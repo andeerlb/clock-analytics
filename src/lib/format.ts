@@ -14,6 +14,22 @@ export function formatDayShort(isoDate: string): string {
   }).format(date);
 }
 
+/** "2026-07-01" -> "01/07/2026" */
+export function formatDateSlash(isoDate: string): string {
+  const [y, m, d] = isoDate.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+/**
+ * "2026-07-01" -> "01/07" — the year is only spelled out when it isn't the
+ * current one, since a dense day-by-day table almost never needs it.
+ */
+export function formatDateCompact(isoDate: string): string {
+  const [y, m, d] = isoDate.split("-");
+  const currentYear = new Date().getFullYear();
+  return Number(y) === currentYear ? `${d}/${m}` : `${d}/${m}/${y}`;
+}
+
 /** SQLite `datetime('now')` output ("2026-08-03 20:55:52", UTC) -> "3 de agosto de 2026 às 20:55" */
 export function formatDateTime(sqliteDatetime: string): string {
   const iso = sqliteDatetime.includes("T")

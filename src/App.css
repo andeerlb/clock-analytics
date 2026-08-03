@@ -397,6 +397,12 @@ tr:last-child td {
   color: var(--danger);
   border: 1px solid rgba(255, 180, 171, 0.5);
 }
+/* Overtime isn't good or bad on its own — neutral, unlike ok/warn/overwrite. */
+.badge.neutral {
+  background: var(--surface-variant);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
 /* Small neutral count chip for table toolbars (e.g. "8 conflitos") —
    informational, not a status. */
 .count-chip {
@@ -703,6 +709,12 @@ input[type="checkbox"]:disabled {
   background: var(--surface-container);
 }
 
+/* card-flush already sits on the lighter surface-container-low; its table
+   header needs to step up a level too, or it'd blend into the toolbar. */
+.table-card.card-flush thead tr {
+  background: var(--surface-container-high);
+}
+
 .table-card td,
 .table-card th {
   padding: 1rem;
@@ -710,6 +722,20 @@ input[type="checkbox"]:disabled {
 
 .table-card tbody td {
   border-bottom-color: rgba(66, 71, 84, 0.5);
+}
+
+tr.row-weekend {
+  background: var(--card-bg-soft);
+}
+tr.row-weekend:hover {
+  background: var(--surface-container);
+}
+tr.row-weekend .weekday {
+  color: var(--danger);
+}
+
+tr.row-incomplete {
+  border-left: 2px solid var(--danger);
 }
 
 .table-card .pagination {

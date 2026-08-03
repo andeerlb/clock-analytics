@@ -157,6 +157,13 @@ export interface StoredImport {
   companyName: string;
   periodStart: string;
   periodEnd: string;
+  /** This employee's own PDF (their split-off page, for a multi-page batch). */
   originalPdfPath: string;
+  /**
+   * The whole original file this import came from — `null` for imports
+   * saved before this link existed. Equal to `originalPdfPath` when the
+   * source was a single-page file; distinct for a multi-page batch.
+   */
+  sourceOriginalPdfPath: string | null;
   importedAt: string;
 }

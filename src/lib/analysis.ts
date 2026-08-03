@@ -48,3 +48,39 @@ export function formatMinutes(totalMinutes: number): string {
   const m = abs % 60;
   return `${sign}${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
+
+/** Coalize's weekday abbreviations only ever come out in Portuguese. */
+export function isWeekend(weekday: string): boolean {
+  return weekday === "Sáb" || weekday === "Dom";
+}
+
+export interface PeriodSummary {
+  totalWorkedMinutes: number;
+  /** Sum of the excess above `thresholdMinutes` on days that went over it. */
+  overtimeMinutes: number;
+  absenceMinutes: number;
+  /** overtimeMinutes - absenceMinutes — a simple "banco de horas" balance. */
+  balanceMinutes: number;
+}
+
+export function summarizePeriod(
+  days: Pick<DayRecord | StoredDayRecord, "totalWorkedMinutes" | "absenceMinutes">[],
+  thresholdMinutes: number,
+): PeriodSummary {
+  let totalWorkedMinutes = 0;
+  let overtimeMinutes = 0;
+  let absenceMinutes = 0;
+  for (const day of days) {
+    totalWorkedMinutes += day.totalWorkedMinutes;
+    if (day.totalWorkedMinutes > thresholdMinutes) {
+      overtimeMinutes += day.totalWorkedMinutes - thresholdMinutes;
+    }
+    absenceMinutes += day.absenceMinutes;
+  }
+  return {
+    totalWorkedMinutes,
+    overtimeMinutes,
+    absenceMinutes,
+    balanceMinutes: overtimeMinutes - absenceMinutes,
+  };
+}

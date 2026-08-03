@@ -73,6 +73,9 @@ async function upsertImportFile(db: Database, fileName: string, fileHash: string
  * outcome, so the import history reflects every file that was ever
  * processed, not just the ones that ended up saved. Re-processing the same
  * file (same hash) refreshes this row instead of duplicating it.
+ *
+ * Returns the `source_files.id`, so a save that follows can link its
+ * `imports` row back to the whole original file (not just its own page).
  */
 export async function logSourceFile(input: {
   fileHash: string;
@@ -82,7 +85,7 @@ export async function logSourceFile(input: {
   status: ImportStatus;
   errorMessage: string | null;
   originalPdfPath: string;
-}): Promise<void> {
+}): Promise<number> {
   const db = await getDb();
   await db.execute(
     `INSERT INTO source_files
@@ -106,6 +109,13 @@ export async function logSourceFile(input: {
       input.originalPdfPath,
     ],
   );
+  // `lastInsertId` isn't reliable across the ON CONFLICT DO UPDATE path, so
+  // look the row up explicitly rather than trust it.
+  const row = await db.select<{ id: number }[]>(
+    "SELECT id FROM source_files WHERE file_hash = $1",
+    [input.fileHash],
+  );
+  return row[0].id;
 }
 
 /**
@@ -141,10 +151,14 @@ export async function deleteImport(importId: number): Promise<void> {
  * Persists one parsed timesheet (and its days/punches) into SQLite.
  * Pass `replaceImportId` to overwrite an existing conflicting import
  * (same employee+company+overlapping period) instead of adding alongside it.
+ * Pass `sourceFileId` (from `logSourceFile`) to link back to the whole
+ * original file — for a multi-page batch, that's distinct from this sheet's
+ * own split-off page.
  */
 export async function saveParsedTimesheet(
   sheet: ParsedTimesheet,
   replaceImportId?: number,
+  sourceFileId?: number,
 ): Promise<number> {
   const db = await getDb();
 
@@ -157,8 +171,9 @@ export async function saveParsedTimesheet(
   const importFileId = await upsertImportFile(db, sheet.originalFileName, sheet.originalFileHash);
 
   const importResult = await db.execute(
-    `INSERT INTO imports (provider, employee_id, period_start, period_end, original_pdf_path, import_file_id)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+    `INSERT INTO imports
+       (provider, employee_id, period_start, period_end, original_pdf_path, import_file_id, source_file_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [
       sheet.provider,
       employeeId,
@@ -166,6 +181,7 @@ export async function saveParsedTimesheet(
       sheet.period.end,
       sheet.originalPdfPath,
       importFileId,
+      sourceFileId ?? null,
     ],
   );
   const importId = importResult.lastInsertId as number;
@@ -223,10 +239,12 @@ export async function listImports(): Promise<StoredImport[]> {
       i.period_start AS periodStart,
       i.period_end AS periodEnd,
       i.original_pdf_path AS originalPdfPath,
+      sf.original_pdf_path AS sourceOriginalPdfPath,
       i.imported_at AS importedAt
     FROM imports i
     JOIN employees e ON e.id = i.employee_id
     JOIN companies c ON c.id = e.company_id
+    LEFT JOIN source_files sf ON sf.id = i.source_file_id
     ORDER BY i.imported_at DESC
   `);
 }

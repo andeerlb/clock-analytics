@@ -28,5 +28,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0004_source_file_status.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 5,
+            description: "link imports back to their whole original file",
+            sql: include_str!("../migrations/0005_import_source_file.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

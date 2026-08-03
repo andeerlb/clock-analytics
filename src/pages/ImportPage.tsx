@@ -276,24 +276,16 @@ export default function ImportPage() {
     setBusy(true);
     setError(null);
     try {
-      let lastImportId: number | null = null;
-      let savedCount = 0;
-      const savedFileHashes = new Set<string>();
-      for (let i = 0; i < sheets.length; i++) {
-        if (!selectedSheets.has(i)) continue;
-        const conflict = conflictBySheetIndex.get(i);
-        lastImportId = await saveParsedTimesheet(sheets[i], conflict?.existingImportId);
-        savedCount++;
-        savedFileHashes.add(sheetOwner[i].fileHash);
-      }
-
       // The import history only gets an entry once the user actually
       // commits this batch — parsing alone (without clicking Salvar)
       // shouldn't leave a trace. Every file from the batch is logged here
       // (including ones that failed or whose sheets weren't selected), not
-      // just the ones that ended up saved.
+      // just the ones that ended up saved. This has to happen *before* the
+      // save loop below: each import links back to its source_files row,
+      // which only exists once it's been logged.
+      const sourceFileIdByHash = new Map<string, number>();
       for (const result of fileResults) {
-        await logSourceFile({
+        const sourceFileId = await logSourceFile({
           fileHash: result.fileHash,
           fileName: result.fileName,
           pageCount: result.pageCount,
@@ -302,6 +294,23 @@ export default function ImportPage() {
           errorMessage: result.error,
           originalPdfPath: result.originalPdfPath,
         });
+        sourceFileIdByHash.set(result.fileHash, sourceFileId);
+      }
+
+      let lastImportId: number | null = null;
+      let savedCount = 0;
+      const savedFileHashes = new Set<string>();
+      for (let i = 0; i < sheets.length; i++) {
+        if (!selectedSheets.has(i)) continue;
+        const conflict = conflictBySheetIndex.get(i);
+        const fileHash = sheetOwner[i].fileHash;
+        lastImportId = await saveParsedTimesheet(
+          sheets[i],
+          conflict?.existingImportId,
+          sourceFileIdByHash.get(fileHash),
+        );
+        savedCount++;
+        savedFileHashes.add(fileHash);
       }
       // Once per *original* file (not per sheet) — this is what lets the
       // pre-check recognize a saved batch file, even though it produced
