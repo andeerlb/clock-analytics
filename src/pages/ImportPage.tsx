@@ -2,8 +2,6 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   AlertCircle,
   AlertTriangle,
-  ChevronLeft,
-  ChevronRight,
   Eye,
   FileText,
   FolderOpen,
@@ -15,7 +13,9 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import Pagination from "../components/Pagination";
 import { hashFiles, listProviders, parseImport, pickPdfFiles } from "../lib/api";
+import { colorForName, initials } from "../lib/avatar";
 import {
   findConflicts,
   listImportFiles,
@@ -354,8 +354,9 @@ export default function ImportPage() {
       </div>
 
       {fileResults.length > 0 && (
-        <div className="card">
-          <div className="page-header" style={{ marginBottom: "0.4rem", alignItems: "flex-start" }}>
+        <>
+        <div className="card card-flush">
+          <div className="page-header" style={{ marginBottom: 0, alignItems: "flex-end" }}>
             <div>
               <h3 style={{ margin: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <Eye size={18} />
@@ -372,7 +373,7 @@ export default function ImportPage() {
               )}
             </div>
             <div style={{ display: "flex", gap: "0.6rem", flexShrink: 0 }}>
-              <button type="button" className="secondary" onClick={cancelPreview} disabled={busy}>
+              <button type="button" className="outline" onClick={cancelPreview} disabled={busy}>
                 Cancelar
               </button>
               <button
@@ -384,17 +385,25 @@ export default function ImportPage() {
               </button>
             </div>
           </div>
+        </div>
 
+        <div className="card table-card">
           <div className="table-toolbar">
             <div className="counts">
               <span>{sheets.length} registro(s) encontrado(s)</span>
               {conflicts.length > 0 && (
-                <span className="badge overwrite">{conflicts.length} conflito(s)</span>
+                <span className="count-chip">{conflicts.length} conflito(s)</span>
               )}
-              {errorCount > 0 && <span className="badge warn">{errorCount} erro(s)</span>}
+              {errorCount > 0 && (
+                <span className="badge file-error">
+                  <AlertCircle size={13} />
+                  {errorCount} erro(s)
+                </span>
+              )}
             </div>
           </div>
 
+          <div className="table-scroll">
           <table>
             <thead>
               <tr>
@@ -428,7 +437,7 @@ export default function ImportPage() {
                         <div className="muted">{row.message}</div>
                       </td>
                       <td>
-                        <span className="badge warn">
+                        <span className="badge file-error">
                           <AlertCircle size={13} />
                           Erro no arquivo
                         </span>
@@ -448,7 +457,17 @@ export default function ImportPage() {
                         aria-label={`Selecionar ${row.sheet.employee.name}`}
                       />
                     </td>
-                    <td>{row.sheet.employee.name}</td>
+                    <td>
+                      <div className="person-cell">
+                        <span
+                          className="avatar"
+                          style={{ background: colorForName(row.sheet.employee.name) }}
+                        >
+                          {initials(row.sheet.employee.name)}
+                        </span>
+                        {row.sheet.employee.name}
+                      </div>
+                    </td>
                     <td className="mono">{row.sheet.employee.cpf}</td>
                     <td>{row.sheet.company.name}</td>
                     <td>{formatPeriod(row.sheet.period.start, row.sheet.period.end)}</td>
@@ -480,37 +499,21 @@ export default function ImportPage() {
               })}
             </tbody>
           </table>
+          </div>
 
           {previewRows.length > PREVIEW_PAGE_SIZE && (
-            <div className="pagination">
-              <span className="muted">
-                Mostrando {previewPage * PREVIEW_PAGE_SIZE + 1} a{" "}
-                {Math.min(previewRows.length, previewPage * PREVIEW_PAGE_SIZE + PREVIEW_PAGE_SIZE)}{" "}
-                de {previewRows.length}
-              </span>
-              <div className="pagination-controls">
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={previewPage === 0}
-                  onClick={() => setPreviewPage((p) => Math.max(0, p - 1))}
-                  aria-label="Página anterior"
-                >
-                  <ChevronLeft size={16} />
-                </button>
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={previewPage >= previewPageCount - 1}
-                  onClick={() => setPreviewPage((p) => Math.min(previewPageCount - 1, p + 1))}
-                  aria-label="Próxima página"
-                >
-                  <ChevronRight size={16} />
-                </button>
-              </div>
-            </div>
+            <Pagination
+              page={previewPage}
+              pageCount={previewPageCount}
+              onPageChange={setPreviewPage}
+              rangeLabel={`Mostrando ${previewPage * PREVIEW_PAGE_SIZE + 1} a ${Math.min(
+                previewRows.length,
+                previewPage * PREVIEW_PAGE_SIZE + PREVIEW_PAGE_SIZE,
+              )} de ${previewRows.length}`}
+            />
           )}
         </div>
+        </>
       )}
       </div>
 

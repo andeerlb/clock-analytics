@@ -1,6 +1,6 @@
-import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import Pagination from "../components/Pagination";
 import { openOriginalPdf } from "../lib/api";
 import { colorForName, initials } from "../lib/avatar";
 import { listImports } from "../lib/db";
@@ -35,13 +35,16 @@ export default function LibraryPage() {
         Colaboradores com espelhos de ponto importados.
       </p>
 
-      <div className="card">
-        {loading && <p className="muted">Carregando...</p>}
+      <div className="card table-card">
+        {loading && <p className="muted" style={{ padding: "1.4rem" }}>Carregando...</p>}
         {!loading && imports.length === 0 && (
-          <p className="muted">Nenhum import ainda. Comece importando um PDF.</p>
+          <p className="muted" style={{ padding: "1.4rem" }}>
+            Nenhum import ainda. Comece importando um PDF.
+          </p>
         )}
         {imports.length > 0 && (
           <>
+            <div className="table-scroll">
             <table>
               <thead>
                 <tr>
@@ -81,33 +84,17 @@ export default function LibraryPage() {
                 ))}
               </tbody>
             </table>
-
-            <div className="pagination">
-              <span className="muted">
-                Mostrando {page * PAGE_SIZE + 1} a{" "}
-                {Math.min(imports.length, page * PAGE_SIZE + PAGE_SIZE)} de {imports.length} registros
-              </span>
-              <div className="pagination-controls">
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={page === 0}
-                  onClick={() => setPage((p) => Math.max(0, p - 1))}
-                  aria-label="Página anterior"
-                >
-                  <ChevronLeft size={16} />
-                </button>
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={page >= pageCount - 1}
-                  onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-                  aria-label="Próxima página"
-                >
-                  <ChevronRight size={16} />
-                </button>
-              </div>
             </div>
+
+            <Pagination
+              page={page}
+              pageCount={pageCount}
+              onPageChange={setPage}
+              rangeLabel={`Mostrando ${page * PAGE_SIZE + 1} a ${Math.min(
+                imports.length,
+                page * PAGE_SIZE + PAGE_SIZE,
+              )} de ${imports.length} registros`}
+            />
           </>
         )}
       </div>

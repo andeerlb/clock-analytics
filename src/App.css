@@ -27,6 +27,8 @@
 
   --danger: #ffb4ab;
   --danger-soft: rgba(255, 180, 171, 0.15);
+  --error-container: #93000a;
+  --error-container-soft: rgba(147, 0, 10, 0.1);
   --success: #4edea3;
   --success-soft: rgba(78, 222, 163, 0.15);
   /* Not part of the M3 token set — used only to tell "will overwrite"
@@ -67,6 +69,16 @@ a:hover {
   text-decoration: underline;
 }
 
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: "Hanken Grotesk", Avenir, Helvetica, Arial, sans-serif;
+  font-weight: 600;
+}
+
 .app-shell {
   display: flex;
   min-height: 100vh;
@@ -90,6 +102,7 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 0.6rem;
+  font-family: "Hanken Grotesk", Avenir, Helvetica, Arial, sans-serif;
   font-weight: 700;
   font-size: 0.95rem;
   padding: 0 0.25rem;
@@ -185,6 +198,11 @@ a:hover {
   border-radius: 12px;
   padding: 1.4rem;
   margin-bottom: 1.5rem;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.2);
+}
+
+.card.card-flush {
+  background: var(--sidebar-bg);
 }
 
 .field-row {
@@ -253,6 +271,7 @@ button {
   background: var(--accent);
   color: var(--on-accent);
   font-weight: 600;
+  box-shadow: 0 4px 14px rgba(173, 198, 255, 0.2);
 }
 button:hover {
   background: var(--accent-hover);
@@ -262,20 +281,34 @@ button:disabled {
   border-color: var(--surface-variant);
   color: var(--text-muted);
   cursor: not-allowed;
+  box-shadow: none;
 }
 button.secondary {
   background: var(--surface-variant);
   color: var(--text);
   border-color: var(--border);
+  box-shadow: none;
 }
 button.secondary:hover {
   background: var(--surface-bright);
+}
+/* Transparent by default, filled only on hover — for a de-emphasized
+   action sitting next to a primary one (e.g. "Cancelar" beside "Salvar"). */
+button.outline {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+  box-shadow: none;
+}
+button.outline:hover {
+  background: var(--surface-variant);
 }
 button.ghost {
   background: transparent;
   color: var(--text-muted);
   border-color: transparent;
   font-weight: 500;
+  box-shadow: none;
 }
 button.ghost:hover {
   background: rgba(255, 255, 255, 0.05);
@@ -339,18 +372,41 @@ tr:last-child td {
 .badge.warn {
   background: var(--danger-soft);
   color: var(--danger);
+  border: 1px solid rgba(255, 180, 171, 0.3);
 }
 .badge.info {
   background: var(--accent-soft);
   color: var(--accent);
+  border: 1px solid rgba(173, 198, 255, 0.3);
 }
 .badge.ok {
   background: var(--success-soft);
   color: var(--success);
+  border: 1px solid rgba(78, 222, 163, 0.3);
 }
 .badge.overwrite {
   background: var(--warning-soft);
   color: var(--warning);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+}
+/* A parse failure is not the same severity as "will overwrite" or "already
+   imported" — it gets the solid error-container fill instead of a soft
+   tint so it reads as more urgent among the other badges. */
+.badge.file-error {
+  background: var(--error-container);
+  color: var(--danger);
+  border: 1px solid rgba(255, 180, 171, 0.5);
+}
+/* Small neutral count chip for table toolbars (e.g. "8 conflitos") —
+   informational, not a status. */
+.count-chip {
+  display: inline-flex;
+  align-items: center;
+  background: var(--surface-variant);
+  color: var(--text-muted);
+  border-radius: 4px;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.75rem;
 }
 .badge.duplicate {
   background: #171f33;
@@ -595,6 +651,63 @@ input[type="checkbox"]:disabled {
   font-size: 0.85em;
 }
 
+/*
+ * A card variant for data tables: instead of one uniform padding, the
+ * toolbar and pagination strips bleed edge-to-edge with their own
+ * background/border, matching how the table itself butts up against the
+ * card's rounded corners.
+ */
+.table-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.table-card .table-toolbar {
+  padding: 1rem 1.4rem;
+  background: var(--sidebar-bg);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0;
+}
+
+.table-card .table-scroll {
+  overflow-x: auto;
+}
+
+.table-card thead tr {
+  background: var(--surface-container);
+}
+
+.table-card td,
+.table-card th {
+  padding: 1rem;
+}
+
+.table-card tbody td {
+  border-bottom-color: rgba(66, 71, 84, 0.5);
+}
+
+.table-card .pagination {
+  padding: 1rem 1.4rem;
+  background: var(--sidebar-bg);
+  border-top: 1px solid var(--border);
+}
+
+.pagination-pages {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.pagination-pages button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 500;
+}
+
 .table-toolbar {
   display: flex;
   justify-content: space-between;
@@ -615,9 +728,9 @@ tbody tr:hover {
 
 tr.row-error {
   opacity: 0.7;
-  background: var(--danger-soft);
+  background: var(--error-container-soft);
 }
 
 tr.row-error:hover {
-  background: var(--danger-soft);
+  background: var(--error-container-soft);
 }
