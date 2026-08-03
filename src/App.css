@@ -29,7 +29,11 @@
   box-sizing: border-box;
 }
 
-body {
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
   margin: 0;
 }
 
@@ -45,6 +49,7 @@ a:hover {
 .app-shell {
   display: flex;
   min-height: 100vh;
+  width: 100%;
 }
 
 /* Sidebar */
@@ -132,8 +137,8 @@ a:hover {
 
 .app-content {
   flex: 1;
+  min-width: 0;
   padding: 2rem 2.5rem;
-  max-width: 1200px;
 }
 
 .page-header {
@@ -203,6 +208,22 @@ input:focus,
 select:focus {
   outline: 2px solid var(--accent-soft);
   border-color: var(--accent);
+}
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%238b93ab'%3E%3Cpath fill-rule='evenodd' d='M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z' clip-rule='evenodd'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.7em center;
+  background-size: 14px;
+  padding-right: 2.3em;
+}
+
+select option {
+  background: #0f1424;
+  color: var(--text);
 }
 
 button {
@@ -422,9 +443,22 @@ tr:last-child td {
   margin-top: 1.2rem;
 }
 
-.tip-grid {
+.import-layout {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.import-side {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.tip-row {
+  display: flex;
+  flex-wrap: wrap;
   gap: 1rem;
 }
 
@@ -435,6 +469,7 @@ tr:last-child td {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 1rem;
+  flex: 1 1 200px;
 }
 
 .tip-card-icon {

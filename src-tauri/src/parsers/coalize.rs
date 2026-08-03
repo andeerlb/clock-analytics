@@ -117,6 +117,10 @@ impl TimesheetParser for CoalizeParser {
             },
             days,
             original_pdf_path: original_pdf_path.to_string(),
+            // Filled in by the caller (commands::parse_import) once it has
+            // hashed the source file; the parser only knows about content.
+            original_file_hash: String::new(),
+            original_file_name: String::new(),
         }])
     }
 }

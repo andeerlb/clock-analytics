@@ -47,6 +47,22 @@ pub struct ParsedTimesheet {
     pub days: Vec<DayRecord>,
     /// Path to the copy of the original PDF kept in the app's data dir.
     pub original_pdf_path: String,
+    /// Content hash (sha256) of the source PDF, set by the caller after
+    /// parsing — the parser itself only deals with document content, not
+    /// file identity.
+    pub original_file_hash: String,
+    pub original_file_name: String,
+}
+
+/// Content identity of a picked file, independent of parsing — used to
+/// recognize a PDF that was already imported before spending time on
+/// text extraction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileHash {
+    pub path: String,
+    pub file_name: String,
+    pub hash: String,
 }
 
 #[derive(Debug, thiserror::Error)]

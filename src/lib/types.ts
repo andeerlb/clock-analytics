@@ -41,11 +41,47 @@ export interface ParsedTimesheet {
   days: DayRecord[];
   /** Path to the copy of the original PDF kept in the app's data dir. */
   originalPdfPath: string;
+  /** sha256 of the source PDF's bytes — identifies the file regardless of path/name. */
+  originalFileHash: string;
+  originalFileName: string;
 }
 
 export interface ProviderInfo {
   id: string;
   label: string;
+}
+
+/** Content-hash of a picked file, computed before any parsing happens. */
+export interface FileHash {
+  path: string;
+  fileName: string;
+  hash: string;
+}
+
+/** A previously-imported file, found by matching a hash against `import_files`. */
+export interface DuplicateFileInfo {
+  importFileId: number;
+  fileName: string;
+  importedAt: string;
+  employeeName: string;
+  companyName: string;
+  importId: number;
+}
+
+export interface ImportFileRow {
+  id: number;
+  fileName: string;
+  fileHash: string;
+  importedAt: string;
+}
+
+/** An existing import for the same employee+company whose period overlaps a freshly parsed sheet. */
+export interface ConflictInfo {
+  sheetIndex: number;
+  existingImportId: number;
+  existingPeriodStart: string;
+  existingPeriodEnd: string;
+  existingImportedAt: string;
 }
 
 /** A row as read back from SQLite, joined with its parent import/employee/company. */

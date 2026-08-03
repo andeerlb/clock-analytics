@@ -1,5 +1,5 @@
-import { BarChart3, Clock, FileUp, Plus, Users } from "lucide-react";
-import { NavLink, useLocation } from "react-router-dom";
+import { BarChart3, Clock, FileUp, Users } from "lucide-react";
+import { NavLink } from "react-router-dom";
 
 const NAV_ITEMS = [
   { to: "/import", label: "Importar", icon: FileUp, end: false },
@@ -8,8 +8,6 @@ const NAV_ITEMS = [
 ];
 
 export default function Sidebar() {
-  const location = useLocation();
-
   return (
     <nav className="app-nav">
       <div className="app-brand">
@@ -32,13 +30,6 @@ export default function Sidebar() {
           </NavLink>
         ))}
       </div>
-
-      {location.pathname !== "/import" && (
-        <NavLink to="/import" className="app-nav-cta">
-          <Plus size={16} />
-          Nova Importação
-        </NavLink>
-      )}
     </nav>
   );
 }

@@ -1,4 +1,5 @@
-use crate::model::ParsedTimesheet;
+use crate::hashing;
+use crate::model::{FileHash, ParsedTimesheet};
 use crate::parsers;
 use crate::pdf_extract;
 use serde::Serialize;
@@ -20,6 +21,21 @@ pub fn list_providers() -> Vec<ProviderInfo> {
         .map(|(id, label)| ProviderInfo {
             id: id.to_string(),
             label: label.to_string(),
+        })
+        .collect()
+}
+
+/// Content-hashes each file so the frontend can check, before doing any
+/// parsing, whether a picked PDF was already imported (even if it was
+/// renamed or picked from a different folder).
+#[tauri::command]
+pub fn hash_files(paths: Vec<String>) -> Result<Vec<FileHash>, String> {
+    paths
+        .into_iter()
+        .map(|path| {
+            let hash = hashing::hash_file(&path).map_err(|e| e.to_string())?;
+            let file_name = hashing::file_name(&path);
+            Ok(FileHash { path, file_name, hash })
         })
         .collect()
 }
@@ -47,15 +63,21 @@ pub fn parse_import(
     let mut results = Vec::new();
     for source_path in paths {
         let raw_text = pdf_extract::extract_text(&source_path).map_err(|e| e.to_string())?;
+        let file_hash = hashing::hash_file(&source_path).map_err(|e| e.to_string())?;
+        let file_name = hashing::file_name(&source_path);
 
         let file_id = uuid::Uuid::new_v4();
         let dest: PathBuf = imports_dir.join(format!("{file_id}.pdf"));
         fs::copy(&source_path, &dest).map_err(|e| e.to_string())?;
         let dest_str = dest.to_string_lossy().to_string();
 
-        let parsed = parser
+        let mut parsed = parser
             .parse(&raw_text, &dest_str)
             .map_err(|e| e.to_string())?;
+        for sheet in &mut parsed {
+            sheet.original_file_hash = file_hash.clone();
+            sheet.original_file_name = file_name.clone();
+        }
         results.extend(parsed);
     }
 

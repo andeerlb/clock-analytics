@@ -1,5 +1,12 @@
 import Database from "@tauri-apps/plugin-sql";
-import type { ParsedTimesheet, StoredDayRecord, StoredImport } from "./types";
+import type {
+  ConflictInfo,
+  DuplicateFileInfo,
+  ImportFileRow,
+  ParsedTimesheet,
+  StoredDayRecord,
+  StoredImport,
+} from "./types";
 
 export const DB_URL = "sqlite:clock-analytics.db";
 
@@ -47,17 +54,65 @@ async function upsertEmployee(
   return result.lastInsertId as number;
 }
 
-/** Persists one parsed timesheet (and its days/punches) into SQLite. */
-export async function saveParsedTimesheet(sheet: ParsedTimesheet): Promise<number> {
+async function upsertImportFile(db: Database, fileName: string, fileHash: string): Promise<number> {
+  const existing = await db.select<{ id: number }[]>(
+    "SELECT id FROM import_files WHERE file_hash = $1",
+    [fileHash],
+  );
+  if (existing.length > 0) return existing[0].id;
+  const result = await db.execute(
+    "INSERT INTO import_files (file_name, file_hash) VALUES ($1, $2)",
+    [fileName, fileHash],
+  );
+  return result.lastInsertId as number;
+}
+
+/**
+ * Deletes an import and its day_records/punches. Cascades are done by hand
+ * rather than relying on `ON DELETE CASCADE`, since sqlite only enforces
+ * foreign keys when `PRAGMA foreign_keys = ON` was set on the connection,
+ * which isn't guaranteed here.
+ */
+export async function deleteImport(importId: number): Promise<void> {
   const db = await getDb();
+  await db.execute(
+    "DELETE FROM punches WHERE day_record_id IN (SELECT id FROM day_records WHERE import_id = $1)",
+    [importId],
+  );
+  await db.execute("DELETE FROM day_records WHERE import_id = $1", [importId]);
+  await db.execute("DELETE FROM imports WHERE id = $1", [importId]);
+}
+
+/**
+ * Persists one parsed timesheet (and its days/punches) into SQLite.
+ * Pass `replaceImportId` to overwrite an existing conflicting import
+ * (same employee+company+overlapping period) instead of adding alongside it.
+ */
+export async function saveParsedTimesheet(
+  sheet: ParsedTimesheet,
+  replaceImportId?: number,
+): Promise<number> {
+  const db = await getDb();
+
+  if (replaceImportId !== undefined) {
+    await deleteImport(replaceImportId);
+  }
 
   const companyId = await upsertCompany(db, sheet.company.name, sheet.company.cnpj);
   const employeeId = await upsertEmployee(db, companyId, sheet.employee.name, sheet.employee.cpf);
+  const importFileId = await upsertImportFile(db, sheet.originalFileName, sheet.originalFileHash);
 
   const importResult = await db.execute(
-    `INSERT INTO imports (provider, employee_id, period_start, period_end, original_pdf_path)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [sheet.provider, employeeId, sheet.period.start, sheet.period.end, sheet.originalPdfPath],
+    `INSERT INTO imports (provider, employee_id, period_start, period_end, original_pdf_path, import_file_id)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      sheet.provider,
+      employeeId,
+      sheet.period.start,
+      sheet.period.end,
+      sheet.originalPdfPath,
+      importFileId,
+    ],
   );
   const importId = importResult.lastInsertId as number;
 
@@ -202,4 +257,127 @@ export async function listStoredDayRecords(
   }
 
   return rows.map((r) => ({ ...r, punches: punchesByDay.get(r.dayRecordId) ?? [] }));
+}
+
+/**
+ * Given a batch of file hashes (from `hashFiles`), finds which ones were
+ * already imported before — identity is content-based, so a renamed or
+ * re-picked copy of the same PDF is still recognized.
+ */
+export async function findDuplicateFiles(
+  hashes: string[],
+): Promise<Map<string, DuplicateFileInfo>> {
+  if (hashes.length === 0) return new Map();
+  const db = await getDb();
+
+  const placeholders = hashes.map((_, i) => `$${i + 1}`).join(", ");
+  const rows = await db.select<
+    {
+      importFileId: number;
+      fileHash: string;
+      fileName: string;
+      importedAt: string;
+      importId: number;
+      employeeName: string;
+      companyName: string;
+    }[]
+  >(
+    `
+    SELECT
+      f.id AS importFileId,
+      f.file_hash AS fileHash,
+      f.file_name AS fileName,
+      f.imported_at AS importedAt,
+      i.id AS importId,
+      e.name AS employeeName,
+      c.name AS companyName
+    FROM import_files f
+    JOIN imports i ON i.import_file_id = f.id
+    JOIN employees e ON e.id = i.employee_id
+    JOIN companies c ON c.id = e.company_id
+    WHERE f.file_hash IN (${placeholders})
+    `,
+    hashes,
+  );
+
+  const byHash = new Map<string, DuplicateFileInfo>();
+  for (const row of rows) {
+    // A file can map to more than one employee (consolidated PDFs); the
+    // first match is enough to tell the user "this was already imported".
+    if (!byHash.has(row.fileHash)) {
+      byHash.set(row.fileHash, {
+        importFileId: row.importFileId,
+        fileName: row.fileName,
+        importedAt: row.importedAt,
+        employeeName: row.employeeName,
+        companyName: row.companyName,
+        importId: row.importId,
+      });
+    }
+  }
+  return byHash;
+}
+
+/**
+ * Looks for an existing import of the same employee at the same company
+ * whose period overlaps the given range — the "you already imported this
+ * person for this period" check, independent of which file it came from.
+ */
+export async function findConflictingImport(
+  employeeCpf: string,
+  companyCnpj: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<{ importId: number; periodStart: string; periodEnd: string; importedAt: string } | null> {
+  const db = await getDb();
+  const rows = await db.select<
+    { importId: number; periodStart: string; periodEnd: string; importedAt: string }[]
+  >(
+    `
+    SELECT i.id AS importId, i.period_start AS periodStart, i.period_end AS periodEnd,
+           i.imported_at AS importedAt
+    FROM imports i
+    JOIN employees e ON e.id = i.employee_id
+    JOIN companies c ON c.id = e.company_id
+    WHERE e.cpf = $1 AND c.cnpj = $2
+      AND i.period_start <= $4 AND i.period_end >= $3
+    ORDER BY i.imported_at DESC
+    LIMIT 1
+    `,
+    [employeeCpf, companyCnpj, periodStart, periodEnd],
+  );
+  return rows[0] ?? null;
+}
+
+/** Checks a batch of freshly-parsed sheets against existing imports for period overlaps. */
+export async function findConflicts(sheets: ParsedTimesheet[]): Promise<ConflictInfo[]> {
+  const conflicts: ConflictInfo[] = [];
+  for (let i = 0; i < sheets.length; i++) {
+    const sheet = sheets[i];
+    const existing = await findConflictingImport(
+      sheet.employee.cpf,
+      sheet.company.cnpj,
+      sheet.period.start,
+      sheet.period.end,
+    );
+    if (existing) {
+      conflicts.push({
+        sheetIndex: i,
+        existingImportId: existing.importId,
+        existingPeriodStart: existing.periodStart,
+        existingPeriodEnd: existing.periodEnd,
+        existingImportedAt: existing.importedAt,
+      });
+    }
+  }
+  return conflicts;
+}
+
+export async function listImportFiles(): Promise<ImportFileRow[]> {
+  const db = await getDb();
+  return db.select<ImportFileRow[]>(`
+    SELECT id, file_name AS fileName, file_hash AS fileHash, imported_at AS importedAt
+    FROM import_files
+    ORDER BY imported_at DESC
+  `);
 }

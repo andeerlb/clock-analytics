@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod hashing;
 mod model;
 mod parsers;
 mod pdf_extract;
@@ -17,6 +18,7 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             commands::list_providers,
+            commands::hash_files,
             commands::parse_import,
             commands::open_original_pdf,
         ])
