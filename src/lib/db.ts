@@ -3,6 +3,7 @@ import type {
   ConflictInfo,
   DuplicateFileInfo,
   ImportFileRow,
+  ImportStatus,
   ParsedTimesheet,
   StoredDayRecord,
   StoredImport,
@@ -65,6 +66,59 @@ async function upsertImportFile(db: Database, fileName: string, fileHash: string
     [fileName, fileHash],
   );
   return result.lastInsertId as number;
+}
+
+/**
+ * Logs one import attempt — called right after parsing, regardless of
+ * outcome, so the import history reflects every file that was ever
+ * processed, not just the ones that ended up saved. Re-processing the same
+ * file (same hash) refreshes this row instead of duplicating it.
+ */
+export async function logSourceFile(input: {
+  fileHash: string;
+  fileName: string;
+  pageCount: number;
+  provider: string;
+  status: ImportStatus;
+  errorMessage: string | null;
+  originalPdfPath: string;
+}): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO source_files
+       (file_name, file_hash, page_count, provider, status, error_message, original_pdf_path)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT(file_hash) DO UPDATE SET
+       file_name = excluded.file_name,
+       page_count = excluded.page_count,
+       provider = excluded.provider,
+       status = excluded.status,
+       error_message = excluded.error_message,
+       original_pdf_path = excluded.original_pdf_path,
+       imported_at = datetime('now')`,
+    [
+      input.fileName,
+      input.fileHash,
+      input.pageCount,
+      input.provider,
+      input.status,
+      input.errorMessage,
+      input.originalPdfPath,
+    ],
+  );
+}
+
+/**
+ * Marks that at least one sheet from this original file was actually saved.
+ * The "já importado, não reprocessar" pre-check keys off this — a file can
+ * parse fine (and show up in history) without ever being saved, and in
+ * that case it should still be reprocessable.
+ */
+export async function markSourceFileSaved(fileHash: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE source_files SET saved_at = datetime('now') WHERE file_hash = $1", [
+    fileHash,
+  ]);
 }
 
 /**
@@ -260,9 +314,17 @@ export async function listStoredDayRecords(
 }
 
 /**
- * Given a batch of file hashes (from `hashFiles`), finds which ones were
- * already imported before — identity is content-based, so a renamed or
- * re-picked copy of the same PDF is still recognized.
+ * Given a batch of whole-file hashes (from `hashFiles`), finds which ones
+ * were already *saved* before — identity is content-based, so a renamed or
+ * re-picked copy of the same PDF is still recognized. Deliberately keyed on
+ * `saved_at`, not just having been processed: a file can parse fine and
+ * show up in the import history without anything from it actually being
+ * saved, and in that case it should stay reprocessable.
+ *
+ * For a single-page file the matching employee is resolved and linked; for
+ * a multi-page batch file we deliberately don't try to say who's in it at
+ * this stage (that would mean reprocessing it) — the caller just gets
+ * "already imported" + when, with an empty `employees` list.
  */
 export async function findDuplicateFiles(
   hashes: string[],
@@ -271,53 +333,50 @@ export async function findDuplicateFiles(
   const db = await getDb();
 
   const placeholders = hashes.map((_, i) => `$${i + 1}`).join(", ");
-  const rows = await db.select<
-    {
-      importFileId: number;
-      fileHash: string;
-      fileName: string;
-      importedAt: string;
-      importId: number;
-      employeeName: string;
-      companyName: string;
-    }[]
+  const sourceRows = await db.select<
+    { fileHash: string; fileName: string; importedAt: string; pageCount: number }[]
   >(
-    `
-    SELECT
-      f.id AS importFileId,
-      f.file_hash AS fileHash,
-      f.file_name AS fileName,
-      f.imported_at AS importedAt,
-      i.id AS importId,
-      e.name AS employeeName,
-      c.name AS companyName
-    FROM import_files f
-    JOIN imports i ON i.import_file_id = f.id
-    JOIN employees e ON e.id = i.employee_id
-    JOIN companies c ON c.id = e.company_id
-    WHERE f.file_hash IN (${placeholders})
-    `,
+    `SELECT file_hash AS fileHash, file_name AS fileName, imported_at AS importedAt,
+            page_count AS pageCount
+     FROM source_files WHERE file_hash IN (${placeholders}) AND saved_at IS NOT NULL`,
     hashes,
   );
+  if (sourceRows.length === 0) return new Map();
+
+  const singlePageHashes = sourceRows.filter((r) => r.pageCount === 1).map((r) => r.fileHash);
+  const employeesByHash = new Map<
+    string,
+    { importId: number; employeeName: string; companyName: string }[]
+  >();
+  if (singlePageHashes.length > 0) {
+    const ph = singlePageHashes.map((_, i) => `$${i + 1}`).join(", ");
+    const empRows = await db.select<
+      { fileHash: string; importId: number; employeeName: string; companyName: string }[]
+    >(
+      `
+      SELECT f.file_hash AS fileHash, i.id AS importId, e.name AS employeeName, c.name AS companyName
+      FROM import_files f
+      JOIN imports i ON i.import_file_id = f.id
+      JOIN employees e ON e.id = i.employee_id
+      JOIN companies c ON c.id = e.company_id
+      WHERE f.file_hash IN (${ph})
+      `,
+      singlePageHashes,
+    );
+    for (const row of empRows) {
+      const list = employeesByHash.get(row.fileHash) ?? [];
+      list.push({ importId: row.importId, employeeName: row.employeeName, companyName: row.companyName });
+      employeesByHash.set(row.fileHash, list);
+    }
+  }
 
   const byHash = new Map<string, DuplicateFileInfo>();
-  for (const row of rows) {
-    let entry = byHash.get(row.fileHash);
-    if (!entry) {
-      entry = {
-        importFileId: row.importFileId,
-        fileName: row.fileName,
-        importedAt: row.importedAt,
-        employees: [],
-      };
-      byHash.set(row.fileHash, entry);
-    }
-    // A file can map to more than one employee (consolidated PDFs) — list
-    // every one of them rather than picking an arbitrary "the" employee.
-    entry.employees.push({
-      importId: row.importId,
-      employeeName: row.employeeName,
-      companyName: row.companyName,
+  for (const row of sourceRows) {
+    byHash.set(row.fileHash, {
+      fileName: row.fileName,
+      importedAt: row.importedAt,
+      pageCount: row.pageCount,
+      employees: employeesByHash.get(row.fileHash) ?? [],
     });
   }
   return byHash;
@@ -378,11 +437,23 @@ export async function findConflicts(sheets: ParsedTimesheet[]): Promise<Conflict
   return conflicts;
 }
 
+/** The import history: every file ever processed, most recent first. */
 export async function listImportFiles(): Promise<ImportFileRow[]> {
   const db = await getDb();
   return db.select<ImportFileRow[]>(`
-    SELECT id, file_name AS fileName, file_hash AS fileHash, imported_at AS importedAt
-    FROM import_files
+    SELECT
+      id,
+      file_name AS fileName,
+      file_hash AS fileHash,
+      provider,
+      status,
+      error_message AS errorMessage,
+      original_pdf_path AS originalPdfPath,
+      page_count AS pageCount,
+      imported_at AS importedAt,
+      saved_at AS savedAt
+    FROM source_files
     ORDER BY imported_at DESC
+    LIMIT 50
   `);
 }

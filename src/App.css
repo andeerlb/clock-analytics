@@ -552,6 +552,9 @@ tr:last-child td {
 .file-row-info .file-name {
   font-weight: 600;
   font-size: 0.92rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .file-row-info .file-meta {

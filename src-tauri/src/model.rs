@@ -63,6 +63,10 @@ pub struct FileHash {
     pub path: String,
     pub file_name: String,
     pub hash: String,
+    /// How many timesheets this file likely holds — one per page. Lets the
+    /// UI tell "already imported, here's who" (1 page) apart from
+    /// "already imported, but can't say who without reprocessing" (2+).
+    pub page_count: u32,
 }
 
 #[derive(Debug, thiserror::Error)]

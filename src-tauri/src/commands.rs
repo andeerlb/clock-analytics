@@ -4,7 +4,7 @@ use crate::parsers;
 use crate::pdf_extract;
 use serde::Serialize;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
@@ -25,9 +25,10 @@ pub fn list_providers() -> Vec<ProviderInfo> {
         .collect()
 }
 
-/// Content-hashes each file so the frontend can check, before doing any
-/// parsing, whether a picked PDF was already imported (even if it was
-/// renamed or picked from a different folder).
+/// Content-hashes and page-counts each file so the frontend can check,
+/// before doing any parsing, whether a picked PDF was already imported
+/// (even if it was renamed or picked from a different folder) — and
+/// whether it's a single timesheet or a multi-page batch.
 #[tauri::command]
 pub fn hash_files(paths: Vec<String>) -> Result<Vec<FileHash>, String> {
     paths
@@ -35,27 +36,44 @@ pub fn hash_files(paths: Vec<String>) -> Result<Vec<FileHash>, String> {
         .map(|path| {
             let hash = hashing::hash_file(&path).map_err(|e| e.to_string())?;
             let file_name = hashing::file_name(&path);
-            Ok(FileHash { path, file_name, hash })
+            let page_count = hashing::page_count(&path)?;
+            Ok(FileHash { path, file_name, hash, page_count })
         })
         .collect()
 }
 
 /// Outcome of parsing a single source file — kept separate per file so one
 /// bad PDF in a batch doesn't hide the results already extracted from the
-/// others.
+/// others. `error` can be set *alongside* non-empty `sheets`: for a
+/// multi-page file that means some pages parsed fine and others didn't
+/// ("com alertas"), not that the whole file failed.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileParseResult {
     pub path: String,
     pub file_name: String,
+    /// Content hash of the whole original file, as picked — distinct from
+    /// each sheet's own `originalFileHash`, which for a multi-page file is
+    /// the hash of just that person's split-off page.
+    pub file_hash: String,
+    pub page_count: u32,
+    /// Copy of the whole original file, kept regardless of outcome so a
+    /// failed file can still be reopened later ("Visualizar" in the import
+    /// history) to see what was actually sent in.
+    pub original_pdf_path: String,
     pub sheets: Vec<ParsedTimesheet>,
     pub error: Option<String>,
 }
 
 /// Extracts text from each source PDF, hands it to the chosen provider's
 /// parser, and copies the original file into the app's data dir so it stays
-/// browsable later ("ver relatório original") independent of where the user
-/// picked it from on disk.
+/// browsable later independent of where the user picked it from on disk.
+///
+/// A file with more than one page is treated as one timesheet per page
+/// (Coalize's "Espelho Ponto" batch exports put one employee per page): it's
+/// split into single-page PDFs first, and each page is parsed on its own —
+/// one page failing doesn't take the others down with it, it just shows up
+/// as a partial result ("com alertas").
 ///
 /// Each file is parsed independently: a failure on one file is recorded on
 /// its own `FileParseResult` rather than aborting the rest of the batch.
@@ -78,45 +96,156 @@ pub fn parse_import(
     let mut results = Vec::new();
     for source_path in paths {
         let file_name = hashing::file_name(&source_path);
-        match parse_one_file(&source_path, &file_name, parser.as_ref(), &imports_dir) {
-            Ok(sheets) => results.push(FileParseResult {
-                path: source_path,
-                file_name,
-                sheets,
-                error: None,
-            }),
-            Err(message) => results.push(FileParseResult {
-                path: source_path,
-                file_name,
-                sheets: Vec::new(),
-                error: Some(message),
-            }),
-        }
+
+        // Always keep a copy of the whole original file, even on failure —
+        // it's what "Visualizar" in the import history opens later, and
+        // it's useful to be able to re-inspect a file that didn't parse.
+        let original_pdf_path = match copy_into_imports_dir(&source_path, &imports_dir) {
+            Ok(p) => p,
+            Err(e) => {
+                results.push(FileParseResult {
+                    path: source_path,
+                    file_name,
+                    file_hash: String::new(),
+                    page_count: 0,
+                    original_pdf_path: String::new(),
+                    sheets: Vec::new(),
+                    error: Some(e),
+                });
+                continue;
+            }
+        };
+
+        let file_hash = match hashing::hash_file(&source_path) {
+            Ok(h) => h,
+            Err(e) => {
+                results.push(FileParseResult {
+                    path: source_path,
+                    file_name,
+                    file_hash: String::new(),
+                    page_count: 0,
+                    original_pdf_path,
+                    sheets: Vec::new(),
+                    error: Some(e.to_string()),
+                });
+                continue;
+            }
+        };
+        let page_count = match hashing::page_count(&source_path) {
+            Ok(n) => n,
+            Err(e) => {
+                results.push(FileParseResult {
+                    path: source_path,
+                    file_name,
+                    file_hash,
+                    page_count: 0,
+                    original_pdf_path,
+                    sheets: Vec::new(),
+                    error: Some(e),
+                });
+                continue;
+            }
+        };
+
+        let (sheets, error) = if page_count <= 1 {
+            match parse_single_page(&source_path, &file_name, &file_hash, &original_pdf_path, parser.as_ref())
+            {
+                Ok(sheets) => (sheets, None),
+                Err(e) => (Vec::new(), Some(e)),
+            }
+        } else {
+            parse_multi_page(&source_path, &file_name, parser.as_ref(), &imports_dir)
+        };
+
+        results.push(FileParseResult {
+            path: source_path,
+            file_name,
+            file_hash,
+            page_count,
+            original_pdf_path,
+            sheets,
+            error,
+        });
     }
 
     Ok(results)
 }
 
-fn parse_one_file(
+fn parse_single_page(
     source_path: &str,
     file_name: &str,
+    file_hash: &str,
+    dest: &str,
     parser: &dyn parsers::TimesheetParser,
-    imports_dir: &std::path::Path,
 ) -> Result<Vec<ParsedTimesheet>, String> {
     let raw_text = pdf_extract::extract_text(source_path).map_err(|e| e.to_string())?;
-    let file_hash = hashing::hash_file(source_path).map_err(|e| e.to_string())?;
-
-    let file_id = uuid::Uuid::new_v4();
-    let dest: PathBuf = imports_dir.join(format!("{file_id}.pdf"));
-    fs::copy(source_path, &dest).map_err(|e| e.to_string())?;
-    let dest_str = dest.to_string_lossy().to_string();
-
-    let mut parsed = parser.parse(&raw_text, &dest_str).map_err(|e| e.to_string())?;
+    let mut parsed = parser.parse(&raw_text, dest).map_err(|e| e.to_string())?;
     for sheet in &mut parsed {
-        sheet.original_file_hash = file_hash.clone();
+        sheet.original_file_hash = file_hash.to_string();
         sheet.original_file_name = file_name.to_string();
     }
     Ok(parsed)
+}
+
+/// Splits into one PDF per page and parses each independently, so a single
+/// bad page shows up as a partial result instead of failing the whole file.
+fn parse_multi_page(
+    source_path: &str,
+    file_name: &str,
+    parser: &dyn parsers::TimesheetParser,
+    imports_dir: &Path,
+) -> (Vec<ParsedTimesheet>, Option<String>) {
+    let temp_dir = imports_dir.join(format!("split-{}", uuid::Uuid::new_v4()));
+    if let Err(e) = fs::create_dir_all(&temp_dir) {
+        return (Vec::new(), Some(e.to_string()));
+    }
+
+    let page_paths = match pdf_extract::split_pages(source_path, &temp_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&temp_dir);
+            return (Vec::new(), Some(e.to_string()));
+        }
+    };
+
+    let mut all_sheets = Vec::new();
+    let mut page_errors = Vec::new();
+    for (i, page_path) in page_paths.iter().enumerate() {
+        let page_path_str = page_path.to_string_lossy().to_string();
+        let outcome = (|| -> Result<Vec<ParsedTimesheet>, String> {
+            let raw_text = pdf_extract::extract_text(&page_path_str).map_err(|e| e.to_string())?;
+            let page_hash = hashing::hash_file(&page_path_str).map_err(|e| e.to_string())?;
+            let dest = copy_into_imports_dir(&page_path_str, imports_dir)?;
+
+            let mut sheets = parser.parse(&raw_text, &dest).map_err(|e| e.to_string())?;
+            for sheet in &mut sheets {
+                sheet.original_file_hash = page_hash.clone();
+                sheet.original_file_name = format!("{file_name} — página {}", i + 1);
+            }
+            Ok(sheets)
+        })();
+
+        match outcome {
+            Ok(sheets) => all_sheets.extend(sheets),
+            Err(e) => page_errors.push(format!("página {}: {e}", i + 1)),
+        }
+    }
+
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    let error = if page_errors.is_empty() {
+        None
+    } else {
+        Some(page_errors.join("; "))
+    };
+    (all_sheets, error)
+}
+
+fn copy_into_imports_dir(source_path: &str, imports_dir: &Path) -> Result<String, String> {
+    let file_id = uuid::Uuid::new_v4();
+    let dest: PathBuf = imports_dir.join(format!("{file_id}.pdf"));
+    fs::copy(source_path, &dest).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().to_string())
 }
 
 #[tauri::command]

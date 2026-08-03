@@ -16,5 +16,17 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0002_import_files.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 3,
+            description: "track whole source files for multi-page batch imports",
+            sql: include_str!("../migrations/0003_source_files.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 4,
+            description: "log every import attempt with a real status",
+            sql: include_str!("../migrations/0004_source_file_status.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

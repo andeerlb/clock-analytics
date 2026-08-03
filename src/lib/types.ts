@@ -50,12 +50,32 @@ export interface ParsedTimesheet {
  * Outcome of parsing one source file. Each file is parsed independently, so
  * a failure on one PDF in a batch doesn't hide the results already
  * extracted from the others.
+ *
+ * A file with more than one page holds one timesheet per page (Coalize
+ * batch exports put one employee per page) — `fileHash`/`pageCount` are
+ * about the *whole original file*, distinct from each sheet's own
+ * `originalFileHash`, which for a multi-page file is that page's own hash.
+ *
+ * `error` can be set *alongside* non-empty `sheets`: for a multi-page file
+ * that means some pages parsed fine and others didn't (a "warning" outcome,
+ * not a full failure).
  */
 export interface FileParseResult {
   path: string;
   fileName: string;
+  fileHash: string;
+  pageCount: number;
+  /** Copy of the whole original file, kept regardless of outcome. */
+  originalPdfPath: string;
   sheets: ParsedTimesheet[];
   error: string | null;
+}
+
+export type ImportStatus = "success" | "warning" | "error";
+
+export function importStatusOf(result: Pick<FileParseResult, "sheets" | "error">): ImportStatus {
+  if (!result.error) return "success";
+  return result.sheets.length > 0 ? "warning" : "error";
 }
 
 export interface ProviderInfo {
@@ -68,26 +88,35 @@ export interface FileHash {
   path: string;
   fileName: string;
   hash: string;
+  pageCount: number;
 }
 
 /**
- * A previously-imported file, found by matching a hash against `import_files`.
- * `employees` lists every import that came from this file — a consolidated
- * PDF can hold more than one person, so there's no single "the" employee to
- * point at.
+ * A previously-imported file, found by matching a whole-file hash against
+ * `source_files`. For a single-page file we can also say *who* it was
+ * (`employees`); for a multi-page batch we deliberately don't try to
+ * resolve that without reprocessing, so `employees` stays empty.
  */
 export interface DuplicateFileInfo {
-  importFileId: number;
   fileName: string;
   importedAt: string;
+  pageCount: number;
   employees: { importId: number; employeeName: string; companyName: string }[];
 }
 
+/** A logged import attempt — one row per distinct file ever processed. */
 export interface ImportFileRow {
   id: number;
   fileName: string;
   fileHash: string;
+  provider: string;
+  status: ImportStatus;
+  errorMessage: string | null;
+  originalPdfPath: string;
+  pageCount: number;
   importedAt: string;
+  /** Set once at least one sheet from this file was actually saved. */
+  savedAt: string | null;
 }
 
 /** An existing import for the same employee+company whose period overlaps a freshly parsed sheet. */

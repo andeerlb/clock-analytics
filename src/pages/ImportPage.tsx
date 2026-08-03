@@ -2,11 +2,13 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   AlertCircle,
   AlertTriangle,
+  CheckCircle2,
   Eye,
   FileText,
   FolderOpen,
   Lightbulb,
   PlusCircle,
+  Search,
   ShieldCheck,
   UploadCloud,
   X,
@@ -14,23 +16,33 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Pagination from "../components/Pagination";
-import { hashFiles, listProviders, parseImport, pickPdfFiles } from "../lib/api";
+import { hashFiles, listProviders, openOriginalPdf, parseImport, pickPdfFiles } from "../lib/api";
 import { colorForName, initials } from "../lib/avatar";
 import {
   findConflicts,
   listImportFiles,
   findDuplicateFiles,
+  logSourceFile,
+  markSourceFileSaved,
   saveParsedTimesheet,
 } from "../lib/db";
 import { formatDateTime, formatPeriod } from "../lib/format";
+import { importStatusOf } from "../lib/types";
 import type {
   ConflictInfo,
   DuplicateFileInfo,
   FileParseResult,
   ImportFileRow,
+  ImportStatus,
   ParsedTimesheet,
   ProviderInfo,
 } from "../lib/types";
+
+const STATUS_BADGE: Record<ImportStatus, { className: string; label: string; icon: typeof CheckCircle2 }> = {
+  success: { className: "badge ok", label: "Sucesso", icon: CheckCircle2 },
+  warning: { className: "badge overwrite", label: "Com alertas", icon: AlertTriangle },
+  error: { className: "badge file-error", label: "Falha", icon: AlertCircle },
+};
 
 interface FileStatus {
   hash: string;
@@ -55,6 +67,7 @@ export default function ImportPage() {
   const [selectedSheets, setSelectedSheets] = useState<Set<number>>(new Set());
   const [previewPage, setPreviewPage] = useState(0);
   const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
+  const [historySearch, setHistorySearch] = useState("");
   const [dragActive, setDragActive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -153,6 +166,14 @@ export default function ImportPage() {
   // is the stable identity used for selection/conflict lookups.
   const sheets = useMemo(() => fileResults.flatMap((r) => r.sheets), [fileResults]);
 
+  // Which FileParseResult each flat sheet index came from — needed at save
+  // time to record the *original* (possibly multi-page) file once, even
+  // though it may have produced several sheets/imports.
+  const sheetOwner = useMemo(
+    () => fileResults.flatMap((r) => r.sheets.map(() => r)),
+    [fileResults],
+  );
+
   const conflictBySheetIndex = useMemo(
     () => new Map(conflicts.map((c) => [c.sheetIndex, c])),
     [conflicts],
@@ -190,6 +211,12 @@ export default function ImportPage() {
   );
 
   const allSelected = sheets.length > 0 && sheets.every((_, i) => selectedSheets.has(i));
+
+  const filteredRecentFiles = useMemo(() => {
+    const query = historySearch.trim().toLowerCase();
+    if (!query) return recentFiles;
+    return recentFiles.filter((f) => f.fileName.toLowerCase().includes(query));
+  }, [recentFiles, historySearch]);
 
   async function handleParse() {
     setError(null);
@@ -233,11 +260,36 @@ export default function ImportPage() {
     try {
       let lastImportId: number | null = null;
       let savedCount = 0;
+      const savedFileHashes = new Set<string>();
       for (let i = 0; i < sheets.length; i++) {
         if (!selectedSheets.has(i)) continue;
         const conflict = conflictBySheetIndex.get(i);
         lastImportId = await saveParsedTimesheet(sheets[i], conflict?.existingImportId);
         savedCount++;
+        savedFileHashes.add(sheetOwner[i].fileHash);
+      }
+
+      // The import history only gets an entry once the user actually
+      // commits this batch — parsing alone (without clicking Salvar)
+      // shouldn't leave a trace. Every file from the batch is logged here
+      // (including ones that failed or whose sheets weren't selected), not
+      // just the ones that ended up saved.
+      for (const result of fileResults) {
+        await logSourceFile({
+          fileHash: result.fileHash,
+          fileName: result.fileName,
+          pageCount: result.pageCount,
+          provider,
+          status: importStatusOf(result),
+          errorMessage: result.error,
+          originalPdfPath: result.originalPdfPath,
+        });
+      }
+      // Once per *original* file (not per sheet) — this is what lets the
+      // pre-check recognize a saved batch file, even though it produced
+      // several separate imports.
+      for (const fileHash of savedFileHashes) {
+        await markSourceFileSaved(fileHash);
       }
       refreshRecentFiles();
       reset();
@@ -304,7 +356,7 @@ export default function ImportPage() {
                     </div>
                     <div className="file-row-info">
                       <div className="file-name">{status?.fileName ?? p}</div>
-                      {status?.duplicate && (
+                      {status?.duplicate && status.duplicate.employees.length > 0 && (
                         <div className="file-meta">
                           {status.duplicate.employees[0].companyName} ·{" "}
                           {status.duplicate.employees.map((e, i) => (
@@ -314,6 +366,12 @@ export default function ImportPage() {
                             </span>
                           ))}
                           {" · importado em "}
+                          {formatDateTime(status.duplicate.importedAt)}
+                        </div>
+                      )}
+                      {status?.duplicate && status.duplicate.employees.length === 0 && (
+                        <div className="file-meta">
+                          {status.duplicate.pageCount} páginas · importado em{" "}
                           {formatDateTime(status.duplicate.importedAt)}
                         </div>
                       )}
@@ -381,7 +439,7 @@ export default function ImportPage() {
                 onClick={handleSave}
                 disabled={busy || selectedSheets.size === 0}
               >
-                {busy ? "Salvando..." : "Salvar no banco"}
+                {busy ? "Salvando..." : "Salvar"}
               </button>
             </div>
           </div>
@@ -420,7 +478,6 @@ export default function ImportPage() {
                 <th>CPF</th>
                 <th>Empresa</th>
                 <th>Período</th>
-                <th style={{ textAlign: "right" }}>Dias lidos</th>
                 <th>Status</th>
               </tr>
             </thead>
@@ -432,7 +489,7 @@ export default function ImportPage() {
                       <td className="checkbox-cell">
                         <input type="checkbox" disabled aria-label="Não disponível" />
                       </td>
-                      <td colSpan={5}>
+                      <td colSpan={4}>
                         <div className="file-name">{row.fileName}</div>
                         <div className="muted">{row.message}</div>
                       </td>
@@ -471,9 +528,6 @@ export default function ImportPage() {
                     <td className="mono">{row.sheet.employee.cpf}</td>
                     <td>{row.sheet.company.name}</td>
                     <td>{formatPeriod(row.sheet.period.start, row.sheet.period.end)}</td>
-                    <td className="mono" style={{ textAlign: "right" }}>
-                      {row.sheet.days.length}
-                    </td>
                     <td>
                       {!conflict && (
                         <span className="badge ok">
@@ -520,24 +574,79 @@ export default function ImportPage() {
       <div className="import-side">
         <div className="card">
           <h3 style={{ marginTop: 0 }}>Histórico de importações</h3>
-          {recentFiles.length === 0 && <p className="muted">Nenhum arquivo importado ainda.</p>}
+
           {recentFiles.length > 0 && (
-            <table>
-              <thead>
-                <tr>
-                  <th>Arquivo</th>
-                  <th>Importado em</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentFiles.map((f) => (
-                  <tr key={f.id}>
-                    <td>{f.fileName}</td>
-                    <td>{formatDateTime(f.importedAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="field" style={{ marginBottom: "0.8rem" }}>
+              <div style={{ position: "relative" }}>
+                <Search
+                  size={14}
+                  style={{
+                    position: "absolute",
+                    left: "0.65rem",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    color: "var(--text-muted)",
+                  }}
+                />
+                <input
+                  type="text"
+                  value={historySearch}
+                  onChange={(e) => setHistorySearch(e.target.value)}
+                  placeholder="Buscar por nome do arquivo..."
+                  style={{ width: "100%", paddingLeft: "2rem" }}
+                />
+              </div>
+            </div>
+          )}
+
+          {recentFiles.length === 0 && <p className="muted">Nenhum arquivo importado ainda.</p>}
+          {recentFiles.length > 0 && filteredRecentFiles.length === 0 && (
+            <p className="muted">Nenhum arquivo encontrado.</p>
+          )}
+
+          {filteredRecentFiles.length > 0 && (
+            <div className="file-list">
+              {filteredRecentFiles.map((f) => {
+                const badge = STATUS_BADGE[f.status];
+                const BadgeIcon = badge.icon;
+                return (
+                  <div className="file-row" key={f.id}>
+                    <div className="file-row-icon">
+                      <FileText size={18} />
+                    </div>
+                    <div className="file-row-info">
+                      <div className="file-name" title={f.fileName}>
+                        {f.fileName}
+                      </div>
+                      <div className="file-meta">
+                        {f.provider || "—"} · {formatDateTime(f.importedAt)}
+                      </div>
+                      {f.status !== "success" && f.errorMessage && (
+                        <div className="muted" style={{ fontSize: "0.75rem", marginTop: "0.15rem" }}>
+                          {f.errorMessage}
+                        </div>
+                      )}
+                    </div>
+                    <div className="file-row-actions">
+                      <span className={badge.className}>
+                        <BadgeIcon size={13} />
+                        {badge.label}
+                      </span>
+                      <button
+                        type="button"
+                        className="ghost"
+                        style={{ padding: "0.3rem" }}
+                        onClick={() => openOriginalPdf(f.originalPdfPath)}
+                        aria-label="Visualizar"
+                        title="Visualizar"
+                      >
+                        <Eye size={14} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
 
