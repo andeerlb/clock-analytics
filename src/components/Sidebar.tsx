@@ -1,7 +1,8 @@
-import { BarChart3, Clock, FileUp, Users } from "lucide-react";
+import { BarChart3, Building2, Clock, FileUp, Users } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 const NAV_ITEMS = [
+  { to: "/companies", label: "Empresas", icon: Building2, end: false },
   { to: "/import", label: "Importar", icon: FileUp, end: false },
   { to: "/", label: "Colaboradores", icon: Users, end: true },
   { to: "/reports", label: "Relatórios", icon: BarChart3, end: false },

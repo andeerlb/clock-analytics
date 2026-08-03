@@ -30,6 +30,18 @@ export function formatDateCompact(isoDate: string): string {
   return Number(y) === currentYear ? `${d}/${m}` : `${d}/${m}/${y}`;
 }
 
+/** Strips everything but digits — the canonical, storable/comparable form of a CNPJ. */
+export function normalizeCnpj(cnpj: string): string {
+  return cnpj.replace(/\D/g, "");
+}
+
+/** "62489830000181" -> "62.489.830/0001-81". Falls back to the raw input if it isn't 14 digits. */
+export function formatCnpj(cnpj: string): string {
+  const digits = normalizeCnpj(cnpj);
+  if (digits.length !== 14) return cnpj;
+  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12, 14)}`;
+}
+
 /** SQLite `datetime('now')` output ("2026-08-03 20:55:52", UTC) -> "3 de agosto de 2026 às 20:55" */
 export function formatDateTime(sqliteDatetime: string): string {
   const iso = sqliteDatetime.includes("T")

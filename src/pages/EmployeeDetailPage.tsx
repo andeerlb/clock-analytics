@@ -11,8 +11,9 @@ import type { StoredDayRecord, StoredImport } from "../lib/types";
 // the "Horas Extras" bento metric.
 const OVERTIME_THRESHOLD_MINUTES = 8 * 60;
 
-function isEmptyDay(day: Pick<StoredDayRecord, "punches" | "totalWorkedMinutes">): boolean {
-  return day.punches.length === 0 && day.totalWorkedMinutes === 0;
+/** A day with no day_record at all (outside what the parser captured) — as opposed to a real, recorded zero. */
+function isSynthetic(day: Pick<StoredDayRecord, "dayRecordId">): boolean {
+  return day.dayRecordId === -1;
 }
 
 const WEEKDAY_ABBR = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
@@ -107,7 +108,7 @@ export default function EmployeeDetailPage() {
   // Always includes every day from the period by default — this only
   // narrows what's *displayed*, the totals above are unaffected.
   const visibleDays = useMemo(
-    () => (hideEmptyDays ? fullDays.filter((d) => !isEmptyDay(d)) : fullDays),
+    () => (hideEmptyDays ? fullDays.filter((d) => !isSynthetic(d)) : fullDays),
     [fullDays, hideEmptyDays],
   );
 
@@ -120,6 +121,13 @@ export default function EmployeeDetailPage() {
   const hasSeparateOriginal =
     importInfo.sourceOriginalPdfPath !== null &&
     importInfo.sourceOriginalPdfPath !== importInfo.originalPdfPath;
+
+  // "Entrada 1", "Saída 1", "Entrada 2", "Saída 2", ... — however many
+  // pairs this import actually needs, computed at import time.
+  const punchColumnLabels = Array.from({ length: importInfo.maxPunches }, (_, i) => {
+    const pairNumber = Math.floor(i / 2) + 1;
+    return i % 2 === 0 ? `Entrada ${pairNumber}` : `Saída ${pairNumber}`;
+  });
 
   return (
     <div>
@@ -208,11 +216,14 @@ export default function EmployeeDetailPage() {
             <thead>
               <tr>
                 <th>Data</th>
-                <th style={{ textAlign: "center" }}>Entrada 1</th>
-                <th style={{ textAlign: "center" }}>Saída 1</th>
-                <th style={{ textAlign: "center" }}>Entrada 2</th>
-                <th style={{ textAlign: "center" }}>Saída 2</th>
-                <th style={{ textAlign: "right" }}>Total Diário</th>
+                {punchColumnLabels.map((label) => (
+                  <th key={label} style={{ textAlign: "center" }}>
+                    {label}
+                  </th>
+                ))}
+                <th style={{ textAlign: "right" }}>Total Trab.</th>
+                <th style={{ textAlign: "right" }}>HR</th>
+                <th style={{ textAlign: "right" }}>HF</th>
                 <th>Observação</th>
               </tr>
             </thead>
@@ -223,14 +234,14 @@ export default function EmployeeDetailPage() {
                 const rowClass = [weekend ? "row-weekend" : "", incomplete ? "row-incomplete" : ""]
                   .filter(Boolean)
                   .join(" ");
-                const empty = isEmptyDay(day);
+                const synthetic = isSynthetic(day);
 
                 return (
                   <tr key={day.date} className={rowClass || undefined}>
                     <td>
                       {formatDateCompact(day.date)} <span className="weekday muted">· {day.weekday}</span>
                     </td>
-                    {[0, 1, 2, 3].map((i) => (
+                    {punchColumnLabels.map((_, i) => (
                       <td key={i} style={{ textAlign: "center" }}>
                         {day.punches[i] ?? ""}
                       </td>
@@ -239,10 +250,16 @@ export default function EmployeeDetailPage() {
                       style={{
                         textAlign: "right",
                         fontWeight: 600,
-                        color: empty ? "var(--text-muted)" : "var(--accent)",
+                        color: synthetic ? "var(--text-muted)" : "var(--accent)",
                       }}
                     >
-                      {empty ? "" : formatMinutes(day.totalWorkedMinutes)}
+                      {synthetic ? "" : formatMinutes(day.totalWorkedMinutes)}
+                    </td>
+                    <td style={{ textAlign: "right" }}>
+                      {synthetic ? "" : formatMinutes(day.normalHoursMinutes)}
+                    </td>
+                    <td style={{ textAlign: "right" }}>
+                      {synthetic ? "" : formatMinutes(day.absenceMinutes)}
                     </td>
                     <td>{day.observation ?? ""}</td>
                   </tr>
@@ -252,6 +269,9 @@ export default function EmployeeDetailPage() {
           </table>
         </div>
       </div>
+      <p className="muted" style={{ fontSize: "0.78rem", marginTop: "0.6rem" }}>
+        Total Trab.: Total Trabalhado · HR: Horas Regulares · HF: Horas Faltas
+      </p>
     </div>
   );
 }

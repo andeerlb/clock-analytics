@@ -8,9 +8,11 @@ use regex::Regex;
 ///
 /// The layout is a fixed grid: one line per day, `DD/MM (Weekday)` followed
 /// by 0-4 "HH:MM" punches and always exactly 3 trailing "HH:MM" totals
-/// (Total trabalhado, Horas normais, Faltas). Plain `pdftotext` (no
-/// `-layout`) keeps this one-line-per-day structure, so the parser works
-/// off token counts per line rather than column positions.
+/// (Total trabalhado, Horas normais, Faltas). `pdf_extract::extract_text`
+/// uses `pdftotext -layout`, which keeps this one-line-per-day structure
+/// regardless of the source PDF's internal text-object order, so this
+/// parser works off token counts per line (trimmed first) rather than exact
+/// column positions or spacing.
 pub struct CoalizeParser;
 
 impl TimesheetParser for CoalizeParser {
@@ -206,5 +208,48 @@ Assinatura: ";
 
         assert_eq!(day.punches, vec!["16:27"]);
         assert_eq!(day.total_worked_minutes, 0);
+    }
+
+    // A real page from a Coalize batch export whose internal PDF text-object
+    // order made plain `pdftotext` emit every date first and every time
+    // value afterward — the day-row regex matched nothing and the parser
+    // silently produced 0 days. `pdftotext -layout` (which
+    // `pdf_extract::extract_text` now always uses) reconstructs rows from
+    // on-page position instead, giving this wide, space-padded — but still
+    // one-line-per-day — output. Also covers a `FUNCIONÁRIO` line with a
+    // trailing "| Cargo: ..." field this page had that the sample didn't.
+    const LAYOUT_SAMPLE: &str = "\
+Emissão: 03/08/2026 13:25:03
+
+                                                               ESPELHO PONTO: 01/07/2026 - 31/07/2026
+  FUNCIONÁRIO: LUANA VIEIRA | CPF: 06485482954 | Cargo: REPOSITOR (A)
+  EMPRESA: RF MERCHANDISING E PROMOCOES LTDA | CNPJ: 62489830000181
+
+                                                  Jornada realizada                              Jornada
+                                                                                       Total                Horas
+                   Data               Ent. 1     Saí. 1       Ent. 2    Saí. 2                                         Faltas    Observação
+                                                                                    trabalhado             normais
+               01/07 (Qua)                                                             00:00                 00:00      00:00
+               05/07 (Dom)            15:08       21:15                                06:07                 00:00      00:00
+               31/07 (Sex)                                                             00:00                 00:00      00:00
+
+Assinatura: ";
+
+    #[test]
+    fn parses_wide_layout_output() {
+        let sheets = CoalizeParser.parse(LAYOUT_SAMPLE, "/tmp/x.pdf").unwrap();
+        assert_eq!(sheets.len(), 1);
+        let sheet = &sheets[0];
+
+        assert_eq!(sheet.employee.name, "LUANA VIEIRA");
+        assert_eq!(sheet.employee.cpf, "06485482954");
+        assert_eq!(sheet.days.len(), 3);
+
+        let no_punch = sheet.days.iter().find(|d| d.date == "2026-07-01").unwrap();
+        assert!(no_punch.punches.is_empty());
+
+        let with_punches = sheet.days.iter().find(|d| d.date == "2026-07-05").unwrap();
+        assert_eq!(with_punches.punches, vec!["15:08", "21:15"]);
+        assert_eq!(with_punches.total_worked_minutes, 6 * 60 + 7);
     }
 }

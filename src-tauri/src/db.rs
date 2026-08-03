@@ -34,5 +34,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0005_import_source_file.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 6,
+            description: "store how many punch columns an import's grid needs",
+            sql: include_str!("../migrations/0006_import_max_punches.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

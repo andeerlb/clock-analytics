@@ -165,5 +165,11 @@ export interface StoredImport {
    * source was a single-page file; distinct for a multi-page batch.
    */
   sourceOriginalPdfPath: string | null;
+  /**
+   * How many punch columns this import's grid needs (2 pairs, i.e. 4, by
+   * default — more if some day actually had more clock-ins). Computed once
+   * at import time; the UI just reads it instead of scanning day_records.
+   */
+  maxPunches: number;
   importedAt: string;
 }

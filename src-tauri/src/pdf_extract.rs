@@ -2,14 +2,24 @@ use crate::model::ParseError;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Extracts raw text from a PDF file using `pdftotext` (Poppler), in
-/// reading order (no `-layout`), which is what the Coalize parser expects.
+/// Extracts raw text from a PDF file using `pdftotext -layout` (Poppler).
+///
+/// `-layout` reconstructs each line from the *visual* (x/y) position of the
+/// text on the page, rather than the order text objects happen to appear in
+/// the PDF's content stream. Without it, two pages from the same export can
+/// come out with a completely different reading order — one page listed
+/// dates and times inline per row, another listed every date first and
+/// every time value afterward, silently breaking the one-line-per-day
+/// assumption the Coalize parser depends on (0 days parsed, no error).
+/// `-layout` is slower but the line structure it produces is stable
+/// regardless of how the source PDF was generated.
 ///
 /// NOTE: for distribution across Linux/macOS/Windows, `pdftotext` needs to
 /// be bundled as a Tauri sidecar binary per platform rather than relying on
 /// a system install. This wrapper is the single seam that would change.
 pub fn extract_text(pdf_path: &str) -> Result<String, ParseError> {
     let output = Command::new("pdftotext")
+        .arg("-layout")
         .arg(pdf_path)
         .arg("-") // write to stdout
         .output()
