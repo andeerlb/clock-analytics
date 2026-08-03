@@ -454,6 +454,5 @@ export async function listImportFiles(): Promise<ImportFileRow[]> {
       saved_at AS savedAt
     FROM source_files
     ORDER BY imported_at DESC
-    LIMIT 50
   `);
 }

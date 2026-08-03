@@ -54,7 +54,8 @@ type PreviewRow =
   | { kind: "sheet"; sheetIndex: number; sheet: ParsedTimesheet }
   | { kind: "error"; fileName: string; message: string };
 
-const PREVIEW_PAGE_SIZE = 10;
+const PREVIEW_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 export default function ImportPage() {
   const navigate = useNavigate();
@@ -66,8 +67,11 @@ export default function ImportPage() {
   const [conflicts, setConflicts] = useState<ConflictInfo[]>([]);
   const [selectedSheets, setSelectedSheets] = useState<Set<number>>(new Set());
   const [previewPage, setPreviewPage] = useState(0);
+  const [previewPageSize, setPreviewPageSize] = useState(PREVIEW_PAGE_SIZE_OPTIONS[0]);
   const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
   const [historySearch, setHistorySearch] = useState("");
+  const [historyPage, setHistoryPage] = useState(0);
+  const [historyPageSize, setHistoryPageSize] = useState(HISTORY_PAGE_SIZE_OPTIONS[0]);
   const [dragActive, setDragActive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -200,14 +204,14 @@ export default function ImportPage() {
 
   const errorCount = fileResults.filter((r) => r.error).length;
 
-  const previewPageCount = Math.max(1, Math.ceil(previewRows.length / PREVIEW_PAGE_SIZE));
+  const previewPageCount = Math.max(1, Math.ceil(previewRows.length / previewPageSize));
   const previewPageItems = useMemo(
     () =>
       previewRows.slice(
-        previewPage * PREVIEW_PAGE_SIZE,
-        previewPage * PREVIEW_PAGE_SIZE + PREVIEW_PAGE_SIZE,
+        previewPage * previewPageSize,
+        previewPage * previewPageSize + previewPageSize,
       ),
-    [previewRows, previewPage],
+    [previewRows, previewPage, previewPageSize],
   );
 
   const allSelected = sheets.length > 0 && sheets.every((_, i) => selectedSheets.has(i));
@@ -217,6 +221,20 @@ export default function ImportPage() {
     if (!query) return recentFiles;
     return recentFiles.filter((f) => f.fileName.toLowerCase().includes(query));
   }, [recentFiles, historySearch]);
+
+  useEffect(() => {
+    setHistoryPage(0);
+  }, [historySearch]);
+
+  const historyPageCount = Math.max(1, Math.ceil(filteredRecentFiles.length / historyPageSize));
+  const historyPageItems = useMemo(
+    () =>
+      filteredRecentFiles.slice(
+        historyPage * historyPageSize,
+        historyPage * historyPageSize + historyPageSize,
+      ),
+    [filteredRecentFiles, historyPage, historyPageSize],
+  );
 
   async function handleParse() {
     setError(null);
@@ -555,15 +573,21 @@ export default function ImportPage() {
           </table>
           </div>
 
-          {previewRows.length > PREVIEW_PAGE_SIZE && (
+          {previewRows.length > PREVIEW_PAGE_SIZE_OPTIONS[0] && (
             <Pagination
               page={previewPage}
               pageCount={previewPageCount}
               onPageChange={setPreviewPage}
-              rangeLabel={`Mostrando ${previewPage * PREVIEW_PAGE_SIZE + 1} a ${Math.min(
+              rangeLabel={`Mostrando ${previewPage * previewPageSize + 1} a ${Math.min(
                 previewRows.length,
-                previewPage * PREVIEW_PAGE_SIZE + PREVIEW_PAGE_SIZE,
+                previewPage * previewPageSize + previewPageSize,
               )} de ${previewRows.length}`}
+              pageSize={previewPageSize}
+              pageSizeOptions={PREVIEW_PAGE_SIZE_OPTIONS}
+              onPageSizeChange={(size) => {
+                setPreviewPageSize(size);
+                setPreviewPage(0);
+              }}
             />
           )}
         </div>
@@ -606,7 +630,7 @@ export default function ImportPage() {
 
           {filteredRecentFiles.length > 0 && (
             <div className="file-list">
-              {filteredRecentFiles.map((f) => {
+              {historyPageItems.map((f) => {
                 const badge = STATUS_BADGE[f.status];
                 const BadgeIcon = badge.icon;
                 return (
@@ -647,6 +671,25 @@ export default function ImportPage() {
                 );
               })}
             </div>
+          )}
+
+          {filteredRecentFiles.length > HISTORY_PAGE_SIZE_OPTIONS[0] && (
+            <Pagination
+              page={historyPage}
+              pageCount={historyPageCount}
+              onPageChange={setHistoryPage}
+              rangeLabel={`Mostrando ${historyPage * historyPageSize + 1} a ${Math.min(
+                filteredRecentFiles.length,
+                historyPage * historyPageSize + historyPageSize,
+              )} de ${filteredRecentFiles.length}`}
+              pageSize={historyPageSize}
+              pageSizeOptions={HISTORY_PAGE_SIZE_OPTIONS}
+              onPageSizeChange={(size) => {
+                setHistoryPageSize(size);
+                setHistoryPage(0);
+              }}
+              maxPageButtons={3}
+            />
           )}
         </div>
 

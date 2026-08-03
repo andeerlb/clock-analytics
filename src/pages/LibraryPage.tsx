@@ -1,30 +1,67 @@
+import { Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Pagination from "../components/Pagination";
 import { openOriginalPdf } from "../lib/api";
 import { colorForName, initials } from "../lib/avatar";
-import { listImports } from "../lib/db";
+import { listCompanies, listImports, type CompanyRow } from "../lib/db";
 import { formatDate, formatDateTime } from "../lib/format";
 import type { StoredImport } from "../lib/types";
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 export default function LibraryPage() {
   const [imports, setImports] = useState<StoredImport[]>([]);
+  const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
+  const [search, setSearch] = useState("");
+  const [companyId, setCompanyId] = useState("");
+  const [periodStart, setPeriodStart] = useState("");
+  const [periodEnd, setPeriodEnd] = useState("");
 
   useEffect(() => {
-    listImports()
-      .then(setImports)
+    Promise.all([listImports(), listCompanies()])
+      .then(([importsRows, companyRows]) => {
+        setImports(importsRows);
+        setCompanies(companyRows);
+      })
       .finally(() => setLoading(false));
   }, []);
 
-  const pageCount = Math.max(1, Math.ceil(imports.length / PAGE_SIZE));
+  // Reset to the first page whenever a filter changes, so pagination never
+  // gets stuck showing an out-of-range page.
+  useEffect(() => {
+    setPage(0);
+  }, [search, companyId, periodStart, periodEnd]);
+
+  const filteredImports = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return imports.filter((imp) => {
+      if (companyId && String(imp.companyId) !== companyId) return false;
+      if (
+        query &&
+        !imp.employeeName.toLowerCase().includes(query) &&
+        !imp.companyName.toLowerCase().includes(query)
+      ) {
+        return false;
+      }
+      // Period range filter: keep imports whose period overlaps the
+      // selected range — an empty bound means "no constraint on that side".
+      if (periodStart && imp.periodEnd < periodStart) return false;
+      if (periodEnd && imp.periodStart > periodEnd) return false;
+      return true;
+    });
+  }, [imports, search, companyId, periodStart, periodEnd]);
+
+  const pageCount = Math.max(1, Math.ceil(filteredImports.length / pageSize));
   const pageItems = useMemo(
-    () => imports.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE),
-    [imports, page],
+    () => filteredImports.slice(page * pageSize, page * pageSize + pageSize),
+    [filteredImports, page, pageSize],
   );
+
+  const hasFilters = Boolean(search || companyId || periodStart || periodEnd);
 
   return (
     <div>
@@ -35,6 +72,69 @@ export default function LibraryPage() {
         Colaboradores com espelhos de ponto importados.
       </p>
 
+      {imports.length > 0 && (
+        <div className="card">
+          <div className="field-row" style={{ marginBottom: 0 }}>
+            <div className="field" style={{ flex: "2 1 240px" }}>
+              <label htmlFor="search">Buscar</label>
+              <div style={{ position: "relative" }}>
+                <Search
+                  size={14}
+                  style={{
+                    position: "absolute",
+                    left: "0.65rem",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    color: "var(--text-muted)",
+                  }}
+                />
+                <input
+                  id="search"
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Colaborador ou empresa..."
+                  style={{ width: "100%", paddingLeft: "2rem" }}
+                />
+              </div>
+            </div>
+            <div className="field">
+              <label htmlFor="company-filter">Empresa</label>
+              <select
+                id="company-filter"
+                value={companyId}
+                onChange={(e) => setCompanyId(e.target.value)}
+              >
+                <option value="">Todas</option>
+                {companies.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="period-start">De</label>
+              <input
+                id="period-start"
+                type="date"
+                value={periodStart}
+                onChange={(e) => setPeriodStart(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="period-end">Até</label>
+              <input
+                id="period-end"
+                type="date"
+                value={periodEnd}
+                onChange={(e) => setPeriodEnd(e.target.value)}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="card table-card">
         {loading && <p className="muted" style={{ padding: "1.4rem" }}>Carregando...</p>}
         {!loading && imports.length === 0 && (
@@ -42,7 +142,12 @@ export default function LibraryPage() {
             Nenhum import ainda. Comece importando um PDF.
           </p>
         )}
-        {imports.length > 0 && (
+        {!loading && imports.length > 0 && filteredImports.length === 0 && (
+          <p className="muted" style={{ padding: "1.4rem" }}>
+            {hasFilters ? "Nenhum colaborador encontrado para esse filtro." : "Nenhum registro."}
+          </p>
+        )}
+        {filteredImports.length > 0 && (
           <>
             <div className="table-scroll">
             <table>
@@ -52,7 +157,7 @@ export default function LibraryPage() {
                   <th>Empresa</th>
                   <th>Período</th>
                   <th>Importado em</th>
-                  <th></th>
+                  <th>Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -76,8 +181,9 @@ export default function LibraryPage() {
                         type="button"
                         className="secondary"
                         onClick={() => openOriginalPdf(imp.originalPdfPath)}
+                        title="Abrir o PDF deste colaborador"
                       >
-                        Original
+                        PDF
                       </button>
                     </td>
                   </tr>
@@ -90,10 +196,16 @@ export default function LibraryPage() {
               page={page}
               pageCount={pageCount}
               onPageChange={setPage}
-              rangeLabel={`Mostrando ${page * PAGE_SIZE + 1} a ${Math.min(
-                imports.length,
-                page * PAGE_SIZE + PAGE_SIZE,
-              )} de ${imports.length} registros`}
+              rangeLabel={`Mostrando ${page * pageSize + 1} a ${Math.min(
+                filteredImports.length,
+                page * pageSize + pageSize,
+              )} de ${filteredImports.length} registros`}
+              pageSize={pageSize}
+              pageSizeOptions={PAGE_SIZE_OPTIONS}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(0);
+              }}
             />
           </>
         )}
