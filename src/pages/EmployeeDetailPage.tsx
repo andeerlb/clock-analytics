@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { openOriginalPdf } from "../lib/api";
 import { analyzeDay, formatMinutes } from "../lib/analysis";
 import { listImports, listStoredDayRecords } from "../lib/db";
+import { formatDate, formatDayShort } from "../lib/format";
 import type { StoredDayRecord, StoredImport } from "../lib/types";
 
 export default function EmployeeDetailPage() {
@@ -51,7 +52,8 @@ export default function EmployeeDetailPage() {
         <div>
           <h2>{importInfo.employeeName}</h2>
           <p className="muted">
-            {importInfo.companyName} · {importInfo.periodStart} a {importInfo.periodEnd}
+            {importInfo.companyName} · {formatDate(importInfo.periodStart)} a{" "}
+            {formatDate(importInfo.periodEnd)}
           </p>
         </div>
         <button
@@ -112,7 +114,7 @@ export default function EmployeeDetailPage() {
               const a = analyzeDay(day, thresholdMinutes);
               return (
                 <tr key={day.dayRecordId}>
-                  <td>{day.date}</td>
+                  <td>{formatDayShort(day.date)}</td>
                   <td>{day.weekday}</td>
                   <td>{day.punches[0] ?? "—"}</td>
                   <td>{day.punches[1] ?? "—"}</td>

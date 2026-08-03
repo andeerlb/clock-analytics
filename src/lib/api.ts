@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { FileHash, ParsedTimesheet, ProviderInfo } from "./types";
+import type { FileHash, FileParseResult, ProviderInfo } from "./types";
 
 export function listProviders(): Promise<ProviderInfo[]> {
   return invoke("list_providers");
@@ -11,7 +11,8 @@ export function hashFiles(paths: string[]): Promise<FileHash[]> {
   return invoke("hash_files", { paths });
 }
 
-export function parseImport(provider: string, paths: string[]): Promise<ParsedTimesheet[]> {
+/** Parses each file independently — check `.error` per result instead of a try/catch around the whole batch. */
+export function parseImport(provider: string, paths: string[]): Promise<FileParseResult[]> {
   return invoke("parse_import", { provider, paths });
 }
 

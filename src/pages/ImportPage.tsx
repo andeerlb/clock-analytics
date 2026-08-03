@@ -1,5 +1,18 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { FileText, FolderOpen, Lightbulb, ShieldCheck, UploadCloud, X } from "lucide-react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  FileText,
+  FolderOpen,
+  Lightbulb,
+  PlusCircle,
+  ShieldCheck,
+  UploadCloud,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { hashFiles, listProviders, parseImport, pickPdfFiles } from "../lib/api";
@@ -9,9 +22,11 @@ import {
   findDuplicateFiles,
   saveParsedTimesheet,
 } from "../lib/db";
+import { formatDateTime, formatPeriod } from "../lib/format";
 import type {
   ConflictInfo,
   DuplicateFileInfo,
+  FileParseResult,
   ImportFileRow,
   ParsedTimesheet,
   ProviderInfo,
@@ -23,15 +38,22 @@ interface FileStatus {
   duplicate: DuplicateFileInfo | null;
 }
 
+type PreviewRow =
+  | { kind: "sheet"; sheetIndex: number; sheet: ParsedTimesheet }
+  | { kind: "error"; fileName: string; message: string };
+
+const PREVIEW_PAGE_SIZE = 10;
+
 export default function ImportPage() {
   const navigate = useNavigate();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [provider, setProvider] = useState("");
   const [paths, setPaths] = useState<string[]>([]);
   const [fileStatuses, setFileStatuses] = useState<Map<string, FileStatus>>(new Map());
-  const [preview, setPreview] = useState<ParsedTimesheet[]>([]);
+  const [fileResults, setFileResults] = useState<FileParseResult[]>([]);
   const [conflicts, setConflicts] = useState<ConflictInfo[]>([]);
-  const [overwriteSelected, setOverwriteSelected] = useState<Set<number>>(new Set());
+  const [selectedSheets, setSelectedSheets] = useState<Set<number>>(new Set());
+  const [previewPage, setPreviewPage] = useState(0);
   const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -94,19 +116,23 @@ export default function ImportPage() {
 
   function addPaths(newPaths: string[]) {
     setPaths((prev) => Array.from(new Set([...prev, ...newPaths])));
-    setPreview([]);
-    setConflicts([]);
+    cancelPreview();
   }
 
   function removePath(path: string) {
     setPaths((prev) => prev.filter((p) => p !== path));
   }
 
+  function cancelPreview() {
+    setFileResults([]);
+    setConflicts([]);
+    setSelectedSheets(new Set());
+    setPreviewPage(0);
+  }
+
   function reset() {
     setPaths([]);
-    setPreview([]);
-    setConflicts([]);
-    setOverwriteSelected(new Set());
+    cancelPreview();
     setError(null);
   }
 
@@ -122,15 +148,65 @@ export default function ImportPage() {
   );
   const duplicateCount = paths.length - eligiblePaths.length;
 
+  // Flat list of every successfully parsed sheet, in file order — this is
+  // what conflict-checking and saving iterate over. Index into this array
+  // is the stable identity used for selection/conflict lookups.
+  const sheets = useMemo(() => fileResults.flatMap((r) => r.sheets), [fileResults]);
+
+  const conflictBySheetIndex = useMemo(
+    () => new Map(conflicts.map((c) => [c.sheetIndex, c])),
+    [conflicts],
+  );
+
+  // One row per sheet, plus one row per file that failed to parse — a bad
+  // PDF in the batch doesn't hide the results already extracted from the
+  // others.
+  const previewRows = useMemo(() => {
+    const rows: PreviewRow[] = [];
+    let idx = 0;
+    for (const result of fileResults) {
+      if (result.error) {
+        rows.push({ kind: "error", fileName: result.fileName, message: result.error });
+      } else {
+        for (const sheet of result.sheets) {
+          rows.push({ kind: "sheet", sheetIndex: idx, sheet });
+          idx++;
+        }
+      }
+    }
+    return rows;
+  }, [fileResults]);
+
+  const errorCount = fileResults.filter((r) => r.error).length;
+
+  const previewPageCount = Math.max(1, Math.ceil(previewRows.length / PREVIEW_PAGE_SIZE));
+  const previewPageItems = useMemo(
+    () =>
+      previewRows.slice(
+        previewPage * PREVIEW_PAGE_SIZE,
+        previewPage * PREVIEW_PAGE_SIZE + PREVIEW_PAGE_SIZE,
+      ),
+    [previewRows, previewPage],
+  );
+
+  const allSelected = sheets.length > 0 && sheets.every((_, i) => selectedSheets.has(i));
+
   async function handleParse() {
     setError(null);
     setBusy(true);
     try {
-      const sheets = await parseImport(provider, eligiblePaths);
-      const foundConflicts = await findConflicts(sheets);
-      setPreview(sheets);
+      const results = await parseImport(provider, eligiblePaths);
+      const allSheets = results.flatMap((r) => r.sheets);
+      const foundConflicts = await findConflicts(allSheets);
+      // Rows with a conflict start unselected — overwriting is opt-in.
+      const defaultSelected = new Set<number>();
+      allSheets.forEach((_, i) => {
+        if (!foundConflicts.some((c) => c.sheetIndex === i)) defaultSelected.add(i);
+      });
+      setFileResults(results);
       setConflicts(foundConflicts);
-      setOverwriteSelected(new Set());
+      setSelectedSheets(defaultSelected);
+      setPreviewPage(0);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -138,8 +214,8 @@ export default function ImportPage() {
     }
   }
 
-  function toggleOverwrite(sheetIndex: number) {
-    setOverwriteSelected((prev) => {
+  function toggleSheet(sheetIndex: number) {
+    setSelectedSheets((prev) => {
       const next = new Set(prev);
       if (next.has(sheetIndex)) next.delete(sheetIndex);
       else next.add(sheetIndex);
@@ -147,10 +223,9 @@ export default function ImportPage() {
     });
   }
 
-  const conflictBySheetIndex = useMemo(
-    () => new Map(conflicts.map((c) => [c.sheetIndex, c])),
-    [conflicts],
-  );
+  function toggleAll() {
+    setSelectedSheets(allSelected ? new Set() : new Set(sheets.map((_, i) => i)));
+  }
 
   async function handleSave() {
     setBusy(true);
@@ -158,10 +233,10 @@ export default function ImportPage() {
     try {
       let lastImportId: number | null = null;
       let savedCount = 0;
-      for (let i = 0; i < preview.length; i++) {
+      for (let i = 0; i < sheets.length; i++) {
+        if (!selectedSheets.has(i)) continue;
         const conflict = conflictBySheetIndex.get(i);
-        if (conflict && !overwriteSelected.has(i)) continue; // conflicting + not confirmed: skip
-        lastImportId = await saveParsedTimesheet(preview[i], conflict?.existingImportId);
+        lastImportId = await saveParsedTimesheet(sheets[i], conflict?.existingImportId);
         savedCount++;
       }
       refreshRecentFiles();
@@ -231,9 +306,15 @@ export default function ImportPage() {
                       <div className="file-name">{status?.fileName ?? p}</div>
                       {status?.duplicate && (
                         <div className="file-meta">
-                          {status.duplicate.employeeName} · {status.duplicate.companyName} ·
-                          importado em {status.duplicate.importedAt}{" "}
-                          <Link to={`/employee/${status.duplicate.importId}`}>ver</Link>
+                          {status.duplicate.employees[0].companyName} ·{" "}
+                          {status.duplicate.employees.map((e, i) => (
+                            <span key={e.importId}>
+                              {i > 0 && ", "}
+                              <Link to={`/employee/${e.importId}`}>{e.employeeName}</Link>
+                            </span>
+                          ))}
+                          {" · importado em "}
+                          {formatDateTime(status.duplicate.importedAt)}
                         </div>
                       )}
                     </div>
@@ -272,53 +353,126 @@ export default function ImportPage() {
         </div>
       </div>
 
-      {preview.length > 0 && (
+      {fileResults.length > 0 && (
         <div className="card">
-          <h3 style={{ marginTop: 0 }}>Pré-visualização</h3>
-          {conflicts.length > 0 && (
-            <p className="muted" style={{ marginTop: "-0.4rem" }}>
-              Alguns colaboradores já têm dados importados para esse período. Marque quem você
-              quer <strong>sobrescrever</strong> — os demais não terão os dados salvos.
-            </p>
-          )}
+          <div className="page-header" style={{ marginBottom: "0.4rem", alignItems: "flex-start" }}>
+            <div>
+              <h3 style={{ margin: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <Eye size={18} />
+                Pré-visualização da Importação
+              </h3>
+              {conflicts.length > 0 ? (
+                <p className="muted" style={{ maxWidth: "42rem" }}>
+                  Alguns colaboradores já possuem dados importados para este período. Revise a
+                  lista e marque quem você quer <strong>sobrescrever</strong> — os demais não
+                  terão os dados salvos.
+                </p>
+              ) : (
+                <p className="muted">Revise os dados antes de confirmar.</p>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: "0.6rem", flexShrink: 0 }}>
+              <button type="button" className="secondary" onClick={cancelPreview} disabled={busy}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={busy || selectedSheets.size === 0}
+              >
+                {busy ? "Salvando..." : "Salvar no banco"}
+              </button>
+            </div>
+          </div>
+
+          <div className="table-toolbar">
+            <div className="counts">
+              <span>{sheets.length} registro(s) encontrado(s)</span>
+              {conflicts.length > 0 && (
+                <span className="badge overwrite">{conflicts.length} conflito(s)</span>
+              )}
+              {errorCount > 0 && <span className="badge warn">{errorCount} erro(s)</span>}
+            </div>
+          </div>
+
           <table>
             <thead>
               <tr>
+                <th className="checkbox-cell">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    disabled={sheets.length === 0}
+                    aria-label="Selecionar todos"
+                  />
+                </th>
                 <th>Colaborador</th>
                 <th>CPF</th>
                 <th>Empresa</th>
                 <th>Período</th>
-                <th>Dias lidos</th>
+                <th style={{ textAlign: "right" }}>Dias lidos</th>
                 <th>Status</th>
               </tr>
             </thead>
             <tbody>
-              {preview.map((sheet, i) => {
-                const conflict = conflictBySheetIndex.get(i);
+              {previewPageItems.map((row, i) => {
+                if (row.kind === "error") {
+                  return (
+                    <tr key={`error-${i}`} className="row-error">
+                      <td className="checkbox-cell">
+                        <input type="checkbox" disabled aria-label="Não disponível" />
+                      </td>
+                      <td colSpan={5}>
+                        <div className="file-name">{row.fileName}</div>
+                        <div className="muted">{row.message}</div>
+                      </td>
+                      <td>
+                        <span className="badge warn">
+                          <AlertCircle size={13} />
+                          Erro no arquivo
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const conflict = conflictBySheetIndex.get(row.sheetIndex);
                 return (
-                  <tr key={i}>
-                    <td>{sheet.employee.name}</td>
-                    <td>{sheet.employee.cpf}</td>
-                    <td>{sheet.company.name}</td>
-                    <td>
-                      {sheet.period.start} a {sheet.period.end}
+                  <tr key={row.sheetIndex}>
+                    <td className="checkbox-cell">
+                      <input
+                        type="checkbox"
+                        checked={selectedSheets.has(row.sheetIndex)}
+                        onChange={() => toggleSheet(row.sheetIndex)}
+                        aria-label={`Selecionar ${row.sheet.employee.name}`}
+                      />
                     </td>
-                    <td>{sheet.days.length}</td>
+                    <td>{row.sheet.employee.name}</td>
+                    <td className="mono">{row.sheet.employee.cpf}</td>
+                    <td>{row.sheet.company.name}</td>
+                    <td>{formatPeriod(row.sheet.period.start, row.sheet.period.end)}</td>
+                    <td className="mono" style={{ textAlign: "right" }}>
+                      {row.sheet.days.length}
+                    </td>
                     <td>
-                      {!conflict && <span className="badge ok">Novo</span>}
+                      {!conflict && (
+                        <span className="badge ok">
+                          <PlusCircle size={13} />
+                          Novo
+                        </span>
+                      )}
                       {conflict && (
-                        <label
-                          style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}
-                          className="muted"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={overwriteSelected.has(i)}
-                            onChange={() => toggleOverwrite(i)}
-                          />
-                          Sobrescrever ({conflict.existingPeriodStart} a{" "}
-                          {conflict.existingPeriodEnd}, {conflict.existingImportedAt})
-                        </label>
+                        <>
+                          <span className="badge overwrite">
+                            <AlertTriangle size={13} />
+                            Sobrescrever
+                          </span>
+                          <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.25rem" }}>
+                            {formatPeriod(conflict.existingPeriodStart, conflict.existingPeriodEnd)}{" "}
+                            · {formatDateTime(conflict.existingImportedAt)}
+                          </div>
+                        </>
                       )}
                     </td>
                   </tr>
@@ -326,11 +480,36 @@ export default function ImportPage() {
               })}
             </tbody>
           </table>
-          <div className="card-footer">
-            <button type="button" onClick={handleSave} disabled={busy}>
-              {busy ? "Salvando..." : "Salvar no banco"}
-            </button>
-          </div>
+
+          {previewRows.length > PREVIEW_PAGE_SIZE && (
+            <div className="pagination">
+              <span className="muted">
+                Mostrando {previewPage * PREVIEW_PAGE_SIZE + 1} a{" "}
+                {Math.min(previewRows.length, previewPage * PREVIEW_PAGE_SIZE + PREVIEW_PAGE_SIZE)}{" "}
+                de {previewRows.length}
+              </span>
+              <div className="pagination-controls">
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={previewPage === 0}
+                  onClick={() => setPreviewPage((p) => Math.max(0, p - 1))}
+                  aria-label="Página anterior"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={previewPage >= previewPageCount - 1}
+                  onClick={() => setPreviewPage((p) => Math.min(previewPageCount - 1, p + 1))}
+                  aria-label="Próxima página"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
       </div>
@@ -351,7 +530,7 @@ export default function ImportPage() {
                 {recentFiles.map((f) => (
                   <tr key={f.id}>
                     <td>{f.fileName}</td>
-                    <td>{f.importedAt}</td>
+                    <td>{formatDateTime(f.importedAt)}</td>
                   </tr>
                 ))}
               </tbody>

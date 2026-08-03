@@ -40,10 +40,25 @@ pub fn hash_files(paths: Vec<String>) -> Result<Vec<FileHash>, String> {
         .collect()
 }
 
+/// Outcome of parsing a single source file — kept separate per file so one
+/// bad PDF in a batch doesn't hide the results already extracted from the
+/// others.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileParseResult {
+    pub path: String,
+    pub file_name: String,
+    pub sheets: Vec<ParsedTimesheet>,
+    pub error: Option<String>,
+}
+
 /// Extracts text from each source PDF, hands it to the chosen provider's
 /// parser, and copies the original file into the app's data dir so it stays
 /// browsable later ("ver relatório original") independent of where the user
 /// picked it from on disk.
+///
+/// Each file is parsed independently: a failure on one file is recorded on
+/// its own `FileParseResult` rather than aborting the rest of the batch.
 ///
 /// Persisting the parsed result into SQLite is left to the frontend (via
 /// `@tauri-apps/plugin-sql`) once it has a result it's happy with — this
@@ -53,7 +68,7 @@ pub fn parse_import(
     app: AppHandle,
     provider: String,
     paths: Vec<String>,
-) -> Result<Vec<ParsedTimesheet>, String> {
+) -> Result<Vec<FileParseResult>, String> {
     let parser = parsers::get_parser(&provider).ok_or_else(|| format!("unknown provider '{provider}'"))?;
 
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -62,26 +77,46 @@ pub fn parse_import(
 
     let mut results = Vec::new();
     for source_path in paths {
-        let raw_text = pdf_extract::extract_text(&source_path).map_err(|e| e.to_string())?;
-        let file_hash = hashing::hash_file(&source_path).map_err(|e| e.to_string())?;
         let file_name = hashing::file_name(&source_path);
-
-        let file_id = uuid::Uuid::new_v4();
-        let dest: PathBuf = imports_dir.join(format!("{file_id}.pdf"));
-        fs::copy(&source_path, &dest).map_err(|e| e.to_string())?;
-        let dest_str = dest.to_string_lossy().to_string();
-
-        let mut parsed = parser
-            .parse(&raw_text, &dest_str)
-            .map_err(|e| e.to_string())?;
-        for sheet in &mut parsed {
-            sheet.original_file_hash = file_hash.clone();
-            sheet.original_file_name = file_name.clone();
+        match parse_one_file(&source_path, &file_name, parser.as_ref(), &imports_dir) {
+            Ok(sheets) => results.push(FileParseResult {
+                path: source_path,
+                file_name,
+                sheets,
+                error: None,
+            }),
+            Err(message) => results.push(FileParseResult {
+                path: source_path,
+                file_name,
+                sheets: Vec::new(),
+                error: Some(message),
+            }),
         }
-        results.extend(parsed);
     }
 
     Ok(results)
+}
+
+fn parse_one_file(
+    source_path: &str,
+    file_name: &str,
+    parser: &dyn parsers::TimesheetParser,
+    imports_dir: &std::path::Path,
+) -> Result<Vec<ParsedTimesheet>, String> {
+    let raw_text = pdf_extract::extract_text(source_path).map_err(|e| e.to_string())?;
+    let file_hash = hashing::hash_file(source_path).map_err(|e| e.to_string())?;
+
+    let file_id = uuid::Uuid::new_v4();
+    let dest: PathBuf = imports_dir.join(format!("{file_id}.pdf"));
+    fs::copy(source_path, &dest).map_err(|e| e.to_string())?;
+    let dest_str = dest.to_string_lossy().to_string();
+
+    let mut parsed = parser.parse(&raw_text, &dest_str).map_err(|e| e.to_string())?;
+    for sheet in &mut parsed {
+        sheet.original_file_hash = file_hash.clone();
+        sheet.original_file_name = file_name.to_string();
+    }
+    Ok(parsed)
 }
 
 #[tauri::command]

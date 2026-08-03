@@ -302,18 +302,23 @@ export async function findDuplicateFiles(
 
   const byHash = new Map<string, DuplicateFileInfo>();
   for (const row of rows) {
-    // A file can map to more than one employee (consolidated PDFs); the
-    // first match is enough to tell the user "this was already imported".
-    if (!byHash.has(row.fileHash)) {
-      byHash.set(row.fileHash, {
+    let entry = byHash.get(row.fileHash);
+    if (!entry) {
+      entry = {
         importFileId: row.importFileId,
         fileName: row.fileName,
         importedAt: row.importedAt,
-        employeeName: row.employeeName,
-        companyName: row.companyName,
-        importId: row.importId,
-      });
+        employees: [],
+      };
+      byHash.set(row.fileHash, entry);
     }
+    // A file can map to more than one employee (consolidated PDFs) — list
+    // every one of them rather than picking an arbitrary "the" employee.
+    entry.employees.push({
+      importId: row.importId,
+      employeeName: row.employeeName,
+      companyName: row.companyName,
+    });
   }
   return byHash;
 }

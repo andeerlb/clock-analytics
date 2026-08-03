@@ -46,6 +46,18 @@ export interface ParsedTimesheet {
   originalFileName: string;
 }
 
+/**
+ * Outcome of parsing one source file. Each file is parsed independently, so
+ * a failure on one PDF in a batch doesn't hide the results already
+ * extracted from the others.
+ */
+export interface FileParseResult {
+  path: string;
+  fileName: string;
+  sheets: ParsedTimesheet[];
+  error: string | null;
+}
+
 export interface ProviderInfo {
   id: string;
   label: string;
@@ -58,14 +70,17 @@ export interface FileHash {
   hash: string;
 }
 
-/** A previously-imported file, found by matching a hash against `import_files`. */
+/**
+ * A previously-imported file, found by matching a hash against `import_files`.
+ * `employees` lists every import that came from this file — a consolidated
+ * PDF can hold more than one person, so there's no single "the" employee to
+ * point at.
+ */
 export interface DuplicateFileInfo {
   importFileId: number;
   fileName: string;
   importedAt: string;
-  employeeName: string;
-  companyName: string;
-  importId: number;
+  employees: { importId: number; employeeName: string; companyName: string }[];
 }
 
 export interface ImportFileRow {

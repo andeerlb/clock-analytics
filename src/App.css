@@ -29,6 +29,11 @@
   --danger-soft: rgba(255, 180, 171, 0.15);
   --success: #4edea3;
   --success-soft: rgba(78, 222, 163, 0.15);
+  /* Not part of the M3 token set — used only to tell "will overwrite"
+     apart from "failed to parse", which both would otherwise land on
+     --danger. */
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.15);
 
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
   font-size: 15px;
@@ -322,7 +327,9 @@ tr:last-child td {
 }
 
 .badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   padding: 0.15em 0.55em;
   border-radius: 999px;
   font-size: 0.75rem;
@@ -331,15 +338,19 @@ tr:last-child td {
 
 .badge.warn {
   background: var(--danger-soft);
-  color: #f87171;
+  color: var(--danger);
 }
 .badge.info {
   background: var(--accent-soft);
-  color: #93a3ff;
+  color: var(--accent);
 }
 .badge.ok {
   background: var(--success-soft);
-  color: #4ade80;
+  color: var(--success);
+}
+.badge.overwrite {
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 .badge.duplicate {
   background: #171f33;
@@ -558,4 +569,55 @@ tr:last-child td {
   margin: 0;
   font-size: 0.82rem;
   color: var(--text-muted);
+}
+
+/* Preview table (import) */
+
+input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  padding: 0;
+}
+
+input[type="checkbox"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.checkbox-cell {
+  width: 2.5rem;
+  text-align: center;
+}
+
+.mono {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.85em;
+}
+
+.table-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.table-toolbar .counts {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+}
+
+tbody tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+tr.row-error {
+  opacity: 0.7;
+  background: var(--danger-soft);
+}
+
+tr.row-error:hover {
+  background: var(--danger-soft);
 }

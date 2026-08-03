@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { openOriginalPdf } from "../lib/api";
 import { colorForName, initials } from "../lib/avatar";
 import { listImports } from "../lib/db";
+import { formatDate, formatDateTime } from "../lib/format";
 import type { StoredImport } from "../lib/types";
 
 const PAGE_SIZE = 10;
@@ -64,9 +65,9 @@ export default function LibraryPage() {
                     </td>
                     <td>{imp.companyName}</td>
                     <td>
-                      {imp.periodStart} a {imp.periodEnd}
+                      {formatDate(imp.periodStart)} a {formatDate(imp.periodEnd)}
                     </td>
-                    <td>{imp.importedAt}</td>
+                    <td>{formatDateTime(imp.importedAt)}</td>
                     <td>
                       <button
                         type="button"
