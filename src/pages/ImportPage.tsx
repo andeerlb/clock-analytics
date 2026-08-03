@@ -1,5 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { FolderOpen, Lightbulb, ShieldCheck, UploadCloud, X } from "lucide-react";
+import { FileText, FolderOpen, Lightbulb, ShieldCheck, UploadCloud, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { hashFiles, listProviders, parseImport, pickPdfFiles } from "../lib/api";
@@ -216,43 +216,49 @@ export default function ImportPage() {
               <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
               Procurar arquivos
             </button>
-            {paths.length > 0 && (
-              <ul className="dropzone-file-list">
-                {paths.map((p) => {
-                  const status = fileStatuses.get(p);
-                  return (
-                    <li key={p}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                        <span style={{ flex: 1 }}>{status?.fileName ?? p}</span>
-                        {status?.duplicate && <span className="badge warn">Já importado</span>}
-                        <button
-                          type="button"
-                          className="ghost"
-                          style={{ padding: "0.2rem" }}
-                          onClick={() => removePath(p)}
-                          aria-label="Remover"
-                        >
-                          <X size={14} />
-                        </button>
-                      </div>
+          </div>
+
+          {paths.length > 0 && (
+            <div className="file-list">
+              {paths.map((p) => {
+                const status = fileStatuses.get(p);
+                return (
+                  <div className="file-row" key={p}>
+                    <div className="file-row-icon">
+                      <FileText size={18} />
+                    </div>
+                    <div className="file-row-info">
+                      <div className="file-name">{status?.fileName ?? p}</div>
                       {status?.duplicate && (
-                        <p className="muted" style={{ margin: "0.15rem 0 0" }}>
+                        <div className="file-meta">
                           {status.duplicate.employeeName} · {status.duplicate.companyName} ·
                           importado em {status.duplicate.importedAt}{" "}
                           <Link to={`/employee/${status.duplicate.importId}`}>ver</Link>
-                        </p>
+                        </div>
                       )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-            {duplicateCount > 0 && (
-              <p className="muted" style={{ margin: "0.5rem 0 0" }}>
-                {duplicateCount} arquivo(s) já importado(s) não serão reprocessados.
-              </p>
-            )}
-          </div>
+                    </div>
+                    <div className="file-row-actions">
+                      {status?.duplicate && <span className="badge duplicate">Já importado</span>}
+                      <button
+                        type="button"
+                        className="ghost"
+                        style={{ padding: "0.3rem" }}
+                        onClick={() => removePath(p)}
+                        aria-label="Remover"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {duplicateCount > 0 && (
+            <p className="muted" style={{ textAlign: "center", marginTop: "0.75rem" }}>
+              {duplicateCount} arquivo(s) já importado(s) não serão reprocessados.
+            </p>
+          )}
         </div>
 
         <div className="card-footer">
