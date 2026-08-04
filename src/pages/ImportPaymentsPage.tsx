@@ -25,17 +25,22 @@ import {
   findDuplicatePaymentShifts,
   findEmployeeByIdentifiers,
   getPaymentTemplate,
-  listClients,
   listImportFiles,
   listPaymentTemplates,
   logSourceFile,
   markSourceFileSaved,
   savePaymentShifts,
-  type ClientRow,
   type EmployeeRow,
   type PaymentShiftInput,
 } from "../lib/db";
-import { formatDate, formatDateTime, parseDateWithFormat } from "../lib/format";
+import {
+  formatDate,
+  formatDateTime,
+  formatMinutesAsTime,
+  parseDateWithFormat,
+  parseScheduleToMinutes,
+  resolvePaymentRoute,
+} from "../lib/format";
 import type {
   ImportFileRow,
   ImportStatus,
@@ -57,11 +62,16 @@ interface PaymentPreviewRow {
   employee: EmployeeRow | null;
   local: string;
   role: string;
-  schedule: string;
+  /** Raw Horário text, kept only to display when `parseScheduleToMinutes` can't make sense of it. */
+  scheduleRaw: string;
+  scheduleStartMinutes: number | null;
+  scheduleEndMinutes: number | null;
   note: string | null;
   /** Always a valid ISO date — rows whose "data" field doesn't parse are filtered out before this is ever built (see `handleProcess`), not shown as an error row. */
   workDate: string;
   isDuplicate: boolean;
+  /** No rule in the template's routing chain matched this row's field value — `employee` is always `null` when this is `true` (the lookup never runs without a resolved client). */
+  unresolvedRoute: boolean;
 }
 
 interface PaymentFileResult {
@@ -82,10 +92,6 @@ const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 export default function ImportPaymentsPage() {
   const navigate = useNavigate();
-
-  const [clients, setClients] = useState<ClientRow[]>([]);
-  const [clientId, setClientId] = useState("");
-  const [companyId, setCompanyId] = useState("");
 
   const [templates, setTemplates] = useState<PaymentTemplateListRow[]>([]);
   const [templateId, setTemplateId] = useState("");
@@ -111,7 +117,6 @@ export default function ImportPaymentsPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    listClients().then(setClients);
     listPaymentTemplates().then(setTemplates);
     refreshRecentFiles();
   }, []);
@@ -138,29 +143,6 @@ export default function ImportPaymentsPage() {
       cancelled = true;
     };
   }, [paths]);
-
-  const selectedClient = useMemo(
-    () => clients.find((c) => String(c.id) === clientId) ?? null,
-    [clients, clientId],
-  );
-  const clientCompanies = useMemo(
-    () => clients.filter((c) => String(c.id) === clientId),
-    [clients, clientId],
-  );
-  useEffect(() => {
-    if (clientCompanies.length === 1) {
-      setCompanyId(String(clientCompanies[0].companyId));
-    } else {
-      setCompanyId("");
-    }
-  }, [clientCompanies]);
-
-  // Global templates are always offered; client-specific ones only once
-  // that client is selected.
-  const availableTemplates = useMemo(
-    () => templates.filter((t) => t.clientId === null || String(t.clientId) === clientId),
-    [templates, clientId],
-  );
 
   useEffect(() => {
     if (!templateId) {
@@ -274,7 +256,7 @@ export default function ImportPaymentsPage() {
   );
 
   async function handleProcess() {
-    if (!selectedClient || !selectedTemplate) return;
+    if (!selectedTemplate) return;
     setError(null);
     setBusy(true);
     try {
@@ -311,10 +293,18 @@ export default function ImportPaymentsPage() {
               continue;
             }
 
+            // Which company/client this row belongs to is resolved here,
+            // per row, by walking the template's if/else-if/else rule
+            // chain — there's no upfront cliente/empresa choice anymore.
+            const route = resolvePaymentRoute(selectedTemplate.rules, applied_row.fields);
             const cpf = applied_row.fields.cpf || null;
             const matricula = applied_row.fields.matricula || null;
             const nome = applied_row.fields.nome || null;
-            const employee = await findEmployeeByIdentifiers(selectedClient.id, cpf, matricula, nome);
+            const employee = route
+              ? await findEmployeeByIdentifiers(route.clientId, cpf, matricula, nome)
+              : null;
+            const scheduleRaw = applied_row.fields.horario ?? "";
+            const parsedSchedule = parseScheduleToMinutes(scheduleRaw);
             rows.push({
               fileHash,
               fileName,
@@ -323,10 +313,13 @@ export default function ImportPaymentsPage() {
               employee,
               local: applied_row.fields.local ?? "",
               role: applied_row.fields.funcao ?? "",
-              schedule: applied_row.fields.horario ?? "",
+              scheduleRaw,
+              scheduleStartMinutes: parsedSchedule?.startMinutes ?? null,
+              scheduleEndMinutes: parsedSchedule?.endMinutes ?? null,
               note: applied_row.fields.observacao || null,
               workDate,
               isDuplicate: false,
+              unresolvedRoute: !route,
             });
           }
           results.push({ fileHash, fileName, rows, skippedCount, error: null });
@@ -360,7 +353,7 @@ export default function ImportPaymentsPage() {
   }
 
   async function handleSave() {
-    if (!selectedClient || !companyId || !selectedTemplate) return;
+    if (!selectedTemplate) return;
     setBusy(true);
     setError(null);
     setSuccessMessage(null);
@@ -394,7 +387,8 @@ export default function ImportPaymentsPage() {
           local: row.local,
           workDate: row.workDate,
           role: row.role,
-          schedule: row.schedule,
+          scheduleStartMinutes: row.scheduleStartMinutes,
+          scheduleEndMinutes: row.scheduleEndMinutes,
           note: row.note,
         });
         savedFileHashes.add(fileHash);
@@ -442,76 +436,32 @@ export default function ImportPaymentsPage() {
       <div className="import-layout">
         <div className="import-main">
           <div className="card">
-            <div className="field-row" style={{ marginBottom: "1.2rem" }}>
-              <div className="field" style={{ flex: "1 1 220px" }}>
-                <label htmlFor="payment-client">Cliente</label>
-                <select
-                  id="payment-client"
-                  value={clientId}
-                  onChange={(e) => setClientId(e.target.value)}
-                  disabled={clients.length === 0}
-                >
-                  <option value="">Selecione um cliente</option>
-                  {Array.from(new Map(clients.map((c) => [c.id, c])).values()).map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-                {clients.length === 0 ? (
-                  <p className="field-hint">
-                    Nenhum cliente cadastrado. <Link to="/clients">Cadastre um cliente</Link> antes
-                    de importar.
-                  </p>
-                ) : (
-                  <p className="field-hint">Define em quais colaboradores os turnos são casados.</p>
-                )}
-              </div>
-              <div className="field" style={{ flex: "1 1 180px" }}>
-                <label htmlFor="payment-company">Empresa</label>
-                <select
-                  id="payment-company"
-                  value={companyId}
-                  onChange={(e) => setCompanyId(e.target.value)}
-                  disabled={clientCompanies.length <= 1}
-                >
-                  {clientCompanies.length !== 1 && <option value="">Selecione uma empresa</option>}
-                  {clientCompanies.map((c) => (
-                    <option key={c.companyId} value={c.companyId}>
-                      {c.companyName}
-                    </option>
-                  ))}
-                </select>
+            <div className="field" style={{ maxWidth: "24rem", marginBottom: "1.2rem" }}>
+              <label htmlFor="payment-template">Template</label>
+              <select
+                id="payment-template"
+                value={templateId}
+                onChange={(e) => setTemplateId(e.target.value)}
+                disabled={templates.length === 0}
+              >
+                <option value="">Selecione um template</option>
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+              {templates.length === 0 ? (
                 <p className="field-hint">
-                  {clientCompanies.length > 1
-                    ? "Esse cliente está vinculado a mais de uma empresa — escolha uma."
-                    : "Definida automaticamente pelo cliente selecionado."}
+                  Nenhum template disponível.{" "}
+                  <Link to="/import/payments/templates">Cadastre um template</Link>.
                 </p>
-              </div>
-              <div className="field" style={{ flex: "1 1 220px" }}>
-                <label htmlFor="payment-template">Template</label>
-                <select
-                  id="payment-template"
-                  value={templateId}
-                  onChange={(e) => setTemplateId(e.target.value)}
-                  disabled={availableTemplates.length === 0}
-                >
-                  <option value="">Selecione um template</option>
-                  {availableTemplates.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-                {availableTemplates.length === 0 ? (
-                  <p className="field-hint">
-                    Nenhum template disponível.{" "}
-                    <Link to="/import/payments/templates">Cadastre um template</Link>.
-                  </p>
-                ) : (
-                  <p className="field-hint">Como as colunas do arquivo serão lidas.</p>
-                )}
-              </div>
+              ) : (
+                <p className="field-hint">
+                  Como as colunas do arquivo serão lidas, e as regras que decidem a Empresa/Cliente
+                  de cada linha.
+                </p>
+              )}
             </div>
 
             <div className="field">
@@ -563,7 +513,7 @@ export default function ImportPaymentsPage() {
             <div className="card-footer">
               <button
                 type="button"
-                disabled={paths.length === 0 || !templateId || !clientId || !companyId || busy}
+                disabled={paths.length === 0 || !templateId || busy}
                 onClick={handleProcess}
               >
                 {busy ? "Processando..." : `Processar ${paths.length || ""} arquivo(s)`}
@@ -690,7 +640,15 @@ export default function ImportPaymentsPage() {
                             <td>{row.local}</td>
                             <td>{formatDate(row.workDate)}</td>
                             <td>{row.role}</td>
-                            <td>{row.schedule}</td>
+                            <td>
+                              {row.scheduleStartMinutes !== null && row.scheduleEndMinutes !== null ? (
+                                `${formatMinutesAsTime(row.scheduleStartMinutes)} – ${formatMinutesAsTime(row.scheduleEndMinutes)}`
+                              ) : (
+                                <span className="muted" title="Horário não reconhecido">
+                                  {row.scheduleRaw || "—"}
+                                </span>
+                              )}
+                            </td>
                             <td>
                               {row.employee && !row.isDuplicate && (
                                 <span className="badge ok">
@@ -698,7 +656,20 @@ export default function ImportPaymentsPage() {
                                   Novo
                                 </span>
                               )}
-                              {!row.employee && (
+                              {!row.employee && row.unresolvedRoute && (
+                                <div style={{ marginBottom: "0.3rem" }}>
+                                  <span className="badge warn">
+                                    <AlertTriangle size={13} />
+                                    Empresa/cliente não definido
+                                  </span>
+                                  <div style={{ marginTop: "0.25rem" }}>
+                                    <Link to="/import/payments/templates" style={{ fontSize: "0.78rem" }}>
+                                      Editar regras do template
+                                    </Link>
+                                  </div>
+                                </div>
+                              )}
+                              {!row.employee && !row.unresolvedRoute && (
                                 <div style={{ marginBottom: "0.3rem" }}>
                                   <span className="badge warn">
                                     <AlertTriangle size={13} />

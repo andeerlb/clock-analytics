@@ -243,20 +243,39 @@ export interface PaymentTemplateGroup {
 export interface PaymentTemplateListRow {
   id: number;
   name: string;
-  clientId: number | null;
-  clientName: string | null;
   fileKind: PaymentFileKind;
   updatedAt: string;
 }
 
-/** Full shape of a payment import template, including its sheet groups. */
+/**
+ * One step of a template's if/else-if/else routing chain — see
+ * `resolvePaymentRoute` in `format.ts` for how these are evaluated. A
+ * `"condition"` rule matches rows whose `field` value is one of `values`;
+ * an `"else"` rule (field/values both `null`) always matches, is optional,
+ * and at most one per template — always the last step in the chain.
+ */
+export type PaymentTemplateRuleKind = "condition" | "else";
+
+export interface PaymentTemplateRule {
+  kind: PaymentTemplateRuleKind;
+  field: PaymentTargetField | null;
+  values: string[];
+  /** Whether matching `values` against a row's field folds case — ignored when `kind === "else"`. */
+  caseInsensitive: boolean;
+  companyId: number;
+  companyName: string;
+  clientId: number;
+  clientName: string;
+}
+
+/** Full shape of a payment import template, including its sheet groups and routing rules. */
 export interface PaymentTemplateRow extends PaymentTemplateListRow {
   delimiter: string | null;
-  decimalSeparator: string;
   dateFormat: string;
   sampleFilePath: string;
   sampleFileName: string;
   groups: PaymentTemplateGroup[];
+  rules: PaymentTemplateRule[];
   createdAt: string;
 }
 
@@ -275,7 +294,8 @@ export interface PaymentShiftRow {
   local: string;
   workDate: string;
   role: string;
-  schedule: string;
+  scheduleStartMinutes: number | null;
+  scheduleEndMinutes: number | null;
   note: string | null;
   status: PaymentShiftStatus;
   errorMessage: string | null;

@@ -118,5 +118,23 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0019_payment_template_drop_header_row.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 20,
+            description: "drop payment_templates.client_id and decimal_separator — client is now resolved per row via rules, decimal separator was never used",
+            sql: include_str!("../migrations/0020_payment_template_drop_client_and_decimal.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 21,
+            description: "add payment_template_rules — an if/else-if/else chain routing each row to a company/client by a mapped field's value",
+            sql: include_str!("../migrations/0021_payment_template_rules.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 22,
+            description: "normalize payment_shifts.schedule into start/end minutes instead of raw text",
+            sql: include_str!("../migrations/0022_payment_shift_schedule_minutes.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

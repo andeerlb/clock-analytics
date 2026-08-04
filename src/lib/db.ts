@@ -9,10 +9,13 @@ import type {
   ImportType,
   ParsedTimesheet,
   PaymentFileKind,
+  PaymentTargetField,
   PaymentTemplateFieldMapping,
   PaymentTemplateGroup,
   PaymentTemplateListRow,
   PaymentTemplateRow,
+  PaymentTemplateRule,
+  PaymentTemplateRuleKind,
   PaymentShiftRow,
   PaymentShiftSummaryRow,
   StoredDayRecord,
@@ -417,24 +420,6 @@ export async function listClientsWithStats(): Promise<ClientWithStats[]> {
     GROUP BY cl.id, c.id
     ORDER BY c.name, cl.name
   `);
-}
-
-export interface ClientOption {
-  id: number;
-  name: string;
-  cnpj: string;
-}
-
-/**
- * Every client, once each — for a plain "which client owns this?" picker
- * where company doesn't matter. `listClients()` returns one row per
- * client-company link (it backs the company-scoped timesheet import
- * picker), so using it here would show duplicate rows for any client
- * linked to more than one company.
- */
-export async function listClientOptions(): Promise<ClientOption[]> {
-  const db = await getDb();
-  return db.select<ClientOption[]>("SELECT id, name, cnpj FROM clients ORDER BY name");
 }
 
 /**
@@ -986,24 +971,20 @@ export async function markOriginalsRemoved(sourceFileIds: number[]): Promise<voi
 export async function listPaymentTemplates(): Promise<PaymentTemplateListRow[]> {
   const db = await getDb();
   return db.select<PaymentTemplateListRow[]>(`
-    SELECT pt.id, pt.name, pt.client_id AS clientId, cl.name AS clientName,
-           pt.file_kind AS fileKind, pt.updated_at AS updatedAt
+    SELECT pt.id, pt.name, pt.file_kind AS fileKind, pt.updated_at AS updatedAt
     FROM payment_templates pt
-    LEFT JOIN clients cl ON cl.id = pt.client_id
     ORDER BY pt.updated_at DESC
   `);
 }
 
 export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow> {
   const db = await getDb();
-  const rows = await db.select<Omit<PaymentTemplateRow, "groups">[]>(
-    `SELECT pt.id, pt.name, pt.client_id AS clientId, cl.name AS clientName,
-            pt.file_kind AS fileKind, pt.delimiter,
-            pt.decimal_separator AS decimalSeparator, pt.date_format AS dateFormat,
+  const rows = await db.select<Omit<PaymentTemplateRow, "groups" | "rules">[]>(
+    `SELECT pt.id, pt.name, pt.file_kind AS fileKind, pt.delimiter,
+            pt.date_format AS dateFormat,
             pt.sample_file_path AS sampleFilePath, pt.sample_file_name AS sampleFileName,
             pt.created_at AS createdAt, pt.updated_at AS updatedAt
      FROM payment_templates pt
-     LEFT JOIN clients cl ON cl.id = pt.client_id
      WHERE pt.id = $1`,
     [id],
   );
@@ -1029,19 +1010,55 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
     groups.push({ sheetNames: sheetRows.map((r) => r.sheetName), fieldMappings });
   }
 
-  return { ...rows[0], groups };
+  const ruleRows = await db.select<
+    {
+      kind: PaymentTemplateRuleKind;
+      field: PaymentTargetField | null;
+      valuesJson: string | null;
+      caseInsensitive: number;
+      companyId: number;
+      companyName: string;
+      clientId: number;
+      clientName: string;
+    }[]
+  >(
+    `SELECT r.kind, r.field, r.values_json AS valuesJson, r.case_insensitive AS caseInsensitive,
+            r.company_id AS companyId, c.name AS companyName,
+            r.client_id AS clientId, cl.name AS clientName
+     FROM payment_template_rules r
+     JOIN companies c ON c.id = r.company_id
+     JOIN clients cl ON cl.id = r.client_id
+     WHERE r.template_id = $1
+     ORDER BY r.id`,
+    [id],
+  );
+  const rules: PaymentTemplateRule[] = ruleRows.map((r) => ({
+    ...r,
+    values: r.valuesJson ? JSON.parse(r.valuesJson) : [],
+    caseInsensitive: Boolean(r.caseInsensitive),
+  }));
+
+  return { ...rows[0], groups, rules };
+}
+
+export interface PaymentTemplateRuleInput {
+  kind: PaymentTemplateRuleKind;
+  field: PaymentTargetField | null;
+  values: string[];
+  caseInsensitive: boolean;
+  companyId: number;
+  clientId: number;
 }
 
 export interface PaymentTemplateInput {
   name: string;
-  clientId: number | null;
   fileKind: PaymentFileKind;
   delimiter: string | null;
-  decimalSeparator: string;
   dateFormat: string;
   sampleFilePath: string;
   sampleFileName: string;
   groups: PaymentTemplateGroup[];
+  rules: PaymentTemplateRuleInput[];
 }
 
 async function insertTemplateGroups(
@@ -1085,19 +1102,44 @@ async function deleteTemplateGroups(db: Database, templateId: number): Promise<v
   await db.execute("DELETE FROM payment_template_groups WHERE template_id = $1", [templateId]);
 }
 
+/** Inserted in array order — evaluation order for the if/else-if/else chain matches insertion (id) order, see `resolvePaymentRoute`. */
+async function insertTemplateRules(
+  db: Database,
+  templateId: number,
+  rules: PaymentTemplateRuleInput[],
+): Promise<void> {
+  for (const rule of rules) {
+    await db.execute(
+      `INSERT INTO payment_template_rules
+         (template_id, kind, field, values_json, case_insensitive, company_id, client_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        templateId,
+        rule.kind,
+        rule.kind === "condition" ? rule.field : null,
+        rule.kind === "condition" ? JSON.stringify(rule.values) : null,
+        rule.caseInsensitive ? 1 : 0,
+        rule.companyId,
+        rule.clientId,
+      ],
+    );
+  }
+}
+
+async function deleteTemplateRules(db: Database, templateId: number): Promise<void> {
+  await db.execute("DELETE FROM payment_template_rules WHERE template_id = $1", [templateId]);
+}
+
 export async function createPaymentTemplate(input: PaymentTemplateInput): Promise<number> {
   const db = await getDb();
   const result = await db.execute(
     `INSERT INTO payment_templates
-       (name, client_id, file_kind, delimiter, decimal_separator, date_format,
-        sample_file_path, sample_file_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       (name, file_kind, delimiter, date_format, sample_file_path, sample_file_name)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
     [
       input.name,
-      input.clientId,
       input.fileKind,
       input.delimiter,
-      input.decimalSeparator,
       input.dateFormat,
       input.sampleFilePath,
       input.sampleFileName,
@@ -1105,6 +1147,7 @@ export async function createPaymentTemplate(input: PaymentTemplateInput): Promis
   );
   const templateId = result.lastInsertId as number;
   await insertTemplateGroups(db, templateId, input.groups);
+  await insertTemplateRules(db, templateId, input.rules);
   return templateId;
 }
 
@@ -1112,16 +1155,13 @@ export async function updatePaymentTemplate(id: number, input: PaymentTemplateIn
   const db = await getDb();
   await db.execute(
     `UPDATE payment_templates SET
-       name = $1, client_id = $2, file_kind = $3, delimiter = $4,
-       decimal_separator = $5, date_format = $6,
-       sample_file_path = $7, sample_file_name = $8, updated_at = datetime('now')
-     WHERE id = $9`,
+       name = $1, file_kind = $2, delimiter = $3, date_format = $4,
+       sample_file_path = $5, sample_file_name = $6, updated_at = datetime('now')
+     WHERE id = $7`,
     [
       input.name,
-      input.clientId,
       input.fileKind,
       input.delimiter,
-      input.decimalSeparator,
       input.dateFormat,
       input.sampleFilePath,
       input.sampleFileName,
@@ -1130,13 +1170,15 @@ export async function updatePaymentTemplate(id: number, input: PaymentTemplateIn
   );
   await deleteTemplateGroups(db, id);
   await insertTemplateGroups(db, id, input.groups);
+  await deleteTemplateRules(db, id);
+  await insertTemplateRules(db, id, input.rules);
 }
 
 /**
- * Deletes the template and its groups (and their sheets/field mappings);
- * returns its `sample_file_path` so the caller can best-effort delete the
- * copied file too (via the existing generic `deletePaths()` Rust command)
- * — this function only touches the SQL side.
+ * Deletes the template and its groups/rules (and their sheets/field
+ * mappings); returns its `sample_file_path` so the caller can best-effort
+ * delete the copied file too (via the existing generic `deletePaths()`
+ * Rust command) — this function only touches the SQL side.
  */
 export async function deletePaymentTemplate(id: number): Promise<string> {
   const db = await getDb();
@@ -1145,6 +1187,7 @@ export async function deletePaymentTemplate(id: number): Promise<string> {
     [id],
   );
   await deleteTemplateGroups(db, id);
+  await deleteTemplateRules(db, id);
   await db.execute("DELETE FROM payment_templates WHERE id = $1", [id]);
   return rows[0]?.sampleFilePath ?? "";
 }
@@ -1224,7 +1267,8 @@ export interface PaymentShiftInput {
   local: string;
   workDate: string;
   role: string;
-  schedule: string;
+  scheduleStartMinutes: number | null;
+  scheduleEndMinutes: number | null;
   note: string | null;
 }
 
@@ -1234,9 +1278,20 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
   for (const r of rows) {
     await db.execute(
       `INSERT INTO payment_shifts
-         (employee_id, template_id, source_file_id, local, work_date, role, schedule, note, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pendente')`,
-      [r.employeeId, r.templateId, r.sourceFileId, r.local, r.workDate, r.role, r.schedule, r.note],
+         (employee_id, template_id, source_file_id, local, work_date, role,
+          schedule_start_minutes, schedule_end_minutes, note, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pendente')`,
+      [
+        r.employeeId,
+        r.templateId,
+        r.sourceFileId,
+        r.local,
+        r.workDate,
+        r.role,
+        r.scheduleStartMinutes,
+        r.scheduleEndMinutes,
+        r.note,
+      ],
     );
   }
 }
@@ -1271,7 +1326,9 @@ export async function listPaymentShiftsForEmployeeMonth(
   const db = await getDb();
   return db.select<PaymentShiftRow[]>(
     `SELECT ps.id, ps.employee_id AS employeeId, e.name AS employeeName,
-            ps.local, ps.work_date AS workDate, ps.role, ps.schedule, ps.note,
+            ps.local, ps.work_date AS workDate, ps.role,
+            ps.schedule_start_minutes AS scheduleStartMinutes,
+            ps.schedule_end_minutes AS scheduleEndMinutes, ps.note,
             ps.status, ps.error_message AS errorMessage, ps.amount, ps.imported_at AS importedAt
      FROM payment_shifts ps
      JOIN employees e ON e.id = ps.employee_id
@@ -1333,13 +1390,14 @@ export async function clearAllData(options: ClearDataOptions = {}): Promise<void
   }
   if (!keepClients) {
     // Payment templates aren't import history — they're master/config data
-    // like clients/companies, so "Limpar tudo" never deletes them. But a
-    // template scoped to a client that's about to be wiped would otherwise
-    // be left pointing at a client_id that no longer exists (this
-    // connection doesn't enforce foreign keys, same reason deleteImport
-    // has to clean up manually elsewhere) — demote it to a global template
-    // instead of leaving it dangling.
-    await db.execute("UPDATE payment_templates SET client_id = NULL WHERE client_id IS NOT NULL");
+    // like clients/companies, so "Limpar tudo" never deletes them. But
+    // every routing rule requires a real client_id (this connection
+    // doesn't enforce foreign keys, same reason deleteImport has to clean
+    // up manually elsewhere), so wiping clients would leave every rule
+    // dangling — drop the rules instead of leaving them pointing nowhere.
+    // (keepCompanies can only be false when keepClients is too, so this
+    // single spot covers a company wipe as well.)
+    await db.execute("DELETE FROM payment_template_rules");
     await db.execute("DELETE FROM client_companies");
     await db.execute("DELETE FROM clients");
     clearedTables.push("clients");

@@ -4,7 +4,7 @@ import { useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
 import { getEmployee, listPaymentShiftsForEmployeeMonth, type EmployeeRow } from "../lib/db";
-import { formatDate } from "../lib/format";
+import { formatDate, formatMinutesAsTime } from "../lib/format";
 import type { PaymentShiftRow, PaymentShiftStatus } from "../lib/types";
 
 const STATUS_OPTIONS: MultiSelectOption<PaymentShiftStatus>[] = [
@@ -141,7 +141,11 @@ export default function PaymentDetailPage() {
                       <td>{formatDate(s.workDate)}</td>
                       <td>{s.local}</td>
                       <td>{s.role}</td>
-                      <td>{s.schedule}</td>
+                      <td>
+                        {s.scheduleStartMinutes !== null && s.scheduleEndMinutes !== null
+                          ? `${formatMinutesAsTime(s.scheduleStartMinutes)} – ${formatMinutesAsTime(s.scheduleEndMinutes)}`
+                          : "—"}
+                      </td>
                       <td className="muted">{s.note ?? "—"}</td>
                       <td>
                         <span className={badge.className}>

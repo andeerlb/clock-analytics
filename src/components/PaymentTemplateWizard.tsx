@@ -1,4 +1,4 @@
-import { CheckSquare, ChevronLeft, ChevronRight, Eye, FolderOpen, Square, X } from "lucide-react";
+import { CheckSquare, ChevronLeft, ChevronRight, Eye, FolderOpen, Plus, Square, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   copyPaymentSample,
@@ -9,10 +9,13 @@ import {
 } from "../lib/api";
 import {
   createPaymentTemplate,
-  listClientOptions,
+  listClients,
+  listCompanies,
   updatePaymentTemplate,
-  type ClientOption,
+  type ClientRow,
+  type CompanyRow,
   type PaymentTemplateInput,
+  type PaymentTemplateRuleInput,
 } from "../lib/db";
 import { columnLetter, fileNameFromPath } from "../lib/format";
 import {
@@ -24,6 +27,7 @@ import {
   type PaymentTargetField,
   type PaymentTemplateGroup,
   type PaymentTemplateRow,
+  type PaymentTemplateRuleKind,
 } from "../lib/types";
 
 const STEP_LABELS = ["Arquivo", "Mapeamento", "Detalhes"];
@@ -41,6 +45,24 @@ const DELIMITER_OPTIONS = [
 ];
 
 const DATE_FORMAT_OPTIONS = ["DD/MM/YYYY", "DD/MM/YY", "YYYY-MM-DD", "MM/DD/YYYY"];
+
+/** The wizard's editable draft of one step in a template's if/else-if/else routing chain — see `PaymentTemplateRule` in types.ts for the saved shape. */
+interface WizardRule {
+  kind: PaymentTemplateRuleKind;
+  field: PaymentTargetField;
+  /** Raw comma-separated input; ignored when `kind === "else"`. */
+  valuesText: string;
+  /** Ignored when `kind === "else"`. */
+  caseInsensitive: boolean;
+  companyId: number | null;
+  clientId: number | null;
+}
+
+function isRuleValid(r: WizardRule): boolean {
+  if (!r.companyId || !r.clientId) return false;
+  if (r.kind === "else") return true;
+  return r.valuesText.split(",").map((v) => v.trim()).filter(Boolean).length > 0;
+}
 
 function fileKindFromPath(path: string): PaymentFileKind {
   const ext = path.split(".").pop()?.toLowerCase();
@@ -61,7 +83,8 @@ export default function PaymentTemplateWizard({
   onSaved: () => void;
 }) {
   const [step, setStep] = useState(0);
-  const [clients, setClients] = useState<ClientOption[]>([]);
+  const [companies, setCompanies] = useState<CompanyRow[]>([]);
+  const [clientsAll, setClientsAll] = useState<ClientRow[]>([]);
 
   const [filePath, setFilePath] = useState<string | null>(null);
   const [fileKind, setFileKind] = useState<PaymentFileKind | null>(null);
@@ -82,16 +105,16 @@ export default function PaymentTemplateWizard({
   const [groupMapping, setGroupMapping] = useState<Record<string, Record<number, PaymentTargetField>>>({});
 
   const [name, setName] = useState("");
-  const [clientId, setClientId] = useState<number | null>(null);
-  const [decimalSeparator, setDecimalSeparator] = useState(",");
   const [dateFormat, setDateFormat] = useState("DD/MM/YYYY");
+  const [rules, setRules] = useState<WizardRule[]>([]);
 
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    listClientOptions().then(setClients);
+    listCompanies().then(setCompanies);
+    listClients().then(setClientsAll);
   }, []);
 
   useEffect(() => {
@@ -112,9 +135,8 @@ export default function PaymentTemplateWizard({
       setSheetGroupOf({});
       setGroupMapping({});
       setName("");
-      setClientId(null);
-      setDecimalSeparator(",");
       setDateFormat("DD/MM/YYYY");
+      setRules([]);
       return;
     }
 
@@ -122,9 +144,17 @@ export default function PaymentTemplateWizard({
     setFileKind(target.fileKind);
     setIsNewFile(false);
     setName(target.name);
-    setClientId(target.clientId);
-    setDecimalSeparator(target.decimalSeparator);
     setDateFormat(target.dateFormat);
+    setRules(
+      target.rules.map((r) => ({
+        kind: r.kind,
+        field: r.field ?? PAYMENT_TARGET_FIELDS[0],
+        valuesText: r.values.join(", "),
+        caseInsensitive: r.caseInsensitive,
+        companyId: r.companyId,
+        clientId: r.clientId,
+      })),
+    );
     loadFileForEdit(target);
   }, [target]);
 
@@ -320,6 +350,47 @@ export default function PaymentTemplateWizard({
     return hasIdentifier && REQUIRED_PAYMENT_FIELDS.every((f) => fields.has(f));
   }
 
+  const hasElseRule = rules.some((r) => r.kind === "else");
+
+  /** New "condition" rows always land right before the "senão" rule, if one exists — that one always stays last. */
+  function addConditionRule() {
+    const newRule: WizardRule = {
+      kind: "condition",
+      field: PAYMENT_TARGET_FIELDS[0],
+      valuesText: "",
+      caseInsensitive: true,
+      companyId: null,
+      clientId: null,
+    };
+    setRules((prev) => {
+      const elseIndex = prev.findIndex((r) => r.kind === "else");
+      if (elseIndex === -1) return [...prev, newRule];
+      return [...prev.slice(0, elseIndex), newRule, ...prev.slice(elseIndex)];
+    });
+  }
+
+  function addElseRule() {
+    setRules((prev) => [
+      ...prev,
+      {
+        kind: "else",
+        field: PAYMENT_TARGET_FIELDS[0],
+        valuesText: "",
+        caseInsensitive: true,
+        companyId: null,
+        clientId: null,
+      },
+    ]);
+  }
+
+  function removeRule(index: number) {
+    setRules((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function updateRule(index: number, patch: Partial<WizardRule>) {
+    setRules((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  }
+
   const activeGroupKey = groupKeyOf(activeSheet);
   const mapping = groupMapping[activeGroupKey] ?? {};
 
@@ -357,6 +428,15 @@ export default function PaymentTemplateWizard({
     }
     return entries;
   })();
+
+  // Read-only readout of the row-validity filter — there's nothing to
+  // configure here, it's just whichever column each included group already
+  // has mapped to "data" (see the `PaymentTemplateGroup` doc comment).
+  const dataFilterEntries = includedGroupKeys.map((key) => {
+    const m = groupMapping[key] ?? {};
+    const index = Object.entries(m).find(([, field]) => field === "data")?.[0];
+    return { key, columnLabel: index !== undefined ? columnLetter(Number(index)) : null };
+  });
 
   const canAdvance =
     step === 0
@@ -400,16 +480,27 @@ export default function PaymentTemplateWizard({
         return { sheetNames, fieldMappings };
       });
 
+      const ruleInputs: PaymentTemplateRuleInput[] = rules.map((r) => ({
+        kind: r.kind,
+        field: r.kind === "condition" ? r.field : null,
+        values:
+          r.kind === "condition"
+            ? r.valuesText.split(",").map((v) => v.trim()).filter(Boolean)
+            : [],
+        caseInsensitive: r.caseInsensitive,
+        companyId: r.companyId!,
+        clientId: r.clientId!,
+      }));
+
       const input: PaymentTemplateInput = {
         name: name.trim(),
-        clientId,
         fileKind,
         delimiter: fileKind === "csv" ? delimiter : null,
-        decimalSeparator,
         dateFormat,
         sampleFilePath,
         sampleFileName,
         groups,
+        rules: ruleInputs,
       };
 
       if (editing) {
@@ -647,45 +738,19 @@ export default function PaymentTemplateWizard({
         )}
 
         {step === 2 && (
-          <div className="card" style={{ maxWidth: "32rem" }}>
-            <div className="field" style={{ marginBottom: "1rem" }}>
-              <label htmlFor="template-name">Nome do template</label>
-              <input
-                id="template-name"
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Ex.: Folha mensal — Provedor X"
-              />
-            </div>
-            <div className="field" style={{ marginBottom: "1rem" }}>
-              <label htmlFor="template-client">Cliente</label>
-              <select
-                id="template-client"
-                value={clientId ?? ""}
-                onChange={(e) => setClientId(e.target.value ? Number(e.target.value) : null)}
-              >
-                <option value="">Qualquer cliente (modelo global)</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field-row">
-              <div className="field" style={{ flex: "1 1 160px" }}>
-                <label htmlFor="template-decimal">Separador decimal</label>
-                <select
-                  id="template-decimal"
-                  value={decimalSeparator}
-                  onChange={(e) => setDecimalSeparator(e.target.value)}
-                >
-                  <option value=",">Vírgula (1.234,56)</option>
-                  <option value=".">Ponto (1,234.56)</option>
-                </select>
+          <div>
+            <div className="card" style={{ maxWidth: "36rem" }}>
+              <div className="field" style={{ marginBottom: "1rem" }}>
+                <label htmlFor="template-name">Nome do template</label>
+                <input
+                  id="template-name"
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Ex.: Folha mensal — Provedor X"
+                />
               </div>
-              <div className="field" style={{ flex: "1 1 160px" }}>
+              <div className="field" style={{ maxWidth: "16rem" }}>
                 <label htmlFor="template-date-format">Formato de data</label>
                 <select
                   id="template-date-format"
@@ -699,13 +764,168 @@ export default function PaymentTemplateWizard({
                   ))}
                 </select>
               </div>
+              <p className="field-hint" style={{ marginTop: "1rem" }}>
+                {includedGroupKeys.length === 1
+                  ? "1 configuração de colunas."
+                  : `${includedGroupKeys.length} configurações de colunas diferentes.`}
+                {sheets.length > 1 && ` ${includedSheets.size} de ${sheets.length} aba(s) selecionada(s).`}
+              </p>
             </div>
-            <p className="field-hint" style={{ marginTop: "1rem" }}>
-              {includedGroupKeys.length === 1
-                ? "1 configuração de colunas."
-                : `${includedGroupKeys.length} configurações de colunas diferentes.`}
-              {sheets.length > 1 && ` ${includedSheets.size} de ${sheets.length} aba(s) selecionada(s).`}
-            </p>
+
+            <div className="card" style={{ maxWidth: "36rem", marginTop: "1.2rem" }}>
+              <label>Filtro de linha válida</label>
+              <p className="muted" style={{ marginTop: "0.3rem" }}>
+                Tipo de filtro: Data (único disponível por enquanto). Uma linha só é considerada
+                válida quando a coluna abaixo consegue ser interpretada como data, no formato
+                configurado acima.
+              </p>
+              <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem", fontSize: "0.85rem" }}>
+                {dataFilterEntries.map((e) => (
+                  <li key={e.key}>
+                    {e.key}: coluna {e.columnLabel ?? "—"}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="card" style={{ marginTop: "1.2rem" }}>
+              <label>Regras de roteamento (Empresa/Cliente)</label>
+              <p className="muted" style={{ marginTop: "0.3rem" }}>
+                Decide, linha a linha, a Empresa/Cliente de destino a partir do valor de um campo
+                já mapeado — avaliadas em ordem, a primeira que bater vence. Sempre obrigatório,
+                mesmo se o arquivo sempre pertencer a um único cliente (nesse caso, use só uma
+                regra "senão").
+              </p>
+
+              {rules.map((rule, i) => (
+                <div
+                  key={i}
+                  className="field-row"
+                  style={{
+                    alignItems: "flex-end",
+                    marginTop: "0.8rem",
+                    paddingTop: "0.8rem",
+                    borderTop: "1px solid var(--border)",
+                  }}
+                >
+                  {rule.kind === "condition" ? (
+                    <>
+                      <div className="field" style={{ flex: "1 1 150px" }}>
+                        <label>Campo</label>
+                        <select
+                          value={rule.field}
+                          onChange={(e) => updateRule(i, { field: e.target.value as PaymentTargetField })}
+                        >
+                          {PAYMENT_TARGET_FIELDS.map((f) => (
+                            <option key={f} value={f}>
+                              {PAYMENT_TARGET_FIELD_LABELS[f]}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="field" style={{ flex: "2 1 220px" }}>
+                        <label>Valores possíveis</label>
+                        <input
+                          type="text"
+                          value={rule.valuesText}
+                          onChange={(e) => updateRule(i, { valuesText: e.target.value })}
+                          placeholder="Ex.: FLV, Mercearia"
+                        />
+                        <label
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.35rem",
+                            marginTop: "0.4rem",
+                            fontSize: "0.8rem",
+                            fontWeight: 400,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={rule.caseInsensitive}
+                            onChange={(e) => updateRule(i, { caseInsensitive: e.target.checked })}
+                          />
+                          Ignorar maiúsculas/minúsculas
+                        </label>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="field" style={{ flex: "3 1 300px" }}>
+                      <label>Senão — se nenhuma regra acima bater, usa esta</label>
+                    </div>
+                  )}
+                  <div className="field" style={{ flex: "1 1 160px" }}>
+                    <label>Empresa</label>
+                    <select
+                      value={rule.companyId ?? ""}
+                      onChange={(e) =>
+                        updateRule(i, {
+                          companyId: e.target.value ? Number(e.target.value) : null,
+                          clientId: null,
+                        })
+                      }
+                    >
+                      <option value="">Selecione</option>
+                      {companies.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="field" style={{ flex: "1 1 160px" }}>
+                    <label>Cliente</label>
+                    <select
+                      value={rule.clientId ?? ""}
+                      onChange={(e) =>
+                        updateRule(i, { clientId: e.target.value ? Number(e.target.value) : null })
+                      }
+                      disabled={!rule.companyId}
+                    >
+                      <option value="">Selecione</option>
+                      {clientsAll
+                        .filter((c) => c.companyId === rule.companyId)
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    className="ghost"
+                    style={{ padding: "0.4rem" }}
+                    onClick={() => removeRule(i)}
+                    aria-label="Remover regra"
+                    title="Remover regra"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+
+              {rules.length === 0 && (
+                <p className="field-hint" style={{ marginTop: "0.6rem" }}>
+                  Nenhuma regra cadastrada — pelo menos uma é obrigatória para salvar.
+                </p>
+              )}
+
+              <div style={{ display: "flex", gap: "0.6rem", marginTop: "1rem" }}>
+                <button type="button" className="secondary" onClick={addConditionRule}>
+                  <Plus size={14} style={{ marginRight: "0.3rem" }} />
+                  Adicionar regra
+                </button>
+                {!hasElseRule && (
+                  <button type="button" className="secondary" onClick={addElseRule}>
+                    <Plus size={14} style={{ marginRight: "0.3rem" }} />
+                    Adicionar "senão"
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -735,7 +955,11 @@ export default function PaymentTemplateWizard({
             <ChevronRight size={15} style={{ marginLeft: "0.3rem" }} />
           </button>
         ) : (
-          <button type="button" onClick={handleSave} disabled={busy || !name.trim()}>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={busy || !name.trim() || rules.length === 0 || rules.some((r) => !isRuleValid(r))}
+          >
             {busy ? "Salvando..." : "Salvar"}
           </button>
         )}

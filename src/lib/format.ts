@@ -235,3 +235,70 @@ export function parseDateWithFormat(raw: string, dateFormat: string): string | n
 
   return `${String(yearNum).padStart(4, "0")}-${String(monthNum).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
 }
+
+/**
+ * Pulls a start/end time pair out of a free-text Horário cell — payroll
+ * exports write this as "9:00 - 15:00", "7:30 às 13:30", etc., always two
+ * HH:MM-ish timestamps somewhere in the string. Takes the first two
+ * matches; `null` if fewer than two are found. Minutes are 0-1439 (time of
+ * day, not a signed duration) — a shift crossing midnight (end < start) is
+ * valid here, left for a future duration calculation to add 1440 for.
+ */
+export function parseScheduleToMinutes(raw: string): { startMinutes: number; endMinutes: number } | null {
+  const matches = [...raw.matchAll(/(\d{1,2}):(\d{2})/g)];
+  if (matches.length < 2) return null;
+
+  function toMinutes(match: RegExpMatchArray): number | null {
+    const h = Number(match[1]);
+    const m = Number(match[2]);
+    if (h > 23 || m > 59) return null;
+    return h * 60 + m;
+  }
+
+  const startMinutes = toMinutes(matches[0]);
+  const endMinutes = toMinutes(matches[1]);
+  if (startMinutes === null || endMinutes === null) return null;
+  return { startMinutes, endMinutes };
+}
+
+/** Minutes-since-midnight -> "HH:MM", zero-padded. */
+export function formatMinutesAsTime(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/**
+ * Resolves which company/client a payment-import row belongs to, by
+ * walking a template's if/else-if/else rule chain in order — the first
+ * rule that matches wins. A `"condition"` rule matches when the row's
+ * already-mapped `rule.field` value (trimmed, case-insensitive) is one of
+ * `rule.values`; an `"else"` rule always matches. `null` means no rule
+ * matched (no `"else"` present, and no condition matched either) — the
+ * caller shows this as a row needing manual resolution, not a silent drop.
+ */
+export function resolvePaymentRoute(
+  rules: {
+    kind: "condition" | "else";
+    field: string | null;
+    values: string[];
+    caseInsensitive: boolean;
+    companyId: number;
+    clientId: number;
+  }[],
+  fields: Record<string, string>,
+): { companyId: number; clientId: number } | null {
+  for (const rule of rules) {
+    if (rule.kind === "else") {
+      return { companyId: rule.companyId, clientId: rule.clientId };
+    }
+    const raw = rule.field ? fields[rule.field] : undefined;
+    if (!raw) continue;
+    const fold = (s: string) => (rule.caseInsensitive ? s.toLowerCase() : s);
+    const normalized = fold(raw.trim());
+    if (rule.values.some((v) => fold(v.trim()) === normalized)) {
+      return { companyId: rule.companyId, clientId: rule.clientId };
+    }
+  }
+  return null;
+}

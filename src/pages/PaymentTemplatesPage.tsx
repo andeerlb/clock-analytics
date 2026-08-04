@@ -79,7 +79,6 @@ export default function PaymentTemplatesPage() {
               <thead>
                 <tr>
                   <th>Nome</th>
-                  <th>Cliente</th>
                   <th>Formato</th>
                   <th>Atualizado em</th>
                   <th>Ações</th>
@@ -89,7 +88,6 @@ export default function PaymentTemplatesPage() {
                 {templates.map((t) => (
                   <tr key={t.id}>
                     <td>{t.name}</td>
-                    <td>{t.clientName ?? "Global"}</td>
                     <td>{FILE_KIND_LABELS[t.fileKind] ?? t.fileKind}</td>
                     <td>{formatDateTime(t.updatedAt)}</td>
                     <td>
