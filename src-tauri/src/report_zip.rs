@@ -54,13 +54,8 @@ pub fn build(entries: &[ReportZipEntry], dest_zip_path: &str, poppler_dir: Optio
 /// (Poppler) — same family as the `pdftotext`/`pdfseparate` calls already
 /// used for parsing. Result is written to a temp file the caller is
 /// responsible for cleaning up once it's been read.
-<<<<<<< Updated upstream
 fn merge_pdfs(paths: &[String], poppler_dir: Option<&str>) -> Result<String, String> {
-    let out_path = std::env::temp_dir().join(format!("clock-analytics-merged-{}.pdf", uuid::Uuid::new_v4()));
-=======
-fn merge_pdfs(paths: &[String]) -> Result<String, String> {
     let out_path = std::env::temp_dir().join(format!("pontoscan-merged-{}.pdf", uuid::Uuid::new_v4()));
->>>>>>> Stashed changes
     let out_path_str = out_path.to_string_lossy().to_string();
 
     let output = Command::new(crate::poppler::resolve("pdfunite", poppler_dir))
