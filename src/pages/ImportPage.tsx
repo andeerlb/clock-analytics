@@ -8,6 +8,7 @@ import {
   FolderOpen,
   Lightbulb,
   PlusCircle,
+  RotateCcw,
   Search,
   ShieldCheck,
   UploadCloud,
@@ -68,6 +69,7 @@ export default function ImportPage() {
   const [companyId, setCompanyId] = useState("");
   const [paths, setPaths] = useState<string[]>([]);
   const [fileStatuses, setFileStatuses] = useState<Map<string, FileStatus>>(new Map());
+  const [forceReprocess, setForceReprocess] = useState<Set<string>>(new Set());
   const [fileResults, setFileResults] = useState<FileParseResult[]>([]);
   const [conflicts, setConflicts] = useState<ConflictInfo[]>([]);
   const [selectedSheets, setSelectedSheets] = useState<Set<number>>(new Set());
@@ -158,8 +160,21 @@ export default function ImportPage() {
 
   function reset() {
     setPaths([]);
+    setForceReprocess(new Set());
     cancelPreview();
     setError(null);
+  }
+
+  // Opt a single already-imported file back into processing — its own
+  // sheet(s) then go through the normal conflict flow (findConflicts),
+  // which already knows how to overwrite an existing import by id.
+  function toggleForceReprocess(path: string) {
+    setForceReprocess((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
   }
 
   async function handlePick() {
@@ -169,10 +184,12 @@ export default function ImportPage() {
   }
 
   const eligiblePaths = useMemo(
-    () => paths.filter((p) => !fileStatuses.get(p)?.duplicate),
-    [paths, fileStatuses],
+    () => paths.filter((p) => !fileStatuses.get(p)?.duplicate || forceReprocess.has(p)),
+    [paths, fileStatuses, forceReprocess],
   );
-  const duplicateCount = paths.length - eligiblePaths.length;
+  const duplicateCount = paths.filter(
+    (p) => fileStatuses.get(p)?.duplicate && !forceReprocess.has(p),
+  ).length;
 
   // `clients` has one row per (client, company) link, so grab the first
   // match just for the client's own identity (name/cnpj) — those are the
@@ -511,7 +528,33 @@ export default function ImportPage() {
                       )}
                     </div>
                     <div className="file-row-actions">
-                      {status?.duplicate && <span className="badge duplicate">Já importado</span>}
+                      {status?.duplicate && !forceReprocess.has(p) && (
+                        <>
+                          <span className="badge duplicate">Já importado</span>
+                          <button
+                            type="button"
+                            className="ghost"
+                            style={{ padding: "0.3rem 0.6rem", fontSize: "0.8rem" }}
+                            onClick={() => toggleForceReprocess(p)}
+                          >
+                            <RotateCcw size={13} style={{ marginRight: "0.35rem" }} />
+                            Reprocessar
+                          </button>
+                        </>
+                      )}
+                      {status?.duplicate && forceReprocess.has(p) && (
+                        <>
+                          <span className="badge warn">Será reprocessado</span>
+                          <button
+                            type="button"
+                            className="ghost"
+                            style={{ padding: "0.3rem 0.6rem", fontSize: "0.8rem" }}
+                            onClick={() => toggleForceReprocess(p)}
+                          >
+                            Cancelar
+                          </button>
+                        </>
+                      )}
                       <button
                         type="button"
                         className="ghost"
