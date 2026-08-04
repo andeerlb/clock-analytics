@@ -26,6 +26,11 @@ export async function readPdfBytes(path: string): Promise<ArrayBuffer> {
   return invoke("read_pdf_bytes", { path });
 }
 
+/** Copies the PDF at `sourcePath` to `destPath` — the viewer's "Baixar" action. */
+export function copyPdfTo(sourcePath: string, destPath: string): Promise<void> {
+  return invoke("copy_pdf_to", { sourcePath, destPath });
+}
+
 /** Opens the native file picker, restricted to PDFs, multi-select on. */
 export async function pickPdfFiles(): Promise<string[]> {
   const selection = await open({

@@ -23,6 +23,7 @@ pub fn run() {
             commands::parse_import,
             commands::reveal_in_file_manager,
             commands::read_pdf_bytes,
+            commands::copy_pdf_to,
             commands::generate_report_zip,
         ])
         .run(tauri::generate_context!())

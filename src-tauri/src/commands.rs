@@ -272,6 +272,16 @@ pub fn read_pdf_bytes(path: String) -> Result<tauri::ipc::Response, String> {
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// Copies the PDF at `source_path` to wherever the user picked via the save
+/// dialog — the "Baixar" button in the in-app viewer. A plain byte-for-byte
+/// copy, not a re-export through pdf.js, so the downloaded file is
+/// identical to what's stored.
+#[tauri::command]
+pub fn copy_pdf_to(source_path: String, dest_path: String) -> Result<(), String> {
+    fs::copy(&source_path, &dest_path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Builds the Relatórios export zip. The frontend already knows the
 /// company/client/employee grouping and file naming (locale-aware period
 /// formatting lives in TS) — this just moves bytes into an archive, merging

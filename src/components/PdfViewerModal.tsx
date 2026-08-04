@@ -1,9 +1,11 @@
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { save } from "@tauri-apps/plugin-dialog";
+import { ChevronLeft, ChevronRight, Download, X } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { useEffect, useRef, useState } from "react";
-import { readPdfBytes } from "../lib/api";
+import { copyPdfTo, readPdfBytes } from "../lib/api";
+import { sanitizeFileName } from "../lib/format";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 
@@ -27,6 +29,8 @@ export default function PdfViewerModal({
   const [pageNum, setPageNum] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -37,6 +41,7 @@ export default function PdfViewerModal({
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setDownloadError(null);
     setPageNum(1);
     readPdfBytes(path)
       .then((buffer) => pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise)
@@ -75,6 +80,24 @@ export default function PdfViewerModal({
       renderTask?.cancel();
     };
   }, [doc, pageNum]);
+
+  async function handleDownload() {
+    if (!path) return;
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const destPath = await save({
+        defaultPath: `${sanitizeFileName(title ?? "documento")}.pdf`,
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+      });
+      if (!destPath) return;
+      await copyPdfTo(path, destPath);
+    } catch (e) {
+      setDownloadError(String(e));
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   if (!path) return null;
 
@@ -130,6 +153,16 @@ export default function PdfViewerModal({
               </button>
             </div>
           )}
+          <button
+            type="button"
+            className="secondary"
+            onClick={handleDownload}
+            disabled={downloading || !doc}
+            title="Baixar"
+          >
+            <Download size={15} style={{ marginRight: "0.4rem" }} />
+            {downloading ? "Baixando..." : "Baixar"}
+          </button>
           <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={onClose} aria-label="Fechar">
             <X size={18} />
           </button>
@@ -137,11 +170,16 @@ export default function PdfViewerModal({
       </div>
 
       <div
-        style={{ flex: 1, overflow: "auto", display: "flex", justifyContent: "center", padding: "1.5rem" }}
+        style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column", alignItems: "center", padding: "1.5rem" }}
         onClick={(e) => e.stopPropagation()}
       >
         {loading && <p className="muted">Carregando...</p>}
         {error && <div className="error-box">{error}</div>}
+        {downloadError && (
+          <div className="error-box" style={{ marginBottom: "1rem" }}>
+            {downloadError}
+          </div>
+        )}
         {!error && (
           <canvas ref={canvasRef} style={{ boxShadow: "0 10px 30px rgba(0, 0, 0, 0.5)", height: "fit-content" }} />
         )}
