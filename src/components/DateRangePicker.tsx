@@ -18,25 +18,42 @@ const segmentStyle: CSSProperties = {
 
 /**
  * "De"/"Até" as one visual control instead of two unrelated inputs — a
- * single bordered pill with both dates and a "→" between them. Always has
- * a value on both sides (no clearing to empty): this drives report
- * generation, which needs a bounded period to work with, not an optional
- * narrowing filter. Picking a date on either side keeps the range valid
- * and capped at one calendar month by pushing the other side along with
- * it, rather than rejecting the pick.
+ * single bordered pill with both dates and a "→" between them. Picking the
+ * start automatically hands the popover to the end side, instead of making
+ * the user reopen it themselves.
+ *
+ * `maxSpanMonths`, when set, keeps the range valid and capped by pushing
+ * the other side along with whichever side was just picked — used where a
+ * bounded period is a hard requirement (report generation), not just a
+ * narrowing filter. Without it, the two sides are independent and can be
+ * left empty (only order is still enforced: picking a start after an
+ * earlier end pushes the end forward, and vice versa).
  */
 export default function DateRangePicker({
   startValue,
   endValue,
   onChange,
+  maxSpanMonths,
+  allowClear = true,
+  startPlaceholder = "Início",
+  endPlaceholder = "Fim",
 }: {
   startValue: string;
   endValue: string;
   onChange: (start: string, end: string) => void;
+  maxSpanMonths?: number;
+  allowClear?: boolean;
+  startPlaceholder?: string;
+  endPlaceholder?: string;
 }) {
   const [openField, setOpenField] = useState<Field | null>(null);
   const [viewDate, setViewDate] = useState(() => todayUtc());
+  // Anchored to whichever side has room — a field near the right edge of
+  // the screen (like the last one in a filter row) would otherwise have
+  // its popover run off-screen and get clipped by the window.
+  const [align, setAlign] = useState<"left" | "right">("left");
   const rootRef = useRef<HTMLDivElement>(null);
+  const POPOVER_WIDTH = 280; // 17.5rem at the default 16px root size
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -47,7 +64,12 @@ export default function DateRangePicker({
   }, []);
 
   function openPicker(field: Field) {
-    setViewDate(new Date(`${(field === "start" ? startValue : endValue) || toIso(todayUtc())}T00:00:00Z`));
+    const base = (field === "start" ? startValue : endValue) || toIso(todayUtc());
+    setViewDate(new Date(`${base}T00:00:00Z`));
+    if (rootRef.current) {
+      const rect = rootRef.current.getBoundingClientRect();
+      setAlign(rect.left + POPOVER_WIDTH > window.innerWidth ? "right" : "left");
+    }
     setOpenField((f) => (f === field ? null : field));
   }
 
@@ -68,22 +90,34 @@ export default function DateRangePicker({
   function selectDay(d: Date) {
     const iso = toIso(d);
     if (openField === "start") {
-      let nextEnd = endValue < iso ? iso : endValue;
-      const maxEnd = addMonthsIso(iso, 1);
-      if (nextEnd > maxEnd) nextEnd = maxEnd;
+      let nextEnd = endValue;
+      if (nextEnd && nextEnd < iso) nextEnd = iso;
+      if (maxSpanMonths !== undefined) {
+        if (!nextEnd) nextEnd = iso;
+        const maxEnd = addMonthsIso(iso, maxSpanMonths);
+        if (nextEnd > maxEnd) nextEnd = maxEnd;
+      }
       onChange(iso, nextEnd);
       // Picking the start is naturally followed by picking the end — keep
-      // the popover open and hand it straight to the "Até" side instead of
-      // making the user reopen it themselves.
-      setViewDate(new Date(`${nextEnd}T00:00:00Z`));
+      // the popover open and hand it straight to the "Até" side.
+      setViewDate(new Date(`${nextEnd || iso}T00:00:00Z`));
       setOpenField("end");
     } else {
-      let nextStart = startValue > iso ? iso : startValue;
-      const minStart = addMonthsIso(iso, -1);
-      if (nextStart < minStart) nextStart = minStart;
+      let nextStart = startValue;
+      if (nextStart && nextStart > iso) nextStart = iso;
+      if (maxSpanMonths !== undefined) {
+        if (!nextStart) nextStart = iso;
+        const minStart = addMonthsIso(iso, -maxSpanMonths);
+        if (nextStart < minStart) nextStart = minStart;
+      }
       onChange(nextStart, iso);
       setOpenField(null);
     }
+  }
+
+  function clear() {
+    onChange("", "");
+    setOpenField(null);
   }
 
   const selectedValue = openField === "start" ? startValue : endValue;
@@ -101,18 +135,19 @@ export default function DateRangePicker({
       >
         <Calendar size={14} style={{ marginLeft: "0.7em", flexShrink: 0, color: "var(--text-muted)" }} />
         <button type="button" onClick={() => openPicker("start")} style={segmentStyle}>
-          {formatDateSlash(startValue)}
+          {startValue ? formatDateSlash(startValue) : <span className="muted">{startPlaceholder}</span>}
         </button>
         <span className="muted">→</span>
         <button type="button" onClick={() => openPicker("end")} style={segmentStyle}>
-          {formatDateSlash(endValue)}
+          {endValue ? formatDateSlash(endValue) : <span className="muted">{endPlaceholder}</span>}
         </button>
       </div>
       {openField && (
         <div
           style={{
             position: "absolute",
-            left: 0,
+            left: align === "left" ? 0 : "auto",
+            right: align === "left" ? "auto" : 0,
             top: "calc(100% + 0.4rem)",
             background: "var(--card-bg)",
             border: "1px solid var(--border)",
@@ -124,7 +159,8 @@ export default function DateRangePicker({
           }}
         >
           <div className="muted" style={{ fontSize: "0.75rem", marginBottom: "0.5rem" }}>
-            {openField === "start" ? "Data inicial" : "Data final"} · período de até 1 mês
+            {openField === "start" ? "Data inicial" : "Data final"}
+            {maxSpanMonths !== undefined && ` · período de até ${maxSpanMonths} mês${maxSpanMonths > 1 ? "es" : ""}`}
           </div>
 
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.6rem" }}>
@@ -173,6 +209,19 @@ export default function DateRangePicker({
               );
             })}
           </div>
+
+          {allowClear && (
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.6rem" }}>
+              <button
+                type="button"
+                className="ghost"
+                style={{ padding: "0.15rem 0.4rem", fontSize: "0.78rem" }}
+                onClick={clear}
+              >
+                Limpar
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

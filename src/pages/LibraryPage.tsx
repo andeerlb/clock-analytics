@@ -1,7 +1,7 @@
 import { Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import DatePicker from "../components/DatePicker";
+import DateRangePicker from "../components/DateRangePicker";
 import Pagination from "../components/Pagination";
 import { openOriginalPdf } from "../lib/api";
 import { colorForName, initials } from "../lib/avatar";
@@ -138,12 +138,15 @@ export default function LibraryPage() {
               </select>
             </div>
             <div className="field">
-              <label htmlFor="period-start">De</label>
-              <DatePicker id="period-start" value={periodStart} onChange={setPeriodStart} />
-            </div>
-            <div className="field">
-              <label htmlFor="period-end">Até</label>
-              <DatePicker id="period-end" value={periodEnd} onChange={setPeriodEnd} />
+              <label>Período</label>
+              <DateRangePicker
+                startValue={periodStart}
+                endValue={periodEnd}
+                onChange={(s, e) => {
+                  setPeriodStart(s);
+                  setPeriodEnd(e);
+                }}
+              />
             </div>
           </div>
         </div>

@@ -251,7 +251,16 @@ export default function ReportsPage() {
           </div>
           <div className="field">
             <label>Período</label>
-            <DateRangePicker startValue={periodStart} endValue={periodEnd} onChange={(s, e) => { setPeriodStart(s); setPeriodEnd(e); }} />
+            <DateRangePicker
+              startValue={periodStart}
+              endValue={periodEnd}
+              onChange={(s, e) => {
+                setPeriodStart(s);
+                setPeriodEnd(e);
+              }}
+              maxSpanMonths={1}
+              allowClear={false}
+            />
           </div>
         </div>
 
