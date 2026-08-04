@@ -1,5 +1,5 @@
 import Database from "@tauri-apps/plugin-sql";
-import { OVERTIME_THRESHOLD_MINUTES, sumIntervalMinutes } from "./analysis";
+import { overtimeMinutesForDay, sumIntervalMinutes } from "./analysis";
 import { normalizeCnpj } from "./format";
 import type {
   ConflictInfo,
@@ -204,9 +204,7 @@ export async function saveParsedTimesheet(
   for (const day of sheet.days) {
     maxPunches = Math.max(maxPunches, day.punches.length);
     totalWorkedMinutes += day.totalWorkedMinutes;
-    if (day.totalWorkedMinutes > OVERTIME_THRESHOLD_MINUTES) {
-      overtimeMinutes += day.totalWorkedMinutes - OVERTIME_THRESHOLD_MINUTES;
-    }
+    overtimeMinutes += overtimeMinutesForDay(day);
     if (day.punches.length < 2) {
       absenceMinutes += day.absenceMinutes;
     } else {

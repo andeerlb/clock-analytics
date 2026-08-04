@@ -55,6 +55,19 @@ jobs:
           node-version: 22
           cache: yarn
 
+      # Safety net, not the primary flow: releasing is supposed to start
+      # with `yarn version:bump X.Y.Z` (commit, then tag that commit), so
+      # tauri.conf.json/Cargo.toml already match the tag by the time this
+      # runs. This just re-applies the same bump to the CI runner's own
+      # checkout — never committed anywhere — in case a release ever gets
+      # tagged without bumping first, so the build still embeds a version
+      # matching its own tag (the Settings > Sobre update check compares
+      # `getVersion()` against the latest GitHub Release). A no-op on
+      # workflow_dispatch off a branch, where github.ref_name isn't a tag.
+      - name: Ensure app version matches the release tag
+        if: startsWith(github.ref_name, 'v')
+        run: node scripts/bump-version.mjs "${GITHUB_REF_NAME#v}"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:

@@ -58,14 +58,18 @@ Bundled artifacts land under `src-tauri/target/release/bundle/`.
 
 ## Building for Linux and macOS (automated)
 
-The [`Release`](.github/workflows/release.yml) GitHub Actions workflow builds `.deb`/`.rpm`/`.AppImage` (Linux) and a universal `.app`/`.dmg` that runs on both Apple Silicon and Intel Macs, publishing everything to a single draft GitHub Release. It runs automatically whenever a version tag is pushed:
+The [`Release`](.github/workflows/release.yml) GitHub Actions workflow builds `.deb`/`.rpm`/`.AppImage` (Linux) and a universal `.app`/`.dmg` that runs on both Apple Silicon and Intel Macs, publishing everything to a single draft GitHub Release. It runs automatically whenever a version tag is pushed.
+
+Bump the version *before* tagging, so the tag actually points at the commit it describes (the app reads its own version at runtime — Configurações shows it and flags when a newer GitHub Release exists — so this has to be accurate):
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+yarn version:bump 0.2.0
+git commit -am "chore: bump version to 0.2.0"
+git tag v0.2.0
+git push origin master v0.2.0
 ```
 
-You can also trigger it manually from the Actions tab (`workflow_dispatch`). Review the draft release and publish it once you're happy with it.
+You can also trigger the workflow manually from the Actions tab (`workflow_dispatch`), e.g. to rebuild an existing tag. Review the draft release and publish it once you're happy with it.
 
 The macOS artifacts are unsigned and non-notarized (see the code-signing note below) — CI has no Apple Developer ID to sign with, so opening them will trigger Gatekeeper warnings just like a manual build.
 

@@ -4,7 +4,7 @@ import { useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import PdfViewerModal from "../components/PdfViewerModal";
-import { OVERTIME_THRESHOLD_MINUTES, formatMinutes, isWeekend, sumIntervalMinutes } from "../lib/analysis";
+import { formatMinutes, isWeekend, overtimeMinutesForDay, sumIntervalMinutes } from "../lib/analysis";
 import { listImports, listStoredDayRecords } from "../lib/db";
 import { formatDate, formatDateCompact, formatDateTime } from "../lib/format";
 import type { StoredDayRecord, StoredImport } from "../lib/types";
@@ -60,7 +60,7 @@ const DAY_STATUS_OPTIONS: { id: DayStatusId; label: string; matches: (day: Store
     label: "Marcação completa",
     matches: (d) => d.punches.length > 0 && d.punches.length % 2 === 0,
   },
-  { id: "overtime", label: "Horas extras", matches: (d) => d.totalWorkedMinutes > OVERTIME_THRESHOLD_MINUTES },
+  { id: "overtime", label: "Horas extras", matches: (d) => overtimeMinutesForDay(d) > 0 },
   { id: "absence", label: "Horas faltas", matches: (d) => d.absenceMinutes > 0 && d.punches.length < 2 },
   { id: "late", label: "Horas de atraso", matches: (d) => d.absenceMinutes > 0 && d.punches.length >= 2 },
   { id: "regular", label: "Horas regulares", matches: (d) => d.normalHoursMinutes > 0 },
@@ -186,15 +186,6 @@ export default function EmployeeDetailPage() {
   if (loading) return <p className="muted">Carregando...</p>;
   if (!importInfo) return <p className="muted">Import não encontrado.</p>;
 
-  // For a single-page source, the employee's own file *is* the whole
-  // original — nothing to tell apart. For a multi-page batch, they're two
-  // different PDFs, so both buttons make sense — unless the whole-original
-  // was since purged via Configurações ("remover originais redundantes"),
-  // which empties the path rather than nulling it (the column is NOT NULL).
-  const hasSeparateOriginal =
-    Boolean(importInfo.sourceOriginalPdfPath) &&
-    importInfo.sourceOriginalPdfPath !== importInfo.originalPdfPath;
-
   // "Entrada 1", "Saída 1", "Entrada 2", "Saída 2", ... — however many
   // pairs this import actually needs, computed at import time.
   const punchColumnLabels = Array.from({ length: importInfo.maxPunches }, (_, i) => {
@@ -249,28 +240,14 @@ export default function EmployeeDetailPage() {
             className="secondary"
             onClick={() =>
               setViewer({
-                path: importInfo.sourceOriginalPdfPath || importInfo.originalPdfPath,
-                title: hasSeparateOriginal ? "Arquivo original" : `${importInfo.employeeName} — ${formatDate(importInfo.periodStart)} a ${formatDate(importInfo.periodEnd)}`,
+                path: importInfo.originalPdfPath,
+                title: `${importInfo.employeeName} — ${formatDate(importInfo.periodStart)} a ${formatDate(importInfo.periodEnd)}`,
               })
             }
           >
             <FileText size={15} style={{ marginRight: "0.4rem" }} />
             Ver arquivo
           </button>
-          {hasSeparateOriginal && (
-            <button
-              type="button"
-              onClick={() =>
-                setViewer({
-                  path: importInfo.originalPdfPath,
-                  title: `${importInfo.employeeName} — ${formatDate(importInfo.periodStart)} a ${formatDate(importInfo.periodEnd)}`,
-                })
-              }
-            >
-              <FileText size={15} style={{ marginRight: "0.4rem" }} />
-              Ver arquivo do colaborador
-            </button>
-          )}
           <MultiSelectDropdown
             options={DAY_STATUS_OPTIONS}
             selected={selectedStatuses}
@@ -341,12 +318,10 @@ export default function EmployeeDetailPage() {
                         <td
                           style={{
                             textAlign: "right",
-                            color: !synthetic && day.totalWorkedMinutes > OVERTIME_THRESHOLD_MINUTES ? "var(--success)" : undefined,
+                            color: !synthetic && overtimeMinutesForDay(day) > 0 ? "var(--success)" : undefined,
                           }}
                         >
-                          {synthetic
-                            ? ""
-                            : formatMinutes(Math.max(0, day.totalWorkedMinutes - OVERTIME_THRESHOLD_MINUTES))}
+                          {synthetic ? "" : formatMinutes(overtimeMinutesForDay(day))}
                         </td>
                         <td style={{ textAlign: "right" }}>
                           {synthetic ? "" : formatMinutes(day.normalHoursMinutes)}

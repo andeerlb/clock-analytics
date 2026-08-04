@@ -1,8 +1,3 @@
-// Not user-configurable anywhere in the UI — shared between the frontend
-// (Cartão de Ponto's per-day filter) and `db.ts` (period aggregates stored
-// at import time), so it lives here as the single source of truth.
-export const OVERTIME_THRESHOLD_MINUTES = 8 * 60;
-
 function hhmmToMinutes(value: string): number | null {
   const [h, m] = value.split(":").map(Number);
   if (Number.isNaN(h) || Number.isNaN(m)) return null;
@@ -36,4 +31,21 @@ export function formatMinutes(totalMinutes: number): string {
 /** Coalize's weekday abbreviations only ever come out in Portuguese. */
 export function isWeekend(weekday: string): boolean {
   return weekday === "Sáb" || weekday === "Dom";
+}
+
+/**
+ * A day's overtime is whatever it worked beyond its own "Horas normais"
+ * (regular hours) baseline — not a fixed threshold, since contracted daily
+ * hours vary by employee/provider and this app has no config for that.
+ * When the source didn't print a regular-hours figure for the day
+ * (`normalHoursMinutes` is 0 — every "no data" day looks like this, same as
+ * a genuine day off), there's no baseline to measure against, so overtime
+ * is 0 rather than guessed against an assumed number. Shared between the
+ * frontend (Cartão de Ponto's per-day filter/column) and `db.ts` (period
+ * aggregates stored at import time), so it lives here as the single source
+ * of truth.
+ */
+export function overtimeMinutesForDay(day: { totalWorkedMinutes: number; normalHoursMinutes: number }): number {
+  if (day.normalHoursMinutes <= 0) return 0;
+  return Math.max(0, day.totalWorkedMinutes - day.normalHoursMinutes);
 }

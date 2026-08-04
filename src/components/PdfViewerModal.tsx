@@ -81,6 +81,16 @@ export default function PdfViewerModal({
     };
   }, [doc, pageNum]);
 
+  // Closes on Esc, same as clicking the backdrop.
+  useEffect(() => {
+    if (!path) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [path, onClose]);
+
   async function handleDownload() {
     if (!path) return;
     setDownloading(true);
@@ -171,17 +181,25 @@ export default function PdfViewerModal({
 
       <div
         style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column", alignItems: "center", padding: "1.5rem" }}
-        onClick={(e) => e.stopPropagation()}
+        onClick={onClose}
       >
         {loading && <p className="muted">Carregando...</p>}
-        {error && <div className="error-box">{error}</div>}
+        {error && (
+          <div className="error-box" onClick={(e) => e.stopPropagation()}>
+            {error}
+          </div>
+        )}
         {downloadError && (
-          <div className="error-box" style={{ marginBottom: "1rem" }}>
+          <div className="error-box" style={{ marginBottom: "1rem" }} onClick={(e) => e.stopPropagation()}>
             {downloadError}
           </div>
         )}
         {!error && (
-          <canvas ref={canvasRef} style={{ boxShadow: "0 10px 30px rgba(0, 0, 0, 0.5)", height: "fit-content" }} />
+          <canvas
+            ref={canvasRef}
+            onClick={(e) => e.stopPropagation()}
+            style={{ boxShadow: "0 10px 30px rgba(0, 0, 0, 0.5)", height: "fit-content" }}
+          />
         )}
       </div>
     </div>

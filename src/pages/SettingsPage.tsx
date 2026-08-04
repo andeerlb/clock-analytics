@@ -1,4 +1,5 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   AlertTriangle,
   Archive,
@@ -12,6 +13,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import GithubIcon from "../components/GithubIcon";
 import {
   backupAppData,
   checkPopplerStatus,
@@ -24,6 +26,7 @@ import {
 import { clearAllData, findRedundantOriginals, markOriginalsRemoved, vacuumDatabase } from "../lib/db";
 import { formatBytes } from "../lib/format";
 import type { PopplerStatus, StorageUsage } from "../lib/types";
+import { checkForUpdate, REPO_URL, type UpdateStatus } from "../lib/updateCheck";
 
 const CLEAR_CONFIRM_PHRASE = "APAGAR TUDO";
 
@@ -46,6 +49,8 @@ export default function SettingsPage() {
   const [popplerDirInput, setPopplerDirInput] = useState("");
   const [popplerSaving, setPopplerSaving] = useState(false);
   const [popplerError, setPopplerError] = useState<string | null>(null);
+
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
 
   // Employees need their company and client to survive (both are required
   // references); clients need their company. Checking a more specific level
@@ -82,6 +87,7 @@ export default function SettingsPage() {
   useEffect(() => {
     refreshStorage();
     refreshPopplerStatus();
+    checkForUpdate().then(setUpdateStatus);
   }, []);
 
   function refreshPopplerStatus() {
@@ -398,6 +404,35 @@ export default function SettingsPage() {
           {backupBeforeClear ? <Archive size={15} style={{ marginRight: "0.4rem" }} /> : <Trash2 size={15} style={{ marginRight: "0.4rem" }} />}
           {clearing ? "Apagando..." : "Apagar tudo"}
         </button>
+      </div>
+
+      <div className="card">
+        <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <GithubIcon size={18} />
+          Sobre
+        </h3>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.8rem" }}>
+          <p className="muted" style={{ margin: 0, fontSize: "0.85rem" }}>
+            PontoScan {updateStatus ? `v${updateStatus.currentVersion}` : ""}
+            {updateStatus?.updateAvailable && (
+              <>
+                {" "}— nova versão disponível:{" "}
+                <strong style={{ color: "var(--success)" }}>{updateStatus.latestVersion}</strong>
+              </>
+            )}
+          </p>
+          <div style={{ display: "flex", gap: "0.6rem" }}>
+            {updateStatus?.updateAvailable && (
+              <button type="button" onClick={() => openUrl(updateStatus.latestUrl ?? REPO_URL)}>
+                Ver nova versão
+              </button>
+            )}
+            <button type="button" className="secondary" onClick={() => openUrl(REPO_URL)}>
+              <GithubIcon size={15} style={{ marginRight: "0.4rem" }} />
+              Ver no GitHub
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
