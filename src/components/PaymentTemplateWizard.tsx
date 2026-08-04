@@ -1,4 +1,4 @@
-import { CheckSquare, ChevronLeft, ChevronRight, FolderOpen, Square, X } from "lucide-react";
+import { CheckSquare, ChevronLeft, ChevronRight, Eye, FolderOpen, Square, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   copyPaymentSample,
@@ -251,11 +251,15 @@ export default function PaymentTemplateWizard({
     refetchRows(sheetName, delimiter);
   }
 
-  function toggleSheetIncluded(sheetName: string) {
+  /** Includes/excludes every sheet in `members` together — a merged group is toggled as one unit, since they're presumed identical. */
+  function toggleGroupIncluded(members: string[]) {
     setIncludedSheets((prev) => {
       const next = new Set(prev);
-      if (next.has(sheetName)) next.delete(sheetName);
-      else next.add(sheetName);
+      const allIncluded = members.every((s) => next.has(s));
+      for (const s of members) {
+        if (allIncluded) next.delete(s);
+        else next.add(s);
+      }
       return next;
     });
   }
@@ -264,13 +268,28 @@ export default function PaymentTemplateWizard({
   function toggleSheetMerge(otherSheet: string) {
     if (!activeSheet) return;
     const activeKey = groupKeyOf(activeSheet);
-    if (groupKeyOf(otherSheet) === activeKey) {
+    const otherKey = groupKeyOf(otherSheet);
+
+    if (otherKey === activeKey) {
+      // Split just this one sheet back out into its own fresh group —
+      // anyone else still resolving to the same key stays put.
       setSheetGroupOf((prev) => ({ ...prev, [otherSheet]: otherSheet }));
       setGroupHeaderRow((prev) => ({ ...prev, [otherSheet]: 1 }));
       setGroupMapping((prev) => ({ ...prev, [otherSheet]: {} }));
-    } else {
-      setSheetGroupOf((prev) => ({ ...prev, [otherSheet]: activeKey }));
+      return;
     }
+
+    // `groupKeyOf` only follows one hop, so if otherSheet was itself
+    // anchoring other sheets, repointing just otherSheet would strand
+    // them pointing at a key that's no longer self-referential. Repoint
+    // every sheet that currently resolves to otherKey in one pass instead.
+    setSheetGroupOf((prev) => {
+      const next = { ...prev };
+      for (const s of sheets) {
+        if ((next[s] ?? s) === otherKey) next[s] = activeKey;
+      }
+      return next;
+    });
   }
 
   function handleDelimiterChange(newDelimiter: string) {
@@ -312,7 +331,12 @@ export default function PaymentTemplateWizard({
   }
 
   const activeGroupKey = groupKeyOf(activeSheet);
-  const headerRow = groupHeaderRow[activeGroupKey] ?? 1;
+  // `undefined` until the user actually clicks a row — falling back to 1
+  // only for downstream calculations (sample rows, saved header_row), not
+  // for deciding whether to highlight anything: nothing is "selected"
+  // until the user picks it, even though row 1 is the effective default.
+  const headerRowSelected = groupHeaderRow[activeGroupKey];
+  const headerRow = headerRowSelected ?? 1;
   const mapping = groupMapping[activeGroupKey] ?? {};
 
   const colCount = rows.reduce((max, r) => Math.max(max, r.length), 0);
@@ -326,6 +350,27 @@ export default function PaymentTemplateWizard({
     fileKind === "csv"
       ? [CSV_GROUP_KEY]
       : Array.from(new Set(sheets.filter((s) => includedSheets.has(s)).map((s) => groupKeyOf(s))));
+
+  // One tab per group of already-merged sheets (mirrors the Mapeamento
+  // step's tab bar), except an excluded sheet always gets its own tab —
+  // there's no reason to bundle something that isn't being imported.
+  const structureTabEntries: { key: string; members: string[] }[] = [];
+  {
+    const seen = new Set<string>();
+    for (const s of sheets) {
+      if (!includedSheets.has(s)) {
+        structureTabEntries.push({ key: s, members: [s] });
+        continue;
+      }
+      const gk = groupKeyOf(s);
+      if (seen.has(gk)) continue;
+      seen.add(gk);
+      structureTabEntries.push({
+        key: gk,
+        members: sheets.filter((m) => includedSheets.has(m) && groupKeyOf(m) === gk),
+      });
+    }
+  }
 
   const canAdvance =
     step === 0
@@ -397,6 +442,43 @@ export default function PaymentTemplateWizard({
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Checklist of other included sheets that can be merged into (or split out of) the active sheet's group — shared by the Estrutura and Mapeamento steps, since merging always carries both header row and mapping together. */
+  function renderMergeChecklist(label: string) {
+    if (!activeSheet || !includedSheets.has(activeSheet) || includedSheets.size <= 1) return null;
+    return (
+      <div className="field" style={{ marginTop: "1rem" }}>
+        <label>{label}</label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.7rem", marginTop: "0.5rem" }}>
+          {sheets
+            .filter((s) => s !== activeSheet && includedSheets.has(s))
+            .map((s) => (
+              <span key={s} style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}>
+                <input
+                  type="checkbox"
+                  id={`merge-${s}`}
+                  checked={groupKeyOf(s) === activeGroupKey}
+                  onChange={() => toggleSheetMerge(s)}
+                />
+                <label htmlFor={`merge-${s}`} style={{ fontSize: "0.85rem", cursor: "pointer" }}>
+                  {s}
+                </label>
+                <button
+                  type="button"
+                  className="ghost"
+                  style={{ padding: "0.1rem 0.3rem" }}
+                  onClick={() => handleSheetClick(s)}
+                  title={`Visualizar "${s}"`}
+                  aria-label={`Visualizar "${s}"`}
+                >
+                  <Eye size={12} />
+                </button>
+              </span>
+            ))}
+        </div>
+      </div>
+    );
   }
 
   if (!target) return null;
@@ -494,36 +576,45 @@ export default function PaymentTemplateWizard({
             </p>
             {sheets.length > 1 && (
               <div className="sheet-tabs">
-                {sheets.map((s) => {
-                  const included = includedSheets.has(s);
+                {structureTabEntries.map(({ key, members }) => {
+                  const included = includedSheets.has(key);
                   return (
                     <button
-                      key={s}
+                      key={key}
                       type="button"
-                      className={`sheet-tab${s === activeSheet ? " active" : ""}${included ? "" : " excluded"}`}
-                      onClick={() => handleSheetClick(s)}
+                      className={`sheet-tab${key === activeSheet ? " active" : ""}${included ? "" : " excluded"}`}
+                      onClick={() => handleSheetClick(key)}
                     >
                       <span
                         className="sheet-tab-check"
                         role="checkbox"
                         aria-checked={included}
-                        aria-label={included ? `Não importar ${s}` : `Importar ${s}`}
+                        aria-label={included ? `Não importar ${key}` : `Importar ${key}`}
                         tabIndex={0}
                         onClick={(e) => {
                           e.stopPropagation();
-                          toggleSheetIncluded(s);
+                          toggleGroupIncluded(members);
                         }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
                             e.stopPropagation();
-                            toggleSheetIncluded(s);
+                            toggleGroupIncluded(members);
                           }
                         }}
                       >
                         {included ? <CheckSquare size={13} /> : <Square size={13} />}
                       </span>
-                      {s}
+                      {key}
+                      {members.length > 1 ? ` (+${members.length - 1})` : ""}
+                      {included && groupHeaderRow[groupKeyOf(key)] === undefined && (
+                        <span
+                          title="Cabeçalho ainda não confirmado"
+                          style={{ color: "var(--warning)", fontSize: "1.1em", lineHeight: 1 }}
+                        >
+                          •
+                        </span>
+                      )}
                     </button>
                   );
                 })}
@@ -546,7 +637,7 @@ export default function PaymentTemplateWizard({
                     {rows.map((row, i) => (
                       <tr
                         key={i}
-                        className={i + 1 === headerRow ? "header-row-selected" : ""}
+                        className={headerRowSelected !== undefined && i + 1 === headerRowSelected ? "header-row-selected" : ""}
                         onClick={() => handleHeaderRowClick(i + 1)}
                       >
                         <td className="row-gutter">{i + 1}</td>
@@ -559,28 +650,7 @@ export default function PaymentTemplateWizard({
                 </table>
               </div>
             )}
-            {activeSheet && includedSheets.has(activeSheet) && includedSheets.size > 1 && (
-              <div className="field" style={{ marginTop: "1rem" }}>
-                <label>Estas abas usam a mesma estrutura de "{activeSheet}":</label>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.7rem", marginTop: "0.5rem" }}>
-                  {sheets
-                    .filter((s) => s !== activeSheet && includedSheets.has(s))
-                    .map((s) => (
-                      <label
-                        key={s}
-                        style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.85rem", cursor: "pointer" }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={groupKeyOf(s) === activeGroupKey}
-                          onChange={() => toggleSheetMerge(s)}
-                        />
-                        {s}
-                      </label>
-                    ))}
-                </div>
-              </div>
-            )}
+            {renderMergeChecklist(`Estas abas usam a mesma estrutura de "${activeSheet}":`)}
           </div>
         )}
 
@@ -662,6 +732,7 @@ export default function PaymentTemplateWizard({
                 </table>
               </div>
             )}
+            {renderMergeChecklist(`Estas abas usam o mesmo mapeamento de "${activeSheet}":`)}
           </div>
         )}
 
