@@ -1,6 +1,7 @@
 import { FileText, TrendingDown, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
+import BackButton from "../components/BackButton";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import PdfViewerModal from "../components/PdfViewerModal";
 import { OVERTIME_THRESHOLD_MINUTES, formatMinutes, isWeekend, sumIntervalMinutes } from "../lib/analysis";
@@ -180,7 +181,10 @@ export default function EmployeeDetailPage() {
     <div>
       <div className="page-header" style={{ alignItems: "flex-end" }}>
         <div>
-          <h2>Cartão de Ponto - {importInfo.employeeName}</h2>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <BackButton />
+            <h2>Cartão de Ponto - {importInfo.employeeName}</h2>
+          </div>
           <p className="muted">
             Período: <strong style={{ color: "var(--text)" }}>{formatDate(importInfo.periodStart)} a{" "}
             {formatDate(importInfo.periodEnd)}</strong>

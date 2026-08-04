@@ -163,7 +163,7 @@ export default function SettingsPage() {
     try {
       if (backupBeforeClear) {
         const destPath = await save({
-          defaultPath: "clock-analytics-backup.zip",
+          defaultPath: "pontoscan-backup.zip",
           filters: [{ name: "ZIP", extensions: ["zip"] }],
         });
         if (!destPath) {
@@ -189,7 +189,7 @@ export default function SettingsPage() {
         <h2>Configurações</h2>
       </div>
       <p className="page-subtitle">
-        O Clock Analytics guarda tudo localmente neste computador — banco de dados e cópias dos
+        O PontoScan guarda tudo localmente neste computador — banco de dados e cópias dos
         PDFs importados. Com o tempo isso ocupa espaço em disco; aqui dá pra acompanhar e liberar.
       </p>
 

@@ -19,7 +19,7 @@ pub struct StorageUsage {
 pub fn usage(data_dir: &Path) -> StorageUsage {
     let mut db_bytes = 0u64;
     for suffix in ["", "-wal", "-shm"] {
-        let path = data_dir.join(format!("clock-analytics.db{suffix}"));
+        let path = data_dir.join(format!("pontoscan.db{suffix}"));
         if let Ok(meta) = fs::metadata(&path) {
             db_bytes += meta.len();
         }
@@ -97,7 +97,7 @@ pub fn backup(data_dir: &Path, dest_zip_path: &str) -> Result<(), String> {
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     for suffix in ["", "-wal", "-shm"] {
-        let name = format!("clock-analytics.db{suffix}");
+        let name = format!("pontoscan.db{suffix}");
         let path = data_dir.join(&name);
         if path.exists() {
             let bytes = fs::read(&path).map_err(|e| e.to_string())?;

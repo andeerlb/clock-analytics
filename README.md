@@ -1,4 +1,4 @@
-# Clock Analytics
+# PontoScan
 
 A cross-platform desktop app (Linux, macOS, Windows) built with [Tauri](https://tauri.app/) for ingesting Brazilian "Espelho Ponto" (timesheet) PDF exports, parsing punch data per employee/day, and analyzing it locally — no data ever leaves the machine, everything is persisted to a local SQLite database.
 

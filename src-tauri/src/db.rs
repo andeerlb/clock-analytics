@@ -1,6 +1,6 @@
 use tauri_plugin_sql::{Migration, MigrationKind};
 
-pub const DB_URL: &str = "sqlite:clock-analytics.db";
+pub const DB_URL: &str = "sqlite:pontoscan.db";
 
 pub fn migrations() -> Vec<Migration> {
     vec![

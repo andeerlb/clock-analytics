@@ -11,7 +11,7 @@ import type {
   StoredImport,
 } from "./types";
 
-export const DB_URL = "sqlite:clock-analytics.db";
+export const DB_URL = "sqlite:pontoscan.db";
 
 let dbPromise: Promise<Database> | null = null;
 

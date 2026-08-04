@@ -20,7 +20,7 @@ export default function Sidebar() {
         <div className="app-brand-icon">
           <Clock size={18} />
         </div>
-        <span>Clock Analytics</span>
+        <span>PontoScan</span>
       </div>
 
       <div className="app-nav-links">
