@@ -24,10 +24,22 @@ A cross-platform desktop app (Linux, macOS, Windows) built with [Tauri](https://
 - [Node.js](https://nodejs.org/) 20+ and [Yarn](https://yarnpkg.com/)
 - [Rust](https://www.rust-lang.org/tools/install) (stable toolchain, via `rustup`)
 - [Tauri's platform-specific system dependencies](https://tauri.app/start/prerequisites/) (WebKitGTK on Linux, Xcode Command Line Tools on macOS, WebView2 on Windows)
-- **Poppler utilities on your `PATH`** — `pdftotext`, `pdfseparate`, `pdfinfo`, and `pdfunite` must be installed. These aren't bundled with the app yet (see [Known limitations](#known-limitations)), so they're required both for local development and on any machine that runs the packaged app.
+- **Poppler utilities installed** — `pdftotext`, `pdfseparate`, `pdfinfo`, and `pdfunite`. These aren't bundled with the app yet (see [PDF tooling (Poppler)](#pdf-tooling-poppler) and [Known limitations](#known-limitations)), so they're required both for local development and on any machine that runs the packaged app.
   - Debian/Ubuntu: `sudo apt-get install poppler-utils`
   - macOS: `brew install poppler`
-  - Windows: install a [Poppler for Windows](https://github.com/oschwartz10612/poppler-windows) build and add its `bin/` folder to `PATH`
+  - Windows: **not currently supported** — see [PDF tooling (Poppler)](#pdf-tooling-poppler) below.
+
+## PDF tooling (Poppler)
+
+The app shells out to four Poppler CLI tools — `pdfinfo`, `pdftotext`, `pdfseparate`, `pdfunite` — for page counting, text extraction, and PDF splitting/merging. They're **not bundled** with the app (see [Known limitations](#known-limitations)), so they need to already be installed on whatever machine runs it, dev or packaged.
+
+**macOS.** `brew install poppler` is enough — no `PATH` setup required. A packaged `.app` opened from Finder is launched with a minimal `PATH` that doesn't include Homebrew's `bin/`, so the app looks for the tools directly in the well-known install locations instead of relying on `PATH`: `/opt/homebrew/bin` (Apple Silicon Homebrew), `/usr/local/bin` (Intel Homebrew), and `/opt/local/bin` (MacPorts). See `src-tauri/src/poppler.rs`.
+
+**Linux.** `sudo apt-get install poppler-utils` (or your distro's equivalent) installs to `/usr/bin`, which is on `PATH` for GUI-launched apps in most desktop environments — no extra setup needed. `/usr/bin` is also checked directly as a fallback, same as the macOS locations above.
+
+**Windows — not currently supported.** There's no bundled or auto-detected Poppler for Windows, and no Windows build is produced by this repo's tooling yet (see [Known limitations](#known-limitations)). If you build for Windows yourself, you'd need to install a [Poppler for Windows](https://github.com/oschwartz10612/poppler-windows) build and add its `bin/` folder to `PATH` — but note the packaged-app `PATH` caveat above likely applies there too, and hasn't been addressed for Windows.
+
+**If auto-detection doesn't find it** (a non-Homebrew/MacPorts/apt install, or a custom location), open **Configurações** in the app — it shows the resolved status of each of the four tools and lets you point at the folder containing them manually. The app also checks on startup and shows a banner linking to Configurações if anything's missing.
 
 ## Development
 
@@ -94,6 +106,6 @@ There's no macOS CI in this repo yet, so producing a macOS build means running i
 
 ## Known limitations
 
-- **Poppler isn't bundled yet.** The app shells out to `pdftotext`/`pdfseparate`/`pdfinfo`/`pdfunite` as external processes rather than bundling them as a Tauri sidecar per platform. Any machine running the app (not just the build machine) needs Poppler installed and on `PATH`. See `src-tauri/src/pdf_extract.rs` for the rationale.
+- **Poppler isn't bundled yet.** The app shells out to `pdftotext`/`pdfseparate`/`pdfinfo`/`pdfunite` as external processes rather than bundling them as a Tauri sidecar per platform. Any machine running the app (not just the build machine) needs Poppler installed — see [PDF tooling (Poppler)](#pdf-tooling-poppler). macOS and Linux auto-detect common install locations (with a manual override in Configurações); Windows has no equivalent yet and isn't a supported target.
 - **One timesheet provider today.** Only the Coalize export format is supported; additional providers can be added under `src-tauri/src/parsers/` without changing the rest of the app.
 - **Windows isn't covered by CI yet.** Only Linux is automated via GitHub Actions; macOS is manual (above), and Windows builds are untested by this repo's tooling so far.
