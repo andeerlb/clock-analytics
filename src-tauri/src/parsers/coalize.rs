@@ -7,12 +7,21 @@ use regex::Regex;
 /// Parses the "Espelho Ponto" export from Coalize (coalize.com.br).
 ///
 /// The layout is a fixed grid: one line per day, `DD/MM (Weekday)` followed
-/// by 0-4 "HH:MM" punches and always exactly 3 trailing "HH:MM" totals
-/// (Total trabalhado, Horas normais, Faltas). `pdf_extract::extract_text`
-/// uses `pdftotext -layout`, which keeps this one-line-per-day structure
-/// regardless of the source PDF's internal text-object order, so this
-/// parser works off token counts per line (trimmed first) rather than exact
-/// column positions or spacing.
+/// by 0-4 "HH:MM" punches and a fixed run of trailing "HH:MM" totals.
+/// `pdf_extract::extract_text` uses `pdftotext -layout`, which keeps this
+/// one-line-per-day structure regardless of the source PDF's internal
+/// text-object order, so this parser works off token counts per line
+/// (trimmed first) rather than exact column positions or spacing.
+///
+/// Two export configurations exist, differing only in whether a "Total
+/// trabalhado" column is included before "Horas normais"/"Faltas" — 3
+/// trailing totals with it, 2 without. Token count alone can't tell them
+/// apart (e.g. "3 trailing + 1 punch" and "2 trailing + 2 punches" both
+/// produce 4 tokens), so the variant is detected once from the header via
+/// the word "trabalhado", which only appears when that column exists.
+/// When it's absent, worked minutes are computed from the punches
+/// themselves (summing each Entrada→Saída pair) instead of trusting a
+/// field the source doesn't print.
 pub struct CoalizeParser;
 
 impl TimesheetParser for CoalizeParser {
@@ -63,6 +72,12 @@ impl TimesheetParser for CoalizeParser {
             cnpj: company_caps[2].trim().to_string(),
         };
 
+        // See the module doc comment: some exports omit the "Total
+        // trabalhado" column entirely, leaving only 2 trailing totals
+        // instead of 3.
+        let has_total_worked_column = raw_text.contains("trabalhado");
+        let trailing_count = if has_total_worked_column { 3 } else { 2 };
+
         let mut days = Vec::new();
         for line in raw_text.lines() {
             let line = line.trim();
@@ -75,17 +90,27 @@ impl TimesheetParser for CoalizeParser {
             let weekday = caps[3].to_string();
             let tokens: Vec<&str> = caps[4].split_whitespace().collect();
 
-            // A valid row always has the 3 trailing totals; anything short
-            // of that isn't a data row we recognize, so skip rather than
-            // fail the whole document over one stray line.
-            if tokens.len() < 3 {
+            // A valid row always has the trailing totals; anything short of
+            // that isn't a data row we recognize, so skip rather than fail
+            // the whole document over one stray line.
+            if tokens.len() < trailing_count {
                 continue;
             }
 
-            let (punches, trailing) = tokens.split_at(tokens.len() - 3);
-            let total_worked_minutes = hhmm_to_minutes(trailing[0]).unwrap_or(0);
-            let normal_hours_minutes = hhmm_to_minutes(trailing[1]).unwrap_or(0);
-            let absence_minutes = hhmm_to_minutes(trailing[2]).unwrap_or(0);
+            let (punches, trailing) = tokens.split_at(tokens.len() - trailing_count);
+            let (total_worked_minutes, normal_hours_minutes, absence_minutes) = if has_total_worked_column {
+                (
+                    hhmm_to_minutes(trailing[0]).unwrap_or(0),
+                    hhmm_to_minutes(trailing[1]).unwrap_or(0),
+                    hhmm_to_minutes(trailing[2]).unwrap_or(0),
+                )
+            } else {
+                (
+                    worked_minutes_from_punches(punches),
+                    hhmm_to_minutes(trailing[0]).unwrap_or(0),
+                    hhmm_to_minutes(trailing[1]).unwrap_or(0),
+                )
+            };
 
             // The row only has day/month, not year; periods span a single
             // month in this export, but guard the rollover just in case a
@@ -130,6 +155,22 @@ impl TimesheetParser for CoalizeParser {
 fn parse_br_date(s: &str) -> Result<NaiveDate, ParseError> {
     NaiveDate::parse_from_str(s, "%d/%m/%Y")
         .map_err(|_| ParseError::UnrecognizedFormat("coalize:date".into()))
+}
+
+/// Sums each Entrada→Saída pair (punches[0]→punches[1], punches[2]→punches[3],
+/// ...) — used when the source doesn't print its own "Total trabalhado"
+/// column. A trailing unmatched punch (odd count) contributes nothing, same
+/// as the source itself would leave that day's total incomplete.
+fn worked_minutes_from_punches(punches: &[&str]) -> i32 {
+    let mut total = 0;
+    let mut i = 0;
+    while i + 1 < punches.len() {
+        if let (Some(start), Some(end)) = (hhmm_to_minutes(punches[i]), hhmm_to_minutes(punches[i + 1])) {
+            total += end - start;
+        }
+        i += 2;
+    }
+    total
 }
 
 #[cfg(test)]
@@ -251,5 +292,54 @@ Assinatura: ";
         let with_punches = sheet.days.iter().find(|d| d.date == "2026-07-05").unwrap();
         assert_eq!(with_punches.punches, vec!["15:08", "21:15"]);
         assert_eq!(with_punches.total_worked_minutes, 6 * 60 + 7);
+    }
+
+    // A real "Espelho Ponto" export configuration with no "Total
+    // trabalhado" column at all — only "Horas normais" and "Faltas". Before
+    // the fix, the parser always split off the last 3 tokens as totals,
+    // which on a day with a single punch (05/07) swallowed that punch
+    // entirely as a bogus "total worked" value, and on a day with two
+    // punches (26/07) mistook the real Saída for the same bogus total.
+    const NO_TOTAL_WORKED_COLUMN_SAMPLE: &str = "\
+Emissão: 03/08/2026 13:12:58
+ESPELHO PONTO: 01/07/2026 - 31/07/2026
+FUNCIONÁRIO: ADAO PINTO FAGUNDES | CPF: 80998852015 | Cargo: operador de caixa
+EMPRESA: FC MERCHANDISING LTDA | CNPJ: 64953192000133
+Jornada realizada Jornada
+Data Ent. 1 Saí. 1 Ent. 2 Saí. 2 Horas
+normais Faltas Observação
+01/07 (Qua) 00:00 00:00
+05/07 (Dom) 16:47 00:00 00:00
+26/07 (Dom) 13:24 19:36 00:00 00:00
+28/07 (Ter) 12:54 00:00 00:00
+TOTAL 00h00min 00h00min
+Assinatura: ";
+
+    #[test]
+    fn parses_variant_without_total_worked_column() {
+        let sheets = CoalizeParser.parse(NO_TOTAL_WORKED_COLUMN_SAMPLE, "/tmp/x.pdf").unwrap();
+        let sheet = &sheets[0];
+
+        let no_punch = sheet.days.iter().find(|d| d.date == "2026-07-01").unwrap();
+        assert!(no_punch.punches.is_empty());
+        assert_eq!(no_punch.total_worked_minutes, 0);
+
+        // A single punch is a real Entrada, not a bogus "total worked".
+        let single_punch = sheet.days.iter().find(|d| d.date == "2026-07-05").unwrap();
+        assert_eq!(single_punch.punches, vec!["16:47"]);
+        assert_eq!(single_punch.total_worked_minutes, 0);
+
+        // Both punches land in Ent.1/Saí.1, and worked minutes are derived
+        // from that pair (19:36 - 13:24 = 6h12min) since the source prints
+        // no total of its own.
+        let pair = sheet.days.iter().find(|d| d.date == "2026-07-26").unwrap();
+        assert_eq!(pair.punches, vec!["13:24", "19:36"]);
+        assert_eq!(pair.total_worked_minutes, 6 * 60 + 12);
+        assert_eq!(pair.normal_hours_minutes, 0);
+        assert_eq!(pair.absence_minutes, 0);
+
+        let trailing_single = sheet.days.iter().find(|d| d.date == "2026-07-28").unwrap();
+        assert_eq!(trailing_single.punches, vec!["12:54"]);
+        assert_eq!(trailing_single.total_worked_minutes, 0);
     }
 }
