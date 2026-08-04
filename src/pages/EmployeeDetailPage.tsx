@@ -1,5 +1,5 @@
-import { FileText, TrendingDown, TrendingUp } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { FileText, ListFilter, TrendingDown, TrendingUp } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { openOriginalPdf } from "../lib/api";
 import { formatMinutes, isWeekend, summarizePeriod } from "../lib/analysis";
@@ -17,6 +17,124 @@ function isSynthetic(day: Pick<StoredDayRecord, "dayRecordId">): boolean {
 }
 
 const WEEKDAY_ABBR = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
+type DayStatusId = "no-punch" | "pending" | "complete" | "overtime" | "absence" | "weekend";
+
+/**
+ * Categories a day can fall into, used to drive the "quais dias exibir"
+ * filter below. `no-punch`/`pending`/`complete` are mutually exclusive (a
+ * day always matches exactly one, based on punch count) — `overtime`/
+ * `absence` are independent flags that can co-occur with any of those.
+ * A day is hidden if it matches an option the user has unchecked, so
+ * unchecking "Horas extras" hides every overtime day regardless of its
+ * punch status.
+ */
+const DAY_STATUS_OPTIONS: { id: DayStatusId; label: string; matches: (day: StoredDayRecord) => boolean }[] = [
+  { id: "no-punch", label: "Sem marcação", matches: (d) => d.punches.length === 0 },
+  {
+    id: "pending",
+    label: "Marcação pendente",
+    matches: (d) => d.punches.length > 0 && d.punches.length % 2 !== 0,
+  },
+  {
+    id: "complete",
+    label: "Marcação completa",
+    matches: (d) => d.punches.length > 0 && d.punches.length % 2 === 0,
+  },
+  { id: "overtime", label: "Horas extras", matches: (d) => d.totalWorkedMinutes > OVERTIME_THRESHOLD_MINUTES },
+  { id: "absence", label: "Horas faltas", matches: (d) => d.absenceMinutes > 0 },
+  { id: "weekend", label: "Finais de semana", matches: (d) => isWeekend(d.weekday) },
+];
+
+function DayStatusFilter({
+  selected,
+  onToggle,
+  onSelectAll,
+  onSelectNone,
+}: {
+  selected: Set<DayStatusId>;
+  onToggle: (id: DayStatusId) => void;
+  onSelectAll: () => void;
+  onSelectNone: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  const label =
+    selected.size === DAY_STATUS_OPTIONS.length
+      ? "Todos os dias"
+      : selected.size === 0
+        ? "Nenhum filtro selecionado"
+        : `${selected.size} de ${DAY_STATUS_OPTIONS.length} filtros`;
+
+  return (
+    <div style={{ position: "relative" }} ref={rootRef}>
+      <button type="button" className="secondary" onClick={() => setOpen((o) => !o)}>
+        <ListFilter size={15} style={{ marginRight: "0.4rem" }} />
+        {label}
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            right: 0,
+            top: "calc(100% + 0.4rem)",
+            background: "var(--card-bg)",
+            border: "1px solid var(--border)",
+            borderRadius: 10,
+            padding: "0.6rem",
+            minWidth: "220px",
+            boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.4)",
+            zIndex: 20,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.4rem" }}>
+            <button
+              type="button"
+              className="ghost"
+              style={{ padding: "0.15rem 0.4rem", fontSize: "0.78rem" }}
+              onClick={onSelectAll}
+            >
+              Selecionar todos
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              style={{ padding: "0.15rem 0.4rem", fontSize: "0.78rem" }}
+              onClick={onSelectNone}
+            >
+              Limpar
+            </button>
+          </div>
+          {DAY_STATUS_OPTIONS.map((opt) => (
+            <label
+              key={opt.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                padding: "0.3rem 0.2rem",
+                fontSize: "0.88rem",
+                cursor: "pointer",
+              }}
+            >
+              <input type="checkbox" checked={selected.has(opt.id)} onChange={() => onToggle(opt.id)} />
+              {opt.label}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function weekdayAbbr(isoDate: string): string {
   return WEEKDAY_ABBR[new Date(`${isoDate}T00:00:00Z`).getUTCDay()];
@@ -73,7 +191,9 @@ export default function EmployeeDetailPage() {
   const { importId } = useParams<{ importId: string }>();
   const [days, setDays] = useState<StoredDayRecord[]>([]);
   const [importInfo, setImportInfo] = useState<StoredImport | null>(null);
-  const [hideEmptyDays, setHideEmptyDays] = useState(false);
+  const [selectedStatuses, setSelectedStatuses] = useState<Set<DayStatusId>>(
+    () => new Set(DAY_STATUS_OPTIONS.map((o) => o.id)),
+  );
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -108,10 +228,14 @@ export default function EmployeeDetailPage() {
     [fullDays],
   );
   // Always includes every day from the period by default — this only
-  // narrows what's *displayed*, the totals above are unaffected.
+  // narrows what's *displayed*, the totals above are unaffected. A day is
+  // hidden if it matches a status option the user unchecked.
   const visibleDays = useMemo(
-    () => (hideEmptyDays ? fullDays.filter((d) => !isSynthetic(d)) : fullDays),
-    [fullDays, hideEmptyDays],
+    () =>
+      fullDays.filter((day) =>
+        DAY_STATUS_OPTIONS.every((opt) => !opt.matches(day) || selectedStatuses.has(opt.id)),
+      ),
+    [fullDays, selectedStatuses],
   );
 
   if (loading) return <p className="muted">Carregando...</p>;
@@ -201,17 +325,19 @@ export default function EmployeeDetailPage() {
       </div>
 
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "0.6rem" }}>
-        <label
-          className="muted"
-          style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}
-        >
-          <input
-            type="checkbox"
-            checked={hideEmptyDays}
-            onChange={(e) => setHideEmptyDays(e.target.checked)}
-          />
-          Ocultar dias sem registro
-        </label>
+        <DayStatusFilter
+          selected={selectedStatuses}
+          onToggle={(id) =>
+            setSelectedStatuses((prev) => {
+              const next = new Set(prev);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return next;
+            })
+          }
+          onSelectAll={() => setSelectedStatuses(new Set(DAY_STATUS_OPTIONS.map((o) => o.id)))}
+          onSelectNone={() => setSelectedStatuses(new Set())}
+        />
       </div>
 
       <div className="card table-card card-flush">
