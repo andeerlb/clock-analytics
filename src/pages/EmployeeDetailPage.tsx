@@ -16,16 +16,36 @@ function isSynthetic(day: Pick<StoredDayRecord, "dayRecordId">): boolean {
 
 const WEEKDAY_ABBR = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 
-type DayStatusId = "no-punch" | "pending" | "complete" | "overtime" | "absence" | "weekend" | "interval";
+type DayStatusId =
+  | "no-punch"
+  | "pending"
+  | "complete"
+  | "overtime"
+  | "absence"
+  | "late"
+  | "weekend"
+  | "interval";
 
 /**
  * Categories a day can fall into, used to drive the "quais dias exibir"
  * filter below. `no-punch`/`pending`/`complete` are mutually exclusive (a
  * day always matches exactly one, based on punch count) — `overtime`/
- * `absence` are independent flags that can co-occur with any of those.
- * A day is hidden if it matches an option the user has unchecked, so
- * unchecking "Horas extras" hides every overtime day regardless of its
- * punch status.
+ * `absence`/`late`/etc. are independent flags that can co-occur with any of
+ * those, including with one of that trio (an atraso day, for instance, is
+ * always also a "Marcação completa" day, since it needs a punch pair to
+ * come up short against).
+ *
+ * With every box checked (the default), nothing is filtered out. As soon as
+ * anything is unchecked, `visibleDays` below narrows to an inclusive OR:
+ * only days matching at least one still-checked category stay visible — so
+ * checking just "Horas de atraso" shows atraso days and nothing else, not
+ * every day that happens to also be a "Marcação completa" day.
+ *
+ * `absence` (falta) and `late` (atraso) split the same underlying
+ * `absenceMinutes` by punch count — falta is a day with no valid punch pair
+ * (nothing to measure short hours against), atraso is a day with a pair
+ * that still came up short. Mirrors the split `saveParsedTimesheet` does
+ * when aggregating these same minutes over the whole period.
  */
 const DAY_STATUS_OPTIONS: { id: DayStatusId; label: string; matches: (day: StoredDayRecord) => boolean }[] = [
   { id: "no-punch", label: "Sem marcação", matches: (d) => d.punches.length === 0 },
@@ -40,7 +60,8 @@ const DAY_STATUS_OPTIONS: { id: DayStatusId; label: string; matches: (day: Store
     matches: (d) => d.punches.length > 0 && d.punches.length % 2 === 0,
   },
   { id: "overtime", label: "Horas extras", matches: (d) => d.totalWorkedMinutes > OVERTIME_THRESHOLD_MINUTES },
-  { id: "absence", label: "Horas faltas", matches: (d) => d.absenceMinutes > 0 },
+  { id: "absence", label: "Horas faltas", matches: (d) => d.absenceMinutes > 0 && d.punches.length < 2 },
+  { id: "late", label: "Horas de atraso", matches: (d) => d.absenceMinutes > 0 && d.punches.length >= 2 },
   { id: "weekend", label: "Finais de semana", matches: (d) => isWeekend(d.weekday) },
   { id: "interval", label: "Com intervalo", matches: (d) => sumIntervalMinutes(d.punches) > 0 },
 ];
@@ -148,12 +169,14 @@ export default function EmployeeDetailPage() {
     };
   }, [importInfo]);
   // Always includes every day from the period by default — this only
-  // narrows what's *displayed*, the totals above are unaffected. A day is
-  // hidden if it matches a status option the user unchecked.
+  // narrows what's *displayed*, the totals above are unaffected. See the
+  // DAY_STATUS_OPTIONS doc comment for the inclusive-OR matching rule.
   const visibleDays = useMemo(
     () =>
-      fullDays.filter((day) =>
-        DAY_STATUS_OPTIONS.every((opt) => !opt.matches(day) || selectedStatuses.has(opt.id)),
+      fullDays.filter(
+        (day) =>
+          selectedStatuses.size === DAY_STATUS_OPTIONS.length ||
+          DAY_STATUS_OPTIONS.some((opt) => selectedStatuses.has(opt.id) && opt.matches(day)),
       ),
     [fullDays, selectedStatuses],
   );
@@ -278,6 +301,7 @@ export default function EmployeeDetailPage() {
                       </th>
                     ))}
                     <th style={{ textAlign: "right" }}>Total Trab.</th>
+                    <th style={{ textAlign: "right" }}>HE</th>
                     <th style={{ textAlign: "right" }}>HR</th>
                     <th style={{ textAlign: "right" }}>HF</th>
                     <th style={{ textAlign: "right" }}>HI</th>
@@ -312,6 +336,16 @@ export default function EmployeeDetailPage() {
                         >
                           {synthetic ? "" : formatMinutes(day.totalWorkedMinutes)}
                         </td>
+                        <td
+                          style={{
+                            textAlign: "right",
+                            color: !synthetic && day.totalWorkedMinutes > OVERTIME_THRESHOLD_MINUTES ? "var(--success)" : undefined,
+                          }}
+                        >
+                          {synthetic
+                            ? ""
+                            : formatMinutes(Math.max(0, day.totalWorkedMinutes - OVERTIME_THRESHOLD_MINUTES))}
+                        </td>
                         <td style={{ textAlign: "right" }}>
                           {synthetic ? "" : formatMinutes(day.normalHoursMinutes)}
                         </td>
@@ -330,7 +364,8 @@ export default function EmployeeDetailPage() {
             </div>
           </div>
           <p className="muted" style={{ fontSize: "0.78rem", marginTop: "0.6rem" }}>
-            Total Trab.: Total Trabalhado · HR: Horas Regulares · HF: Horas Faltas · HI: Horas Intervalo
+            Total Trab.: Total Trabalhado · HE: Horas Extras · HR: Horas Regulares · HF: Horas Faltas · HI: Horas
+            Intervalo
           </p>
         </div>
 

@@ -25,9 +25,16 @@ const segmentStyle: CSSProperties = {
  * `maxSpanMonths`, when set, keeps the range valid and capped by pushing
  * the other side along with whichever side was just picked — used where a
  * bounded period is a hard requirement (report generation), not just a
- * narrowing filter. Without it, the two sides are independent and can be
- * left empty (only order is still enforced: picking a start after an
- * earlier end pushes the end forward, and vice versa).
+ * narrowing filter. Since both sides are always non-empty in that mode,
+ * `onChange` fires right after picking the start.
+ *
+ * Without `maxSpanMonths`, the two sides are independent and can be left
+ * empty — and picking a start there is only held locally (not reported via
+ * `onChange`) until "Até" is picked too, so a consumer that filters/queries
+ * on every change (like a table's period filter) doesn't act on a
+ * half-picked range. Order is still enforced either way: picking a start
+ * after an earlier end pulls the end forward to match, and picking an end
+ * before the (possibly still-pending) start pulls the start back.
  */
 export default function DateRangePicker({
   startValue,
@@ -47,6 +54,10 @@ export default function DateRangePicker({
   endPlaceholder?: string;
 }) {
   const [openField, setOpenField] = useState<Field | null>(null);
+  // Only used when `maxSpanMonths` is unset: the start date the user just
+  // clicked, held here (not yet reported via `onChange`) until "Até" is
+  // picked too — see the doc comment above.
+  const [pendingStart, setPendingStart] = useState<string | null>(null);
   const [viewDate, setViewDate] = useState(() => todayUtc());
   // Anchored to whichever side has room — a field near the right edge of
   // the screen (like the last one in a filter row) would otherwise have
@@ -57,14 +68,19 @@ export default function DateRangePicker({
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpenField(null);
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpenField(null);
+        setPendingStart(null);
+      }
     }
     document.addEventListener("mousedown", onClickOutside);
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
 
+  const displayStart = pendingStart ?? startValue;
+
   function openPicker(field: Field) {
-    const base = (field === "start" ? startValue : endValue) || toIso(todayUtc());
+    const base = (field === "start" ? displayStart : endValue) || toIso(todayUtc());
     setViewDate(new Date(`${base}T00:00:00Z`));
     if (rootRef.current) {
       const rect = rootRef.current.getBoundingClientRect();
@@ -90,20 +106,27 @@ export default function DateRangePicker({
   function selectDay(d: Date) {
     const iso = toIso(d);
     if (openField === "start") {
-      let nextEnd = endValue;
-      if (nextEnd && nextEnd < iso) nextEnd = iso;
       if (maxSpanMonths !== undefined) {
+        // Bounded mode: both sides are always meaningful, so report the
+        // change right away.
+        let nextEnd = endValue;
+        if (nextEnd && nextEnd < iso) nextEnd = iso;
         if (!nextEnd) nextEnd = iso;
         const maxEnd = addMonthsIso(iso, maxSpanMonths);
         if (nextEnd > maxEnd) nextEnd = maxEnd;
+        onChange(iso, nextEnd);
+        setViewDate(new Date(`${nextEnd}T00:00:00Z`));
+      } else {
+        // Independent mode: hold the pick locally until "Até" is chosen
+        // too, instead of reporting a half-picked range.
+        setPendingStart(iso);
+        setViewDate(new Date(`${iso}T00:00:00Z`));
       }
-      onChange(iso, nextEnd);
       // Picking the start is naturally followed by picking the end — keep
       // the popover open and hand it straight to the "Até" side.
-      setViewDate(new Date(`${nextEnd || iso}T00:00:00Z`));
       setOpenField("end");
     } else {
-      let nextStart = startValue;
+      let nextStart = displayStart;
       if (nextStart && nextStart > iso) nextStart = iso;
       if (maxSpanMonths !== undefined) {
         if (!nextStart) nextStart = iso;
@@ -111,16 +134,18 @@ export default function DateRangePicker({
         if (nextStart < minStart) nextStart = minStart;
       }
       onChange(nextStart, iso);
+      setPendingStart(null);
       setOpenField(null);
     }
   }
 
   function clear() {
     onChange("", "");
+    setPendingStart(null);
     setOpenField(null);
   }
 
-  const selectedValue = openField === "start" ? startValue : endValue;
+  const selectedValue = openField === "start" ? displayStart : endValue;
 
   return (
     <div style={{ position: "relative" }} ref={rootRef}>
@@ -135,7 +160,7 @@ export default function DateRangePicker({
       >
         <Calendar size={14} style={{ marginLeft: "0.7em", flexShrink: 0, color: "var(--text-muted)" }} />
         <button type="button" onClick={() => openPicker("start")} style={segmentStyle}>
-          {startValue ? formatDateSlash(startValue) : <span className="muted">{startPlaceholder}</span>}
+          {displayStart ? formatDateSlash(displayStart) : <span className="muted">{startPlaceholder}</span>}
         </button>
         <span className="muted">→</span>
         <button type="button" onClick={() => openPicker("end")} style={segmentStyle}>

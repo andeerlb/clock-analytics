@@ -1,4 +1,4 @@
-name: Release Linux
+name: Release
 
 on:
   push:
@@ -7,19 +7,33 @@ on:
   workflow_dispatch:
 
 jobs:
-  release-linux:
-    runs-on: ubuntu-22.04
+  release:
     # tauri-action needs write access to create/update the GitHub Release —
     # some repos/orgs default GITHUB_TOKEN to read-only, which would 403.
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            args: ""
+          # A single universal .app/.dmg that runs on both Apple Silicon and
+          # Intel Macs, instead of publishing two separate artifacts.
+          - platform: macos-latest
+            args: "--target universal-apple-darwin"
+    runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # WebKitGTK/GTK for the Tauri webview, plus Poppler for the app's
-      # own runtime PDF dependency (pdftotext/pdfseparate/pdfinfo/pdfunite).
-      - name: Install system dependencies
+      # WebKitGTK/GTK for the Tauri webview, plus Poppler for the app's own
+      # runtime PDF dependency (pdftotext/pdfseparate/pdfinfo/pdfunite).
+      # macOS ships WebKit natively and doesn't need this step; Poppler
+      # there is a *runtime* dependency for whoever runs the app, not a
+      # build-time one (see the README's "PDF tooling" section).
+      - name: Install system dependencies (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -43,6 +57,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -60,7 +76,11 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "PontoScan ${{ github.ref_name }}"
           releaseBody: |
-            Linux build artifacts (.deb, .rpm, .AppImage) for this release.
-            See the README for manual macOS build instructions.
+            Linux (.deb, .rpm, .AppImage) and macOS (.dmg, .app) build artifacts for this release.
+
+            The macOS build is unsigned and not notarized — opening it will trigger a Gatekeeper
+            warning (right-click > Abrir, or System Settings > Privacy & Security > "Abrir assim
+            mesmo"). Windows isn't built here yet — see the README for manual instructions.
           releaseDraft: true
           prerelease: false
+          args: ${{ matrix.args }}

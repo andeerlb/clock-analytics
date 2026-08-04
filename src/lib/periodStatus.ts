@@ -25,3 +25,20 @@ export const PERIOD_STATUS_OPTIONS: {
   { id: "no-punch", label: "Sem nenhuma marcação no período", matches: (i) => i.totalWorkedMinutes === 0 },
   { id: "interval", label: "Com intervalo no período", matches: (i) => i.intervalMinutes > 0 },
 ];
+
+/**
+ * Whether `imp` should stay visible under the current "Status no período"
+ * checkboxes. These categories aren't exhaustive or mutually exclusive — a
+ * period can match several, or none at all (e.g. some punches, but nothing
+ * that rises to overtime/absence/atraso/regular/interval). With every box
+ * checked (the default), nothing is filtered out, including periods
+ * matching none of them. As soon as anything is unchecked, this narrows to
+ * an inclusive OR: only periods matching at least one still-checked
+ * category remain — so checking just "Horas extras" shows periods with
+ * overtime and nothing else, not every period the deselected categories
+ * happen not to describe.
+ */
+export function matchesSelectedStatuses(imp: StoredImport, selected: Set<PeriodStatusId>): boolean {
+  if (selected.size === PERIOD_STATUS_OPTIONS.length) return true;
+  return PERIOD_STATUS_OPTIONS.some((opt) => selected.has(opt.id) && opt.matches(imp));
+}

@@ -5,22 +5,12 @@ import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
 import PdfViewerModal from "../components/PdfViewerModal";
+import { REPORT_PAGE_SIZE_OPTIONS, useReportFilters, type ReportMode } from "../contexts/FiltersContext";
 import { generateReportZip, revealInFileManager } from "../lib/api";
-import { toIso, todayUtc } from "../lib/calendar";
 import { listClients, listCompanies, listImports, type ClientRow, type CompanyRow } from "../lib/db";
 import { formatPeriod, sanitizeFileName } from "../lib/format";
-import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
+import { matchesSelectedStatuses, PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
 import type { ReportZipEntry, StoredImport } from "../lib/types";
-
-/** Default period on load: the current calendar month so far. */
-function defaultPeriodStart(): string {
-  const today = todayUtc();
-  return toIso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)));
-}
-
-type Mode = "per-employee" | "per-client";
-
-const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 /**
  * Groups the matched imports into Empresa/Cliente folders and turns them
@@ -29,7 +19,7 @@ const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
  * file. In "per-client" mode every employee's PDF under a client is merged
  * (via `pdfunite`, on the Rust side) into one consolidated document.
  */
-function buildZipEntries(imports: StoredImport[], mode: Mode): ReportZipEntry[] {
+function buildZipEntries(imports: StoredImport[], mode: ReportMode): ReportZipEntry[] {
   const byCompany = new Map<string, Map<string, StoredImport[]>>();
   for (const imp of imports) {
     if (!imp.clientId || !imp.clientName) continue;
@@ -69,22 +59,29 @@ function buildZipEntries(imports: StoredImport[], mode: Mode): ReportZipEntry[] 
 }
 
 export default function ReportsPage() {
+  const {
+    selectedCompanyIds,
+    setSelectedCompanyIds,
+    selectedClientIds,
+    setSelectedClientIds,
+    periodStart,
+    periodEnd,
+    setPeriod,
+    selectedStatuses,
+    setSelectedStatuses,
+    mode,
+    setMode,
+    page,
+    setPage,
+    pageSize,
+    setPageSize,
+  } = useReportFilters();
+
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [imports, setImports] = useState<StoredImport[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [selectedCompanyIds, setSelectedCompanyIds] = useState<Set<string>>(new Set());
-  const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
-  const [periodStart, setPeriodStart] = useState(defaultPeriodStart);
-  const [periodEnd, setPeriodEnd] = useState(() => toIso(todayUtc()));
-  const [selectedStatuses, setSelectedStatuses] = useState<Set<PeriodStatusId>>(
-    () => new Set(PERIOD_STATUS_OPTIONS.map((o) => o.id)),
-  );
-  const [mode, setMode] = useState<Mode>("per-employee");
-
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generatedZipPath, setGeneratedZipPath] = useState<string | null>(null);
@@ -112,15 +109,55 @@ export default function ReportsPage() {
     return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [clients, selectedCompanyIds]);
 
-  // Switching empresas changes what's even selectable — start the cliente
-  // filter over rather than carry a stale, now-invisible selection.
-  useEffect(() => {
+  // Each setter below resets whatever it invalidates itself (rather than
+  // reacting via an effect), so a filter restored as-is from
+  // `FiltersProvider` on remount never gets treated as a "change": empresa
+  // narrows cliente, and any of the two (plus período/status) resets back
+  // to page 1.
+  function updateSelectedCompanyIds(next: Set<string>) {
+    setSelectedCompanyIds(next);
     setSelectedClientIds(new Set());
-  }, [selectedCompanyIds]);
-
-  useEffect(() => {
     setPage(0);
-  }, [selectedCompanyIds, selectedClientIds, periodStart, periodEnd, selectedStatuses]);
+  }
+  function toggleCompany(id: string) {
+    const next = new Set(selectedCompanyIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    updateSelectedCompanyIds(next);
+  }
+
+  function updateSelectedClientIds(next: Set<string>) {
+    setSelectedClientIds(next);
+    setPage(0);
+  }
+  function toggleClient(id: string) {
+    const next = new Set(selectedClientIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    updateSelectedClientIds(next);
+  }
+
+  function updatePeriod(s: string, e: string) {
+    setPeriod(s, e);
+    setPage(0);
+  }
+  function toggleStatus(id: PeriodStatusId) {
+    setSelectedStatuses((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    setPage(0);
+  }
+  function selectAllStatuses() {
+    setSelectedStatuses(new Set(PERIOD_STATUS_OPTIONS.map((o) => o.id)));
+    setPage(0);
+  }
+  function selectNoneStatuses() {
+    setSelectedStatuses(new Set());
+    setPage(0);
+  }
 
   const filteredImports = useMemo(() => {
     return imports.filter((imp) => {
@@ -128,9 +165,7 @@ export default function ReportsPage() {
       if (selectedCompanyIds.size > 0 && !selectedCompanyIds.has(String(imp.companyId))) return false;
       if (selectedClientIds.size > 0 && !selectedClientIds.has(String(imp.clientId))) return false;
       if (imp.periodEnd < periodStart || imp.periodStart > periodEnd) return false;
-      for (const opt of PERIOD_STATUS_OPTIONS) {
-        if (opt.matches(imp) && !selectedStatuses.has(opt.id)) return false;
-      }
+      if (!matchesSelectedStatuses(imp, selectedStatuses)) return false;
       return true;
     });
   }, [imports, selectedCompanyIds, selectedClientIds, periodStart, periodEnd, selectedStatuses]);
@@ -190,16 +225,9 @@ export default function ReportsPage() {
             <MultiSelectDropdown
               options={companies.map((c) => ({ id: String(c.id), label: c.name }))}
               selected={selectedCompanyIds}
-              onToggle={(id) =>
-                setSelectedCompanyIds((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(id)) next.delete(id);
-                  else next.add(id);
-                  return next;
-                })
-              }
-              onSelectAll={() => setSelectedCompanyIds(new Set(companies.map((c) => String(c.id))))}
-              onSelectNone={() => setSelectedCompanyIds(new Set())}
+              onToggle={toggleCompany}
+              onSelectAll={() => updateSelectedCompanyIds(new Set(companies.map((c) => String(c.id))))}
+              onSelectNone={() => updateSelectedCompanyIds(new Set())}
               icon={Building2}
               allLabel="Todas as empresas"
               noneLabel="Todas as empresas"
@@ -211,16 +239,9 @@ export default function ReportsPage() {
             <MultiSelectDropdown
               options={clientOptions.map((c) => ({ id: String(c.id), label: c.name }))}
               selected={selectedClientIds}
-              onToggle={(id) =>
-                setSelectedClientIds((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(id)) next.delete(id);
-                  else next.add(id);
-                  return next;
-                })
-              }
-              onSelectAll={() => setSelectedClientIds(new Set(clientOptions.map((c) => String(c.id))))}
-              onSelectNone={() => setSelectedClientIds(new Set())}
+              onToggle={toggleClient}
+              onSelectAll={() => updateSelectedClientIds(new Set(clientOptions.map((c) => String(c.id))))}
+              onSelectNone={() => updateSelectedClientIds(new Set())}
               icon={Users}
               allLabel="Todos os clientes"
               noneLabel="Todos os clientes"
@@ -232,16 +253,9 @@ export default function ReportsPage() {
             <MultiSelectDropdown
               options={PERIOD_STATUS_OPTIONS}
               selected={selectedStatuses}
-              onToggle={(id) =>
-                setSelectedStatuses((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(id)) next.delete(id);
-                  else next.add(id);
-                  return next;
-                })
-              }
-              onSelectAll={() => setSelectedStatuses(new Set(PERIOD_STATUS_OPTIONS.map((o) => o.id)))}
-              onSelectNone={() => setSelectedStatuses(new Set())}
+              onToggle={toggleStatus}
+              onSelectAll={selectAllStatuses}
+              onSelectNone={selectNoneStatuses}
               allLabel="Todos os status"
               noneLabel="Nenhum filtro selecionado"
               countLabel={(n, total) => `${n} de ${total} filtros`}
@@ -252,10 +266,7 @@ export default function ReportsPage() {
             <DateRangePicker
               startValue={periodStart}
               endValue={periodEnd}
-              onChange={(s, e) => {
-                setPeriodStart(s);
-                setPeriodEnd(e);
-              }}
+              onChange={updatePeriod}
               maxSpanMonths={1}
               allowClear={false}
             />
@@ -373,7 +384,7 @@ export default function ReportsPage() {
                 page * pageSize + pageSize,
               )} de ${filteredImports.length} registros`}
               pageSize={pageSize}
-              pageSizeOptions={PAGE_SIZE_OPTIONS}
+              pageSizeOptions={REPORT_PAGE_SIZE_OPTIONS}
               onPageSizeChange={(size) => {
                 setPageSize(size);
                 setPage(0);

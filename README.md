@@ -56,9 +56,9 @@ yarn tauri build
 
 Bundled artifacts land under `src-tauri/target/release/bundle/`.
 
-## Building for Linux (automated)
+## Building for Linux and macOS (automated)
 
-The [`Release Linux`](.github/workflows/release-linux.yml) GitHub Actions workflow builds `.deb`, `.rpm`, and `.AppImage` artifacts and publishes them as a draft GitHub Release. It runs automatically whenever a version tag is pushed:
+The [`Release`](.github/workflows/release.yml) GitHub Actions workflow builds `.deb`/`.rpm`/`.AppImage` (Linux) and a universal `.app`/`.dmg` that runs on both Apple Silicon and Intel Macs, publishing everything to a single draft GitHub Release. It runs automatically whenever a version tag is pushed:
 
 ```sh
 git tag v0.1.0
@@ -67,9 +67,11 @@ git push origin v0.1.0
 
 You can also trigger it manually from the Actions tab (`workflow_dispatch`). Review the draft release and publish it once you're happy with it.
 
-## Building for macOS (manual)
+The macOS artifacts are unsigned and non-notarized (see the code-signing note below) — CI has no Apple Developer ID to sign with, so opening them will trigger Gatekeeper warnings just like a manual build.
 
-There's no macOS CI in this repo yet, so producing a macOS build means running it locally on a Mac:
+## Building for macOS locally (manual)
+
+The steps below are for iterating on a Mac without waiting on CI, or for signing/notarizing a build yourself — the automated workflow above already produces a macOS build on every tag push.
 
 1. Install the Xcode Command Line Tools:
    ```sh
@@ -108,4 +110,4 @@ There's no macOS CI in this repo yet, so producing a macOS build means running i
 
 - **Poppler isn't bundled yet.** The app shells out to `pdftotext`/`pdfseparate`/`pdfinfo`/`pdfunite` as external processes rather than bundling them as a Tauri sidecar per platform. Any machine running the app (not just the build machine) needs Poppler installed — see [PDF tooling (Poppler)](#pdf-tooling-poppler). macOS and Linux auto-detect common install locations (with a manual override in Configurações); Windows has no equivalent yet and isn't a supported target.
 - **One timesheet provider today.** Only the Coalize export format is supported; additional providers can be added under `src-tauri/src/parsers/` without changing the rest of the app.
-- **Windows isn't covered by CI yet.** Only Linux is automated via GitHub Actions; macOS is manual (above), and Windows builds are untested by this repo's tooling so far.
+- **Windows isn't covered by CI yet.** Linux and macOS are automated via GitHub Actions (the macOS build is unsigned/non-notarized); Windows builds are untested by this repo's tooling so far.
