@@ -13,7 +13,7 @@ export type PeriodStatusId =
  * Status categories for a whole import's (fixed) period, reading the
  * aggregates stored at import time instead of recomputing anything — used
  * anywhere a list of imports needs filtering by what happened over their
- * period, not a single day. Used by the Colaboradores screen's "Status no
+ * period, not a single day. Used by the Cartão Ponto list's "Status no
  * período" filter.
  *
  * `absence` (falta) and `late` (atraso) are separate buckets: falta is a

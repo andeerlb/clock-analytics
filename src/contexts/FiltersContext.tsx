@@ -35,7 +35,7 @@ export interface LibraryFilters {
 const LibraryFiltersContext = createContext<LibraryFilters | null>(null);
 
 /**
- * Holds the Colaboradores filter state above the router, so it survives
+ * Holds the Cartão Ponto filter state above the router, so it survives
  * navigating away and back — to a collaborator's Cartão de Ponto, anywhere.
  * The route unmounts the page component on every visit; component-local
  * `useState` would reset to defaults each time, which is exactly what this

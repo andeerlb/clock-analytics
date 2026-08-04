@@ -1,6 +1,6 @@
 import Database from "@tauri-apps/plugin-sql";
 import { overtimeMinutesForDay, sumIntervalMinutes } from "./analysis";
-import { normalizeCnpj } from "./format";
+import { normalizeCnpj, normalizeCpf } from "./format";
 import type {
   ConflictInfo,
   DuplicateFileInfo,
@@ -282,11 +282,16 @@ export interface CompanyRow {
   id: number;
   name: string;
   cnpj: string;
+  /** Shift hours from here until `nightEndTime` count as "noturno" — used to classify a payment template's Horário field. */
+  nightStartTime: string;
+  nightEndTime: string;
 }
 
 export async function listCompanies(): Promise<CompanyRow[]> {
   const db = await getDb();
-  return db.select<CompanyRow[]>("SELECT id, name, cnpj FROM companies ORDER BY name");
+  return db.select<CompanyRow[]>(
+    "SELECT id, name, cnpj, night_start_time AS nightStartTime, night_end_time AS nightEndTime FROM companies ORDER BY name",
+  );
 }
 
 export interface CompanyWithStats extends CompanyRow {
@@ -296,7 +301,8 @@ export interface CompanyWithStats extends CompanyRow {
 export async function listCompaniesWithStats(): Promise<CompanyWithStats[]> {
   const db = await getDb();
   return db.select<CompanyWithStats[]>(`
-    SELECT c.id, c.name, c.cnpj, COUNT(DISTINCT e.id) AS employeeCount
+    SELECT c.id, c.name, c.cnpj, c.night_start_time AS nightStartTime, c.night_end_time AS nightEndTime,
+           COUNT(DISTINCT e.id) AS employeeCount
     FROM companies c
     LEFT JOIN employees e ON e.company_id = c.id
     GROUP BY c.id
@@ -310,9 +316,17 @@ export async function listCompaniesWithStats(): Promise<CompanyWithStats[]> {
  * a typo'd CNPJ should surface as an error, not quietly merge into another
  * company's record.
  */
-export async function createCompany(name: string, cnpj: string): Promise<number> {
+export async function createCompany(
+  name: string,
+  cnpj: string,
+  nightStartTime = "22:00",
+  nightEndTime = "05:00",
+): Promise<number> {
   const db = await getDb();
   const normalizedCnpj = normalizeCnpj(cnpj);
+  if (normalizedCnpj.length !== 14) {
+    throw new Error("CNPJ deve ter 14 dígitos.");
+  }
   const existing = await db.select<{ id: number }[]>(
     "SELECT id FROM companies WHERE cnpj = $1",
     [normalizedCnpj],
@@ -320,11 +334,46 @@ export async function createCompany(name: string, cnpj: string): Promise<number>
   if (existing.length > 0) {
     throw new Error("Já existe uma empresa cadastrada com esse CNPJ.");
   }
-  const result = await db.execute("INSERT INTO companies (name, cnpj) VALUES ($1, $2)", [
-    name.trim(),
-    normalizedCnpj,
-  ]);
+  const result = await db.execute(
+    "INSERT INTO companies (name, cnpj, night_start_time, night_end_time) VALUES ($1, $2, $3, $4)",
+    [name.trim(), normalizedCnpj, nightStartTime, nightEndTime],
+  );
   return result.lastInsertId as number;
+}
+
+export async function getCompany(id: number): Promise<CompanyRow> {
+  const db = await getDb();
+  const rows = await db.select<CompanyRow[]>(
+    "SELECT id, name, cnpj, night_start_time AS nightStartTime, night_end_time AS nightEndTime FROM companies WHERE id = $1",
+    [id],
+  );
+  if (rows.length === 0) throw new Error("Empresa não encontrada.");
+  return rows[0];
+}
+
+export async function updateCompany(
+  id: number,
+  name: string,
+  cnpj: string,
+  nightStartTime: string,
+  nightEndTime: string,
+): Promise<void> {
+  const db = await getDb();
+  const normalizedCnpj = normalizeCnpj(cnpj);
+  if (normalizedCnpj.length !== 14) {
+    throw new Error("CNPJ deve ter 14 dígitos.");
+  }
+  const existing = await db.select<{ id: number }[]>(
+    "SELECT id FROM companies WHERE cnpj = $1 AND id != $2",
+    [normalizedCnpj, id],
+  );
+  if (existing.length > 0) {
+    throw new Error("Já existe uma empresa cadastrada com esse CNPJ.");
+  }
+  await db.execute(
+    "UPDATE companies SET name = $1, cnpj = $2, night_start_time = $3, night_end_time = $4 WHERE id = $5",
+    [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, id],
+  );
 }
 
 // One row per (client, company) link — a client with multiple companies
@@ -401,6 +450,9 @@ export async function createClient(
 ): Promise<number> {
   const db = await getDb();
   const normalizedCnpj = normalizeCnpj(cnpj);
+  if (normalizedCnpj.length !== 14) {
+    throw new Error("CNPJ deve ter 14 dígitos.");
+  }
 
   const existing = await db.select<{ id: number }[]>("SELECT id FROM clients WHERE cnpj = $1", [
     normalizedCnpj,
@@ -429,6 +481,177 @@ export async function createClient(
     [clientId, companyId],
   );
   return clientId;
+}
+
+export interface ClientDetail {
+  id: number;
+  name: string;
+  cnpj: string;
+  companies: { id: number; name: string }[];
+}
+
+export async function getClient(id: number): Promise<ClientDetail> {
+  const db = await getDb();
+  const rows = await db.select<{ id: number; name: string; cnpj: string }[]>(
+    "SELECT id, name, cnpj FROM clients WHERE id = $1",
+    [id],
+  );
+  if (rows.length === 0) throw new Error("Cliente não encontrado.");
+  const companies = await db.select<{ id: number; name: string }[]>(
+    `SELECT c.id, c.name
+     FROM client_companies cc
+     JOIN companies c ON c.id = cc.company_id
+     WHERE cc.client_id = $1
+     ORDER BY c.name`,
+    [id],
+  );
+  return { ...rows[0], companies };
+}
+
+/**
+ * Updates a client's own name/CNPJ — not its company links, which stay
+ * managed the way they always have been (via `createClient`'s "link to an
+ * additional company" path), since that's a many-to-many relationship, not
+ * a simple field on the client itself.
+ */
+export async function updateClient(id: number, name: string, cnpj: string): Promise<void> {
+  const db = await getDb();
+  const normalizedCnpj = normalizeCnpj(cnpj);
+  if (normalizedCnpj.length !== 14) {
+    throw new Error("CNPJ deve ter 14 dígitos.");
+  }
+  const existing = await db.select<{ id: number }[]>(
+    "SELECT id FROM clients WHERE cnpj = $1 AND id != $2",
+    [normalizedCnpj, id],
+  );
+  if (existing.length > 0) {
+    throw new Error("Já existe um cliente cadastrado com esse CNPJ.");
+  }
+  await db.execute("UPDATE clients SET name = $1, cnpj = $2 WHERE id = $3", [
+    name.trim(),
+    normalizedCnpj,
+    id,
+  ]);
+}
+
+export interface EmployeeRow {
+  id: number;
+  name: string;
+  cpf: string;
+  clientId: number;
+  clientName: string;
+  companyId: number;
+  companyName: string;
+}
+
+/**
+ * Every employee, across every client — the Colaboradores cadastro list.
+ * Not scoped to a single client up front (unlike the import flows) since
+ * this is meant as a master directory; the clientName/companyName columns
+ * disambiguate a CPF that happens to exist under more than one client.
+ */
+export async function listEmployeesGlobal(): Promise<EmployeeRow[]> {
+  const db = await getDb();
+  return db.select<EmployeeRow[]>(`
+    SELECT e.id, e.name, e.cpf,
+           cl.id AS clientId, cl.name AS clientName,
+           c.id AS companyId, c.name AS companyName
+    FROM employees e
+    JOIN clients cl ON cl.id = e.client_id
+    JOIN companies c ON c.id = e.company_id
+    ORDER BY e.name
+  `);
+}
+
+/**
+ * Registers an employee directly (not via a timesheet import) — the
+ * Colaboradores cadastro's "Cadastrar" action. Same client-scoped CPF
+ * matching as the import flow's internal `upsertEmployee`: a CPF is
+ * unique to the specific client (legal entity) it worked for, so the same
+ * CPF can legitimately exist again under a different client.
+ */
+export async function createEmployeeManual(
+  clientId: number,
+  companyId: number,
+  name: string,
+  cpf: string,
+): Promise<number> {
+  const db = await getDb();
+  const normalizedCpf = normalizeCpf(cpf);
+  if (normalizedCpf.length !== 11) {
+    throw new Error("CPF deve ter 11 dígitos.");
+  }
+
+  const link = await db.select<{ clientId: number }[]>(
+    "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
+    [clientId, companyId],
+  );
+  if (link.length === 0) {
+    throw new Error("Esse cliente não está vinculado à empresa selecionada.");
+  }
+
+  const existing = await db.select<{ id: number }[]>(
+    "SELECT id FROM employees WHERE client_id = $1 AND cpf = $2",
+    [clientId, normalizedCpf],
+  );
+  if (existing.length > 0) {
+    throw new Error("Já existe um colaborador com esse CPF para esse cliente.");
+  }
+
+  const result = await db.execute(
+    "INSERT INTO employees (company_id, client_id, name, cpf) VALUES ($1, $2, $3, $4)",
+    [companyId, clientId, name.trim(), normalizedCpf],
+  );
+  return result.lastInsertId as number;
+}
+
+export async function getEmployee(id: number): Promise<EmployeeRow> {
+  const db = await getDb();
+  const rows = await db.select<EmployeeRow[]>(
+    `SELECT e.id, e.name, e.cpf,
+            cl.id AS clientId, cl.name AS clientName,
+            c.id AS companyId, c.name AS companyName
+     FROM employees e
+     JOIN clients cl ON cl.id = e.client_id
+     JOIN companies c ON c.id = e.company_id
+     WHERE e.id = $1`,
+    [id],
+  );
+  if (rows.length === 0) throw new Error("Colaborador não encontrado.");
+  return rows[0];
+}
+
+/**
+ * Updates name/CPF only — client/empresa aren't editable here, since a
+ * colaborador is really "this person at this client"; moving them to a
+ * different one is conceptually a new colaborador, not an edit.
+ */
+export async function updateEmployee(id: number, name: string, cpf: string): Promise<void> {
+  const db = await getDb();
+  const normalizedCpf = normalizeCpf(cpf);
+  if (normalizedCpf.length !== 11) {
+    throw new Error("CPF deve ter 11 dígitos.");
+  }
+
+  const current = await db.select<{ clientId: number }[]>(
+    "SELECT client_id AS clientId FROM employees WHERE id = $1",
+    [id],
+  );
+  if (current.length === 0) throw new Error("Colaborador não encontrado.");
+
+  const existing = await db.select<{ id: number }[]>(
+    "SELECT id FROM employees WHERE client_id = $1 AND cpf = $2 AND id != $3",
+    [current[0].clientId, normalizedCpf, id],
+  );
+  if (existing.length > 0) {
+    throw new Error("Já existe um colaborador com esse CPF para esse cliente.");
+  }
+
+  await db.execute("UPDATE employees SET name = $1, cpf = $2 WHERE id = $3", [
+    name.trim(),
+    normalizedCpf,
+    id,
+  ]);
 }
 
 export async function listImports(): Promise<StoredImport[]> {

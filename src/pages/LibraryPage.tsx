@@ -234,11 +234,11 @@ export default function LibraryPage() {
   return (
     <div>
       <div className="page-header">
-        <h2>Colaboradores</h2>
+        <h2>Cartão Ponto</h2>
       </div>
       <p className="page-subtitle">
-        Colaboradores com espelhos de ponto importados — filtre e gere um zip com os PDFs de cada
-        um, organizados em pastas por empresa e cliente.
+        Espelhos de ponto importados — filtre e gere um zip com os PDFs de cada colaborador,
+        organizados em pastas por empresa e cliente.
       </p>
 
       {error && <div className="error-box">{error}</div>}

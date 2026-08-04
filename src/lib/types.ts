@@ -166,38 +166,53 @@ export interface ImportFileRow {
 export type PaymentFileKind = "csv" | "xlsx" | "xls" | "ods";
 
 /**
- * A known field a payment template's column can map to. Which one acts as
- * "the" employee identifier (cpf vs matricula) isn't a separate setting —
- * it's implicit in whichever field a given template happens to map a
- * column to.
+ * A known field a payment template's column can map to. Each row is a work
+ * shift (place, day, role, hours) that will later be used to *calculate* a
+ * payment — not a ready-made payment amount, which is why there's no
+ * "valor" here: that's entered at payment time, never imported.
+ *
+ * Which one acts as "the" employee identifier isn't a separate setting —
+ * it's implicit in whichever field(s) a template happens to map a column
+ * to. More than one identifier can be mapped at once (e.g. both CPF and
+ * Nome); when that happens, only the highest-precedence one found is
+ * actually used: CPF > Matrícula > Nome (see `IDENTIFIER_FIELD_PRECEDENCE`).
  */
 export type PaymentTargetField =
   | "cpf"
   | "matricula"
   | "nome"
-  | "competencia"
-  | "data_pagamento"
-  | "rubrica"
-  | "valor";
+  | "local"
+  | "data"
+  | "funcao"
+  | "horario"
+  | "observacao";
 
 export const PAYMENT_TARGET_FIELDS: PaymentTargetField[] = [
   "cpf",
   "matricula",
   "nome",
-  "competencia",
-  "data_pagamento",
-  "rubrica",
-  "valor",
+  "local",
+  "data",
+  "funcao",
+  "horario",
+  "observacao",
 ];
+
+/** Highest to lowest precedence — see the `PaymentTargetField` doc comment. */
+export const IDENTIFIER_FIELD_PRECEDENCE: PaymentTargetField[] = ["cpf", "matricula", "nome"];
+
+/** Mapping one of these (besides an identifier) is required for a group to be usable. */
+export const REQUIRED_PAYMENT_FIELDS: PaymentTargetField[] = ["local", "data", "funcao", "horario"];
 
 export const PAYMENT_TARGET_FIELD_LABELS: Record<PaymentTargetField, string> = {
   cpf: "CPF",
   matricula: "Matrícula",
   nome: "Nome",
-  competencia: "Competência",
-  data_pagamento: "Data de pagamento",
-  rubrica: "Rubrica/Verba",
-  valor: "Valor",
+  local: "Local de trabalho",
+  data: "Data",
+  funcao: "Função",
+  horario: "Horário",
+  observacao: "Observação",
 };
 
 export interface PaymentTemplateFieldMapping {

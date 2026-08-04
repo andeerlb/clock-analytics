@@ -8,8 +8,9 @@ import { checkForUpdate, REPO_URL } from "../lib/updateCheck";
 const NAV_ITEMS = [
   { to: "/companies", label: "Empresas", icon: Building2, end: false },
   { to: "/clients", label: "Clientes", icon: Briefcase, end: false },
+  { to: "/employees", label: "Colaboradores", icon: Users, end: false },
   { to: "/import", label: "Importar", icon: FileUp, end: false },
-  { to: "/", label: "Colaboradores", icon: Users, end: true },
+  { to: "/", label: "Cartão Ponto", icon: Clock, end: true },
 ];
 
 function navLinkClass({ isActive }: { isActive: boolean }): string {

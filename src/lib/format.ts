@@ -87,6 +87,43 @@ export function formatCnpj(cnpj: string): string {
   return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12, 14)}`;
 }
 
+export function normalizeCpf(cpf: string): string {
+  return cpf.replace(/\D/g, "");
+}
+
+/** "12345678901" -> "123.456.789-01". Falls back to the raw input if it isn't 11 digits. */
+export function formatCpf(cpf: string): string {
+  const digits = normalizeCpf(cpf);
+  if (digits.length !== 11) return cpf;
+  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`;
+}
+
+/**
+ * As-you-type CNPJ mask for a controlled input's `onChange` — unlike
+ * `formatCnpj` (which only formats an already-complete value and falls
+ * back to raw otherwise), this punctuates whatever's typed so far and
+ * caps it at 14 digits, so the field can never hold anything else.
+ */
+export function maskCnpj(input: string): string {
+  const digits = normalizeCnpj(input).slice(0, 14);
+  let out = digits.slice(0, 2);
+  if (digits.length > 2) out += `.${digits.slice(2, 5)}`;
+  if (digits.length > 5) out += `.${digits.slice(5, 8)}`;
+  if (digits.length > 8) out += `/${digits.slice(8, 12)}`;
+  if (digits.length > 12) out += `-${digits.slice(12, 14)}`;
+  return out;
+}
+
+/** As-you-type CPF mask for a controlled input's `onChange` — see `maskCnpj`. */
+export function maskCpf(input: string): string {
+  const digits = normalizeCpf(input).slice(0, 11);
+  let out = digits.slice(0, 3);
+  if (digits.length > 3) out += `.${digits.slice(3, 6)}`;
+  if (digits.length > 6) out += `.${digits.slice(6, 9)}`;
+  if (digits.length > 9) out += `-${digits.slice(9, 11)}`;
+  return out;
+}
+
 /** SQLite `datetime('now')` output ("2026-08-03 20:55:52", UTC) -> "3 de agosto de 2026 às 20:55" */
 export function formatDateTime(sqliteDatetime: string): string {
   const iso = sqliteDatetime.includes("T")

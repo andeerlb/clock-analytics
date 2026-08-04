@@ -16,8 +16,10 @@ import {
 } from "../lib/db";
 import { columnLetter, fileNameFromPath } from "../lib/format";
 import {
+  IDENTIFIER_FIELD_PRECEDENCE,
   PAYMENT_TARGET_FIELDS,
   PAYMENT_TARGET_FIELD_LABELS,
+  REQUIRED_PAYMENT_FIELDS,
   type PaymentFileKind,
   type PaymentTargetField,
   type PaymentTemplateGroup,
@@ -327,7 +329,8 @@ export default function PaymentTemplateWizard({
 
   function isGroupMappingValid(key: string): boolean {
     const fields = new Set(Object.values(groupMapping[key] ?? {}));
-    return (fields.has("cpf") || fields.has("matricula")) && fields.has("valor");
+    const hasIdentifier = IDENTIFIER_FIELD_PRECEDENCE.some((f) => fields.has(f));
+    return hasIdentifier && REQUIRED_PAYMENT_FIELDS.every((f) => fields.has(f));
   }
 
   const activeGroupKey = groupKeyOf(activeSheet);
@@ -657,9 +660,10 @@ export default function PaymentTemplateWizard({
         {step === 2 && (
           <div>
             <p className="muted" style={{ marginTop: 0 }}>
-              Para cada coluna, escolha a qual campo ela corresponde. É preciso mapear pelo menos um
-              identificador (CPF ou Matrícula) e o Valor
-              {includedGroupKeys.length > 1 ? " em cada configuração." : "."}
+              Para cada coluna, escolha a qual campo ela corresponde. É preciso mapear um
+              identificador (CPF, Matrícula ou Nome — se mais de um for mapeado, o CPF tem
+              prioridade, depois a Matrícula, depois o Nome) e os campos Local, Data, Função e
+              Horário{includedGroupKeys.length > 1 ? " em cada configuração." : "."}
             </p>
             {includedGroupKeys.length > 1 && (
               <div className="sheet-tabs">
@@ -676,7 +680,7 @@ export default function PaymentTemplateWizard({
                       {memberCount > 1 ? ` (+${memberCount - 1})` : ""}
                       {!isGroupMappingValid(key) && (
                         <span
-                          title="Faltam mapear CPF/Matrícula e Valor"
+                          title="Faltam mapear um identificador e/ou Local, Data, Função, Horário"
                           style={{ color: "var(--warning)", fontSize: "1.1em", lineHeight: 1 }}
                         >
                           •

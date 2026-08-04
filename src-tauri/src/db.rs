@@ -94,5 +94,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0015_payment_template_groups.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 16,
+            description: "let each company set its own night-shift hour boundaries",
+            sql: include_str!("../migrations/0016_company_night_shift_hours.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
