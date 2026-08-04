@@ -20,13 +20,13 @@ import { hashFiles, listProviders, openOriginalPdf, parseImport, pickPdfFiles } 
 import { colorForName, initials } from "../lib/avatar";
 import {
   findConflicts,
-  listCompanies,
+  listClients,
   listImportFiles,
   findDuplicateFiles,
   logSourceFile,
   markSourceFileSaved,
   saveParsedTimesheet,
-  type CompanyRow,
+  type ClientRow,
 } from "../lib/db";
 import { formatDateTime, formatPeriod, normalizeCnpj } from "../lib/format";
 import { importStatusOf } from "../lib/types";
@@ -63,8 +63,8 @@ export default function ImportPage() {
   const navigate = useNavigate();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [provider, setProvider] = useState("");
-  const [companies, setCompanies] = useState<CompanyRow[]>([]);
-  const [companyId, setCompanyId] = useState("");
+  const [clients, setClients] = useState<ClientRow[]>([]);
+  const [clientId, setClientId] = useState("");
   const [paths, setPaths] = useState<string[]>([]);
   const [fileStatuses, setFileStatuses] = useState<Map<string, FileStatus>>(new Map());
   const [fileResults, setFileResults] = useState<FileParseResult[]>([]);
@@ -85,7 +85,7 @@ export default function ImportPage() {
       setProviders(list);
       if (list.length > 0) setProvider(list[0].id);
     });
-    listCompanies().then(setCompanies);
+    listClients().then(setClients);
     refreshRecentFiles();
   }, []);
 
@@ -170,9 +170,9 @@ export default function ImportPage() {
   );
   const duplicateCount = paths.length - eligiblePaths.length;
 
-  const selectedCompany = useMemo(
-    () => companies.find((c) => String(c.id) === companyId) ?? null,
-    [companies, companyId],
+  const selectedClient = useMemo(
+    () => clients.find((c) => String(c.id) === clientId) ?? null,
+    [clients, clientId],
   );
 
   // Flat list of every successfully parsed sheet, in file order — this is
@@ -193,18 +193,18 @@ export default function ImportPage() {
     [conflicts],
   );
 
-  // The employee's own file says a different company than the one selected
-  // for this batch — surfaced so picking the wrong company doesn't silently
+  // The employee's own file says a different CNPJ than the client selected
+  // for this batch — surfaced so picking the wrong client doesn't silently
   // attribute someone's timesheet to it.
   const mismatchedSheetIndexes = useMemo(() => {
-    if (!selectedCompany) return new Set<number>();
-    const selectedCnpj = normalizeCnpj(selectedCompany.cnpj);
+    if (!selectedClient) return new Set<number>();
+    const selectedCnpj = normalizeCnpj(selectedClient.cnpj);
     const mismatched = new Set<number>();
     sheets.forEach((sheet, i) => {
       if (normalizeCnpj(sheet.company.cnpj) !== selectedCnpj) mismatched.add(i);
     });
     return mismatched;
-  }, [sheets, selectedCompany]);
+  }, [sheets, selectedClient]);
 
   // One row per sheet, plus one row per file that failed to parse — a bad
   // PDF in the batch doesn't hide the results already extracted from the
@@ -260,15 +260,15 @@ export default function ImportPage() {
   );
 
   async function handleParse() {
-    if (!selectedCompany) return;
+    if (!selectedClient) return;
     setError(null);
     setBusy(true);
     try {
       const results = await parseImport(provider, eligiblePaths);
       const allSheets = results.flatMap((r) => r.sheets);
-      const foundConflicts = await findConflicts(allSheets, selectedCompany.id);
-      const selectedCnpj = normalizeCnpj(selectedCompany.cnpj);
-      // Rows with a conflict, or whose own CNPJ doesn't match the company
+      const foundConflicts = await findConflicts(allSheets, selectedClient.id);
+      const selectedCnpj = normalizeCnpj(selectedClient.cnpj);
+      // Rows with a conflict, or whose own CNPJ doesn't match the client
       // selected for this batch, start unselected — both are opt-in.
       const defaultSelected = new Set<number>();
       allSheets.forEach((sheet, i) => {
@@ -301,7 +301,7 @@ export default function ImportPage() {
   }
 
   async function handleSave() {
-    if (!selectedCompany) return;
+    if (!selectedClient) return;
     setBusy(true);
     setError(null);
     try {
@@ -335,7 +335,7 @@ export default function ImportPage() {
         const fileHash = sheetOwner[i].fileHash;
         lastImportId = await saveParsedTimesheet(
           sheets[i],
-          selectedCompany.id,
+          selectedClient.id,
           conflict?.existingImportId,
           sourceFileIdByHash.get(fileHash),
         );
@@ -374,31 +374,42 @@ export default function ImportPage() {
       <div className="import-main">
       <div className="card">
         <div className="field-row" style={{ marginBottom: "1.2rem" }}>
-          <div className="field" style={{ flex: "1 1 240px" }}>
-            <label htmlFor="company">Empresa</label>
+          <div className="field" style={{ flex: "1 1 220px" }}>
+            <label htmlFor="client">Cliente</label>
             <select
-              id="company"
-              value={companyId}
-              onChange={(e) => setCompanyId(e.target.value)}
-              disabled={companies.length === 0}
+              id="client"
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              disabled={clients.length === 0}
             >
-              <option value="">Selecione uma empresa</option>
-              {companies.map((c) => (
+              <option value="">Selecione um cliente</option>
+              {clients.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
                 </option>
               ))}
             </select>
-            {companies.length === 0 ? (
+            {clients.length === 0 ? (
               <p className="field-hint">
-                Nenhuma empresa cadastrada. <Link to="/companies">Cadastre uma empresa</Link> antes
-                de importar.
+                Nenhum cliente cadastrado. <Link to="/clients">Cadastre um cliente</Link> antes de
+                importar.
               </p>
             ) : (
-              <p className="field-hint">Os colaboradores importados ficam vinculados a ela.</p>
+              <p className="field-hint">Os colaboradores importados ficam vinculados a ele.</p>
             )}
           </div>
-          <div className="field" style={{ flex: "1 1 240px" }}>
+          <div className="field" style={{ flex: "1 1 180px" }}>
+            <label htmlFor="company">Empresa</label>
+            <input
+              id="company"
+              type="text"
+              value={selectedClient?.companyName ?? ""}
+              disabled
+              placeholder="Definida pelo cliente"
+            />
+            <p className="field-hint">Definida automaticamente pelo cliente selecionado.</p>
+          </div>
+          <div className="field" style={{ flex: "1 1 220px" }}>
             <label htmlFor="provider">Provedor</label>
             <select id="provider" value={provider} onChange={(e) => setProvider(e.target.value)}>
               {providers.length === 0 && <option value="">Selecione um provedor</option>}
@@ -486,7 +497,7 @@ export default function ImportPage() {
         <div className="card-footer">
           <button
             type="button"
-            disabled={eligiblePaths.length === 0 || !provider || !companyId || busy}
+            disabled={eligiblePaths.length === 0 || !provider || !clientId || busy}
             onClick={handleParse}
           >
             {busy ? "Processando..." : `Processar ${eligiblePaths.length || ""} PDF(s)`}
@@ -508,7 +519,7 @@ export default function ImportPage() {
                   {conflicts.length > 0 &&
                     "Alguns colaboradores já possuem dados importados para este período. "}
                   {mismatchedSheetIndexes.size > 0 &&
-                    "Alguns arquivos têm um CNPJ diferente da empresa selecionada. "}
+                    "Alguns arquivos têm um CNPJ diferente do cliente selecionado. "}
                   Revise a lista e marque o que você quer salvar — o resto fica de fora.
                 </p>
               ) : (
@@ -625,7 +636,7 @@ export default function ImportPage() {
                         <div style={{ marginBottom: conflict ? "0.4rem" : 0 }}>
                           <span className="badge warn">
                             <AlertTriangle size={13} />
-                            CNPJ diferente da empresa selecionada
+                            CNPJ diferente do cliente selecionado
                           </span>
                         </div>
                       )}

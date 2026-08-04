@@ -40,5 +40,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0006_import_max_punches.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 7,
+            description: "add clients, scoped one-to-many under companies",
+            sql: include_str!("../migrations/0007_clients.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -22,20 +22,24 @@ function getDb(): Promise<Database> {
 async function upsertEmployee(
   db: Database,
   companyId: number,
+  clientId: number,
   name: string,
   cpf: string,
 ): Promise<number> {
+  // Scoped to the client, not the broader company — a CPF is unique to the
+  // specific legal entity (client) it worked for, and a company can have
+  // several of those.
   const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM employees WHERE company_id = $1 AND cpf = $2",
-    [companyId, cpf],
+    "SELECT id FROM employees WHERE client_id = $1 AND cpf = $2",
+    [clientId, cpf],
   );
   if (existing.length > 0) {
     await db.execute("UPDATE employees SET name = $1 WHERE id = $2", [name, existing[0].id]);
     return existing[0].id;
   }
   const result = await db.execute(
-    "INSERT INTO employees (company_id, name, cpf) VALUES ($1, $2, $3)",
-    [companyId, name, cpf],
+    "INSERT INTO employees (company_id, client_id, name, cpf) VALUES ($1, $2, $3, $4)",
+    [companyId, clientId, name, cpf],
   );
   return result.lastInsertId as number;
 }
@@ -134,18 +138,19 @@ export async function deleteImport(importId: number): Promise<void> {
 
 /**
  * Persists one parsed timesheet (and its days/punches) into SQLite, under
- * `companyId` — the company the user explicitly selected before importing,
- * not whatever `sheet.company` says. Companies are pre-registered (see
- * `createCompany`); imports no longer create them on the fly.
+ * `clientId` — the client the user explicitly selected before importing,
+ * not whatever `sheet.company` says. Clients (and their parent company) are
+ * pre-registered (see `createClient`/`createCompany`); imports no longer
+ * create either on the fly.
  * Pass `replaceImportId` to overwrite an existing conflicting import
- * (same employee+company+overlapping period) instead of adding alongside it.
+ * (same employee+client+overlapping period) instead of adding alongside it.
  * Pass `sourceFileId` (from `logSourceFile`) to link back to the whole
  * original file — for a multi-page batch, that's distinct from this sheet's
  * own split-off page.
  */
 export async function saveParsedTimesheet(
   sheet: ParsedTimesheet,
-  companyId: number,
+  clientId: number,
   replaceImportId?: number,
   sourceFileId?: number,
 ): Promise<number> {
@@ -155,7 +160,22 @@ export async function saveParsedTimesheet(
     await deleteImport(replaceImportId);
   }
 
-  const employeeId = await upsertEmployee(db, companyId, sheet.employee.name, sheet.employee.cpf);
+  // The company is derived from the client (not passed separately) so the
+  // two can never end up mismatched.
+  const clientRow = await db.select<{ companyId: number }[]>(
+    "SELECT company_id AS companyId FROM clients WHERE id = $1",
+    [clientId],
+  );
+  if (clientRow.length === 0) throw new Error("Cliente não encontrado.");
+  const companyId = clientRow[0].companyId;
+
+  const employeeId = await upsertEmployee(
+    db,
+    companyId,
+    clientId,
+    sheet.employee.name,
+    sheet.employee.cpf,
+  );
   const importFileId = await upsertImportFile(db, sheet.originalFileName, sheet.originalFileHash);
 
   // Computed once, here, at import time — the UI reads this instead of
@@ -255,6 +275,67 @@ export async function createCompany(name: string, cnpj: string): Promise<number>
     name.trim(),
     normalizedCnpj,
   ]);
+  return result.lastInsertId as number;
+}
+
+export interface ClientRow {
+  id: number;
+  name: string;
+  cnpj: string;
+  companyId: number;
+  companyName: string;
+}
+
+export async function listClients(): Promise<ClientRow[]> {
+  const db = await getDb();
+  return db.select<ClientRow[]>(`
+    SELECT cl.id, cl.name, cl.cnpj, c.id AS companyId, c.name AS companyName
+    FROM clients cl
+    JOIN companies c ON c.id = cl.company_id
+    ORDER BY c.name, cl.name
+  `);
+}
+
+export interface ClientWithStats extends ClientRow {
+  employeeCount: number;
+}
+
+export async function listClientsWithStats(): Promise<ClientWithStats[]> {
+  const db = await getDb();
+  return db.select<ClientWithStats[]>(`
+    SELECT cl.id, cl.name, cl.cnpj, c.id AS companyId, c.name AS companyName,
+           COUNT(DISTINCT e.id) AS employeeCount
+    FROM clients cl
+    JOIN companies c ON c.id = cl.company_id
+    LEFT JOIN employees e ON e.client_id = cl.id
+    GROUP BY cl.id
+    ORDER BY c.name, cl.name
+  `);
+}
+
+/**
+ * Registers a new client under `companyId`. CNPJ only needs to be unique
+ * within that company — registering a CNPJ that's already there is
+ * rejected, same rationale as `createCompany`.
+ */
+export async function createClient(
+  companyId: number,
+  name: string,
+  cnpj: string,
+): Promise<number> {
+  const db = await getDb();
+  const normalizedCnpj = normalizeCnpj(cnpj);
+  const existing = await db.select<{ id: number }[]>(
+    "SELECT id FROM clients WHERE company_id = $1 AND cnpj = $2",
+    [companyId, normalizedCnpj],
+  );
+  if (existing.length > 0) {
+    throw new Error("Essa empresa já tem um cliente cadastrado com esse CNPJ.");
+  }
+  const result = await db.execute(
+    "INSERT INTO clients (company_id, name, cnpj) VALUES ($1, $2, $3)",
+    [companyId, name.trim(), normalizedCnpj],
+  );
   return result.lastInsertId as number;
 }
 
@@ -435,13 +516,13 @@ export async function findDuplicateFiles(
 }
 
 /**
- * Looks for an existing import of the same employee at the same company
+ * Looks for an existing import of the same employee at the same client
  * whose period overlaps the given range — the "you already imported this
  * person for this period" check, independent of which file it came from.
  */
 export async function findConflictingImport(
   employeeCpf: string,
-  companyId: number,
+  clientId: number,
   periodStart: string,
   periodEnd: string,
 ): Promise<{ importId: number; periodStart: string; periodEnd: string; importedAt: string } | null> {
@@ -454,31 +535,31 @@ export async function findConflictingImport(
            i.imported_at AS importedAt
     FROM imports i
     JOIN employees e ON e.id = i.employee_id
-    WHERE e.cpf = $1 AND e.company_id = $2
+    WHERE e.cpf = $1 AND e.client_id = $2
       AND i.period_start <= $4 AND i.period_end >= $3
     ORDER BY i.imported_at DESC
     LIMIT 1
     `,
-    [employeeCpf, companyId, periodStart, periodEnd],
+    [employeeCpf, clientId, periodStart, periodEnd],
   );
   return rows[0] ?? null;
 }
 
 /**
  * Checks a batch of freshly-parsed sheets against existing imports for
- * period overlaps — under `companyId`, the company the user selected for
+ * period overlaps — under `clientId`, the client the user selected for
  * this whole batch (not whatever each sheet's own parsed company says).
  */
 export async function findConflicts(
   sheets: ParsedTimesheet[],
-  companyId: number,
+  clientId: number,
 ): Promise<ConflictInfo[]> {
   const conflicts: ConflictInfo[] = [];
   for (let i = 0; i < sheets.length; i++) {
     const sheet = sheets[i];
     const existing = await findConflictingImport(
       sheet.employee.cpf,
-      companyId,
+      clientId,
       sheet.period.start,
       sheet.period.end,
     );
