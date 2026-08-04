@@ -20,11 +20,23 @@ pub const BINARIES: [&str; 4] = ["pdfinfo", "pdftotext", "pdfseparate", "pdfunit
 /// to the bare name (a `$PATH` lookup) if nothing else matched, so this
 /// still works for a Poppler installed somewhere else while running from a
 /// terminal.
+///
+/// macOS-only in practice: these are Homebrew/MacPorts/apt install
+/// locations, and `PathBuf` isn't given a `.exe` suffix. Linux (see
+/// `.github/workflows/release-linux.yml`, which apt-installs
+/// `poppler-utils` to `/usr/bin`) likely doesn't need this at all — Linux
+/// desktop sessions generally pass the login shell's `$PATH` through to
+/// GUI-launched apps, unlike macOS's launchd — but `/usr/bin` is checked
+/// too as a cheap safety net. There's no Windows build target yet; if one
+/// is added, this needs its own resolution (Poppler isn't preinstalled or
+/// on `$PATH` on Windows the way it can be via Homebrew/apt, so bundling it
+/// as a sidecar is more likely the right call there than path-guessing).
 pub fn resolve(name: &str, custom_dir: Option<&str>) -> PathBuf {
-    const KNOWN_DIRS: [&str; 3] = [
+    const KNOWN_DIRS: [&str; 4] = [
         "/opt/homebrew/bin", // Homebrew on Apple Silicon
         "/usr/local/bin",    // Homebrew on Intel
         "/opt/local/bin",    // MacPorts
+        "/usr/bin",          // apt/dnf poppler-utils on Linux
     ];
 
     if let Some(dir) = custom_dir {
