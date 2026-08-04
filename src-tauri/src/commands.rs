@@ -334,6 +334,37 @@ pub fn copy_payment_sample(app: AppHandle, source_path: String) -> Result<String
     spreadsheet::copy_sample(&data_dir, &source_path)
 }
 
+/// Reads every row of a real (not sample) payment file according to a
+/// saved template's column mapping — the actual import-execution step,
+/// as opposed to `preview_spreadsheet`'s capped preview used while
+/// building the template itself.
+#[tauri::command]
+pub fn apply_payment_template(
+    path: String,
+    groups: Vec<spreadsheet::GroupSpec>,
+    delimiter: Option<String>,
+) -> Result<Vec<spreadsheet::AppliedPaymentRow>, String> {
+    spreadsheet::apply_template(&path, &groups, delimiter.as_deref())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentFileHash {
+    pub path: String,
+    pub file_name: String,
+    pub hash: String,
+}
+
+/// Content-hashes a payment spreadsheet — the payment-import equivalent of
+/// `hash_files`, but without that command's PDF-only `page_count` (via
+/// `pdfinfo`), which would just fail outright on a csv/xlsx/ods.
+#[tauri::command]
+pub fn hash_payment_file(path: String) -> Result<PaymentFileHash, String> {
+    let hash = hashing::hash_file(&path).map_err(|e| e.to_string())?;
+    let file_name = hashing::file_name(&path);
+    Ok(PaymentFileHash { path, file_name, hash })
+}
+
 /// Builds the Relatórios export zip. The frontend already knows the
 /// company/client/employee grouping and file naming (locale-aware period
 /// formatting lives in TS) — this just moves bytes into an archive, merging

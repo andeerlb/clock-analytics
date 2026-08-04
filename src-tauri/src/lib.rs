@@ -32,6 +32,8 @@ pub fn run() {
             commands::list_spreadsheet_sheets,
             commands::preview_spreadsheet,
             commands::copy_payment_sample,
+            commands::apply_payment_template,
+            commands::hash_payment_file,
             commands::generate_report_zip,
             commands::get_storage_usage,
             commands::delete_paths,

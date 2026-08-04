@@ -53,13 +53,34 @@ export async function pickPdfFiles(): Promise<string[]> {
   return Array.isArray(selection) ? selection : [selection];
 }
 
-/** Opens the native file picker, restricted to payroll spreadsheet formats, single-select. */
+/** Opens the native file picker, restricted to payroll spreadsheet formats, single-select — for the template wizard's sample file. */
 export async function pickPaymentFile(): Promise<string | null> {
   const selection = await open({
     multiple: false,
     filters: [{ name: "Planilha de pagamentos", extensions: ["csv", "xlsx", "xls", "ods"] }],
   });
   return typeof selection === "string" ? selection : null;
+}
+
+/** Same filter as `pickPaymentFile`, multi-select — for actually importing (one template can be applied to several files at once). */
+export async function pickPaymentFiles(): Promise<string[]> {
+  const selection = await open({
+    multiple: true,
+    filters: [{ name: "Planilha de pagamentos", extensions: ["csv", "xlsx", "xls", "ods"] }],
+  });
+  if (!selection) return [];
+  return Array.isArray(selection) ? selection : [selection];
+}
+
+export interface PaymentFileHash {
+  path: string;
+  fileName: string;
+  hash: string;
+}
+
+/** Content-hashes a payment file — no page count (unlike `hashFiles`, which is PDF-only via pdfinfo). */
+export function hashPaymentFile(path: string): Promise<PaymentFileHash> {
+  return invoke("hash_payment_file", { path });
 }
 
 export interface SpreadsheetPreview {
@@ -85,6 +106,30 @@ export function previewSpreadsheet(
 /** Copies a payment template's sample file into the app's own data folder. */
 export function copyPaymentSample(sourcePath: string): Promise<string> {
   return invoke("copy_payment_sample", { sourcePath });
+}
+
+/** The bit of a `PaymentTemplateGroup` (see types.ts) actually needed to read rows — id/headerLabel don't matter here. */
+export interface PaymentTemplateGroupSpec {
+  sheetNames: string[];
+  headerRow: number;
+  /** (columnLetter, targetField) pairs. */
+  fieldMappings: [string, string][];
+}
+
+export interface AppliedPaymentRow {
+  sheetName: string | null;
+  /** 1-indexed physical row in the source file — for error messages. */
+  rowNumber: number;
+  fields: Record<string, string>;
+}
+
+/** Reads every row of a real payment file per a saved template's column mapping — the actual import-execution step. */
+export function applyPaymentTemplate(
+  path: string,
+  groups: PaymentTemplateGroupSpec[],
+  delimiter: string | null,
+): Promise<AppliedPaymentRow[]> {
+  return invoke("apply_payment_template", { path, groups, delimiter });
 }
 
 /** Builds the Relatórios export zip at `destZipPath` from the given entries. */

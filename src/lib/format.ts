@@ -187,3 +187,51 @@ export function columnLetter(index0: number): string {
   }
   return letters;
 }
+
+/**
+ * Normalizes a raw "data" field from an applied payment template into an
+ * ISO (YYYY-MM-DD) date, or `null` if it can't be parsed — a row that
+ * fails this becomes a "erro" row in the import preview rather than
+ * silently getting dropped or mis-dated.
+ *
+ * Tries an already-ISO-looking value first (covers both a native date
+ * cell the Rust side already formatted, and source text that already
+ * looks ISO, e.g. "2026-02-18T00:00:00" seen in real exports), then falls
+ * back to a positional parse using the template's own `dateFormat`.
+ */
+export function parseDateWithFormat(raw: string, dateFormat: string): string | null {
+  const trimmed = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+    return trimmed.slice(0, 10);
+  }
+
+  const parts = trimmed.replace(/[^\d]+/g, " ").trim().split(/\s+/);
+  if (parts.length !== 3) return null;
+  const [a, b, c] = parts;
+
+  let day: string;
+  let month: string;
+  let year: string;
+  switch (dateFormat) {
+    case "DD/MM/YYYY":
+    case "DD/MM/YY":
+      [day, month, year] = [a, b, c];
+      break;
+    case "MM/DD/YYYY":
+      [month, day, year] = [a, b, c];
+      break;
+    case "YYYY-MM-DD":
+      [year, month, day] = [a, b, c];
+      break;
+    default:
+      return null;
+  }
+
+  if (year.length === 2) year = `20${year}`;
+  const dayNum = Number(day);
+  const monthNum = Number(month);
+  const yearNum = Number(year);
+  if (!dayNum || !monthNum || !yearNum || monthNum > 12 || dayNum > 31) return null;
+
+  return `${String(yearNum).padStart(4, "0")}-${String(monthNum).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+}

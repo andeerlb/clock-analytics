@@ -3,25 +3,45 @@ import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
+  Eye,
   FileText,
-  Pencil,
-  Plus,
+  FolderOpen,
+  PlusCircle,
   Search,
-  Trash2,
+  Settings2,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import Pagination from "../components/Pagination";
-import PaymentTemplateWizard from "../components/PaymentTemplateWizard";
-import { deletePaths } from "../lib/api";
 import {
-  deletePaymentTemplate,
+  applyPaymentTemplate,
+  hashPaymentFile,
+  pickPaymentFiles,
+  type AppliedPaymentRow,
+} from "../lib/api";
+import { colorForName, initials } from "../lib/avatar";
+import {
+  findDuplicatePaymentShifts,
+  findEmployeeByIdentifiers,
   getPaymentTemplate,
+  listClients,
   listImportFiles,
   listPaymentTemplates,
+  logSourceFile,
+  markSourceFileSaved,
+  savePaymentShifts,
+  type ClientRow,
+  type EmployeeRow,
+  type PaymentShiftInput,
 } from "../lib/db";
-import { formatDateTime } from "../lib/format";
-import type { ImportFileRow, ImportStatus, PaymentTemplateListRow, PaymentTemplateRow } from "../lib/types";
+import { formatDateTime, parseDateWithFormat } from "../lib/format";
+import type {
+  ImportFileRow,
+  ImportStatus,
+  PaymentTemplateListRow,
+  PaymentTemplateRow,
+} from "../lib/types";
 
 const STATUS_BADGE: Record<ImportStatus, { className: string; label: string; icon: typeof CheckCircle2 }> = {
   success: { className: "badge ok", label: "Sucesso", icon: CheckCircle2 },
@@ -29,54 +49,207 @@ const STATUS_BADGE: Record<ImportStatus, { className: string; label: string; ico
   error: { className: "badge file-error", label: "Falha", icon: AlertCircle },
 };
 
-const FILE_KIND_LABELS: Record<string, string> = {
-  csv: "CSV",
-  xlsx: "Excel",
-  xls: "Excel",
-  ods: "ODS",
-};
+interface PaymentPreviewRow {
+  fileHash: string;
+  fileName: string;
+  sheetName: string | null;
+  rowNumber: number;
+  employee: EmployeeRow | null;
+  local: string;
+  role: string;
+  schedule: string;
+  note: string | null;
+  workDateRaw: string;
+  workDate: string | null;
+  isDuplicate: boolean;
+}
 
+interface PaymentFileResult {
+  fileHash: string;
+  fileName: string;
+  rows: PaymentPreviewRow[];
+  error: string | null;
+}
+
+type DisplayRow =
+  | { kind: "shift"; index: number; row: PaymentPreviewRow }
+  | { kind: "error"; fileName: string; message: string };
+
+const PREVIEW_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 export default function ImportPaymentsPage() {
+  const navigate = useNavigate();
+
+  const [clients, setClients] = useState<ClientRow[]>([]);
+  const [clientId, setClientId] = useState("");
+  const [companyId, setCompanyId] = useState("");
+
+  const [templates, setTemplates] = useState<PaymentTemplateListRow[]>([]);
+  const [templateId, setTemplateId] = useState("");
+  const [selectedTemplate, setSelectedTemplate] = useState<PaymentTemplateRow | null>(null);
+
+  const [paths, setPaths] = useState<string[]>([]);
+  const [fileHashes, setFileHashes] = useState<Map<string, { hash: string; fileName: string }>>(
+    new Map(),
+  );
+
+  const [fileResults, setFileResults] = useState<PaymentFileResult[]>([]);
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+  const [previewPage, setPreviewPage] = useState(0);
+  const [previewPageSize, setPreviewPageSize] = useState(PREVIEW_PAGE_SIZE_OPTIONS[0]);
+
   const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
   const [historySearch, setHistorySearch] = useState("");
   const [historyPage, setHistoryPage] = useState(0);
   const [historyPageSize, setHistoryPageSize] = useState(HISTORY_PAGE_SIZE_OPTIONS[0]);
 
-  const [templates, setTemplates] = useState<PaymentTemplateListRow[]>([]);
-  const [wizardTarget, setWizardTarget] = useState<PaymentTemplateRow | "new" | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    listImportFiles("payment").then(setRecentFiles);
-    refreshTemplates();
+    listClients().then(setClients);
+    listPaymentTemplates().then(setTemplates);
+    refreshRecentFiles();
   }, []);
 
-  function refreshTemplates() {
-    listPaymentTemplates().then(setTemplates);
+  function refreshRecentFiles() {
+    listImportFiles("payment").then(setRecentFiles);
   }
 
-  async function handleEditTemplate(id: number) {
-    setError(null);
-    try {
-      const template = await getPaymentTemplate(id);
-      setWizardTarget(template);
-    } catch (e) {
-      setError(String(e));
+  // Hash newly picked files (no page-count/duplicate check like timesheets
+  // — a payment file has no equivalent to "one PDF, one employee", and the
+  // row-level duplicate check further down is the meaningful one here).
+  useEffect(() => {
+    if (paths.length === 0) {
+      setFileHashes(new Map());
+      return;
     }
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(paths.map((p) => hashPaymentFile(p)));
+      if (cancelled) return;
+      setFileHashes(new Map(entries.map((e) => [e.path, { hash: e.hash, fileName: e.fileName }])));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [paths]);
+
+  const selectedClient = useMemo(
+    () => clients.find((c) => String(c.id) === clientId) ?? null,
+    [clients, clientId],
+  );
+  const clientCompanies = useMemo(
+    () => clients.filter((c) => String(c.id) === clientId),
+    [clients, clientId],
+  );
+  useEffect(() => {
+    if (clientCompanies.length === 1) {
+      setCompanyId(String(clientCompanies[0].companyId));
+    } else {
+      setCompanyId("");
+    }
+  }, [clientCompanies]);
+
+  // Global templates are always offered; client-specific ones only once
+  // that client is selected.
+  const availableTemplates = useMemo(
+    () => templates.filter((t) => t.clientId === null || String(t.clientId) === clientId),
+    [templates, clientId],
+  );
+
+  useEffect(() => {
+    if (!templateId) {
+      setSelectedTemplate(null);
+      return;
+    }
+    let cancelled = false;
+    getPaymentTemplate(Number(templateId)).then((t) => {
+      if (!cancelled) setSelectedTemplate(t);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [templateId]);
+
+  function addPaths(newPaths: string[]) {
+    setPaths((prev) => Array.from(new Set([...prev, ...newPaths])));
+    cancelPreview();
+    setSuccessMessage(null);
   }
 
-  async function handleDeleteTemplate(id: number) {
+  function removePath(path: string) {
+    setPaths((prev) => prev.filter((p) => p !== path));
+  }
+
+  function cancelPreview() {
+    setFileResults([]);
+    setSelectedRows(new Set());
+    setPreviewPage(0);
+  }
+
+  function reset() {
+    setPaths([]);
+    cancelPreview();
     setError(null);
-    try {
-      const samplePath = await deletePaymentTemplate(id);
-      if (samplePath) await deletePaths([samplePath]).catch(() => {});
-      setConfirmDeleteId(null);
-      refreshTemplates();
-    } catch (e) {
-      setError(String(e));
+  }
+
+  async function handlePick() {
+    setError(null);
+    const selected = await pickPaymentFiles();
+    if (selected.length > 0) addPaths(selected);
+  }
+
+  const shiftRows = useMemo(() => fileResults.flatMap((r) => r.rows), [fileResults]);
+  const shiftRowFileHash = useMemo(
+    () => fileResults.flatMap((r) => r.rows.map(() => r.fileHash)),
+    [fileResults],
+  );
+
+  const previewRows = useMemo(() => {
+    const out: DisplayRow[] = [];
+    let idx = 0;
+    for (const result of fileResults) {
+      if (result.error) {
+        out.push({ kind: "error", fileName: result.fileName, message: result.error });
+      } else {
+        for (const row of result.rows) {
+          out.push({ kind: "shift", index: idx, row });
+          idx++;
+        }
+      }
+    }
+    return out;
+  }, [fileResults]);
+
+  const errorCount = fileResults.filter((r) => r.error).length;
+  const duplicateCount = shiftRows.filter((r) => r.isDuplicate).length;
+
+  const previewPageCount = Math.max(1, Math.ceil(previewRows.length / previewPageSize));
+  const previewPageItems = useMemo(
+    () => previewRows.slice(previewPage * previewPageSize, previewPage * previewPageSize + previewPageSize),
+    [previewRows, previewPage, previewPageSize],
+  );
+
+  const selectableCount = shiftRows.filter((r) => r.employee && r.workDate).length;
+  const allSelected = selectableCount > 0 && shiftRows.every((r, i) => selectedRows.has(i) || !r.employee || !r.workDate);
+
+  function toggleRow(index: number) {
+    setSelectedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (allSelected) {
+      setSelectedRows(new Set());
+    } else {
+      setSelectedRows(new Set(shiftRows.flatMap((r, i) => (r.employee && r.workDate ? [i] : []))));
     }
   }
 
@@ -93,12 +266,146 @@ export default function ImportPaymentsPage() {
   const historyPageCount = Math.max(1, Math.ceil(filteredRecentFiles.length / historyPageSize));
   const historyPageItems = useMemo(
     () =>
-      filteredRecentFiles.slice(
-        historyPage * historyPageSize,
-        historyPage * historyPageSize + historyPageSize,
-      ),
+      filteredRecentFiles.slice(historyPage * historyPageSize, historyPage * historyPageSize + historyPageSize),
     [filteredRecentFiles, historyPage, historyPageSize],
   );
+
+  async function handleProcess() {
+    if (!selectedClient || !selectedTemplate) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const results: PaymentFileResult[] = [];
+      for (const path of paths) {
+        const info = fileHashes.get(path);
+        const fileHash = info?.hash ?? path;
+        const fileName = info?.fileName ?? path;
+        try {
+          const applied: AppliedPaymentRow[] = await applyPaymentTemplate(
+            path,
+            selectedTemplate.groups.map((g) => ({
+              sheetNames: g.sheetNames,
+              headerRow: g.headerRow,
+              fieldMappings: g.fieldMappings.map(
+                (fm) => [fm.columnLetter, fm.targetField] as [string, string],
+              ),
+            })),
+            selectedTemplate.delimiter,
+          );
+
+          const rows: PaymentPreviewRow[] = [];
+          for (const applied_row of applied) {
+            const cpf = applied_row.fields.cpf || null;
+            const matricula = applied_row.fields.matricula || null;
+            const nome = applied_row.fields.nome || null;
+            const employee = await findEmployeeByIdentifiers(selectedClient.id, cpf, matricula, nome);
+            const workDateRaw = applied_row.fields.data ?? "";
+            const workDate = workDateRaw
+              ? parseDateWithFormat(workDateRaw, selectedTemplate.dateFormat)
+              : null;
+            rows.push({
+              fileHash,
+              fileName,
+              sheetName: applied_row.sheetName,
+              rowNumber: applied_row.rowNumber,
+              employee,
+              local: applied_row.fields.local ?? "",
+              role: applied_row.fields.funcao ?? "",
+              schedule: applied_row.fields.horario ?? "",
+              note: applied_row.fields.observacao || null,
+              workDateRaw,
+              workDate,
+              isDuplicate: false,
+            });
+          }
+          results.push({ fileHash, fileName, rows, error: null });
+        } catch (e) {
+          results.push({ fileHash, fileName, rows: [], error: String(e) });
+        }
+      }
+
+      const allRows = results.flatMap((r) => r.rows);
+      const candidates = allRows.filter((r) => r.employee && r.workDate);
+      const dupIndices = await findDuplicatePaymentShifts(
+        candidates.map((r) => ({ employeeId: r.employee!.id, workDate: r.workDate!, local: r.local })),
+      );
+      dupIndices.forEach((i) => {
+        candidates[i].isDuplicate = true;
+      });
+
+      const defaultSelected = new Set<number>();
+      allRows.forEach((r, i) => {
+        if (r.employee && r.workDate && !r.isDuplicate) defaultSelected.add(i);
+      });
+
+      setFileResults(results);
+      setSelectedRows(defaultSelected);
+      setPreviewPage(0);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSave() {
+    if (!selectedClient || !companyId || !selectedTemplate) return;
+    setBusy(true);
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      const sourceFileIdByHash = new Map<string, number>();
+      for (const result of fileResults) {
+        const sourceFileId = await logSourceFile({
+          fileHash: result.fileHash,
+          fileName: result.fileName,
+          pageCount: 1,
+          provider: selectedTemplate.name,
+          importType: "payment",
+          status: result.error ? "error" : "success",
+          errorMessage: result.error,
+          originalPdfPath: "",
+        });
+        sourceFileIdByHash.set(result.fileHash, sourceFileId);
+      }
+
+      const shiftInputs: PaymentShiftInput[] = [];
+      const savedFileHashes = new Set<string>();
+      for (let i = 0; i < shiftRows.length; i++) {
+        if (!selectedRows.has(i)) continue;
+        const row = shiftRows[i];
+        if (!row.employee || !row.workDate) continue;
+        const fileHash = shiftRowFileHash[i];
+        shiftInputs.push({
+          employeeId: row.employee.id,
+          templateId: selectedTemplate.id,
+          sourceFileId: sourceFileIdByHash.get(fileHash) ?? null,
+          local: row.local,
+          workDate: row.workDate,
+          role: row.role,
+          schedule: row.schedule,
+          note: row.note,
+        });
+        savedFileHashes.add(fileHash);
+      }
+      await savePaymentShifts(shiftInputs);
+      for (const fileHash of savedFileHashes) {
+        await markSourceFileSaved(fileHash);
+      }
+
+      refreshRecentFiles();
+      reset();
+      setSuccessMessage(
+        shiftInputs.length === 1
+          ? "1 turno importado com sucesso."
+          : `${shiftInputs.length} turnos importados com sucesso.`,
+      );
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div>
@@ -108,99 +415,326 @@ export default function ImportPaymentsPage() {
       </Link>
       <div className="page-header">
         <h2>Importar pagamentos</h2>
-        <button type="button" onClick={() => setWizardTarget("new")}>
-          <Plus size={15} style={{ marginRight: "0.4rem" }} />
-          Novo template
+        <button type="button" className="secondary" onClick={() => navigate("/import/payments/templates")}>
+          <Settings2 size={15} style={{ marginRight: "0.4rem" }} />
+          Gerenciar templates
         </button>
       </div>
       <p className="page-subtitle">
-        Importe pagamentos a partir de arquivos CSV, Excel ou ODS fornecidos pelo seu provedor.
+        Aplique um template já cadastrado a um arquivo de pagamentos (CSV, Excel ou ODS) e
+        associe cada linha ao colaborador correspondente.
       </p>
 
       {error && <div className="error-box">{error}</div>}
+      {successMessage && <div className="success-box">{successMessage}</div>}
 
       <div className="import-layout">
         <div className="import-main">
-          <div className="card table-card">
-            {templates.length === 0 ? (
-              <p className="muted" style={{ padding: "1.4rem" }}>
-                Nenhum template cadastrado ainda. Crie um para mapear as colunas de um arquivo de
-                pagamentos antes de importar.
-              </p>
-            ) : (
-              <div className="table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Nome</th>
-                      <th>Cliente</th>
-                      <th>Formato</th>
-                      <th>Atualizado em</th>
-                      <th>Ações</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {templates.map((t) => (
-                      <tr key={t.id}>
-                        <td>{t.name}</td>
-                        <td>{t.clientName ?? "Global"}</td>
-                        <td>{FILE_KIND_LABELS[t.fileKind] ?? t.fileKind}</td>
-                        <td>{formatDateTime(t.updatedAt)}</td>
-                        <td>
-                          {confirmDeleteId === t.id ? (
-                            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                              <span style={{ color: "var(--danger)", fontSize: "0.82rem" }}>
-                                Confirmar exclusão?
-                              </span>
-                              <button
-                                type="button"
-                                className="ghost"
-                                style={{ padding: "0.3rem 0.6rem", fontSize: "0.8rem", color: "var(--danger)" }}
-                                onClick={() => handleDeleteTemplate(t.id)}
-                              >
-                                Excluir
-                              </button>
-                              <button
-                                type="button"
-                                className="ghost"
-                                style={{ padding: "0.3rem 0.6rem", fontSize: "0.8rem" }}
-                                onClick={() => setConfirmDeleteId(null)}
-                              >
-                                Cancelar
-                              </button>
-                            </span>
-                          ) : (
-                            <span style={{ display: "flex", gap: "0.3rem" }}>
-                              <button
-                                type="button"
-                                className="ghost"
-                                style={{ padding: "0.3rem" }}
-                                onClick={() => handleEditTemplate(t.id)}
-                                aria-label="Editar"
-                                title="Editar"
-                              >
-                                <Pencil size={14} />
-                              </button>
-                              <button
-                                type="button"
-                                className="ghost"
-                                style={{ padding: "0.3rem" }}
-                                onClick={() => setConfirmDeleteId(t.id)}
-                                aria-label="Excluir"
-                                title="Excluir"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          <div className="card">
+            <div className="field-row" style={{ marginBottom: "1.2rem" }}>
+              <div className="field" style={{ flex: "1 1 220px" }}>
+                <label htmlFor="payment-client">Cliente</label>
+                <select
+                  id="payment-client"
+                  value={clientId}
+                  onChange={(e) => setClientId(e.target.value)}
+                  disabled={clients.length === 0}
+                >
+                  <option value="">Selecione um cliente</option>
+                  {Array.from(new Map(clients.map((c) => [c.id, c])).values()).map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                {clients.length === 0 ? (
+                  <p className="field-hint">
+                    Nenhum cliente cadastrado. <Link to="/clients">Cadastre um cliente</Link> antes
+                    de importar.
+                  </p>
+                ) : (
+                  <p className="field-hint">Define em quais colaboradores os turnos são casados.</p>
+                )}
               </div>
-            )}
+              <div className="field" style={{ flex: "1 1 180px" }}>
+                <label htmlFor="payment-company">Empresa</label>
+                <select
+                  id="payment-company"
+                  value={companyId}
+                  onChange={(e) => setCompanyId(e.target.value)}
+                  disabled={clientCompanies.length <= 1}
+                >
+                  {clientCompanies.length !== 1 && <option value="">Selecione uma empresa</option>}
+                  {clientCompanies.map((c) => (
+                    <option key={c.companyId} value={c.companyId}>
+                      {c.companyName}
+                    </option>
+                  ))}
+                </select>
+                <p className="field-hint">
+                  {clientCompanies.length > 1
+                    ? "Esse cliente está vinculado a mais de uma empresa — escolha uma."
+                    : "Definida automaticamente pelo cliente selecionado."}
+                </p>
+              </div>
+              <div className="field" style={{ flex: "1 1 220px" }}>
+                <label htmlFor="payment-template">Template</label>
+                <select
+                  id="payment-template"
+                  value={templateId}
+                  onChange={(e) => setTemplateId(e.target.value)}
+                  disabled={availableTemplates.length === 0}
+                >
+                  <option value="">Selecione um template</option>
+                  {availableTemplates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+                {availableTemplates.length === 0 ? (
+                  <p className="field-hint">
+                    Nenhum template disponível.{" "}
+                    <Link to="/import/payments/templates">Cadastre um template</Link>.
+                  </p>
+                ) : (
+                  <p className="field-hint">Como as colunas do arquivo serão lidas.</p>
+                )}
+              </div>
+            </div>
+
+            <div className="field">
+              <label>Arquivos de pagamento</label>
+              <div className="dropzone">
+                <div className="dropzone-icon">
+                  <FileText size={20} />
+                </div>
+                <h4>Selecione os arquivos</h4>
+                <p className="muted" style={{ margin: 0 }}>
+                  CSV, Excel ou ODS — suporta múltiplos arquivos com o mesmo template.
+                </p>
+                <button type="button" className="secondary" onClick={handlePick}>
+                  <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
+                  Procurar arquivos
+                </button>
+              </div>
+
+              {paths.length > 0 && (
+                <div className="file-list">
+                  {paths.map((p) => {
+                    const info = fileHashes.get(p);
+                    return (
+                      <div className="file-row" key={p}>
+                        <div className="file-row-icon">
+                          <FileText size={18} />
+                        </div>
+                        <div className="file-row-info">
+                          <div className="file-name">{info?.fileName ?? p}</div>
+                        </div>
+                        <div className="file-row-actions">
+                          <button
+                            type="button"
+                            className="ghost"
+                            style={{ padding: "0.3rem" }}
+                            onClick={() => removePath(p)}
+                            aria-label="Remover"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="card-footer">
+              <button
+                type="button"
+                disabled={paths.length === 0 || !templateId || !clientId || !companyId || busy}
+                onClick={handleProcess}
+              >
+                {busy ? "Processando..." : `Processar ${paths.length || ""} arquivo(s)`}
+              </button>
+            </div>
           </div>
+
+          {fileResults.length > 0 && (
+            <>
+              <div className="card card-flush">
+                <div className="page-header" style={{ marginBottom: 0, alignItems: "flex-end" }}>
+                  <div>
+                    <h3 style={{ margin: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <Eye size={18} />
+                      Pré-visualização da Importação
+                    </h3>
+                    {duplicateCount > 0 ? (
+                      <p className="muted" style={{ maxWidth: "42rem" }}>
+                        Algumas linhas parecem já ter sido importadas antes (mesmo colaborador,
+                        data e local). Revise a lista e marque o que você quer salvar.
+                      </p>
+                    ) : (
+                      <p className="muted">Revise os dados antes de confirmar.</p>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: "0.6rem", flexShrink: 0 }}>
+                    <button type="button" className="outline" onClick={cancelPreview} disabled={busy}>
+                      Cancelar
+                    </button>
+                    <button type="button" onClick={handleSave} disabled={busy || selectedRows.size === 0}>
+                      {busy ? "Salvando..." : "Salvar"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="card table-card">
+                <div className="table-toolbar">
+                  <div className="counts">
+                    <span>{shiftRows.length} registro(s) encontrado(s)</span>
+                    {duplicateCount > 0 && <span className="count-chip">{duplicateCount} possível(is) duplicata(s)</span>}
+                    {errorCount > 0 && (
+                      <span className="badge file-error">
+                        <AlertCircle size={13} />
+                        {errorCount} erro(s)
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th className="checkbox-cell">
+                          <input
+                            type="checkbox"
+                            checked={allSelected}
+                            onChange={toggleAll}
+                            disabled={selectableCount === 0}
+                            aria-label="Selecionar todos"
+                          />
+                        </th>
+                        <th>Colaborador</th>
+                        <th>Local</th>
+                        <th>Data</th>
+                        <th>Função</th>
+                        <th>Horário</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {previewPageItems.map((item, i) => {
+                        if (item.kind === "error") {
+                          return (
+                            <tr key={`error-${i}`} className="row-error">
+                              <td className="checkbox-cell">
+                                <input type="checkbox" disabled aria-label="Não disponível" />
+                              </td>
+                              <td colSpan={5}>
+                                <div className="file-name">{item.fileName}</div>
+                                <div className="muted">{item.message}</div>
+                              </td>
+                              <td>
+                                <span className="badge file-error">
+                                  <AlertCircle size={13} />
+                                  Erro no arquivo
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        }
+
+                        const { row, index } = item;
+                        const canSelect = Boolean(row.employee && row.workDate);
+                        return (
+                          <tr key={index}>
+                            <td className="checkbox-cell">
+                              <input
+                                type="checkbox"
+                                checked={selectedRows.has(index)}
+                                onChange={() => toggleRow(index)}
+                                disabled={!canSelect}
+                                aria-label={`Selecionar linha ${row.rowNumber}`}
+                              />
+                            </td>
+                            <td>
+                              {row.employee ? (
+                                <div className="person-cell">
+                                  <span className="avatar" style={{ background: colorForName(row.employee.name) }}>
+                                    {initials(row.employee.name)}
+                                  </span>
+                                  {row.employee.name}
+                                </div>
+                              ) : (
+                                <span className="muted">—</span>
+                              )}
+                            </td>
+                            <td>{row.local}</td>
+                            <td>{row.workDate ?? <span className="muted">{row.workDateRaw || "—"}</span>}</td>
+                            <td>{row.role}</td>
+                            <td>{row.schedule}</td>
+                            <td>
+                              {row.employee && row.workDate && !row.isDuplicate && (
+                                <span className="badge ok">
+                                  <PlusCircle size={13} />
+                                  Novo
+                                </span>
+                              )}
+                              {!row.employee && (
+                                <div style={{ marginBottom: "0.3rem" }}>
+                                  <span className="badge warn">
+                                    <AlertTriangle size={13} />
+                                    Colaborador não encontrado
+                                  </span>
+                                  <div style={{ marginTop: "0.25rem" }}>
+                                    <Link to="/employees/new" style={{ fontSize: "0.78rem" }}>
+                                      Cadastrar colaborador
+                                    </Link>
+                                  </div>
+                                </div>
+                              )}
+                              {!row.workDate && (
+                                <span className="badge warn">
+                                  <AlertTriangle size={13} />
+                                  Data inválida
+                                </span>
+                              )}
+                              {row.employee && row.workDate && row.isDuplicate && (
+                                <span className="badge overwrite">
+                                  <AlertTriangle size={13} />
+                                  Possível duplicata
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {previewRows.length > PREVIEW_PAGE_SIZE_OPTIONS[0] && (
+                  <Pagination
+                    page={previewPage}
+                    pageCount={previewPageCount}
+                    onPageChange={setPreviewPage}
+                    rangeLabel={`Mostrando ${previewPage * previewPageSize + 1} a ${Math.min(
+                      previewRows.length,
+                      previewPage * previewPageSize + previewPageSize,
+                    )} de ${previewRows.length}`}
+                    pageSize={previewPageSize}
+                    pageSizeOptions={PREVIEW_PAGE_SIZE_OPTIONS}
+                    onPageSizeChange={(size) => {
+                      setPreviewPageSize(size);
+                      setPreviewPage(0);
+                    }}
+                  />
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="import-side">
@@ -292,15 +826,6 @@ export default function ImportPaymentsPage() {
           </div>
         </div>
       </div>
-
-      <PaymentTemplateWizard
-        target={wizardTarget}
-        onClose={() => setWizardTarget(null)}
-        onSaved={() => {
-          setWizardTarget(null);
-          refreshTemplates();
-        }}
-      />
     </div>
   );
 }

@@ -100,5 +100,17 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0016_company_night_shift_hours.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 17,
+            description: "add matricula to employees, completing the cpf/matricula/nome identifier precedence",
+            sql: include_str!("../migrations/0017_employee_matricula.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 18,
+            description: "track imported payment shifts, one row per work shift",
+            sql: include_str!("../migrations/0018_payment_shifts.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

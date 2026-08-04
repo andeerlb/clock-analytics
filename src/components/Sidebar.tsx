@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Briefcase, Building2, Clock, FileUp, Settings, Users } from "lucide-react";
+import { Briefcase, Building2, Clock, FileUp, Settings, Users, Wallet } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import GithubIcon from "./GithubIcon";
@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { to: "/employees", label: "Colaboradores", icon: Users, end: false },
   { to: "/import", label: "Importar", icon: FileUp, end: false },
   { to: "/", label: "Cartão Ponto", icon: Clock, end: true },
+  { to: "/payments", label: "Pagamentos", icon: Wallet, end: false },
 ];
 
 function navLinkClass({ isActive }: { isActive: boolean }): string {

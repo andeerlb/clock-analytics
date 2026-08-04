@@ -13,6 +13,8 @@ import type {
   PaymentTemplateGroup,
   PaymentTemplateListRow,
   PaymentTemplateRow,
+  PaymentShiftRow,
+  PaymentShiftSummaryRow,
   StoredDayRecord,
   StoredImport,
 } from "./types";
@@ -538,6 +540,8 @@ export interface EmployeeRow {
   id: number;
   name: string;
   cpf: string;
+  /** Optional — not every client's payroll system uses one, unlike CPF. */
+  matricula: string | null;
   clientId: number;
   clientName: string;
   companyId: number;
@@ -553,7 +557,7 @@ export interface EmployeeRow {
 export async function listEmployeesGlobal(): Promise<EmployeeRow[]> {
   const db = await getDb();
   return db.select<EmployeeRow[]>(`
-    SELECT e.id, e.name, e.cpf,
+    SELECT e.id, e.name, e.cpf, e.matricula,
            cl.id AS clientId, cl.name AS clientName,
            c.id AS companyId, c.name AS companyName
     FROM employees e
@@ -575,6 +579,7 @@ export async function createEmployeeManual(
   companyId: number,
   name: string,
   cpf: string,
+  matricula: string | null = null,
 ): Promise<number> {
   const db = await getDb();
   const normalizedCpf = normalizeCpf(cpf);
@@ -599,8 +604,8 @@ export async function createEmployeeManual(
   }
 
   const result = await db.execute(
-    "INSERT INTO employees (company_id, client_id, name, cpf) VALUES ($1, $2, $3, $4)",
-    [companyId, clientId, name.trim(), normalizedCpf],
+    "INSERT INTO employees (company_id, client_id, name, cpf, matricula) VALUES ($1, $2, $3, $4, $5)",
+    [companyId, clientId, name.trim(), normalizedCpf, matricula?.trim() || null],
   );
   return result.lastInsertId as number;
 }
@@ -608,7 +613,7 @@ export async function createEmployeeManual(
 export async function getEmployee(id: number): Promise<EmployeeRow> {
   const db = await getDb();
   const rows = await db.select<EmployeeRow[]>(
-    `SELECT e.id, e.name, e.cpf,
+    `SELECT e.id, e.name, e.cpf, e.matricula,
             cl.id AS clientId, cl.name AS clientName,
             c.id AS companyId, c.name AS companyName
      FROM employees e
@@ -622,11 +627,16 @@ export async function getEmployee(id: number): Promise<EmployeeRow> {
 }
 
 /**
- * Updates name/CPF only — client/empresa aren't editable here, since a
- * colaborador is really "this person at this client"; moving them to a
- * different one is conceptually a new colaborador, not an edit.
+ * Updates name/CPF/matrícula only — client/empresa aren't editable here,
+ * since a colaborador is really "this person at this client"; moving them
+ * to a different one is conceptually a new colaborador, not an edit.
  */
-export async function updateEmployee(id: number, name: string, cpf: string): Promise<void> {
+export async function updateEmployee(
+  id: number,
+  name: string,
+  cpf: string,
+  matricula: string | null = null,
+): Promise<void> {
   const db = await getDb();
   const normalizedCpf = normalizeCpf(cpf);
   if (normalizedCpf.length !== 11) {
@@ -647,9 +657,10 @@ export async function updateEmployee(id: number, name: string, cpf: string): Pro
     throw new Error("Já existe um colaborador com esse CPF para esse cliente.");
   }
 
-  await db.execute("UPDATE employees SET name = $1, cpf = $2 WHERE id = $3", [
+  await db.execute("UPDATE employees SET name = $1, cpf = $2, matricula = $3 WHERE id = $4", [
     name.trim(),
     normalizedCpf,
+    matricula?.trim() || null,
     id,
   ]);
 }
@@ -1136,6 +1147,138 @@ export async function deletePaymentTemplate(id: number): Promise<string> {
   await deleteTemplateGroups(db, id);
   await db.execute("DELETE FROM payment_templates WHERE id = $1", [id]);
   return rows[0]?.sampleFilePath ?? "";
+}
+
+/**
+ * Resolves a payment row's employee within `clientId`, trying CPF, then
+ * matrícula, then nome, in that order — the precedence already defined in
+ * `IDENTIFIER_FIELD_PRECEDENCE`. Whichever one hits first wins; the others
+ * (if also mapped) are never consulted.
+ */
+export async function findEmployeeByIdentifiers(
+  clientId: number,
+  cpf: string | null,
+  matricula: string | null,
+  nome: string | null,
+): Promise<EmployeeRow | null> {
+  const db = await getDb();
+  const select = `SELECT e.id, e.name, e.cpf, e.matricula,
+      cl.id AS clientId, cl.name AS clientName,
+      c.id AS companyId, c.name AS companyName
+    FROM employees e
+    JOIN clients cl ON cl.id = e.client_id
+    JOIN companies c ON c.id = e.company_id
+    WHERE e.client_id = $1 AND `;
+
+  if (cpf) {
+    const normalizedCpf = normalizeCpf(cpf);
+    if (normalizedCpf.length === 11) {
+      const rows = await db.select<EmployeeRow[]>(`${select}e.cpf = $2`, [clientId, normalizedCpf]);
+      if (rows.length > 0) return rows[0];
+    }
+  }
+  if (matricula?.trim()) {
+    const rows = await db.select<EmployeeRow[]>(`${select}e.matricula = $2`, [
+      clientId,
+      matricula.trim(),
+    ]);
+    if (rows.length > 0) return rows[0];
+  }
+  if (nome?.trim()) {
+    const rows = await db.select<EmployeeRow[]>(`${select}lower(e.name) = lower($2)`, [
+      clientId,
+      nome.trim(),
+    ]);
+    if (rows.length > 0) return rows[0];
+  }
+  return null;
+}
+
+/**
+ * Flags rows that already have a saved shift for the same employee/date/
+ * local — purely informational (returns which *indices* of `rows` look
+ * like duplicates), since unlike timesheet imports a payment shift is
+ * additive: re-selecting a flagged row just adds another row, there's no
+ * overwrite/replace semantics here.
+ */
+export async function findDuplicatePaymentShifts(
+  rows: { employeeId: number; workDate: string; local: string }[],
+): Promise<Set<number>> {
+  const db = await getDb();
+  const duplicates = new Set<number>();
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const existing = await db.select<{ id: number }[]>(
+      "SELECT id FROM payment_shifts WHERE employee_id = $1 AND work_date = $2 AND local = $3",
+      [r.employeeId, r.workDate, r.local],
+    );
+    if (existing.length > 0) duplicates.add(i);
+  }
+  return duplicates;
+}
+
+export interface PaymentShiftInput {
+  employeeId: number;
+  templateId: number | null;
+  sourceFileId: number | null;
+  local: string;
+  workDate: string;
+  role: string;
+  schedule: string;
+  note: string | null;
+}
+
+/** Bulk-inserts shifts — every row always starts `pendente`; valor/pago happen in a later step. */
+export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void> {
+  const db = await getDb();
+  for (const r of rows) {
+    await db.execute(
+      `INSERT INTO payment_shifts
+         (employee_id, template_id, source_file_id, local, work_date, role, schedule, note, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pendente')`,
+      [r.employeeId, r.templateId, r.sourceFileId, r.local, r.workDate, r.role, r.schedule, r.note],
+    );
+  }
+}
+
+/** One row per (colaborador, competência) — the Pagamentos list. */
+export async function listPaymentShiftSummaries(): Promise<PaymentShiftSummaryRow[]> {
+  const db = await getDb();
+  return db.select<PaymentShiftSummaryRow[]>(`
+    SELECT
+      e.id AS employeeId, e.name AS employeeName,
+      cl.id AS clientId, cl.name AS clientName,
+      c.id AS companyId, c.name AS companyName,
+      strftime('%Y-%m', ps.work_date) AS competencia,
+      COUNT(*) AS total,
+      SUM(CASE WHEN ps.status = 'pendente' THEN 1 ELSE 0 END) AS pendente,
+      SUM(CASE WHEN ps.status = 'erro' THEN 1 ELSE 0 END) AS erro,
+      SUM(CASE WHEN ps.status = 'pago' THEN 1 ELSE 0 END) AS pago
+    FROM payment_shifts ps
+    JOIN employees e ON e.id = ps.employee_id
+    JOIN clients cl ON cl.id = e.client_id
+    JOIN companies c ON c.id = e.company_id
+    GROUP BY e.id, competencia
+    ORDER BY competencia DESC, e.name
+  `);
+}
+
+/** Every shift for one colaborador in one competência ("YYYY-MM") — the Pagamentos detail. */
+export async function listPaymentShiftsForEmployeeMonth(
+  employeeId: number,
+  competencia: string,
+): Promise<PaymentShiftRow[]> {
+  const db = await getDb();
+  return db.select<PaymentShiftRow[]>(
+    `SELECT ps.id, ps.employee_id AS employeeId, e.name AS employeeName,
+            ps.local, ps.work_date AS workDate, ps.role, ps.schedule, ps.note,
+            ps.status, ps.error_message AS errorMessage, ps.amount, ps.imported_at AS importedAt
+     FROM payment_shifts ps
+     JOIN employees e ON e.id = ps.employee_id
+     WHERE ps.employee_id = $1 AND strftime('%Y-%m', ps.work_date) = $2
+     ORDER BY ps.work_date, ps.id`,
+    [employeeId, competencia],
+  );
 }
 
 /**

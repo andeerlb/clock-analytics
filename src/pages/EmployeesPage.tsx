@@ -55,6 +55,7 @@ export default function EmployeesPage() {
                   <tr>
                     <th>Colaborador</th>
                     <th>CPF</th>
+                    <th>Matrícula</th>
                     <th>Cliente</th>
                     <th>Empresa</th>
                   </tr>
@@ -71,6 +72,7 @@ export default function EmployeesPage() {
                         </div>
                       </td>
                       <td className="mono">{formatCpf(e.cpf)}</td>
+                      <td className="mono">{e.matricula ?? "—"}</td>
                       <td>{e.clientName}</td>
                       <td>{e.companyName}</td>
                     </tr>

@@ -1,5 +1,6 @@
-use calamine::{open_workbook_auto, Reader};
-use serde::Serialize;
+use calamine::{open_workbook_auto, DataType, Reader};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
@@ -133,4 +134,144 @@ pub fn copy_sample(data_dir: &Path, source_path: &str) -> Result<String, String>
     let dest = templates_dir.join(format!("{}.{ext}", Uuid::new_v4()));
     fs::copy(source_path, &dest).map_err(|e| e.to_string())?;
     Ok(dest.to_string_lossy().to_string())
+}
+
+/// One payment template group's own slice of the config needed to read
+/// it — mirrors `PaymentTemplateGroup` on the TS side, minus the parts
+/// (id, header_label) that don't matter for actually reading rows.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupSpec {
+    /// Empty for csv — there's exactly one implicit group.
+    pub sheet_names: Vec<String>,
+    /// 1-indexed physical row holding the header; data starts right after.
+    pub header_row: u32,
+    /// (columnLetter, targetField) pairs — deliberately a tuple list, not a
+    /// map, since duplicate target fields across columns should never
+    /// happen (the wizard already prevents it) but a tuple list doesn't
+    /// need to care either way.
+    pub field_mappings: Vec<(String, String)>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppliedPaymentRow {
+    pub sheet_name: Option<String>,
+    /// 1-indexed physical row in the source file — for error messages.
+    pub row_number: u32,
+    /// targetField -> raw text value.
+    pub fields: HashMap<String, String>,
+}
+
+/// Spreadsheet-style column letter ("A", "Z", "AA") -> 0-indexed column
+/// number — the inverse of the frontend's `columnLetter` (src/lib/format.ts).
+fn column_index(letter: &str) -> Option<usize> {
+    let mut n: usize = 0;
+    for ch in letter.chars() {
+        if !ch.is_ascii_alphabetic() {
+            return None;
+        }
+        n = n * 26 + (ch.to_ascii_uppercase() as usize - 'A' as usize + 1);
+    }
+    n.checked_sub(1)
+}
+
+fn is_blank_row(fields: &HashMap<String, String>) -> bool {
+    fields.values().all(|v| v.trim().is_empty())
+}
+
+/// Reads every row of `path` according to `groups`' column mappings —
+/// the real, unbounded counterpart to `preview`. `header_row` is skipped;
+/// everything after it becomes one `AppliedPaymentRow`, with blank rows
+/// (every mapped field empty) dropped rather than turned into "colaborador
+/// não encontrado" noise in the preview.
+pub fn apply_template(
+    path: &str,
+    groups: &[GroupSpec],
+    delimiter: Option<&str>,
+) -> Result<Vec<AppliedPaymentRow>, String> {
+    if is_csv(path) {
+        let group = groups
+            .first()
+            .ok_or("nenhuma configuração de colunas definida")?;
+        let delim_byte = delimiter
+            .and_then(|d| d.as_bytes().first().copied())
+            .unwrap_or_else(|| detect_delimiter(path));
+        let mut reader = csv::ReaderBuilder::new()
+            .delimiter(delim_byte)
+            .has_headers(false)
+            .flexible(true)
+            .from_path(path)
+            .map_err(|e| e.to_string())?;
+
+        let mut out = Vec::new();
+        for (i, record) in reader.records().enumerate() {
+            let row_number = (i + 1) as u32;
+            if row_number <= group.header_row {
+                continue;
+            }
+            let record = record.map_err(|e| e.to_string())?;
+            let fields: HashMap<String, String> = group
+                .field_mappings
+                .iter()
+                .filter_map(|(letter, target_field)| {
+                    let index = column_index(letter)?;
+                    let value = record.get(index).unwrap_or("").trim().to_string();
+                    Some((target_field.clone(), value))
+                })
+                .collect();
+            if is_blank_row(&fields) {
+                continue;
+            }
+            out.push(AppliedPaymentRow { sheet_name: None, row_number, fields });
+        }
+        return Ok(out);
+    }
+
+    let mut workbook = open_workbook_auto(path).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for group in groups {
+        for sheet_name in &group.sheet_names {
+            let range = workbook
+                .worksheet_range(sheet_name)
+                .map_err(|e| e.to_string())?;
+            for (i, row) in range.rows().enumerate() {
+                let row_number = (i + 1) as u32;
+                if row_number <= group.header_row {
+                    continue;
+                }
+                let fields: HashMap<String, String> = group
+                    .field_mappings
+                    .iter()
+                    .filter_map(|(letter, target_field)| {
+                        let index = column_index(letter)?;
+                        let cell = row.get(index)?;
+                        // A native date cell's Display impl prints the raw
+                        // Excel serial number, not a usable date — convert
+                        // it properly for the one field that needs a real
+                        // date. Everything else (including a "data" column
+                        // that's actually text, e.g. an already-ISO string)
+                        // just uses the same to_string() preview() relies on.
+                        let value = if target_field == "data" {
+                            cell.as_datetime()
+                                .map(|dt| dt.format("%Y-%m-%d").to_string())
+                                .unwrap_or_else(|| cell.to_string())
+                        } else {
+                            cell.to_string()
+                        };
+                        Some((target_field.clone(), value.trim().to_string()))
+                    })
+                    .collect();
+                if is_blank_row(&fields) {
+                    continue;
+                }
+                out.push(AppliedPaymentRow {
+                    sheet_name: Some(sheet_name.clone()),
+                    row_number,
+                    fields,
+                });
+            }
+        }
+    }
+    Ok(out)
 }

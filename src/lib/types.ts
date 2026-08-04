@@ -255,6 +255,45 @@ export interface PaymentTemplateRow extends PaymentTemplateListRow {
   createdAt: string;
 }
 
+/**
+ * A payment shift's own lifecycle — always starts `pendente` on import.
+ * `valor` and the transition to `pago` (or `erro`) belong to a later
+ * "processar pagamento" step, not to import.
+ */
+export type PaymentShiftStatus = "pendente" | "erro" | "pago";
+
+/** One imported work shift row, joined with its employee/client/company for display. */
+export interface PaymentShiftRow {
+  id: number;
+  employeeId: number;
+  employeeName: string;
+  local: string;
+  workDate: string;
+  role: string;
+  schedule: string;
+  note: string | null;
+  status: PaymentShiftStatus;
+  errorMessage: string | null;
+  amount: number | null;
+  importedAt: string;
+}
+
+/** One row per (colaborador, competência) — the Pagamentos list. */
+export interface PaymentShiftSummaryRow {
+  employeeId: number;
+  employeeName: string;
+  clientId: number;
+  clientName: string;
+  companyId: number;
+  companyName: string;
+  /** "YYYY-MM" */
+  competencia: string;
+  total: number;
+  pendente: number;
+  erro: number;
+  pago: number;
+}
+
 /** An existing import for the same employee+company whose period overlaps a freshly parsed sheet. */
 export interface ConflictInfo {
   sheetIndex: number;
