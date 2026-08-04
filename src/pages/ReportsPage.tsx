@@ -1,5 +1,5 @@
 import { save } from "@tauri-apps/plugin-dialog";
-import { Archive, Building2, FolderOpen, Users } from "lucide-react";
+import { Archive, Building2, CheckCircle2, FolderOpen, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
@@ -87,6 +87,7 @@ export default function ReportsPage() {
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [generatedZipPath, setGeneratedZipPath] = useState<string | null>(null);
   const [viewerImport, setViewerImport] = useState<StoredImport | null>(null);
 
   useEffect(() => {
@@ -153,6 +154,7 @@ export default function ReportsPage() {
     if (entries.length === 0) return;
 
     setError(null);
+    setGeneratedZipPath(null);
     setBusy(true);
     try {
       const destPath = await save({
@@ -161,6 +163,7 @@ export default function ReportsPage() {
       });
       if (!destPath) return;
       await generateReportZip(entries, destPath);
+      setGeneratedZipPath(destPath);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -293,6 +296,29 @@ export default function ReportsPage() {
             {busy ? "Gerando..." : "Gerar zip"}
           </button>
         </div>
+
+        {generatedZipPath && (
+          <div
+            className="success-box"
+            style={{
+              marginTop: "1rem",
+              marginBottom: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "1rem",
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <CheckCircle2 size={16} />
+              Zip gerado com sucesso.
+            </span>
+            <button type="button" className="outline" onClick={() => handleReveal(generatedZipPath)}>
+              <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
+              Abrir no explorador de arquivos
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="card table-card">
@@ -323,26 +349,14 @@ export default function ReportsPage() {
                       <td>{imp.employeeName}</td>
                       <td>{formatPeriod(imp.periodStart, imp.periodEnd)}</td>
                       <td>
-                        <div style={{ display: "flex", gap: "0.4rem" }}>
-                          <button
-                            type="button"
-                            className="secondary"
-                            onClick={() => setViewerImport(imp)}
-                            title="Ver o PDF deste colaborador"
-                          >
-                            PDF
-                          </button>
-                          <button
-                            type="button"
-                            className="ghost"
-                            style={{ padding: "0.3rem" }}
-                            onClick={() => handleReveal(imp.originalPdfPath)}
-                            aria-label="Abrir no explorador de arquivos"
-                            title="Abrir no explorador de arquivos"
-                          >
-                            <FolderOpen size={16} />
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => setViewerImport(imp)}
+                          title="Ver o PDF deste colaborador"
+                        >
+                          PDF
+                        </button>
                       </td>
                     </tr>
                   ))}
