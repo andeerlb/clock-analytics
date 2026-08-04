@@ -14,7 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import Pagination from "../components/Pagination";
 import PdfViewerModal from "../components/PdfViewerModal";
 import { hashFiles, listProviders, parseImport, pickPdfFiles } from "../lib/api";
@@ -61,7 +61,6 @@ const PREVIEW_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 export default function ImportPage() {
-  const navigate = useNavigate();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [provider, setProvider] = useState("");
   const [clients, setClients] = useState<ClientRow[]>([]);
@@ -81,6 +80,7 @@ export default function ImportPage() {
   const [dragActive, setDragActive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [viewerFile, setViewerFile] = useState<ImportFileRow | null>(null);
 
   useEffect(() => {
@@ -142,6 +142,7 @@ export default function ImportPage() {
   function addPaths(newPaths: string[]) {
     setPaths((prev) => Array.from(new Set([...prev, ...newPaths])));
     cancelPreview();
+    setSuccessMessage(null);
   }
 
   function removePath(path: string) {
@@ -327,6 +328,7 @@ export default function ImportPage() {
     if (!selectedClient || !companyId) return;
     setBusy(true);
     setError(null);
+    setSuccessMessage(null);
     try {
       // The import history only gets an entry once the user actually
       // commits this batch — parsing alone (without clicking Salvar)
@@ -349,14 +351,13 @@ export default function ImportPage() {
         sourceFileIdByHash.set(result.fileHash, sourceFileId);
       }
 
-      let lastImportId: number | null = null;
       let savedCount = 0;
       const savedFileHashes = new Set<string>();
       for (let i = 0; i < sheets.length; i++) {
         if (!selectedSheets.has(i)) continue;
         const conflict = conflictBySheetIndex.get(i);
         const fileHash = sheetOwner[i].fileHash;
-        lastImportId = await saveParsedTimesheet(
+        await saveParsedTimesheet(
           sheets[i],
           selectedClient.id,
           Number(companyId),
@@ -374,7 +375,11 @@ export default function ImportPage() {
       }
       refreshRecentFiles();
       reset();
-      navigate(savedCount === 1 && lastImportId ? `/employee/${lastImportId}` : "/");
+      setSuccessMessage(
+        savedCount === 1
+          ? "1 colaborador importado com sucesso."
+          : `${savedCount} colaboradores importados com sucesso.`,
+      );
     } catch (e) {
       setError(String(e));
     } finally {
@@ -393,6 +398,7 @@ export default function ImportPage() {
       </p>
 
       {error && <div className="error-box">{error}</div>}
+      {successMessage && <div className="success-box">{successMessage}</div>}
 
       <div className="import-layout">
       <div className="import-main">
