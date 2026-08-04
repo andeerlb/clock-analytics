@@ -189,7 +189,11 @@ export async function saveParsedTimesheet(
   let maxPunches = 4;
   let totalWorkedMinutes = 0;
   let overtimeMinutes = 0;
+  // Falta (no valid punch pair — 0 or 1 punches) vs atraso (has a pair but
+  // still came up short) — two buckets of the same underlying per-day
+  // absence minutes, split by that day's own punch count.
   let absenceMinutes = 0;
+  let lateMinutes = 0;
   let regularMinutes = 0;
   let intervalMinutes = 0;
   for (const day of sheet.days) {
@@ -198,7 +202,11 @@ export async function saveParsedTimesheet(
     if (day.totalWorkedMinutes > OVERTIME_THRESHOLD_MINUTES) {
       overtimeMinutes += day.totalWorkedMinutes - OVERTIME_THRESHOLD_MINUTES;
     }
-    absenceMinutes += day.absenceMinutes;
+    if (day.punches.length < 2) {
+      absenceMinutes += day.absenceMinutes;
+    } else {
+      lateMinutes += day.absenceMinutes;
+    }
     regularMinutes += day.normalHoursMinutes;
     intervalMinutes += sumIntervalMinutes(day.punches);
   }
@@ -207,8 +215,8 @@ export async function saveParsedTimesheet(
     `INSERT INTO imports
        (provider, employee_id, period_start, period_end, original_pdf_path, import_file_id,
         source_file_id, max_punches, total_worked_minutes, overtime_minutes, absence_minutes,
-        regular_minutes, interval_minutes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        late_minutes, regular_minutes, interval_minutes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
     [
       sheet.provider,
       employeeId,
@@ -221,6 +229,7 @@ export async function saveParsedTimesheet(
       totalWorkedMinutes,
       overtimeMinutes,
       absenceMinutes,
+      lateMinutes,
       regularMinutes,
       intervalMinutes,
     ],
@@ -411,6 +420,7 @@ export async function listImports(): Promise<StoredImport[]> {
       i.total_worked_minutes AS totalWorkedMinutes,
       i.overtime_minutes AS overtimeMinutes,
       i.absence_minutes AS absenceMinutes,
+      i.late_minutes AS lateMinutes,
       i.regular_minutes AS regularMinutes,
       i.interval_minutes AS intervalMinutes,
       i.imported_at AS importedAt

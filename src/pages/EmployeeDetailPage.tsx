@@ -134,12 +134,15 @@ export default function EmployeeDetailPage() {
   // Read straight from the import — these are computed once at import time
   // (over the import's own fixed period) and stored, not recomputed here.
   const summary = useMemo(() => {
-    if (!importInfo) return { totalWorkedMinutes: 0, overtimeMinutes: 0, absenceMinutes: 0, balanceMinutes: 0 };
+    if (!importInfo) {
+      return { totalWorkedMinutes: 0, overtimeMinutes: 0, absenceMinutes: 0, lateMinutes: 0, balanceMinutes: 0 };
+    }
     return {
       totalWorkedMinutes: importInfo.totalWorkedMinutes,
       overtimeMinutes: importInfo.overtimeMinutes,
       absenceMinutes: importInfo.absenceMinutes,
-      balanceMinutes: importInfo.overtimeMinutes - importInfo.absenceMinutes,
+      lateMinutes: importInfo.lateMinutes,
+      balanceMinutes: importInfo.overtimeMinutes - importInfo.absenceMinutes - importInfo.lateMinutes,
     };
   }, [importInfo]);
   // Always includes every day from the period by default — this only
@@ -186,43 +189,26 @@ export default function EmployeeDetailPage() {
         </div>
       </div>
 
-      <div className="summary-row">
-        <div className="summary-tile">
-          <div className="label">Total Trabalhado</div>
-          <div className="value">{formatHoursMinutes(summary.totalWorkedMinutes)}</div>
-        </div>
-        <div className="summary-tile">
-          <div className="label">Horas Extras</div>
-          <div className="value" style={{ color: "var(--success)" }}>
-            {formatHoursMinutes(summary.overtimeMinutes)}
-          </div>
-        </div>
-        <div className="summary-tile">
-          <div className="label">Faltas/Atrasos</div>
-          <div className="value" style={{ color: "var(--danger)" }}>
-            {formatHoursMinutes(summary.absenceMinutes)}
-          </div>
-        </div>
-        <div className="summary-tile">
-          <div className="label">Saldo do Banco</div>
-          <div
-            className="value"
-            style={{
-              color: summary.balanceMinutes >= 0 ? "var(--accent)" : "var(--danger)",
-              display: "flex",
-              alignItems: "center",
-              gap: "0.3rem",
-            }}
-          >
-            {summary.balanceMinutes >= 0 ? "+" : ""}
-            {formatHoursMinutes(summary.balanceMinutes)}
-            {summary.balanceMinutes >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
-          </div>
-        </div>
-      </div>
-
-      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", marginBottom: "0.6rem", flexWrap: "wrap", gap: "0.8rem" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.8rem" }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 220px",
+          gridTemplateRows: "auto 1fr",
+          columnGap: "1rem",
+        }}
+      >
+        <div
+          style={{
+            gridColumn: "1",
+            gridRow: "1",
+            display: "flex",
+            justifyContent: "flex-end",
+            alignItems: "center",
+            marginBottom: "0.6rem",
+            flexWrap: "wrap",
+            gap: "0.8rem",
+          }}
+        >
           <span className="muted" style={{ fontSize: "0.85rem" }}>
             Gerado em: <strong style={{ color: "var(--text)" }}>{formatDateTime(importInfo.importedAt)}</strong>
           </span>
@@ -242,92 +228,144 @@ export default function EmployeeDetailPage() {
               Ver arquivo do colaborador
             </button>
           )}
+          <MultiSelectDropdown
+            options={DAY_STATUS_OPTIONS}
+            selected={selectedStatuses}
+            onToggle={(id) =>
+              setSelectedStatuses((prev) => {
+                const next = new Set(prev);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+              })
+            }
+            onSelectAll={() => setSelectedStatuses(new Set(DAY_STATUS_OPTIONS.map((o) => o.id)))}
+            onSelectNone={() => setSelectedStatuses(new Set())}
+            allLabel="Todos os dias"
+            noneLabel="Nenhum filtro selecionado"
+            countLabel={(n, total) => `${n} de ${total} filtros`}
+          />
         </div>
-        <MultiSelectDropdown
-          options={DAY_STATUS_OPTIONS}
-          selected={selectedStatuses}
-          onToggle={(id) =>
-            setSelectedStatuses((prev) => {
-              const next = new Set(prev);
-              if (next.has(id)) next.delete(id);
-              else next.add(id);
-              return next;
-            })
-          }
-          onSelectAll={() => setSelectedStatuses(new Set(DAY_STATUS_OPTIONS.map((o) => o.id)))}
-          onSelectNone={() => setSelectedStatuses(new Set())}
-          allLabel="Todos os dias"
-          noneLabel="Nenhum filtro selecionado"
-          countLabel={(n, total) => `${n} de ${total} filtros`}
-        />
-      </div>
 
-      <div className="card table-card card-flush">
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Data</th>
-                {punchColumnLabels.map((label) => (
-                  <th key={label} style={{ textAlign: "center" }}>
-                    {label}
-                  </th>
-                ))}
-                <th style={{ textAlign: "right" }}>Total Trab.</th>
-                <th style={{ textAlign: "right" }}>HR</th>
-                <th style={{ textAlign: "right" }}>HF</th>
-                <th style={{ textAlign: "right" }}>HI</th>
-                <th>Observação</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleDays.map((day) => {
-                const weekend = isWeekend(day.weekday);
-                const incomplete = day.punches.length % 2 !== 0;
-                const rowClass = [weekend ? "row-weekend" : "", incomplete ? "row-incomplete" : ""]
-                  .filter(Boolean)
-                  .join(" ");
-                const synthetic = isSynthetic(day);
-
-                return (
-                  <tr key={day.date} className={rowClass || undefined}>
-                    <td>
-                      {formatDateCompact(day.date)} <span className="weekday muted">· {day.weekday}</span>
-                    </td>
-                    {punchColumnLabels.map((_, i) => (
-                      <td key={i} style={{ textAlign: "center" }}>
-                        {day.punches[i] ?? ""}
-                      </td>
+        <div style={{ gridColumn: "1", gridRow: "2", minWidth: 0 }}>
+          <div className="card table-card card-flush">
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Data</th>
+                    {punchColumnLabels.map((label) => (
+                      <th key={label} style={{ textAlign: "center" }}>
+                        {label}
+                      </th>
                     ))}
-                    <td
-                      style={{
-                        textAlign: "right",
-                        fontWeight: 600,
-                        color: synthetic ? "var(--text-muted)" : "var(--accent)",
-                      }}
-                    >
-                      {synthetic ? "" : formatMinutes(day.totalWorkedMinutes)}
-                    </td>
-                    <td style={{ textAlign: "right" }}>
-                      {synthetic ? "" : formatMinutes(day.normalHoursMinutes)}
-                    </td>
-                    <td style={{ textAlign: "right" }}>
-                      {synthetic ? "" : formatMinutes(day.absenceMinutes)}
-                    </td>
-                    <td style={{ textAlign: "right" }}>
-                      {synthetic ? "" : formatMinutes(sumIntervalMinutes(day.punches))}
-                    </td>
-                    <td>{day.observation ?? ""}</td>
+                    <th style={{ textAlign: "right" }}>Total Trab.</th>
+                    <th style={{ textAlign: "right" }}>HR</th>
+                    <th style={{ textAlign: "right" }}>HF</th>
+                    <th style={{ textAlign: "right" }}>HI</th>
+                    <th>Observação</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                </thead>
+                <tbody>
+                  {visibleDays.map((day) => {
+                    const weekend = isWeekend(day.weekday);
+                    const incomplete = day.punches.length % 2 !== 0;
+                    const rowClass = [weekend ? "row-weekend" : "", incomplete ? "row-incomplete" : ""]
+                      .filter(Boolean)
+                      .join(" ");
+                    const synthetic = isSynthetic(day);
+
+                    return (
+                      <tr key={day.date} className={rowClass || undefined}>
+                        <td>
+                          {formatDateCompact(day.date)} <span className="weekday muted">· {day.weekday}</span>
+                        </td>
+                        {punchColumnLabels.map((_, i) => (
+                          <td key={i} style={{ textAlign: "center" }}>
+                            {day.punches[i] ?? ""}
+                          </td>
+                        ))}
+                        <td
+                          style={{
+                            textAlign: "right",
+                            fontWeight: 600,
+                            color: synthetic ? "var(--text-muted)" : "var(--accent)",
+                          }}
+                        >
+                          {synthetic ? "" : formatMinutes(day.totalWorkedMinutes)}
+                        </td>
+                        <td style={{ textAlign: "right" }}>
+                          {synthetic ? "" : formatMinutes(day.normalHoursMinutes)}
+                        </td>
+                        <td style={{ textAlign: "right" }}>
+                          {synthetic ? "" : formatMinutes(day.absenceMinutes)}
+                        </td>
+                        <td style={{ textAlign: "right" }}>
+                          {synthetic ? "" : formatMinutes(sumIntervalMinutes(day.punches))}
+                        </td>
+                        <td>{day.observation ?? ""}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <p className="muted" style={{ fontSize: "0.78rem", marginTop: "0.6rem" }}>
+            Total Trab.: Total Trabalhado · HR: Horas Regulares · HF: Horas Faltas · HI: Horas Intervalo
+          </p>
+        </div>
+
+        <div
+          style={{
+            gridColumn: "2",
+            gridRow: "2",
+            alignSelf: "start",
+            display: "flex",
+            flexDirection: "column",
+            gap: "1rem",
+          }}
+        >
+          <div className="summary-tile" style={{ flex: "0 0 auto" }}>
+            <div className="label">Total Trabalhado</div>
+            <div className="value">{formatHoursMinutes(summary.totalWorkedMinutes)}</div>
+          </div>
+          <div className="summary-tile" style={{ flex: "0 0 auto" }}>
+            <div className="label">Horas Extras</div>
+            <div className="value" style={{ color: "var(--success)" }}>
+              {formatHoursMinutes(summary.overtimeMinutes)}
+            </div>
+          </div>
+          <div className="summary-tile" style={{ flex: "0 0 auto" }}>
+            <div className="label">Faltas</div>
+            <div className="value" style={{ color: "var(--danger)" }}>
+              {formatHoursMinutes(summary.absenceMinutes)}
+            </div>
+          </div>
+          <div className="summary-tile" style={{ flex: "0 0 auto" }}>
+            <div className="label">Atrasos</div>
+            <div className="value" style={{ color: "var(--danger)" }}>
+              {formatHoursMinutes(summary.lateMinutes)}
+            </div>
+          </div>
+          <div className="summary-tile" style={{ flex: "0 0 auto" }}>
+            <div className="label">Saldo do Banco</div>
+            <div
+              className="value"
+              style={{
+                color: summary.balanceMinutes >= 0 ? "var(--accent)" : "var(--danger)",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.3rem",
+              }}
+            >
+              {summary.balanceMinutes >= 0 ? "+" : ""}
+              {formatHoursMinutes(summary.balanceMinutes)}
+              {summary.balanceMinutes >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+            </div>
+          </div>
         </div>
       </div>
-      <p className="muted" style={{ fontSize: "0.78rem", marginTop: "0.6rem" }}>
-        Total Trab.: Total Trabalhado · HR: Horas Regulares · HF: Horas Faltas · HI: Horas Intervalo
-      </p>
     </div>
   );
 }

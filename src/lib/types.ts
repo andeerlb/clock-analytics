@@ -193,10 +193,17 @@ export interface StoredImport {
    * the period itself never changes once saved. `overtimeMinutes` is the
    * sum of the excess above the (non-configurable) overtime threshold on
    * days that went over it; `regularMinutes` sums each day's normal hours.
+   *
+   * `absenceMinutes` and `lateMinutes` split what used to be one bucket:
+   * a day counts toward `absenceMinutes` (falta) when it has no valid
+   * punch pair (0 or 1 punches — a lone punch isn't a pair), and toward
+   * `lateMinutes` (atraso) when it has at least one pair but still came
+   * up short on hours. Together they equal the old single total.
    */
   totalWorkedMinutes: number;
   overtimeMinutes: number;
   absenceMinutes: number;
+  lateMinutes: number;
   regularMinutes: number;
   intervalMinutes: number;
   importedAt: string;

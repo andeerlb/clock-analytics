@@ -58,5 +58,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0009_import_period_aggregates.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 10,
+            description: "split absence minutes into falta (no valid pair) and atraso (short despite a pair)",
+            sql: include_str!("../migrations/0010_import_late_minutes.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
