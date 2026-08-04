@@ -2,7 +2,7 @@ import { FileText, ListFilter, TrendingDown, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { openOriginalPdf } from "../lib/api";
-import { formatMinutes, isWeekend, summarizePeriod } from "../lib/analysis";
+import { formatMinutes, isWeekend, summarizePeriod, sumIntervalMinutes } from "../lib/analysis";
 import { listImports, listStoredDayRecords } from "../lib/db";
 import { formatDate, formatDateCompact } from "../lib/format";
 import type { StoredDayRecord, StoredImport } from "../lib/types";
@@ -18,7 +18,7 @@ function isSynthetic(day: Pick<StoredDayRecord, "dayRecordId">): boolean {
 
 const WEEKDAY_ABBR = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 
-type DayStatusId = "no-punch" | "pending" | "complete" | "overtime" | "absence" | "weekend";
+type DayStatusId = "no-punch" | "pending" | "complete" | "overtime" | "absence" | "weekend" | "interval";
 
 /**
  * Categories a day can fall into, used to drive the "quais dias exibir"
@@ -44,6 +44,7 @@ const DAY_STATUS_OPTIONS: { id: DayStatusId; label: string; matches: (day: Store
   { id: "overtime", label: "Horas extras", matches: (d) => d.totalWorkedMinutes > OVERTIME_THRESHOLD_MINUTES },
   { id: "absence", label: "Horas faltas", matches: (d) => d.absenceMinutes > 0 },
   { id: "weekend", label: "Finais de semana", matches: (d) => isWeekend(d.weekday) },
+  { id: "interval", label: "Com intervalo", matches: (d) => sumIntervalMinutes(d.punches) > 0 },
 ];
 
 function DayStatusFilter({
@@ -354,6 +355,7 @@ export default function EmployeeDetailPage() {
                 <th style={{ textAlign: "right" }}>Total Trab.</th>
                 <th style={{ textAlign: "right" }}>HR</th>
                 <th style={{ textAlign: "right" }}>HF</th>
+                <th style={{ textAlign: "right" }}>HI</th>
                 <th>Observação</th>
               </tr>
             </thead>
@@ -391,6 +393,9 @@ export default function EmployeeDetailPage() {
                     <td style={{ textAlign: "right" }}>
                       {synthetic ? "" : formatMinutes(day.absenceMinutes)}
                     </td>
+                    <td style={{ textAlign: "right" }}>
+                      {synthetic ? "" : formatMinutes(sumIntervalMinutes(day.punches))}
+                    </td>
                     <td>{day.observation ?? ""}</td>
                   </tr>
                 );
@@ -400,7 +405,7 @@ export default function EmployeeDetailPage() {
         </div>
       </div>
       <p className="muted" style={{ fontSize: "0.78rem", marginTop: "0.6rem" }}>
-        Total Trab.: Total Trabalhado · HR: Horas Regulares · HF: Horas Faltas
+        Total Trab.: Total Trabalhado · HR: Horas Regulares · HF: Horas Faltas · HI: Horas Intervalo
       </p>
     </div>
   );

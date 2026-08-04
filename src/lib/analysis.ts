@@ -19,6 +19,22 @@ function hhmmToMinutes(value: string): number | null {
   return h * 60 + m;
 }
 
+/**
+ * Sum of every break in the day: the gap between each "saída" and the
+ * following "entrada" (punches[1]→punches[2], punches[3]→punches[4], ...).
+ * A day with just one punch pair (or a trailing unmatched punch) has no
+ * closed break to measure, so it contributes nothing.
+ */
+export function sumIntervalMinutes(punches: string[]): number {
+  let total = 0;
+  for (let i = 1; i + 1 < punches.length; i += 2) {
+    const out = hhmmToMinutes(punches[i]);
+    const in_ = hhmmToMinutes(punches[i + 1]);
+    if (out !== null && in_ !== null) total += in_ - out;
+  }
+  return total;
+}
+
 export function analyzeDay(
   day: Pick<DayRecord | StoredDayRecord, "punches" | "totalWorkedMinutes">,
   thresholdMinutes: number,
