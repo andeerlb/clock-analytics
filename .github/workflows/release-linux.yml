@@ -9,6 +9,10 @@ on:
 jobs:
   release-linux:
     runs-on: ubuntu-22.04
+    # tauri-action needs write access to create/update the GitHub Release —
+    # some repos/orgs default GITHUB_TOKEN to read-only, which would 403.
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4

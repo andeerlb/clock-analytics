@@ -96,6 +96,12 @@ h6 {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+  /* Pinned to the viewport so it never scrolls away with tall page
+     content (e.g. a long import history) — only .app-content scrolls. */
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
 }
 
 .app-brand {
