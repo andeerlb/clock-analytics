@@ -53,6 +53,40 @@ export async function pickPdfFiles(): Promise<string[]> {
   return Array.isArray(selection) ? selection : [selection];
 }
 
+/** Opens the native file picker, restricted to payroll spreadsheet formats, single-select. */
+export async function pickPaymentFile(): Promise<string | null> {
+  const selection = await open({
+    multiple: false,
+    filters: [{ name: "Planilha de pagamentos", extensions: ["csv", "xlsx", "xls", "ods"] }],
+  });
+  return typeof selection === "string" ? selection : null;
+}
+
+export interface SpreadsheetPreview {
+  rows: string[][];
+  delimiter: string | null;
+}
+
+/** Sheet names in an xlsx/xls/ods workbook, for the payment template wizard's sheet tabs — empty for csv. */
+export function listSpreadsheetSheets(path: string): Promise<string[]> {
+  return invoke("list_spreadsheet_sheets", { path });
+}
+
+/** Raw preview rows (no header-row assumption) for the payment template wizard's Excel-like grid. */
+export function previewSpreadsheet(
+  path: string,
+  sheet: string | null,
+  delimiter: string | null,
+  maxRows: number,
+): Promise<SpreadsheetPreview> {
+  return invoke("preview_spreadsheet", { path, sheet, delimiter, maxRows });
+}
+
+/** Copies a payment template's sample file into the app's own data folder. */
+export function copyPaymentSample(sourcePath: string): Promise<string> {
+  return invoke("copy_payment_sample", { sourcePath });
+}
+
 /** Builds the Relatórios export zip at `destZipPath` from the given entries. */
 export function generateReportZip(entries: ReportZipEntry[], destZipPath: string): Promise<void> {
   return invoke("generate_report_zip", { entries, destZipPath });

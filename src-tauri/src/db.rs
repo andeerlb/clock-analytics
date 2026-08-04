@@ -76,5 +76,17 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0012_source_file_import_type.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 13,
+            description: "define reusable payment import templates (column mapping only, not execution)",
+            sql: include_str!("../migrations/0013_payment_templates.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 14,
+            description: "let a payment template target a set of sheets instead of a single fixed one",
+            sql: include_str!("../migrations/0014_payment_template_multi_sheet.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -1,15 +1,39 @@
-import { AlertCircle, AlertTriangle, ArrowLeft, CheckCircle2, FileText, Search, Wrench } from "lucide-react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  ArrowLeft,
+  CheckCircle2,
+  FileText,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Pagination from "../components/Pagination";
-import { listImportFiles } from "../lib/db";
+import PaymentTemplateWizard from "../components/PaymentTemplateWizard";
+import { deletePaths } from "../lib/api";
+import {
+  deletePaymentTemplate,
+  getPaymentTemplate,
+  listImportFiles,
+  listPaymentTemplates,
+} from "../lib/db";
 import { formatDateTime } from "../lib/format";
-import type { ImportFileRow, ImportStatus } from "../lib/types";
+import type { ImportFileRow, ImportStatus, PaymentTemplateListRow, PaymentTemplateRow } from "../lib/types";
 
 const STATUS_BADGE: Record<ImportStatus, { className: string; label: string; icon: typeof CheckCircle2 }> = {
   success: { className: "badge ok", label: "Sucesso", icon: CheckCircle2 },
   warning: { className: "badge overwrite", label: "Com alertas", icon: AlertTriangle },
   error: { className: "badge file-error", label: "Falha", icon: AlertCircle },
+};
+
+const FILE_KIND_LABELS: Record<string, string> = {
+  csv: "CSV",
+  xlsx: "Excel",
+  xls: "Excel",
+  ods: "ODS",
 };
 
 const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
@@ -20,9 +44,41 @@ export default function ImportPaymentsPage() {
   const [historyPage, setHistoryPage] = useState(0);
   const [historyPageSize, setHistoryPageSize] = useState(HISTORY_PAGE_SIZE_OPTIONS[0]);
 
+  const [templates, setTemplates] = useState<PaymentTemplateListRow[]>([]);
+  const [wizardTarget, setWizardTarget] = useState<PaymentTemplateRow | "new" | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
     listImportFiles("payment").then(setRecentFiles);
+    refreshTemplates();
   }, []);
+
+  function refreshTemplates() {
+    listPaymentTemplates().then(setTemplates);
+  }
+
+  async function handleEditTemplate(id: number) {
+    setError(null);
+    try {
+      const template = await getPaymentTemplate(id);
+      setWizardTarget(template);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleDeleteTemplate(id: number) {
+    setError(null);
+    try {
+      const samplePath = await deletePaymentTemplate(id);
+      if (samplePath) await deletePaths([samplePath]).catch(() => {});
+      setConfirmDeleteId(null);
+      refreshTemplates();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   const filteredRecentFiles = useMemo(() => {
     const query = historySearch.trim().toLowerCase();
@@ -52,20 +108,98 @@ export default function ImportPaymentsPage() {
       </Link>
       <div className="page-header">
         <h2>Importar pagamentos</h2>
+        <button type="button" onClick={() => setWizardTarget("new")}>
+          <Plus size={15} style={{ marginRight: "0.4rem" }} />
+          Novo template
+        </button>
       </div>
       <p className="page-subtitle">
         Importe pagamentos a partir de arquivos CSV, Excel ou ODS fornecidos pelo seu provedor.
       </p>
 
+      {error && <div className="error-box">{error}</div>}
+
       <div className="import-layout">
         <div className="import-main">
-          <div className="card" style={{ textAlign: "center", padding: "3rem 1.5rem" }}>
-            <Wrench size={28} style={{ color: "var(--text-muted)", marginBottom: "0.8rem" }} />
-            <h3 style={{ margin: "0 0 0.4rem" }}>Em construção</h3>
-            <p className="muted" style={{ margin: 0 }}>
-              Em breve você poderá importar pagamentos por aqui. Estamos definindo como esse fluxo
-              vai funcionar.
-            </p>
+          <div className="card table-card">
+            {templates.length === 0 ? (
+              <p className="muted" style={{ padding: "1.4rem" }}>
+                Nenhum template cadastrado ainda. Crie um para mapear as colunas de um arquivo de
+                pagamentos antes de importar.
+              </p>
+            ) : (
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Nome</th>
+                      <th>Cliente</th>
+                      <th>Formato</th>
+                      <th>Atualizado em</th>
+                      <th>Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {templates.map((t) => (
+                      <tr key={t.id}>
+                        <td>{t.name}</td>
+                        <td>{t.clientName ?? "Global"}</td>
+                        <td>{FILE_KIND_LABELS[t.fileKind] ?? t.fileKind}</td>
+                        <td>{formatDateTime(t.updatedAt)}</td>
+                        <td>
+                          {confirmDeleteId === t.id ? (
+                            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                              <span style={{ color: "var(--danger)", fontSize: "0.82rem" }}>
+                                Confirmar exclusão?
+                              </span>
+                              <button
+                                type="button"
+                                className="ghost"
+                                style={{ padding: "0.3rem 0.6rem", fontSize: "0.8rem", color: "var(--danger)" }}
+                                onClick={() => handleDeleteTemplate(t.id)}
+                              >
+                                Excluir
+                              </button>
+                              <button
+                                type="button"
+                                className="ghost"
+                                style={{ padding: "0.3rem 0.6rem", fontSize: "0.8rem" }}
+                                onClick={() => setConfirmDeleteId(null)}
+                              >
+                                Cancelar
+                              </button>
+                            </span>
+                          ) : (
+                            <span style={{ display: "flex", gap: "0.3rem" }}>
+                              <button
+                                type="button"
+                                className="ghost"
+                                style={{ padding: "0.3rem" }}
+                                onClick={() => handleEditTemplate(t.id)}
+                                aria-label="Editar"
+                                title="Editar"
+                              >
+                                <Pencil size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                className="ghost"
+                                style={{ padding: "0.3rem" }}
+                                onClick={() => setConfirmDeleteId(t.id)}
+                                aria-label="Excluir"
+                                title="Excluir"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
 
@@ -158,6 +292,15 @@ export default function ImportPaymentsPage() {
           </div>
         </div>
       </div>
+
+      <PaymentTemplateWizard
+        target={wizardTarget}
+        onClose={() => setWizardTarget(null)}
+        onSaved={() => {
+          setWizardTarget(null);
+          refreshTemplates();
+        }}
+      />
     </div>
   );
 }

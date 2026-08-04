@@ -862,3 +862,201 @@ tr.row-error {
 tr.row-error:hover {
   background: var(--error-container-soft);
 }
+
+/* Payment template wizard */
+
+.wizard-steps {
+  display: flex;
+  gap: 1.2rem;
+  padding: 0.9rem 1.3rem;
+  background: var(--card-bg);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.wizard-steps .wizard-step.active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.wizard-steps .wizard-step.done {
+  color: var(--accent);
+}
+
+.sheet-tabs {
+  display: flex;
+  gap: 0.3rem;
+  overflow-x: auto;
+  /* Setting only overflow-x implicitly computes overflow-y to auto too
+     (CSS overflow spec) — without pinning it to hidden, a phantom
+     vertical scrollbar/gutter shows up even when only the row itself
+     overflows horizontally. No scrollbar-gutter here on purpose: unlike
+     the grid, this bar should only take up space when it's actually
+     scrollable, not reserve it up front. */
+  overflow-y: hidden;
+}
+
+.sheet-tabs::-webkit-scrollbar {
+  height: 10px;
+}
+
+.sheet-tabs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sheet-tabs::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+}
+
+.sheet-tabs::-webkit-scrollbar-thumb:hover {
+  background: var(--outline);
+}
+
+.sheet-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: var(--surface-variant);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  position: relative;
+  top: 1px;
+}
+
+.sheet-tab.active {
+  background: var(--card-bg);
+  color: var(--text);
+  font-weight: 600;
+  z-index: 1;
+}
+
+.sheet-tab.excluded {
+  color: var(--text-muted);
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+.sheet-tab-check {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.sheet-tab:not(.excluded) .sheet-tab-check {
+  color: var(--accent);
+}
+
+.spreadsheet-grid-scroll {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 22rem;
+  /* Without this, the webview's overlay-style scrollbars float on top of
+     the last row/column instead of reserving their own track — this
+     forces a fixed, non-overlapping gutter. Deliberately not
+     "both-edges": that reserves a matching empty strip on the opposite
+     side too (for symmetry), which is exactly the phantom left-hand gap
+     this was creating. */
+  scrollbar-gutter: stable;
+}
+
+.spreadsheet-grid-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.spreadsheet-grid-scroll::-webkit-scrollbar-track {
+  background: var(--surface-variant);
+}
+
+.spreadsheet-grid-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+}
+
+.spreadsheet-grid-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--outline);
+}
+
+.spreadsheet-grid-scroll::-webkit-scrollbar-corner {
+  background: var(--surface-variant);
+}
+
+.spreadsheet-grid-scroll.attached-to-tabs {
+  border-top: none;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.spreadsheet-grid {
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  width: 100%;
+}
+
+.spreadsheet-grid th,
+.spreadsheet-grid td {
+  border: 1px solid var(--border);
+  padding: 0.35rem 0.6rem;
+  white-space: nowrap;
+}
+
+.spreadsheet-grid thead th {
+  background: var(--surface-variant);
+  color: var(--text-muted);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.spreadsheet-grid td.row-gutter,
+.spreadsheet-grid th.corner {
+  background: var(--surface-variant);
+  color: var(--text-muted);
+  text-align: center;
+  position: sticky;
+  left: 0;
+}
+
+.spreadsheet-grid tbody tr.header-row-selected td {
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.spreadsheet-grid tbody tr:not(.header-row-selected):hover td {
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.spreadsheet-grid th.mapping-header {
+  background: var(--card-bg);
+  position: static;
+}
+
+.spreadsheet-grid th.mapping-header .header-label {
+  display: block;
+  margin-bottom: 0.3rem;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.spreadsheet-grid select {
+  font-size: 0.78rem;
+  padding: 0.2em 0.4em;
+  width: 100%;
+}
+
+.spreadsheet-grid th.mapping-header.is-mapped {
+  background: var(--accent-soft);
+}

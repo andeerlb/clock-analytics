@@ -103,6 +103,8 @@ export interface StorageUsage {
   dbBytes: number;
   importsBytes: number;
   importsFileCount: number;
+  paymentTemplatesBytes: number;
+  paymentTemplatesFileCount: number;
 }
 
 /** Whether a single Poppler CLI tool (pdfinfo/pdftotext/pdfseparate/pdfunite) was found. */
@@ -159,6 +161,73 @@ export interface ImportFileRow {
   importedAt: string;
   /** Set once at least one sheet from this file was actually saved. */
   savedAt: string | null;
+}
+
+export type PaymentFileKind = "csv" | "xlsx" | "xls" | "ods";
+
+/**
+ * A known field a payment template's column can map to. Which one acts as
+ * "the" employee identifier (cpf vs matricula) isn't a separate setting —
+ * it's implicit in whichever field a given template happens to map a
+ * column to.
+ */
+export type PaymentTargetField =
+  | "cpf"
+  | "matricula"
+  | "nome"
+  | "competencia"
+  | "data_pagamento"
+  | "rubrica"
+  | "valor";
+
+export const PAYMENT_TARGET_FIELDS: PaymentTargetField[] = [
+  "cpf",
+  "matricula",
+  "nome",
+  "competencia",
+  "data_pagamento",
+  "rubrica",
+  "valor",
+];
+
+export const PAYMENT_TARGET_FIELD_LABELS: Record<PaymentTargetField, string> = {
+  cpf: "CPF",
+  matricula: "Matrícula",
+  nome: "Nome",
+  competencia: "Competência",
+  data_pagamento: "Data de pagamento",
+  rubrica: "Rubrica/Verba",
+  valor: "Valor",
+};
+
+export interface PaymentTemplateFieldMapping {
+  columnLetter: string;
+  targetField: PaymentTargetField;
+  headerLabel: string | null;
+}
+
+/** One row per saved payment import template — the column-mapping list view. */
+export interface PaymentTemplateListRow {
+  id: number;
+  name: string;
+  clientId: number | null;
+  clientName: string | null;
+  fileKind: PaymentFileKind;
+  updatedAt: string;
+}
+
+/** Full shape of a payment import template, including its column mappings. */
+export interface PaymentTemplateRow extends PaymentTemplateListRow {
+  /** Empty for csv (no concept of sheets). For xlsx/xls/ods, every sheet the template reads — everything else in the workbook is skipped. */
+  sheetNames: string[];
+  headerRow: number;
+  delimiter: string | null;
+  decimalSeparator: string;
+  dateFormat: string;
+  sampleFilePath: string;
+  sampleFileName: string;
+  fieldMappings: PaymentTemplateFieldMapping[];
+  createdAt: string;
 }
 
 /** An existing import for the same employee+company whose period overlaps a freshly parsed sheet. */

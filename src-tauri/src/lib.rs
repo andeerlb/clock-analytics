@@ -7,6 +7,7 @@ mod pdf_extract;
 mod poppler;
 mod report_zip;
 mod settings;
+mod spreadsheet;
 mod storage;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -28,6 +29,9 @@ pub fn run() {
             commands::open_app_data_dir,
             commands::read_pdf_bytes,
             commands::copy_pdf_to,
+            commands::list_spreadsheet_sheets,
+            commands::preview_spreadsheet,
+            commands::copy_payment_sample,
             commands::generate_report_zip,
             commands::get_storage_usage,
             commands::delete_paths,

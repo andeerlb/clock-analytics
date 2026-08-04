@@ -6,14 +6,17 @@ use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
 /// Disk usage of everything the app itself created — the DB (plus its WAL/
-/// SHM sidecars, which hold real data until checkpointed) and the copied
-/// PDFs under `imports/`. Powers the storage indicator in Configurações.
+/// SHM sidecars, which hold real data until checkpointed), the copied PDFs
+/// under `imports/`, and the copied payment-template sample files under
+/// `payment_templates/`. Powers the storage indicator in Configurações.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageUsage {
     pub db_bytes: u64,
     pub imports_bytes: u64,
     pub imports_file_count: u64,
+    pub payment_templates_bytes: u64,
+    pub payment_templates_file_count: u64,
 }
 
 pub fn usage(data_dir: &Path) -> StorageUsage {
@@ -26,8 +29,16 @@ pub fn usage(data_dir: &Path) -> StorageUsage {
     }
 
     let (imports_bytes, imports_file_count) = dir_size(&data_dir.join("imports"));
+    let (payment_templates_bytes, payment_templates_file_count) =
+        dir_size(&data_dir.join("payment_templates"));
 
-    StorageUsage { db_bytes, imports_bytes, imports_file_count }
+    StorageUsage {
+        db_bytes,
+        imports_bytes,
+        imports_file_count,
+        payment_templates_bytes,
+        payment_templates_file_count,
+    }
 }
 
 fn dir_size(dir: &Path) -> (u64, u64) {
@@ -89,8 +100,9 @@ pub fn clear_imports_dir(data_dir: &Path) -> Result<(), String> {
 }
 
 /// Zips up the database (with its WAL/SHM sidecars, if present) and the
-/// whole `imports/` tree — an escape hatch to save a copy before "Limpar
-/// tudo" wipes everything, since this app keeps the only copy of its data.
+/// whole `imports/` and `payment_templates/` trees — an escape hatch to
+/// save a copy before "Limpar tudo" wipes everything, since this app keeps
+/// the only copy of its data.
 pub fn backup(data_dir: &Path, dest_zip_path: &str) -> Result<(), String> {
     let file = fs::File::create(dest_zip_path).map_err(|e| e.to_string())?;
     let mut zip = ZipWriter::new(file);
@@ -108,7 +120,18 @@ pub fn backup(data_dir: &Path, dest_zip_path: &str) -> Result<(), String> {
 
     let imports_dir = data_dir.join("imports");
     if imports_dir.exists() {
-        add_dir_to_zip(&mut zip, &imports_dir, &imports_dir, options)?;
+        add_dir_to_zip(&mut zip, &imports_dir, &imports_dir, "imports", options)?;
+    }
+
+    let payment_templates_dir = data_dir.join("payment_templates");
+    if payment_templates_dir.exists() {
+        add_dir_to_zip(
+            &mut zip,
+            &payment_templates_dir,
+            &payment_templates_dir,
+            "payment_templates",
+            options,
+        )?;
     }
 
     zip.finish().map_err(|e| e.to_string())?;
@@ -119,16 +142,17 @@ fn add_dir_to_zip(
     zip: &mut ZipWriter<fs::File>,
     base: &Path,
     dir: &Path,
+    prefix: &str,
     options: SimpleFileOptions,
 ) -> Result<(), String> {
     for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
         if path.is_dir() {
-            add_dir_to_zip(zip, base, &path, options)?;
+            add_dir_to_zip(zip, base, &path, prefix, options)?;
         } else {
             let rel = path.strip_prefix(base).map_err(|e| e.to_string())?;
-            let zip_path = format!("imports/{}", rel.to_string_lossy());
+            let zip_path = format!("{prefix}/{}", rel.to_string_lossy());
             let bytes = fs::read(&path).map_err(|e| e.to_string())?;
             zip.start_file(zip_path, options).map_err(|e| e.to_string())?;
             zip.write_all(&bytes).map_err(|e| e.to_string())?;

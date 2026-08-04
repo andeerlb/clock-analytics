@@ -5,6 +5,7 @@ use crate::pdf_extract;
 use crate::poppler;
 use crate::report_zip::{self, ReportZipEntry};
 use crate::settings::{self, AppSettings};
+use crate::spreadsheet;
 use crate::storage::{self, StorageUsage};
 use serde::Serialize;
 use std::fs;
@@ -303,6 +304,34 @@ pub fn read_pdf_bytes(path: String) -> Result<tauri::ipc::Response, String> {
 pub fn copy_pdf_to(source_path: String, dest_path: String) -> Result<(), String> {
     fs::copy(&source_path, &dest_path).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Sheet names in an xlsx/xls/ods workbook, for the payment template
+/// wizard's sheet tabs — empty for csv.
+#[tauri::command]
+pub fn list_spreadsheet_sheets(path: String) -> Result<Vec<String>, String> {
+    spreadsheet::list_sheets(&path)
+}
+
+/// Raw preview rows (no header-row assumption) for the payment template
+/// wizard's Excel-like grid.
+#[tauri::command]
+pub fn preview_spreadsheet(
+    path: String,
+    sheet: Option<String>,
+    delimiter: Option<String>,
+    max_rows: u32,
+) -> Result<spreadsheet::SpreadsheetPreview, String> {
+    spreadsheet::preview(&path, sheet.as_deref(), delimiter.as_deref(), max_rows)
+}
+
+/// Copies the sample file a payment template was built from into this
+/// app's own data dir, so "Editar" can reopen the wizard later without
+/// depending on the originally picked path still existing.
+#[tauri::command]
+pub fn copy_payment_sample(app: AppHandle, source_path: String) -> Result<String, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    spreadsheet::copy_sample(&data_dir, &source_path)
 }
 
 /// Builds the Relatórios export zip. The frontend already knows the

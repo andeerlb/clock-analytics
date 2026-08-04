@@ -8,6 +8,10 @@ import type {
   ImportStatus,
   ImportType,
   ParsedTimesheet,
+  PaymentFileKind,
+  PaymentTemplateFieldMapping,
+  PaymentTemplateListRow,
+  PaymentTemplateRow,
   StoredDayRecord,
   StoredImport,
 } from "./types";
@@ -361,6 +365,24 @@ export async function listClientsWithStats(): Promise<ClientWithStats[]> {
     GROUP BY cl.id, c.id
     ORDER BY c.name, cl.name
   `);
+}
+
+export interface ClientOption {
+  id: number;
+  name: string;
+  cnpj: string;
+}
+
+/**
+ * Every client, once each — for a plain "which client owns this?" picker
+ * where company doesn't matter. `listClients()` returns one row per
+ * client-company link (it backs the company-scoped timesheet import
+ * picker), so using it here would show duplicate rows for any client
+ * linked to more than one company.
+ */
+export async function listClientOptions(): Promise<ClientOption[]> {
+  const db = await getDb();
+  return db.select<ClientOption[]>("SELECT id, name, cnpj FROM clients ORDER BY name");
 }
 
 /**
@@ -726,6 +748,162 @@ export async function markOriginalsRemoved(sourceFileIds: number[]): Promise<voi
   );
 }
 
+export async function listPaymentTemplates(): Promise<PaymentTemplateListRow[]> {
+  const db = await getDb();
+  return db.select<PaymentTemplateListRow[]>(`
+    SELECT pt.id, pt.name, pt.client_id AS clientId, cl.name AS clientName,
+           pt.file_kind AS fileKind, pt.updated_at AS updatedAt
+    FROM payment_templates pt
+    LEFT JOIN clients cl ON cl.id = pt.client_id
+    ORDER BY pt.updated_at DESC
+  `);
+}
+
+export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow> {
+  const db = await getDb();
+  const rows = await db.select<
+    Omit<PaymentTemplateRow, "fieldMappings" | "sheetNames">[]
+  >(
+    `SELECT pt.id, pt.name, pt.client_id AS clientId, cl.name AS clientName,
+            pt.file_kind AS fileKind,
+            pt.header_row AS headerRow, pt.delimiter,
+            pt.decimal_separator AS decimalSeparator, pt.date_format AS dateFormat,
+            pt.sample_file_path AS sampleFilePath, pt.sample_file_name AS sampleFileName,
+            pt.created_at AS createdAt, pt.updated_at AS updatedAt
+     FROM payment_templates pt
+     LEFT JOIN clients cl ON cl.id = pt.client_id
+     WHERE pt.id = $1`,
+    [id],
+  );
+  if (rows.length === 0) throw new Error("Template não encontrado.");
+
+  const fieldMappings = await db.select<PaymentTemplateFieldMapping[]>(
+    `SELECT column_letter AS columnLetter, target_field AS targetField, header_label AS headerLabel
+     FROM payment_template_fields
+     WHERE template_id = $1
+     ORDER BY column_letter`,
+    [id],
+  );
+
+  const sheetRows = await db.select<{ sheetName: string }[]>(
+    "SELECT sheet_name AS sheetName FROM payment_template_sheets WHERE template_id = $1 ORDER BY sheet_name",
+    [id],
+  );
+
+  return { ...rows[0], fieldMappings, sheetNames: sheetRows.map((r) => r.sheetName) };
+}
+
+export interface PaymentTemplateInput {
+  name: string;
+  clientId: number | null;
+  fileKind: PaymentFileKind;
+  sheetNames: string[];
+  headerRow: number;
+  delimiter: string | null;
+  decimalSeparator: string;
+  dateFormat: string;
+  sampleFilePath: string;
+  sampleFileName: string;
+  fieldMappings: PaymentTemplateFieldMapping[];
+}
+
+async function insertFieldMappings(
+  db: Database,
+  templateId: number,
+  fieldMappings: PaymentTemplateFieldMapping[],
+): Promise<void> {
+  for (const mapping of fieldMappings) {
+    await db.execute(
+      `INSERT INTO payment_template_fields (template_id, column_letter, target_field, header_label)
+       VALUES ($1, $2, $3, $4)`,
+      [templateId, mapping.columnLetter, mapping.targetField, mapping.headerLabel],
+    );
+  }
+}
+
+async function insertTemplateSheets(
+  db: Database,
+  templateId: number,
+  sheetNames: string[],
+): Promise<void> {
+  for (const sheetName of sheetNames) {
+    await db.execute(
+      "INSERT INTO payment_template_sheets (template_id, sheet_name) VALUES ($1, $2)",
+      [templateId, sheetName],
+    );
+  }
+}
+
+export async function createPaymentTemplate(input: PaymentTemplateInput): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute(
+    `INSERT INTO payment_templates
+       (name, client_id, file_kind, header_row, delimiter,
+        decimal_separator, date_format, sample_file_path, sample_file_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      input.name,
+      input.clientId,
+      input.fileKind,
+      input.headerRow,
+      input.delimiter,
+      input.decimalSeparator,
+      input.dateFormat,
+      input.sampleFilePath,
+      input.sampleFileName,
+    ],
+  );
+  const templateId = result.lastInsertId as number;
+  await insertFieldMappings(db, templateId, input.fieldMappings);
+  await insertTemplateSheets(db, templateId, input.sheetNames);
+  return templateId;
+}
+
+export async function updatePaymentTemplate(id: number, input: PaymentTemplateInput): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `UPDATE payment_templates SET
+       name = $1, client_id = $2, file_kind = $3, header_row = $4,
+       delimiter = $5, decimal_separator = $6, date_format = $7,
+       sample_file_path = $8, sample_file_name = $9, updated_at = datetime('now')
+     WHERE id = $10`,
+    [
+      input.name,
+      input.clientId,
+      input.fileKind,
+      input.headerRow,
+      input.delimiter,
+      input.decimalSeparator,
+      input.dateFormat,
+      input.sampleFilePath,
+      input.sampleFileName,
+      id,
+    ],
+  );
+  await db.execute("DELETE FROM payment_template_fields WHERE template_id = $1", [id]);
+  await insertFieldMappings(db, id, input.fieldMappings);
+  await db.execute("DELETE FROM payment_template_sheets WHERE template_id = $1", [id]);
+  await insertTemplateSheets(db, id, input.sheetNames);
+}
+
+/**
+ * Deletes the template and its field mappings/sheets; returns its
+ * `sample_file_path` so the caller can best-effort delete the copied file
+ * too (via the existing generic `deletePaths()` Rust command) — this
+ * function only touches the SQL side.
+ */
+export async function deletePaymentTemplate(id: number): Promise<string> {
+  const db = await getDb();
+  const rows = await db.select<{ sampleFilePath: string }[]>(
+    "SELECT sample_file_path AS sampleFilePath FROM payment_templates WHERE id = $1",
+    [id],
+  );
+  await db.execute("DELETE FROM payment_template_fields WHERE template_id = $1", [id]);
+  await db.execute("DELETE FROM payment_template_sheets WHERE template_id = $1", [id]);
+  await db.execute("DELETE FROM payment_templates WHERE id = $1", [id]);
+  return rows[0]?.sampleFilePath ?? "";
+}
+
 /**
  * Recompacts the DB file — reclaims space left behind by deleted rows
  * without touching any surviving data. Cheap, non-destructive; the natural
@@ -777,6 +955,14 @@ export async function clearAllData(options: ClearDataOptions = {}): Promise<void
     clearedTables.push("employees");
   }
   if (!keepClients) {
+    // Payment templates aren't import history — they're master/config data
+    // like clients/companies, so "Limpar tudo" never deletes them. But a
+    // template scoped to a client that's about to be wiped would otherwise
+    // be left pointing at a client_id that no longer exists (this
+    // connection doesn't enforce foreign keys, same reason deleteImport
+    // has to clean up manually elsewhere) — demote it to a global template
+    // instead of leaving it dangling.
+    await db.execute("UPDATE payment_templates SET client_id = NULL WHERE client_id IS NOT NULL");
     await db.execute("DELETE FROM client_companies");
     await db.execute("DELETE FROM clients");
     clearedTables.push("clients");
