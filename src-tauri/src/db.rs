@@ -88,5 +88,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0014_payment_template_multi_sheet.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 15,
+            description: "split a payment template into per-sheet-group header row + column mapping",
+            sql: include_str!("../migrations/0015_payment_template_groups.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

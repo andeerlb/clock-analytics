@@ -10,6 +10,7 @@ import type {
   ParsedTimesheet,
   PaymentFileKind,
   PaymentTemplateFieldMapping,
+  PaymentTemplateGroup,
   PaymentTemplateListRow,
   PaymentTemplateRow,
   StoredDayRecord,
@@ -761,12 +762,9 @@ export async function listPaymentTemplates(): Promise<PaymentTemplateListRow[]> 
 
 export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow> {
   const db = await getDb();
-  const rows = await db.select<
-    Omit<PaymentTemplateRow, "fieldMappings" | "sheetNames">[]
-  >(
+  const rows = await db.select<Omit<PaymentTemplateRow, "groups">[]>(
     `SELECT pt.id, pt.name, pt.client_id AS clientId, cl.name AS clientName,
-            pt.file_kind AS fileKind,
-            pt.header_row AS headerRow, pt.delimiter,
+            pt.file_kind AS fileKind, pt.delimiter,
             pt.decimal_separator AS decimalSeparator, pt.date_format AS dateFormat,
             pt.sample_file_path AS sampleFilePath, pt.sample_file_name AS sampleFileName,
             pt.created_at AS createdAt, pt.updated_at AS updatedAt
@@ -777,75 +775,93 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
   );
   if (rows.length === 0) throw new Error("Template não encontrado.");
 
-  const fieldMappings = await db.select<PaymentTemplateFieldMapping[]>(
-    `SELECT column_letter AS columnLetter, target_field AS targetField, header_label AS headerLabel
-     FROM payment_template_fields
-     WHERE template_id = $1
-     ORDER BY column_letter`,
+  const groupRows = await db.select<{ id: number; headerRow: number }[]>(
+    "SELECT id, header_row AS headerRow FROM payment_template_groups WHERE template_id = $1",
     [id],
   );
+  const groups: PaymentTemplateGroup[] = [];
+  for (const g of groupRows) {
+    const sheetRows = await db.select<{ sheetName: string }[]>(
+      "SELECT sheet_name AS sheetName FROM payment_template_sheets WHERE group_id = $1 ORDER BY sheet_name",
+      [g.id],
+    );
+    const fieldMappings = await db.select<PaymentTemplateFieldMapping[]>(
+      `SELECT column_letter AS columnLetter, target_field AS targetField, header_label AS headerLabel
+       FROM payment_template_fields
+       WHERE group_id = $1
+       ORDER BY column_letter`,
+      [g.id],
+    );
+    groups.push({ headerRow: g.headerRow, sheetNames: sheetRows.map((r) => r.sheetName), fieldMappings });
+  }
 
-  const sheetRows = await db.select<{ sheetName: string }[]>(
-    "SELECT sheet_name AS sheetName FROM payment_template_sheets WHERE template_id = $1 ORDER BY sheet_name",
-    [id],
-  );
-
-  return { ...rows[0], fieldMappings, sheetNames: sheetRows.map((r) => r.sheetName) };
+  return { ...rows[0], groups };
 }
 
 export interface PaymentTemplateInput {
   name: string;
   clientId: number | null;
   fileKind: PaymentFileKind;
-  sheetNames: string[];
-  headerRow: number;
   delimiter: string | null;
   decimalSeparator: string;
   dateFormat: string;
   sampleFilePath: string;
   sampleFileName: string;
-  fieldMappings: PaymentTemplateFieldMapping[];
+  groups: PaymentTemplateGroup[];
 }
 
-async function insertFieldMappings(
+async function insertTemplateGroups(
   db: Database,
   templateId: number,
-  fieldMappings: PaymentTemplateFieldMapping[],
+  groups: PaymentTemplateGroup[],
 ): Promise<void> {
-  for (const mapping of fieldMappings) {
-    await db.execute(
-      `INSERT INTO payment_template_fields (template_id, column_letter, target_field, header_label)
-       VALUES ($1, $2, $3, $4)`,
-      [templateId, mapping.columnLetter, mapping.targetField, mapping.headerLabel],
+  for (const group of groups) {
+    const result = await db.execute(
+      "INSERT INTO payment_template_groups (template_id, header_row) VALUES ($1, $2)",
+      [templateId, group.headerRow],
     );
+    const groupId = result.lastInsertId as number;
+    for (const sheetName of group.sheetNames) {
+      await db.execute(
+        "INSERT INTO payment_template_sheets (group_id, sheet_name) VALUES ($1, $2)",
+        [groupId, sheetName],
+      );
+    }
+    for (const mapping of group.fieldMappings) {
+      await db.execute(
+        `INSERT INTO payment_template_fields (group_id, column_letter, target_field, header_label)
+         VALUES ($1, $2, $3, $4)`,
+        [groupId, mapping.columnLetter, mapping.targetField, mapping.headerLabel],
+      );
+    }
   }
 }
 
-async function insertTemplateSheets(
-  db: Database,
-  templateId: number,
-  sheetNames: string[],
-): Promise<void> {
-  for (const sheetName of sheetNames) {
-    await db.execute(
-      "INSERT INTO payment_template_sheets (template_id, sheet_name) VALUES ($1, $2)",
-      [templateId, sheetName],
-    );
-  }
+/** Deletes every group under a template, and (via their group_id) every sheet/field row under those groups. */
+async function deleteTemplateGroups(db: Database, templateId: number): Promise<void> {
+  const groupRows = await db.select<{ id: number }[]>(
+    "SELECT id FROM payment_template_groups WHERE template_id = $1",
+    [templateId],
+  );
+  if (groupRows.length === 0) return;
+  const ids = groupRows.map((r) => r.id);
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
+  await db.execute(`DELETE FROM payment_template_fields WHERE group_id IN (${placeholders})`, ids);
+  await db.execute(`DELETE FROM payment_template_sheets WHERE group_id IN (${placeholders})`, ids);
+  await db.execute("DELETE FROM payment_template_groups WHERE template_id = $1", [templateId]);
 }
 
 export async function createPaymentTemplate(input: PaymentTemplateInput): Promise<number> {
   const db = await getDb();
   const result = await db.execute(
     `INSERT INTO payment_templates
-       (name, client_id, file_kind, header_row, delimiter,
-        decimal_separator, date_format, sample_file_path, sample_file_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+       (name, client_id, file_kind, delimiter, decimal_separator, date_format,
+        sample_file_path, sample_file_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
     [
       input.name,
       input.clientId,
       input.fileKind,
-      input.headerRow,
       input.delimiter,
       input.decimalSeparator,
       input.dateFormat,
@@ -854,8 +870,7 @@ export async function createPaymentTemplate(input: PaymentTemplateInput): Promis
     ],
   );
   const templateId = result.lastInsertId as number;
-  await insertFieldMappings(db, templateId, input.fieldMappings);
-  await insertTemplateSheets(db, templateId, input.sheetNames);
+  await insertTemplateGroups(db, templateId, input.groups);
   return templateId;
 }
 
@@ -863,15 +878,14 @@ export async function updatePaymentTemplate(id: number, input: PaymentTemplateIn
   const db = await getDb();
   await db.execute(
     `UPDATE payment_templates SET
-       name = $1, client_id = $2, file_kind = $3, header_row = $4,
-       delimiter = $5, decimal_separator = $6, date_format = $7,
-       sample_file_path = $8, sample_file_name = $9, updated_at = datetime('now')
-     WHERE id = $10`,
+       name = $1, client_id = $2, file_kind = $3, delimiter = $4,
+       decimal_separator = $5, date_format = $6,
+       sample_file_path = $7, sample_file_name = $8, updated_at = datetime('now')
+     WHERE id = $9`,
     [
       input.name,
       input.clientId,
       input.fileKind,
-      input.headerRow,
       input.delimiter,
       input.decimalSeparator,
       input.dateFormat,
@@ -880,17 +894,15 @@ export async function updatePaymentTemplate(id: number, input: PaymentTemplateIn
       id,
     ],
   );
-  await db.execute("DELETE FROM payment_template_fields WHERE template_id = $1", [id]);
-  await insertFieldMappings(db, id, input.fieldMappings);
-  await db.execute("DELETE FROM payment_template_sheets WHERE template_id = $1", [id]);
-  await insertTemplateSheets(db, id, input.sheetNames);
+  await deleteTemplateGroups(db, id);
+  await insertTemplateGroups(db, id, input.groups);
 }
 
 /**
- * Deletes the template and its field mappings/sheets; returns its
- * `sample_file_path` so the caller can best-effort delete the copied file
- * too (via the existing generic `deletePaths()` Rust command) — this
- * function only touches the SQL side.
+ * Deletes the template and its groups (and their sheets/field mappings);
+ * returns its `sample_file_path` so the caller can best-effort delete the
+ * copied file too (via the existing generic `deletePaths()` Rust command)
+ * — this function only touches the SQL side.
  */
 export async function deletePaymentTemplate(id: number): Promise<string> {
   const db = await getDb();
@@ -898,8 +910,7 @@ export async function deletePaymentTemplate(id: number): Promise<string> {
     "SELECT sample_file_path AS sampleFilePath FROM payment_templates WHERE id = $1",
     [id],
   );
-  await db.execute("DELETE FROM payment_template_fields WHERE template_id = $1", [id]);
-  await db.execute("DELETE FROM payment_template_sheets WHERE template_id = $1", [id]);
+  await deleteTemplateGroups(db, id);
   await db.execute("DELETE FROM payment_templates WHERE id = $1", [id]);
   return rows[0]?.sampleFilePath ?? "";
 }

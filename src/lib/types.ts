@@ -206,7 +206,20 @@ export interface PaymentTemplateFieldMapping {
   headerLabel: string | null;
 }
 
-/** One row per saved payment import template — the column-mapping list view. */
+/**
+ * Different sheets in the same workbook can have genuinely different
+ * layouts, so a template maps one or more independent "groups" instead of
+ * a single flat header row + mapping — sheets with an identical structure
+ * share a group; sheets that differ get their own. CSV has no sheets, so
+ * it always has exactly one group with an empty `sheetNames`.
+ */
+export interface PaymentTemplateGroup {
+  headerRow: number;
+  sheetNames: string[];
+  fieldMappings: PaymentTemplateFieldMapping[];
+}
+
+/** One row per saved payment import template — the list view. */
 export interface PaymentTemplateListRow {
   id: number;
   name: string;
@@ -216,17 +229,14 @@ export interface PaymentTemplateListRow {
   updatedAt: string;
 }
 
-/** Full shape of a payment import template, including its column mappings. */
+/** Full shape of a payment import template, including its sheet groups. */
 export interface PaymentTemplateRow extends PaymentTemplateListRow {
-  /** Empty for csv (no concept of sheets). For xlsx/xls/ods, every sheet the template reads — everything else in the workbook is skipped. */
-  sheetNames: string[];
-  headerRow: number;
   delimiter: string | null;
   decimalSeparator: string;
   dateFormat: string;
   sampleFilePath: string;
   sampleFileName: string;
-  fieldMappings: PaymentTemplateFieldMapping[];
+  groups: PaymentTemplateGroup[];
   createdAt: string;
 }
 

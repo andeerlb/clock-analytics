@@ -1,5 +1,5 @@
 import { CheckSquare, ChevronLeft, ChevronRight, FolderOpen, Square, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   copyPaymentSample,
   deletePaths,
@@ -20,10 +20,14 @@ import {
   PAYMENT_TARGET_FIELD_LABELS,
   type PaymentFileKind,
   type PaymentTargetField,
+  type PaymentTemplateGroup,
   type PaymentTemplateRow,
 } from "../lib/types";
 
 const STEP_LABELS = ["Arquivo", "Estrutura", "Mapeamento", "Detalhes"];
+
+/** Stand-in group key for csv, which has no sheets to key groups off of — there's always exactly one implicit group. */
+const CSV_GROUP_KEY = "__csv__";
 
 const DELIMITER_OPTIONS = [
   { value: ",", label: "Vírgula (,)" },
@@ -63,8 +67,16 @@ export default function PaymentTemplateWizard({
   const [includedSheets, setIncludedSheets] = useState<Set<string>>(new Set());
   const [delimiter, setDelimiter] = useState<string | null>(null);
   const [rows, setRows] = useState<string[][]>([]);
-  const [headerRow, setHeaderRow] = useState(1);
-  const [mapping, setMapping] = useState<Record<number, PaymentTargetField>>({});
+
+  // Different sheets in the workbook can have genuinely different layouts,
+  // so header row + column mapping are scoped to a GROUP, not the whole
+  // template. `sheetGroupOf[sheet]` names which sheet's config it uses —
+  // every sheet starts as its own standalone group (mapping to itself);
+  // merging two sheets just points one at the other's key. csv has no
+  // sheets, so it always resolves to CSV_GROUP_KEY via groupKeyOf below.
+  const [sheetGroupOf, setSheetGroupOf] = useState<Record<string, string>>({});
+  const [groupHeaderRow, setGroupHeaderRow] = useState<Record<string, number>>({});
+  const [groupMapping, setGroupMapping] = useState<Record<string, Record<number, PaymentTargetField>>>({});
 
   const [name, setName] = useState("");
   const [clientId, setClientId] = useState<number | null>(null);
@@ -94,8 +106,9 @@ export default function PaymentTemplateWizard({
       setIncludedSheets(new Set());
       setDelimiter(null);
       setRows([]);
-      setHeaderRow(1);
-      setMapping({});
+      setSheetGroupOf({});
+      setGroupHeaderRow({});
+      setGroupMapping({});
       setName("");
       setClientId(null);
       setDecimalSeparator(",");
@@ -122,28 +135,55 @@ export default function PaymentTemplateWizard({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [target, onClose]);
 
+  /** Which group a sheet's header row/mapping should be read from — csv always has exactly one, implicit group. */
+  function groupKeyOf(sheetName: string | null): string {
+    if (fileKind === "csv" || sheetName === null) return CSV_GROUP_KEY;
+    return sheetGroupOf[sheetName] ?? sheetName;
+  }
+
   async function loadFileForEdit(t: PaymentTemplateRow) {
     setLoadingPreview(true);
     setError(null);
     try {
       const sheetNames = await listSpreadsheetSheets(t.sampleFilePath);
       setSheets(sheetNames);
-      // Only sheets the saved template actually included are pre-checked —
-      // anything new in the workbook since it was created starts unchecked,
-      // same as a brand new template would.
-      setIncludedSheets(new Set(t.sheetNames.filter((s) => sheetNames.includes(s))));
-      const sheet = t.sheetNames[0] ?? sheetNames[0] ?? null;
+
+      const newSheetGroupOf: Record<string, string> = {};
+      const newGroupHeaderRow: Record<string, number> = {};
+      const newGroupMapping: Record<string, Record<number, PaymentTargetField>> = {};
+      const included = new Set<string>();
+
+      for (const group of t.groups) {
+        const repKey = group.sheetNames[0] ?? CSV_GROUP_KEY;
+        newGroupHeaderRow[repKey] = group.headerRow;
+        const m: Record<number, PaymentTargetField> = {};
+        for (const fm of group.fieldMappings) {
+          const index = letterToIndex(fm.columnLetter);
+          if (index !== null) m[index] = fm.targetField;
+        }
+        newGroupMapping[repKey] = m;
+        // Only sheets the saved template actually included are pre-checked
+        // — anything new in the workbook since it was created starts
+        // unchecked, same as a brand new template would.
+        for (const s of group.sheetNames) {
+          if (sheetNames.includes(s)) {
+            newSheetGroupOf[s] = repKey;
+            included.add(s);
+          }
+        }
+      }
+
+      setSheetGroupOf(newSheetGroupOf);
+      setGroupHeaderRow(newGroupHeaderRow);
+      setGroupMapping(newGroupMapping);
+      setIncludedSheets(included);
+
+      const firstGroupSheet = t.groups[0]?.sheetNames.find((s) => sheetNames.includes(s));
+      const sheet = firstGroupSheet ?? sheetNames[0] ?? null;
       setActiveSheet(sheet);
       const preview = await previewSpreadsheet(t.sampleFilePath, sheet, t.delimiter, 50);
       setRows(preview.rows);
       setDelimiter(t.delimiter ?? preview.delimiter);
-      setHeaderRow(t.headerRow);
-      const initialMapping: Record<number, PaymentTargetField> = {};
-      for (const m of t.fieldMappings) {
-        const index = letterToIndex(m.columnLetter);
-        if (index !== null) initialMapping[index] = m.targetField;
-      }
-      setMapping(initialMapping);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -159,15 +199,17 @@ export default function PaymentTemplateWizard({
       const firstSheet = sheetNames[0] ?? null;
       setSheets(sheetNames);
       setActiveSheet(firstSheet);
-      // Everything starts included — flagging the few sheets that don't
-      // belong (a training log, an absence sheet, ...) is less work than
-      // hand-picking every payroll sheet in a large workbook.
+      // Everything starts included, and every sheet starts as its own
+      // standalone group — flagging the few sheets that don't belong (a
+      // training log, an absence sheet, ...) and merging the ones that
+      // share a layout is less work than doing either from scratch.
       setIncludedSheets(new Set(sheetNames));
+      setSheetGroupOf({});
+      setGroupHeaderRow({});
+      setGroupMapping({});
       const preview = await previewSpreadsheet(path, firstSheet, null, 50);
       setRows(preview.rows);
       setDelimiter(preview.delimiter);
-      setHeaderRow(1);
-      setMapping({});
     } catch (e) {
       setError(String(e));
     } finally {
@@ -175,15 +217,13 @@ export default function PaymentTemplateWizard({
     }
   }
 
-  async function refetchPreview(sheet: string | null, delim: string | null) {
+  async function refetchRows(sheet: string | null, delim: string | null) {
     if (!filePath) return;
     setLoadingPreview(true);
     setError(null);
     try {
       const preview = await previewSpreadsheet(filePath, sheet, delim, 50);
       setRows(preview.rows);
-      setHeaderRow(1);
-      setMapping({});
     } catch (e) {
       setError(String(e));
     } finally {
@@ -201,10 +241,14 @@ export default function PaymentTemplateWizard({
     await loadFile(path);
   }
 
+  // Just switches which sheet's raw grid is being looked at — header
+  // row/mapping are derived from whichever group that sheet belongs to,
+  // so revisiting an already-configured sheet shows its real config
+  // instead of resetting it.
   function handleSheetClick(sheetName: string) {
     if (sheetName === activeSheet) return;
     setActiveSheet(sheetName);
-    refetchPreview(sheetName, delimiter);
+    refetchRows(sheetName, delimiter);
   }
 
   function toggleSheetIncluded(sheetName: string) {
@@ -216,35 +260,72 @@ export default function PaymentTemplateWizard({
     });
   }
 
+  /** Merges `otherSheet` into the active sheet's group, or splits it back into its own fresh one if already merged. */
+  function toggleSheetMerge(otherSheet: string) {
+    if (!activeSheet) return;
+    const activeKey = groupKeyOf(activeSheet);
+    if (groupKeyOf(otherSheet) === activeKey) {
+      setSheetGroupOf((prev) => ({ ...prev, [otherSheet]: otherSheet }));
+      setGroupHeaderRow((prev) => ({ ...prev, [otherSheet]: 1 }));
+      setGroupMapping((prev) => ({ ...prev, [otherSheet]: {} }));
+    } else {
+      setSheetGroupOf((prev) => ({ ...prev, [otherSheet]: activeKey }));
+    }
+  }
+
   function handleDelimiterChange(newDelimiter: string) {
     setDelimiter(newDelimiter);
-    refetchPreview(activeSheet, newDelimiter);
+    // Column boundaries just shifted, so whatever header row/mapping was
+    // set for the csv's one implicit group no longer means anything.
+    setGroupHeaderRow((prev) => ({ ...prev, [CSV_GROUP_KEY]: 1 }));
+    setGroupMapping((prev) => ({ ...prev, [CSV_GROUP_KEY]: {} }));
+    refetchRows(activeSheet, newDelimiter);
+  }
+
+  function handleHeaderRowClick(rowNumber: number) {
+    const key = groupKeyOf(activeSheet);
+    setGroupHeaderRow((prev) => ({ ...prev, [key]: rowNumber }));
+    setGroupMapping((prev) => ({ ...prev, [key]: {} }));
   }
 
   function setColumnMapping(colIndex: number, field: PaymentTargetField | "") {
-    setMapping((prev) => {
-      const next = { ...prev };
+    const key = groupKeyOf(activeSheet);
+    setGroupMapping((prev) => {
+      const current = prev[key] ?? {};
+      const next = { ...current };
       if (!field) {
         delete next[colIndex];
-        return next;
+      } else {
+        for (const k of Object.keys(next)) {
+          const idx = Number(k);
+          if (idx !== colIndex && next[idx] === field) delete next[idx];
+        }
+        next[colIndex] = field;
       }
-      for (const key of Object.keys(next)) {
-        const k = Number(key);
-        if (k !== colIndex && next[k] === field) delete next[k];
-      }
-      next[colIndex] = field;
-      return next;
+      return { ...prev, [key]: next };
     });
   }
 
-  const colCount = useMemo(() => rows.reduce((max, r) => Math.max(max, r.length), 0), [rows]);
-  const columns = useMemo(() => Array.from({ length: colCount }, (_, i) => i), [colCount]);
-  const headerCells = useMemo(() => rows[headerRow - 1] ?? [], [rows, headerRow]);
-  const sampleRows = useMemo(() => rows.slice(headerRow, headerRow + 8), [rows, headerRow]);
+  function isGroupMappingValid(key: string): boolean {
+    const fields = new Set(Object.values(groupMapping[key] ?? {}));
+    return (fields.has("cpf") || fields.has("matricula")) && fields.has("valor");
+  }
 
-  const mappedFields = new Set(Object.values(mapping));
-  const hasIdentifier = mappedFields.has("cpf") || mappedFields.has("matricula");
-  const hasValor = mappedFields.has("valor");
+  const activeGroupKey = groupKeyOf(activeSheet);
+  const headerRow = groupHeaderRow[activeGroupKey] ?? 1;
+  const mapping = groupMapping[activeGroupKey] ?? {};
+
+  const colCount = rows.reduce((max, r) => Math.max(max, r.length), 0);
+  const columns = Array.from({ length: colCount }, (_, i) => i);
+  const headerCells = rows[headerRow - 1] ?? [];
+  const sampleRows = rows.slice(headerRow, headerRow + 8);
+
+  // Every group among the sheets actually being imported — csv always has
+  // just the one implicit group.
+  const includedGroupKeys =
+    fileKind === "csv"
+      ? [CSV_GROUP_KEY]
+      : Array.from(new Set(sheets.filter((s) => includedSheets.has(s)).map((s) => groupKeyOf(s))));
 
   const canAdvance =
     step === 0
@@ -252,7 +333,7 @@ export default function PaymentTemplateWizard({
       : step === 1
         ? sheets.length === 0 || includedSheets.size > 0
         : step === 2
-          ? hasIdentifier && hasValor
+          ? includedGroupKeys.length > 0 && includedGroupKeys.every(isGroupMappingValid)
           : false;
 
   async function handleSave() {
@@ -270,27 +351,34 @@ export default function PaymentTemplateWizard({
         sampleFileName = fileNameFromPath(filePath);
       }
 
-      const fieldMappings = Object.entries(mapping).map(([indexStr, targetField]) => {
-        const index = Number(indexStr);
-        return {
-          columnLetter: columnLetter(index),
-          targetField,
-          headerLabel: headerCells[index] ?? null,
-        };
+      const groups: PaymentTemplateGroup[] = includedGroupKeys.map((key) => {
+        const sheetNames =
+          fileKind === "csv" ? [] : sheets.filter((s) => includedSheets.has(s) && groupKeyOf(s) === key);
+        const m = groupMapping[key] ?? {};
+        const fieldMappings = Object.entries(m).map(([indexStr, targetField]) => {
+          const index = Number(indexStr);
+          return {
+            columnLetter: columnLetter(index),
+            targetField,
+            // Only the group currently in view has its raw grid cached —
+            // header labels for the others are cosmetic (never used for
+            // matching), so it's fine to leave them blank.
+            headerLabel: key === activeGroupKey ? headerCells[index] ?? null : null,
+          };
+        });
+        return { headerRow: groupHeaderRow[key] ?? 1, sheetNames, fieldMappings };
       });
 
       const input: PaymentTemplateInput = {
         name: name.trim(),
         clientId,
         fileKind,
-        sheetNames: fileKind === "csv" ? [] : sheets.filter((s) => includedSheets.has(s)),
-        headerRow,
         delimiter: fileKind === "csv" ? delimiter : null,
         decimalSeparator,
         dateFormat,
         sampleFilePath,
         sampleFileName,
-        fieldMappings,
+        groups,
       };
 
       if (editing) {
@@ -459,7 +547,7 @@ export default function PaymentTemplateWizard({
                       <tr
                         key={i}
                         className={i + 1 === headerRow ? "header-row-selected" : ""}
-                        onClick={() => setHeaderRow(i + 1)}
+                        onClick={() => handleHeaderRowClick(i + 1)}
                       >
                         <td className="row-gutter">{i + 1}</td>
                         {columns.map((c) => (
@@ -471,6 +559,28 @@ export default function PaymentTemplateWizard({
                 </table>
               </div>
             )}
+            {activeSheet && includedSheets.has(activeSheet) && includedSheets.size > 1 && (
+              <div className="field" style={{ marginTop: "1rem" }}>
+                <label>Estas abas usam a mesma estrutura de "{activeSheet}":</label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.7rem", marginTop: "0.5rem" }}>
+                  {sheets
+                    .filter((s) => s !== activeSheet && includedSheets.has(s))
+                    .map((s) => (
+                      <label
+                        key={s}
+                        style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.85rem", cursor: "pointer" }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={groupKeyOf(s) === activeGroupKey}
+                          onChange={() => toggleSheetMerge(s)}
+                        />
+                        {s}
+                      </label>
+                    ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -478,11 +588,38 @@ export default function PaymentTemplateWizard({
           <div>
             <p className="muted" style={{ marginTop: 0 }}>
               Para cada coluna, escolha a qual campo ela corresponde. É preciso mapear pelo menos um
-              identificador (CPF ou Matrícula) e o Valor.
+              identificador (CPF ou Matrícula) e o Valor
+              {includedGroupKeys.length > 1 ? " em cada configuração." : "."}
             </p>
+            {includedGroupKeys.length > 1 && (
+              <div className="sheet-tabs">
+                {includedGroupKeys.map((key) => {
+                  const memberCount = sheets.filter((s) => includedSheets.has(s) && groupKeyOf(s) === key).length;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      className={`sheet-tab${key === activeGroupKey ? " active" : ""}`}
+                      onClick={() => handleSheetClick(key)}
+                    >
+                      {key}
+                      {memberCount > 1 ? ` (+${memberCount - 1})` : ""}
+                      {!isGroupMappingValid(key) && (
+                        <span
+                          title="Faltam mapear CPF/Matrícula e Valor"
+                          style={{ color: "var(--warning)", fontSize: "1.1em", lineHeight: 1 }}
+                        >
+                          •
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             {rows.length === 0 && <p className="muted">Nenhuma linha encontrada.</p>}
             {rows.length > 0 && (
-              <div className="spreadsheet-grid-scroll">
+              <div className={`spreadsheet-grid-scroll${includedGroupKeys.length > 1 ? " attached-to-tabs" : ""}`}>
                 <table className="spreadsheet-grid">
                   <thead>
                     <tr>
@@ -583,7 +720,9 @@ export default function PaymentTemplateWizard({
               </div>
             </div>
             <p className="field-hint" style={{ marginTop: "1rem" }}>
-              {columns.length} coluna(s) na planilha, {Object.keys(mapping).length} mapeada(s).
+              {includedGroupKeys.length === 1
+                ? "1 configuração de colunas."
+                : `${includedGroupKeys.length} configurações de colunas diferentes.`}
               {sheets.length > 1 && ` ${includedSheets.size} de ${sheets.length} aba(s) selecionada(s).`}
             </p>
           </div>
