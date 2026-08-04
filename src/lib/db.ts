@@ -196,6 +196,11 @@ export async function saveParsedTimesheet(
   let lateMinutes = 0;
   let regularMinutes = 0;
   let intervalMinutes = 0;
+  // A day with an odd punch count (a dangling entrada or saída with no
+  // pair) — same condition as the Cartão de Ponto's own "Marcação
+  // pendente" day filter, counted here so the period-level list/report
+  // filter can flag it without loading every import's day_records.
+  let pendingCount = 0;
   for (const day of sheet.days) {
     maxPunches = Math.max(maxPunches, day.punches.length);
     totalWorkedMinutes += day.totalWorkedMinutes;
@@ -209,14 +214,15 @@ export async function saveParsedTimesheet(
     }
     regularMinutes += day.normalHoursMinutes;
     intervalMinutes += sumIntervalMinutes(day.punches);
+    if (day.punches.length % 2 !== 0) pendingCount++;
   }
 
   const importResult = await db.execute(
     `INSERT INTO imports
        (provider, employee_id, period_start, period_end, original_pdf_path, import_file_id,
         source_file_id, max_punches, total_worked_minutes, overtime_minutes, absence_minutes,
-        late_minutes, regular_minutes, interval_minutes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        late_minutes, regular_minutes, interval_minutes, pending_count)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
     [
       sheet.provider,
       employeeId,
@@ -232,6 +238,7 @@ export async function saveParsedTimesheet(
       lateMinutes,
       regularMinutes,
       intervalMinutes,
+      pendingCount,
     ],
   );
   const importId = importResult.lastInsertId as number;
@@ -423,6 +430,7 @@ export async function listImports(): Promise<StoredImport[]> {
       i.late_minutes AS lateMinutes,
       i.regular_minutes AS regularMinutes,
       i.interval_minutes AS intervalMinutes,
+      i.pending_count AS pendingCount,
       i.imported_at AS importedAt
     FROM imports i
     JOIN employees e ON e.id = i.employee_id

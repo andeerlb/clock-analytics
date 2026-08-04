@@ -23,6 +23,7 @@ type DayStatusId =
   | "overtime"
   | "absence"
   | "late"
+  | "regular"
   | "weekend"
   | "interval";
 
@@ -62,6 +63,7 @@ const DAY_STATUS_OPTIONS: { id: DayStatusId; label: string; matches: (day: Store
   { id: "overtime", label: "Horas extras", matches: (d) => d.totalWorkedMinutes > OVERTIME_THRESHOLD_MINUTES },
   { id: "absence", label: "Horas faltas", matches: (d) => d.absenceMinutes > 0 && d.punches.length < 2 },
   { id: "late", label: "Horas de atraso", matches: (d) => d.absenceMinutes > 0 && d.punches.length >= 2 },
+  { id: "regular", label: "Horas regulares", matches: (d) => d.normalHoursMinutes > 0 },
   { id: "weekend", label: "Finais de semana", matches: (d) => isWeekend(d.weekday) },
   { id: "interval", label: "Com intervalo", matches: (d) => sumIntervalMinutes(d.punches) > 0 },
 ];

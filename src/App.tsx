@@ -10,7 +10,6 @@ import CompaniesPage from "./pages/CompaniesPage";
 import ImportPage from "./pages/ImportPage";
 import LibraryPage from "./pages/LibraryPage";
 import EmployeeDetailPage from "./pages/EmployeeDetailPage";
-import ReportsPage from "./pages/ReportsPage";
 import SettingsPage from "./pages/SettingsPage";
 
 function App() {
@@ -47,7 +46,6 @@ function App() {
               <Route path="/clients" element={<ClientsPage />} />
               <Route path="/import" element={<ImportPage />} />
               <Route path="/employee/:importId" element={<EmployeeDetailPage />} />
-              <Route path="/reports" element={<ReportsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>
           </main>

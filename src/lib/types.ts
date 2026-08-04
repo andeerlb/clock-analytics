@@ -232,5 +232,7 @@ export interface StoredImport {
   lateMinutes: number;
   regularMinutes: number;
   intervalMinutes: number;
+  /** Days in the period with an odd, incomplete punch count (a dangling entrada/saída). */
+  pendingCount: number;
   importedAt: string;
 }

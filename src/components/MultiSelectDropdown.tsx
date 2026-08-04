@@ -8,10 +8,12 @@ export interface MultiSelectOption<T extends string> {
 
 /**
  * A checklist that starts fully selected and narrows down as options are
- * unchecked — the "mostra tudo, tira o que não quer ver" pattern used for
- * both the Cartão de Ponto's per-day filter and the Relatórios per-period
- * and cliente filters. Callers decide what "matches" means for each
- * option; this component only owns the popover/selection UI.
+ * unchecked — used for the Cartão de Ponto's per-day filter and the
+ * Colaboradores screen's empresa/cliente/período/status filters. Callers
+ * decide what "matches" means for each option (and whether narrowing is an
+ * inclusive OR over what's checked, or a plain "must be one of these" for a
+ * single-valued field like empresa/cliente); this component only owns the
+ * popover/selection UI.
  */
 export default function MultiSelectDropdown<T extends string>({
   options,

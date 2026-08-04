@@ -1,4 +1,4 @@
-import { BarChart3, Briefcase, Building2, Clock, FileUp, Settings, Users } from "lucide-react";
+import { Briefcase, Building2, Clock, FileUp, Settings, Users } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 const NAV_ITEMS = [
@@ -6,7 +6,6 @@ const NAV_ITEMS = [
   { to: "/clients", label: "Clientes", icon: Briefcase, end: false },
   { to: "/import", label: "Importar", icon: FileUp, end: false },
   { to: "/", label: "Colaboradores", icon: Users, end: true },
-  { to: "/reports", label: "Relatórios", icon: BarChart3, end: false },
 ];
 
 function navLinkClass({ isActive }: { isActive: boolean }): string {

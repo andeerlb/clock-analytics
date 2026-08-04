@@ -56,6 +56,25 @@ export function sanitizeFileName(name: string): string {
     .replace(/[. ]+$/, "");
 }
 
+/** Last path segment — the save dialog returns a full OS path, split on either separator so it works on Windows too. */
+export function fileNameFromPath(path: string): string {
+  return path.split(/[/\\]/).pop() || path;
+}
+
+/**
+ * "2026-08-04-153042" — sortable, filesystem-safe (no colons) local
+ * timestamp for a default file name, so generating a zip more than once in
+ * the same session doesn't collide with the previous one and prompt to
+ * overwrite it.
+ */
+export function formatTimestampForFileName(date: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+  );
+}
+
 /** Strips everything but digits — the canonical, storable/comparable form of a CNPJ. */
 export function normalizeCnpj(cnpj: string): string {
   return cnpj.replace(/\D/g, "");

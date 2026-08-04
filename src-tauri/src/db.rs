@@ -64,5 +64,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0010_import_late_minutes.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 11,
+            description: "count days with a pending (odd) punch count per import",
+            sql: include_str!("../migrations/0011_import_pending_count.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

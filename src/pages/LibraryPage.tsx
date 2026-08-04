@@ -1,16 +1,74 @@
-import { Building2, Search, Users } from "lucide-react";
+import { save } from "@tauri-apps/plugin-dialog";
+import { Archive, Building2, CheckCircle2, FolderOpen, Search, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
 import PdfViewerModal from "../components/PdfViewerModal";
-import { LIBRARY_PAGE_SIZE_OPTIONS, useLibraryFilters } from "../contexts/FiltersContext";
+import { LIBRARY_PAGE_SIZE_OPTIONS, useLibraryFilters, type ReportMode } from "../contexts/FiltersContext";
+import { generateReportZip, revealInFileManager } from "../lib/api";
 import { colorForName, initials } from "../lib/avatar";
 import { listClients, listCompanies, listImports, type ClientRow, type CompanyRow } from "../lib/db";
-import { formatDate, formatDateTime } from "../lib/format";
+import {
+  fileNameFromPath,
+  formatDate,
+  formatDateTime,
+  formatPeriod,
+  formatTimestampForFileName,
+  sanitizeFileName,
+} from "../lib/format";
 import { matchesSelectedStatuses, PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
-import type { StoredImport } from "../lib/types";
+import type { ReportZipEntry, StoredImport } from "../lib/types";
+
+/**
+ * Groups the matched imports into Empresa/Cliente folders and turns them
+ * into the flat entry list the Rust side needs. Always the employee's own
+ * split-off PDF (`originalPdfPath`) — never the whole original source
+ * file. In "per-client" mode every employee's PDF under a client is merged
+ * (via `pdfunite`, on the Rust side) into one consolidated document. Skips
+ * anything without a client link (nothing to organize it under), which is a
+ * distinct, narrower condition than the table filters above — an import can
+ * be worth browsing without being zip-able.
+ */
+function buildZipEntries(imports: StoredImport[], mode: ReportMode): ReportZipEntry[] {
+  const byCompany = new Map<string, Map<string, StoredImport[]>>();
+  for (const imp of imports) {
+    if (!imp.clientId || !imp.clientName) continue;
+    const companyFolder = sanitizeFileName(imp.companyName);
+    const clientFolder = sanitizeFileName(imp.clientName);
+    let byClient = byCompany.get(companyFolder);
+    if (!byClient) {
+      byClient = new Map();
+      byCompany.set(companyFolder, byClient);
+    }
+    const list = byClient.get(clientFolder) ?? [];
+    list.push(imp);
+    byClient.set(clientFolder, list);
+  }
+
+  const entries: ReportZipEntry[] = [];
+  for (const [companyFolder, byClient] of byCompany) {
+    for (const [clientFolder, clientImports] of byClient) {
+      const sorted = [...clientImports].sort((a, b) => a.employeeName.localeCompare(b.employeeName));
+      if (mode === "per-client") {
+        entries.push({
+          zipPath: `${companyFolder}/${clientFolder}/${clientFolder} - Consolidado.pdf`,
+          sourcePdfPaths: sorted.map((imp) => imp.originalPdfPath),
+        });
+      } else {
+        for (const imp of sorted) {
+          const periodLabel = sanitizeFileName(formatPeriod(imp.periodStart, imp.periodEnd));
+          entries.push({
+            zipPath: `${companyFolder}/${clientFolder}/${sanitizeFileName(imp.employeeName)} - ${periodLabel}.pdf`,
+            sourcePdfPaths: [imp.originalPdfPath],
+          });
+        }
+      }
+    }
+  }
+  return entries;
+}
 
 export default function LibraryPage() {
   const {
@@ -25,6 +83,8 @@ export default function LibraryPage() {
     setPeriod,
     selectedStatuses,
     setSelectedStatuses,
+    mode,
+    setMode,
     page,
     setPage,
     pageSize,
@@ -36,6 +96,10 @@ export default function LibraryPage() {
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewerImport, setViewerImport] = useState<StoredImport | null>(null);
+
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [generatedZipPath, setGeneratedZipPath] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([listImports(), listCompanies(), listClients()])
@@ -137,14 +201,47 @@ export default function LibraryPage() {
       selectedStatuses.size !== PERIOD_STATUS_OPTIONS.length,
   );
 
+  async function handleReveal(path: string) {
+    try {
+      await revealInFileManager(path);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleGenerateZip() {
+    const entries = buildZipEntries(filteredImports, mode);
+    if (entries.length === 0) return;
+
+    setError(null);
+    setGeneratedZipPath(null);
+    setBusy(true);
+    try {
+      const destPath = await save({
+        defaultPath: `relatorio-${formatTimestampForFileName()}.zip`,
+        filters: [{ name: "ZIP", extensions: ["zip"] }],
+      });
+      if (!destPath) return;
+      await generateReportZip(entries, destPath);
+      setGeneratedZipPath(destPath);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div>
       <div className="page-header">
         <h2>Colaboradores</h2>
       </div>
       <p className="page-subtitle">
-        Colaboradores com espelhos de ponto importados.
+        Colaboradores com espelhos de ponto importados — filtre e gere um zip com os PDFs de cada
+        um, organizados em pastas por empresa e cliente.
       </p>
+
+      {error && <div className="error-box">{error}</div>}
 
       {imports.length > 0 && (
         <div className="card">
@@ -223,6 +320,64 @@ export default function LibraryPage() {
               />
             </div>
           </div>
+
+          <div className="field-row" style={{ marginTop: "1rem", marginBottom: 0 }}>
+            <div className="field">
+              <label>Modo de geração</label>
+              <div style={{ display: "flex", gap: "1.2rem", alignItems: "center", height: "2.5rem" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.9rem", cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="mode"
+                    checked={mode === "per-employee"}
+                    onChange={() => setMode("per-employee")}
+                  />
+                  Um PDF por colaborador
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.9rem", cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="mode"
+                    checked={mode === "per-client"}
+                    onChange={() => setMode("per-client")}
+                  />
+                  Um PDF por cliente
+                </label>
+              </div>
+            </div>
+            <button
+              type="button"
+              style={{ marginLeft: "auto" }}
+              onClick={handleGenerateZip}
+              disabled={busy || filteredImports.length === 0}
+            >
+              <Archive size={15} style={{ marginRight: "0.4rem" }} />
+              {busy ? "Gerando..." : "Gerar zip"}
+            </button>
+          </div>
+
+          {generatedZipPath && (
+            <div
+              className="success-box"
+              style={{
+                marginTop: "1rem",
+                marginBottom: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "1rem",
+              }}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <CheckCircle2 size={16} />
+                Zip gerado com sucesso: {fileNameFromPath(generatedZipPath)}
+              </span>
+              <button type="button" className="outline" onClick={() => handleReveal(generatedZipPath)}>
+                <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
+                Abrir no explorador de arquivos
+              </button>
+            </div>
+          )}
         </div>
       )}
 
