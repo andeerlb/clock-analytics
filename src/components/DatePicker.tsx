@@ -1,40 +1,7 @@
 import { Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { MONTH_NAMES, WEEKDAY_HEADER, gridStart, toIso, todayUtc } from "../lib/calendar";
 import { formatDateSlash } from "../lib/format";
-
-const MONTH_NAMES = [
-  "Janeiro",
-  "Fevereiro",
-  "Março",
-  "Abril",
-  "Maio",
-  "Junho",
-  "Julho",
-  "Agosto",
-  "Setembro",
-  "Outubro",
-  "Novembro",
-  "Dezembro",
-];
-
-const WEEKDAY_HEADER = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
-
-function toIso(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-function todayUtc(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-}
-
-/** The Sunday on or before the 1st of `year`/`month`, in UTC — where the 6x7 grid starts. */
-function gridStart(year: number, month: number): Date {
-  const first = new Date(Date.UTC(year, month, 1));
-  const start = new Date(first);
-  start.setUTCDate(first.getUTCDate() - first.getUTCDay());
-  return start;
-}
 
 /**
  * A calendar date picker in pt-BR — the native `<input type="date">`

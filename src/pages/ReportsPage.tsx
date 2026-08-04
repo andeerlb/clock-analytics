@@ -1,13 +1,20 @@
 import { save } from "@tauri-apps/plugin-dialog";
 import { Archive, Building2, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import DatePicker from "../components/DatePicker";
+import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
 import { generateReportZip } from "../lib/api";
+import { toIso, todayUtc } from "../lib/calendar";
 import { listClients, listCompanies, listImports, type ClientRow, type CompanyRow } from "../lib/db";
 import { formatPeriod, sanitizeFileName } from "../lib/format";
 import type { ReportZipEntry, StoredImport } from "../lib/types";
+
+/** Default period on load: the current calendar month so far. */
+function defaultPeriodStart(): string {
+  const today = todayUtc();
+  return toIso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)));
+}
 
 type Mode = "per-employee" | "per-client";
 
@@ -83,8 +90,8 @@ export default function ReportsPage() {
 
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<Set<string>>(new Set());
   const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
-  const [periodStart, setPeriodStart] = useState("");
-  const [periodEnd, setPeriodEnd] = useState("");
+  const [periodStart, setPeriodStart] = useState(defaultPeriodStart);
+  const [periodEnd, setPeriodEnd] = useState(() => toIso(todayUtc()));
   const [selectedStatuses, setSelectedStatuses] = useState<Set<PeriodStatusId>>(
     () => new Set(PERIOD_STATUS_OPTIONS.map((o) => o.id)),
   );
@@ -132,8 +139,7 @@ export default function ReportsPage() {
       if (!imp.clientId) return false;
       if (selectedCompanyIds.size > 0 && !selectedCompanyIds.has(String(imp.companyId))) return false;
       if (selectedClientIds.size > 0 && !selectedClientIds.has(String(imp.clientId))) return false;
-      if (periodStart && imp.periodEnd < periodStart) return false;
-      if (periodEnd && imp.periodStart > periodEnd) return false;
+      if (imp.periodEnd < periodStart || imp.periodStart > periodEnd) return false;
       for (const opt of PERIOD_STATUS_OPTIONS) {
         if (opt.matches(imp) && !selectedStatuses.has(opt.id)) return false;
       }
@@ -224,14 +230,6 @@ export default function ReportsPage() {
             />
           </div>
           <div className="field">
-            <label htmlFor="start">De</label>
-            <DatePicker id="start" value={periodStart} onChange={setPeriodStart} />
-          </div>
-          <div className="field">
-            <label htmlFor="end">Até</label>
-            <DatePicker id="end" value={periodEnd} onChange={setPeriodEnd} />
-          </div>
-          <div className="field">
             <label>Status no período</label>
             <MultiSelectDropdown
               options={PERIOD_STATUS_OPTIONS}
@@ -250,6 +248,10 @@ export default function ReportsPage() {
               noneLabel="Nenhum filtro selecionado"
               countLabel={(n, total) => `${n} de ${total} filtros`}
             />
+          </div>
+          <div className="field">
+            <label>Período</label>
+            <DateRangePicker startValue={periodStart} endValue={periodEnd} onChange={(s, e) => { setPeriodStart(s); setPeriodEnd(e); }} />
           </div>
         </div>
 
