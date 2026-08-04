@@ -1,4 +1,5 @@
 import Database from "@tauri-apps/plugin-sql";
+import { OVERTIME_THRESHOLD_MINUTES, sumIntervalMinutes } from "./analysis";
 import { normalizeCnpj } from "./format";
 import type {
   ConflictInfo,
@@ -181,16 +182,33 @@ export async function saveParsedTimesheet(
   );
   const importFileId = await upsertImportFile(db, sheet.originalFileName, sheet.originalFileHash);
 
-  // Computed once, here, at import time — the UI reads this instead of
-  // scanning every day_record to figure out how many Entrada/Saída columns
-  // to draw. Floor of 4 (2 pairs) matches the fixed grid the PDF itself
-  // always has, even on days that leave it unfilled.
-  const maxPunches = Math.max(4, ...sheet.days.map((d) => d.punches.length));
+  // Computed once, here, at import time, over the whole (fixed) period —
+  // the UI reads these instead of scanning day_records on every render.
+  // `maxPunches` floors at 4 (2 pairs), matching the fixed grid the PDF
+  // itself always has, even on days that leave it unfilled.
+  let maxPunches = 4;
+  let totalWorkedMinutes = 0;
+  let overtimeMinutes = 0;
+  let absenceMinutes = 0;
+  let regularMinutes = 0;
+  let intervalMinutes = 0;
+  for (const day of sheet.days) {
+    maxPunches = Math.max(maxPunches, day.punches.length);
+    totalWorkedMinutes += day.totalWorkedMinutes;
+    if (day.totalWorkedMinutes > OVERTIME_THRESHOLD_MINUTES) {
+      overtimeMinutes += day.totalWorkedMinutes - OVERTIME_THRESHOLD_MINUTES;
+    }
+    absenceMinutes += day.absenceMinutes;
+    regularMinutes += day.normalHoursMinutes;
+    intervalMinutes += sumIntervalMinutes(day.punches);
+  }
 
   const importResult = await db.execute(
     `INSERT INTO imports
-       (provider, employee_id, period_start, period_end, original_pdf_path, import_file_id, source_file_id, max_punches)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       (provider, employee_id, period_start, period_end, original_pdf_path, import_file_id,
+        source_file_id, max_punches, total_worked_minutes, overtime_minutes, absence_minutes,
+        regular_minutes, interval_minutes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
     [
       sheet.provider,
       employeeId,
@@ -200,6 +218,11 @@ export async function saveParsedTimesheet(
       importFileId,
       sourceFileId ?? null,
       maxPunches,
+      totalWorkedMinutes,
+      overtimeMinutes,
+      absenceMinutes,
+      regularMinutes,
+      intervalMinutes,
     ],
   );
   const importId = importResult.lastInsertId as number;
@@ -385,6 +408,11 @@ export async function listImports(): Promise<StoredImport[]> {
       i.original_pdf_path AS originalPdfPath,
       sf.original_pdf_path AS sourceOriginalPdfPath,
       i.max_punches AS maxPunches,
+      i.total_worked_minutes AS totalWorkedMinutes,
+      i.overtime_minutes AS overtimeMinutes,
+      i.absence_minutes AS absenceMinutes,
+      i.regular_minutes AS regularMinutes,
+      i.interval_minutes AS intervalMinutes,
       i.imported_at AS importedAt
     FROM imports i
     JOIN employees e ON e.id = i.employee_id

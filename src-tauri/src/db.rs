@@ -52,5 +52,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0008_clients_many_to_many.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 9,
+            description: "store each import's period aggregates instead of recomputing them live",
+            sql: include_str!("../migrations/0009_import_period_aggregates.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -83,6 +83,18 @@ export interface ProviderInfo {
   label: string;
 }
 
+/**
+ * One file to place inside the Relatórios export zip. `zipPath` is the
+ * full relative path within the archive, folders and all (e.g.
+ * "Empresa X/Cliente Y/Nome - jul-2026.pdf"). A single source path is
+ * copied in as-is; more than one means "merge these into a single
+ * per-client document" (done with `pdfunite` on the Rust side).
+ */
+export interface ReportZipEntry {
+  zipPath: string;
+  sourcePdfPaths: string[];
+}
+
 /** Content-hash of a picked file, computed before any parsing happens. */
 export interface FileHash {
   path: string;
@@ -175,5 +187,17 @@ export interface StoredImport {
    * at import time; the UI just reads it instead of scanning day_records.
    */
   maxPunches: number;
+  /**
+   * Aggregates over this import's whole (fixed) period — summed once at
+   * import time from its day_records rather than recomputed live, since
+   * the period itself never changes once saved. `overtimeMinutes` is the
+   * sum of the excess above the (non-configurable) overtime threshold on
+   * days that went over it; `regularMinutes` sums each day's normal hours.
+   */
+  totalWorkedMinutes: number;
+  overtimeMinutes: number;
+  absenceMinutes: number;
+  regularMinutes: number;
+  intervalMinutes: number;
   importedAt: string;
 }

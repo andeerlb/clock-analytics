@@ -4,6 +4,7 @@ mod hashing;
 mod model;
 mod parsers;
 mod pdf_extract;
+mod report_zip;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -21,6 +22,7 @@ pub fn run() {
             commands::hash_files,
             commands::parse_import,
             commands::open_original_pdf,
+            commands::generate_report_zip,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

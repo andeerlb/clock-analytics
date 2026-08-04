@@ -2,6 +2,7 @@ use crate::hashing;
 use crate::model::{FileHash, ParsedTimesheet};
 use crate::parsers;
 use crate::pdf_extract;
+use crate::report_zip::{self, ReportZipEntry};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -251,4 +252,13 @@ fn copy_into_imports_dir(source_path: &str, imports_dir: &Path) -> Result<String
 #[tauri::command]
 pub fn open_original_pdf(app: AppHandle, path: String) -> Result<(), String> {
     app.opener().open_path(path, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Builds the Relatórios export zip. The frontend already knows the
+/// company/client/employee grouping and file naming (locale-aware period
+/// formatting lives in TS) — this just moves bytes into an archive, merging
+/// with `pdfunite` first wherever an entry has more than one source PDF.
+#[tauri::command]
+pub fn generate_report_zip(entries: Vec<ReportZipEntry>, dest_zip_path: String) -> Result<(), String> {
+    report_zip::build(&entries, &dest_zip_path)
 }

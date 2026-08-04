@@ -1,15 +1,12 @@
-import { FileText, ListFilter, TrendingDown, TrendingUp } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { FileText, TrendingDown, TrendingUp } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
+import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import { openOriginalPdf } from "../lib/api";
-import { formatMinutes, isWeekend, summarizePeriod, sumIntervalMinutes } from "../lib/analysis";
+import { OVERTIME_THRESHOLD_MINUTES, formatMinutes, isWeekend, sumIntervalMinutes } from "../lib/analysis";
 import { listImports, listStoredDayRecords } from "../lib/db";
 import { formatDate, formatDateCompact } from "../lib/format";
 import type { StoredDayRecord, StoredImport } from "../lib/types";
-
-// Not user-configurable (no threshold control in this view) — only feeds
-// the "Horas Extras" bento metric.
-const OVERTIME_THRESHOLD_MINUTES = 8 * 60;
 
 /** A day with no day_record at all (outside what the parser captured) — as opposed to a real, recorded zero. */
 function isSynthetic(day: Pick<StoredDayRecord, "dayRecordId">): boolean {
@@ -46,96 +43,6 @@ const DAY_STATUS_OPTIONS: { id: DayStatusId; label: string; matches: (day: Store
   { id: "weekend", label: "Finais de semana", matches: (d) => isWeekend(d.weekday) },
   { id: "interval", label: "Com intervalo", matches: (d) => sumIntervalMinutes(d.punches) > 0 },
 ];
-
-function DayStatusFilter({
-  selected,
-  onToggle,
-  onSelectAll,
-  onSelectNone,
-}: {
-  selected: Set<DayStatusId>;
-  onToggle: (id: DayStatusId) => void;
-  onSelectAll: () => void;
-  onSelectNone: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    function onClickOutside(e: MouseEvent) {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", onClickOutside);
-    return () => document.removeEventListener("mousedown", onClickOutside);
-  }, []);
-
-  const label =
-    selected.size === DAY_STATUS_OPTIONS.length
-      ? "Todos os dias"
-      : selected.size === 0
-        ? "Nenhum filtro selecionado"
-        : `${selected.size} de ${DAY_STATUS_OPTIONS.length} filtros`;
-
-  return (
-    <div style={{ position: "relative" }} ref={rootRef}>
-      <button type="button" className="secondary" onClick={() => setOpen((o) => !o)}>
-        <ListFilter size={15} style={{ marginRight: "0.4rem" }} />
-        {label}
-      </button>
-      {open && (
-        <div
-          style={{
-            position: "absolute",
-            right: 0,
-            top: "calc(100% + 0.4rem)",
-            background: "var(--card-bg)",
-            border: "1px solid var(--border)",
-            borderRadius: 10,
-            padding: "0.6rem",
-            minWidth: "220px",
-            boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.4)",
-            zIndex: 20,
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.4rem" }}>
-            <button
-              type="button"
-              className="ghost"
-              style={{ padding: "0.15rem 0.4rem", fontSize: "0.78rem" }}
-              onClick={onSelectAll}
-            >
-              Selecionar todos
-            </button>
-            <button
-              type="button"
-              className="ghost"
-              style={{ padding: "0.15rem 0.4rem", fontSize: "0.78rem" }}
-              onClick={onSelectNone}
-            >
-              Limpar
-            </button>
-          </div>
-          {DAY_STATUS_OPTIONS.map((opt) => (
-            <label
-              key={opt.id}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-                padding: "0.3rem 0.2rem",
-                fontSize: "0.88rem",
-                cursor: "pointer",
-              }}
-            >
-              <input type="checkbox" checked={selected.has(opt.id)} onChange={() => onToggle(opt.id)} />
-              {opt.label}
-            </label>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function weekdayAbbr(isoDate: string): string {
   return WEEKDAY_ABBR[new Date(`${isoDate}T00:00:00Z`).getUTCDay()];
@@ -224,10 +131,17 @@ export default function EmployeeDetailPage() {
     );
   }, [days, importInfo]);
 
-  const summary = useMemo(
-    () => summarizePeriod(fullDays, OVERTIME_THRESHOLD_MINUTES),
-    [fullDays],
-  );
+  // Read straight from the import — these are computed once at import time
+  // (over the import's own fixed period) and stored, not recomputed here.
+  const summary = useMemo(() => {
+    if (!importInfo) return { totalWorkedMinutes: 0, overtimeMinutes: 0, absenceMinutes: 0, balanceMinutes: 0 };
+    return {
+      totalWorkedMinutes: importInfo.totalWorkedMinutes,
+      overtimeMinutes: importInfo.overtimeMinutes,
+      absenceMinutes: importInfo.absenceMinutes,
+      balanceMinutes: importInfo.overtimeMinutes - importInfo.absenceMinutes,
+    };
+  }, [importInfo]);
   // Always includes every day from the period by default — this only
   // narrows what's *displayed*, the totals above are unaffected. A day is
   // hidden if it matches a status option the user unchecked.
@@ -326,7 +240,8 @@ export default function EmployeeDetailPage() {
       </div>
 
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "0.6rem" }}>
-        <DayStatusFilter
+        <MultiSelectDropdown
+          options={DAY_STATUS_OPTIONS}
           selected={selectedStatuses}
           onToggle={(id) =>
             setSelectedStatuses((prev) => {
@@ -338,6 +253,9 @@ export default function EmployeeDetailPage() {
           }
           onSelectAll={() => setSelectedStatuses(new Set(DAY_STATUS_OPTIONS.map((o) => o.id)))}
           onSelectNone={() => setSelectedStatuses(new Set())}
+          allLabel="Todos os dias"
+          noneLabel="Nenhum filtro selecionado"
+          countLabel={(n, total) => `${n} de ${total} filtros`}
         />
       </div>
 

@@ -30,6 +30,19 @@ export function formatDateCompact(isoDate: string): string {
   return Number(y) === currentYear ? `${d}/${m}` : `${d}/${m}/${y}`;
 }
 
+/**
+ * Makes a string safe to use as a file or folder name across Linux/macOS/
+ * Windows — strips path separators and the handful of characters Windows
+ * forbids, and trims trailing dots/spaces (also a Windows quirk).
+ */
+export function sanitizeFileName(name: string): string {
+  return name
+    .replace(/[/\\:*?"<>|]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/, "");
+}
+
 /** Strips everything but digits — the canonical, storable/comparable form of a CNPJ. */
 export function normalizeCnpj(cnpj: string): string {
   return cnpj.replace(/\D/g, "");

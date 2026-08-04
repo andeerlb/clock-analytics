@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { FileHash, FileParseResult, ProviderInfo } from "./types";
+import type { FileHash, FileParseResult, ProviderInfo, ReportZipEntry } from "./types";
 
 export function listProviders(): Promise<ProviderInfo[]> {
   return invoke("list_providers");
@@ -28,4 +28,9 @@ export async function pickPdfFiles(): Promise<string[]> {
   });
   if (!selection) return [];
   return Array.isArray(selection) ? selection : [selection];
+}
+
+/** Builds the Relatórios export zip at `destZipPath` from the given entries. */
+export function generateReportZip(entries: ReportZipEntry[], destZipPath: string): Promise<void> {
+  return invoke("generate_report_zip", { entries, destZipPath });
 }

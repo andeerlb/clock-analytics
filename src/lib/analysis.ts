@@ -1,17 +1,7 @@
-import type { DayRecord, StoredDayRecord } from "./types";
-
-/**
- * Fields derived from a day's punches. Deliberately not persisted: the
- * overtime threshold is chosen per report, at read time, so baking these
- * into stored rows would go stale the moment the user picks a different X.
- */
-export interface DayAnalysis {
-  punchCount: number;
-  hasPunch: boolean;
-  isIncomplete: boolean;
-  intervalMinutes: number | null;
-  exceedsThreshold: boolean;
-}
+// Not user-configurable anywhere in the UI — shared between the frontend
+// (Cartão de Ponto's per-day filter) and `db.ts` (period aggregates stored
+// at import time), so it lives here as the single source of truth.
+export const OVERTIME_THRESHOLD_MINUTES = 8 * 60;
 
 function hhmmToMinutes(value: string): number | null {
   const [h, m] = value.split(":").map(Number);
@@ -35,28 +25,6 @@ export function sumIntervalMinutes(punches: string[]): number {
   return total;
 }
 
-export function analyzeDay(
-  day: Pick<DayRecord | StoredDayRecord, "punches" | "totalWorkedMinutes">,
-  thresholdMinutes: number,
-): DayAnalysis {
-  const punchCount = day.punches.length;
-
-  let intervalMinutes: number | null = null;
-  if (day.punches.length >= 4) {
-    const sai1 = hhmmToMinutes(day.punches[1]);
-    const ent2 = hhmmToMinutes(day.punches[2]);
-    if (sai1 !== null && ent2 !== null) intervalMinutes = ent2 - sai1;
-  }
-
-  return {
-    punchCount,
-    hasPunch: punchCount > 0,
-    isIncomplete: punchCount % 2 !== 0,
-    intervalMinutes,
-    exceedsThreshold: day.totalWorkedMinutes > thresholdMinutes,
-  };
-}
-
 export function formatMinutes(totalMinutes: number): string {
   const sign = totalMinutes < 0 ? "-" : "";
   const abs = Math.abs(totalMinutes);
@@ -68,35 +36,4 @@ export function formatMinutes(totalMinutes: number): string {
 /** Coalize's weekday abbreviations only ever come out in Portuguese. */
 export function isWeekend(weekday: string): boolean {
   return weekday === "Sáb" || weekday === "Dom";
-}
-
-export interface PeriodSummary {
-  totalWorkedMinutes: number;
-  /** Sum of the excess above `thresholdMinutes` on days that went over it. */
-  overtimeMinutes: number;
-  absenceMinutes: number;
-  /** overtimeMinutes - absenceMinutes — a simple "banco de horas" balance. */
-  balanceMinutes: number;
-}
-
-export function summarizePeriod(
-  days: Pick<DayRecord | StoredDayRecord, "totalWorkedMinutes" | "absenceMinutes">[],
-  thresholdMinutes: number,
-): PeriodSummary {
-  let totalWorkedMinutes = 0;
-  let overtimeMinutes = 0;
-  let absenceMinutes = 0;
-  for (const day of days) {
-    totalWorkedMinutes += day.totalWorkedMinutes;
-    if (day.totalWorkedMinutes > thresholdMinutes) {
-      overtimeMinutes += day.totalWorkedMinutes - thresholdMinutes;
-    }
-    absenceMinutes += day.absenceMinutes;
-  }
-  return {
-    totalWorkedMinutes,
-    overtimeMinutes,
-    absenceMinutes,
-    balanceMinutes: overtimeMinutes - absenceMinutes,
-  };
 }
