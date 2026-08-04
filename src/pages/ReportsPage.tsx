@@ -1,6 +1,7 @@
 import { save } from "@tauri-apps/plugin-dialog";
-import { Archive, Users } from "lucide-react";
+import { Archive, Building2, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import DatePicker from "../components/DatePicker";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
 import { generateReportZip } from "../lib/api";
@@ -80,7 +81,7 @@ export default function ReportsPage() {
   const [imports, setImports] = useState<StoredImport[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [companyId, setCompanyId] = useState("");
+  const [selectedCompanyIds, setSelectedCompanyIds] = useState<Set<string>>(new Set());
   const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
   const [periodStart, setPeriodStart] = useState("");
   const [periodEnd, setPeriodEnd] = useState("");
@@ -105,28 +106,31 @@ export default function ReportsPage() {
   }, []);
 
   // `clients` has one row per (client, company) link — scope to the chosen
-  // empresa (if any), then dedupe down to one option per client.
+  // empresas (if any), then dedupe down to one option per client.
   const clientOptions = useMemo(() => {
-    const scoped = companyId ? clients.filter((c) => String(c.companyId) === companyId) : clients;
+    const scoped =
+      selectedCompanyIds.size > 0
+        ? clients.filter((c) => selectedCompanyIds.has(String(c.companyId)))
+        : clients;
     const seen = new Map<number, ClientRow>();
     for (const c of scoped) if (!seen.has(c.id)) seen.set(c.id, c);
     return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [clients, companyId]);
+  }, [clients, selectedCompanyIds]);
 
-  // Switching empresa changes what's even selectable — start the cliente
+  // Switching empresas changes what's even selectable — start the cliente
   // filter over rather than carry a stale, now-invisible selection.
   useEffect(() => {
     setSelectedClientIds(new Set());
-  }, [companyId]);
+  }, [selectedCompanyIds]);
 
   useEffect(() => {
     setPage(0);
-  }, [companyId, selectedClientIds, periodStart, periodEnd, selectedStatuses]);
+  }, [selectedCompanyIds, selectedClientIds, periodStart, periodEnd, selectedStatuses]);
 
   const filteredImports = useMemo(() => {
     return imports.filter((imp) => {
       if (!imp.clientId) return false;
-      if (companyId && String(imp.companyId) !== companyId) return false;
+      if (selectedCompanyIds.size > 0 && !selectedCompanyIds.has(String(imp.companyId))) return false;
       if (selectedClientIds.size > 0 && !selectedClientIds.has(String(imp.clientId))) return false;
       if (periodStart && imp.periodEnd < periodStart) return false;
       if (periodEnd && imp.periodStart > periodEnd) return false;
@@ -135,7 +139,7 @@ export default function ReportsPage() {
       }
       return true;
     });
-  }, [imports, companyId, selectedClientIds, periodStart, periodEnd, selectedStatuses]);
+  }, [imports, selectedCompanyIds, selectedClientIds, periodStart, periodEnd, selectedStatuses]);
 
   const pageCount = Math.max(1, Math.ceil(filteredImports.length / pageSize));
   const pageItems = useMemo(
@@ -178,15 +182,25 @@ export default function ReportsPage() {
       <div className="card">
         <div className="field-row">
           <div className="field">
-            <label htmlFor="company">Empresa</label>
-            <select id="company" value={companyId} onChange={(e) => setCompanyId(e.target.value)}>
-              <option value="">Todas</option>
-              {companies.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+            <label>Empresa</label>
+            <MultiSelectDropdown
+              options={companies.map((c) => ({ id: String(c.id), label: c.name }))}
+              selected={selectedCompanyIds}
+              onToggle={(id) =>
+                setSelectedCompanyIds((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(id)) next.delete(id);
+                  else next.add(id);
+                  return next;
+                })
+              }
+              onSelectAll={() => setSelectedCompanyIds(new Set(companies.map((c) => String(c.id))))}
+              onSelectNone={() => setSelectedCompanyIds(new Set())}
+              icon={Building2}
+              allLabel="Todas as empresas"
+              noneLabel="Todas as empresas"
+              countLabel={(n, total) => `${n} de ${total} empresas`}
+            />
           </div>
           <div className="field">
             <label>Cliente</label>
@@ -211,21 +225,11 @@ export default function ReportsPage() {
           </div>
           <div className="field">
             <label htmlFor="start">De</label>
-            <input
-              id="start"
-              type="date"
-              value={periodStart}
-              onChange={(e) => setPeriodStart(e.target.value)}
-            />
+            <DatePicker id="start" value={periodStart} onChange={setPeriodStart} />
           </div>
           <div className="field">
             <label htmlFor="end">Até</label>
-            <input
-              id="end"
-              type="date"
-              value={periodEnd}
-              onChange={(e) => setPeriodEnd(e.target.value)}
-            />
+            <DatePicker id="end" value={periodEnd} onChange={setPeriodEnd} />
           </div>
           <div className="field">
             <label>Status no período</label>
