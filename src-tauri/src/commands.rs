@@ -3,6 +3,7 @@ use crate::model::{FileHash, ParsedTimesheet};
 use crate::parsers;
 use crate::pdf_extract;
 use crate::report_zip::{self, ReportZipEntry};
+use crate::storage::{self, StorageUsage};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -263,6 +264,16 @@ pub fn reveal_in_file_manager(app: AppHandle, path: String) -> Result<(), String
         .map_err(|e| e.to_string())
 }
 
+/// Opens the app's whole data folder (DB + `imports/`) in the OS file
+/// manager — the "Abrir pasta de dados" button in Configurações.
+#[tauri::command]
+pub fn open_app_data_dir(app: AppHandle) -> Result<(), String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    app.opener()
+        .open_path(data_dir.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// Raw bytes of a PDF, for the in-app viewer (pdf.js on the frontend) to
 /// render — returning `tauri::ipc::Response` instead of a JSON-wrapped
 /// `Vec<u8>` avoids base64/array overhead for what can be a few hundred KB.
@@ -289,4 +300,34 @@ pub fn copy_pdf_to(source_path: String, dest_path: String) -> Result<(), String>
 #[tauri::command]
 pub fn generate_report_zip(entries: Vec<ReportZipEntry>, dest_zip_path: String) -> Result<(), String> {
     report_zip::build(&entries, &dest_zip_path)
+}
+
+/// Disk usage of the DB and the copied PDFs — the storage indicator on the
+/// Configurações screen.
+#[tauri::command]
+pub fn get_storage_usage(app: AppHandle) -> Result<StorageUsage, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(storage::usage(&data_dir))
+}
+
+/// Best-effort delete of the given files — used for "remover originais
+/// redundantes". Returns how many bytes were actually freed.
+#[tauri::command]
+pub fn delete_paths(paths: Vec<String>) -> Result<u64, String> {
+    storage::delete_paths(&paths)
+}
+
+/// Empties and recreates `imports/` — the file half of "Limpar tudo".
+#[tauri::command]
+pub fn clear_imports_dir(app: AppHandle) -> Result<(), String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    storage::clear_imports_dir(&data_dir)
+}
+
+/// Zips the DB and `imports/` to `dest_zip_path` — the optional backup
+/// offered right before "Limpar tudo" wipes everything.
+#[tauri::command]
+pub fn backup_app_data(app: AppHandle, dest_zip_path: String) -> Result<(), String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    storage::backup(&data_dir, &dest_zip_path)
 }

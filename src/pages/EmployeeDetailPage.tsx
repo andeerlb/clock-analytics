@@ -162,9 +162,11 @@ export default function EmployeeDetailPage() {
 
   // For a single-page source, the employee's own file *is* the whole
   // original — nothing to tell apart. For a multi-page batch, they're two
-  // different PDFs, so both buttons make sense.
+  // different PDFs, so both buttons make sense — unless the whole-original
+  // was since purged via Configurações ("remover originais redundantes"),
+  // which empties the path rather than nulling it (the column is NOT NULL).
   const hasSeparateOriginal =
-    importInfo.sourceOriginalPdfPath !== null &&
+    Boolean(importInfo.sourceOriginalPdfPath) &&
     importInfo.sourceOriginalPdfPath !== importInfo.originalPdfPath;
 
   // "Entrada 1", "Saída 1", "Entrada 2", "Saída 2", ... — however many
@@ -218,7 +220,7 @@ export default function EmployeeDetailPage() {
             className="secondary"
             onClick={() =>
               setViewer({
-                path: importInfo.sourceOriginalPdfPath ?? importInfo.originalPdfPath,
+                path: importInfo.sourceOriginalPdfPath || importInfo.originalPdfPath,
                 title: hasSeparateOriginal ? "Arquivo original" : `${importInfo.employeeName} — ${formatDate(importInfo.periodStart)} a ${formatDate(importInfo.periodEnd)}`,
               })
             }

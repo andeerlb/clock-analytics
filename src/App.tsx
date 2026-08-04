@@ -7,6 +7,7 @@ import ImportPage from "./pages/ImportPage";
 import LibraryPage from "./pages/LibraryPage";
 import EmployeeDetailPage from "./pages/EmployeeDetailPage";
 import ReportsPage from "./pages/ReportsPage";
+import SettingsPage from "./pages/SettingsPage";
 
 function App() {
   return (
@@ -21,6 +22,7 @@ function App() {
             <Route path="/import" element={<ImportPage />} />
             <Route path="/employee/:importId" element={<EmployeeDetailPage />} />
             <Route path="/reports" element={<ReportsPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
           </Routes>
         </main>
       </div>

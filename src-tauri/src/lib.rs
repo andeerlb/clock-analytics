@@ -5,6 +5,7 @@ mod model;
 mod parsers;
 mod pdf_extract;
 mod report_zip;
+mod storage;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -22,9 +23,14 @@ pub fn run() {
             commands::hash_files,
             commands::parse_import,
             commands::reveal_in_file_manager,
+            commands::open_app_data_dir,
             commands::read_pdf_bytes,
             commands::copy_pdf_to,
             commands::generate_report_zip,
+            commands::get_storage_usage,
+            commands::delete_paths,
+            commands::clear_imports_dir,
+            commands::backup_app_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

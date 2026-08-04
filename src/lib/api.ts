@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { FileHash, FileParseResult, ProviderInfo, ReportZipEntry } from "./types";
+import type { FileHash, FileParseResult, ProviderInfo, ReportZipEntry, StorageUsage } from "./types";
 
 export function listProviders(): Promise<ProviderInfo[]> {
   return invoke("list_providers");
@@ -19,6 +19,11 @@ export function parseImport(provider: string, paths: string[]): Promise<FilePars
 /** Opens `path`'s containing folder in the OS file manager ("abrir no explorador de arquivos"). */
 export function revealInFileManager(path: string): Promise<void> {
   return invoke("reveal_in_file_manager", { path });
+}
+
+/** Opens the app's whole data folder (DB + imports/) in the OS file manager. */
+export function openAppDataDir(): Promise<void> {
+  return invoke("open_app_data_dir");
 }
 
 /** Raw bytes of a PDF, for the in-app viewer to render. */
@@ -44,4 +49,24 @@ export async function pickPdfFiles(): Promise<string[]> {
 /** Builds the Relatórios export zip at `destZipPath` from the given entries. */
 export function generateReportZip(entries: ReportZipEntry[], destZipPath: string): Promise<void> {
   return invoke("generate_report_zip", { entries, destZipPath });
+}
+
+/** Disk usage of the DB and the copied PDFs. */
+export function getStorageUsage(): Promise<StorageUsage> {
+  return invoke("get_storage_usage");
+}
+
+/** Best-effort delete of each path — returns how many bytes were actually freed. */
+export function deletePaths(paths: string[]): Promise<number> {
+  return invoke("delete_paths", { paths });
+}
+
+/** Empties and recreates the imports/ folder — the file half of "Limpar tudo". */
+export function clearImportsDir(): Promise<void> {
+  return invoke("clear_imports_dir");
+}
+
+/** Zips the DB and imports/ to `destZipPath` — the backup offered before "Limpar tudo". */
+export function backupAppData(destZipPath: string): Promise<void> {
+  return invoke("backup_app_data", { destZipPath });
 }

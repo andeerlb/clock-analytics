@@ -782,8 +782,9 @@ export default function ImportPage() {
                         className="ghost"
                         style={{ padding: "0.3rem" }}
                         onClick={() => setViewerFile(f)}
+                        disabled={!f.originalPdfPath}
                         aria-label="Visualizar"
-                        title="Visualizar"
+                        title={f.originalPdfPath ? "Visualizar" : "Arquivo original removido (Configurações)"}
                       >
                         <Eye size={14} />
                       </button>

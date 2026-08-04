@@ -672,3 +672,113 @@ export async function listImportFiles(): Promise<ImportFileRow[]> {
     ORDER BY imported_at DESC
   `);
 }
+
+/**
+ * A multi-page batch's whole original file, once every one of its pages
+ * has its own saved import — at that point the whole-original is pure
+ * duplication (each employee's split-off page already has everything),
+ * so it's safe to offer up for deletion. Single-page sources are never
+ * candidates: there, the "original" and the employee's own file are the
+ * same one copy, not a duplicate.
+ */
+export interface RedundantOriginal {
+  sourceFileId: number;
+  path: string;
+}
+
+export async function findRedundantOriginals(): Promise<RedundantOriginal[]> {
+  const db = await getDb();
+  return db.select<RedundantOriginal[]>(`
+    SELECT sf.id AS sourceFileId, sf.original_pdf_path AS path
+    FROM source_files sf
+    WHERE sf.page_count > 1
+      AND sf.original_pdf_path != ''
+      AND (SELECT COUNT(*) FROM imports i WHERE i.source_file_id = sf.id) = sf.page_count
+  `);
+}
+
+/**
+ * Marks a batch's whole-original as removed after its file has actually
+ * been deleted from disk. `original_pdf_path` stays `NOT NULL` in the
+ * schema, so "removed" is the empty string — same sentinel the column
+ * already defaults to before a file is ever recorded — rather than NULL.
+ */
+export async function markOriginalsRemoved(sourceFileIds: number[]): Promise<void> {
+  if (sourceFileIds.length === 0) return;
+  const db = await getDb();
+  const placeholders = sourceFileIds.map((_, i) => `$${i + 1}`).join(", ");
+  await db.execute(
+    `UPDATE source_files SET original_pdf_path = '' WHERE id IN (${placeholders})`,
+    sourceFileIds,
+  );
+}
+
+/**
+ * Recompacts the DB file — reclaims space left behind by deleted rows
+ * without touching any surviving data. Cheap, non-destructive; the natural
+ * first thing to try before "Limpar tudo".
+ */
+export async function vacuumDatabase(): Promise<void> {
+  const db = await getDb();
+  await db.execute("VACUUM");
+}
+
+export interface ClearDataOptions {
+  /** Keep companies (and, transitively, whatever else depends on them). */
+  keepCompanies?: boolean;
+  /** Keep clients/client_companies — implies keeping companies too (a kept client's links need somewhere to point). */
+  keepClients?: boolean;
+  /** Keep employees — implies keeping their clients and companies too (both are required FKs). */
+  keepEmployees?: boolean;
+}
+
+/**
+ * Deletes rows from every table (schema and migration history stay intact)
+ * and reclaims the freed space — the database half of "Limpar tudo". The
+ * file half (everything under `imports/`) is a separate, Rust-side step,
+ * since this only touches the SQL connection.
+ *
+ * Import/timesheet data (punches, day_records, imports, import_files,
+ * source_files) is always wiped — there's no "keep" option for it, since
+ * it's exactly what's re-derivable by re-importing the same PDFs. Master
+ * data (companies/clients/employees) can optionally survive via `options`,
+ * respecting the real dependency chain: employees → clients → companies.
+ */
+export async function clearAllData(options: ClearDataOptions = {}): Promise<void> {
+  const db = await getDb();
+
+  const keepEmployees = Boolean(options.keepEmployees);
+  const keepClients = Boolean(options.keepClients) || keepEmployees;
+  const keepCompanies = Boolean(options.keepCompanies) || keepClients;
+
+  await db.execute("DELETE FROM punches");
+  await db.execute("DELETE FROM day_records");
+  await db.execute("DELETE FROM imports");
+  await db.execute("DELETE FROM import_files");
+  await db.execute("DELETE FROM source_files");
+
+  const clearedTables = ["punches", "day_records", "imports", "import_files", "source_files"];
+
+  if (!keepEmployees) {
+    await db.execute("DELETE FROM employees");
+    clearedTables.push("employees");
+  }
+  if (!keepClients) {
+    await db.execute("DELETE FROM client_companies");
+    await db.execute("DELETE FROM clients");
+    clearedTables.push("clients");
+  }
+  if (!keepCompanies) {
+    await db.execute("DELETE FROM companies");
+    clearedTables.push("companies");
+  }
+
+  try {
+    const placeholders = clearedTables.map((_, i) => `$${i + 1}`).join(", ");
+    await db.execute(`DELETE FROM sqlite_sequence WHERE name IN (${placeholders})`, clearedTables);
+  } catch {
+    // No autoincrement table has ever been written to yet — nothing to reset.
+  }
+
+  await db.execute("VACUUM");
+}

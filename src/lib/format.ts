@@ -1,3 +1,16 @@
+/** Bytes -> "12.3 MB" — the Configurações storage indicator. */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex++;
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
 /** "2026-07-01" -> "1 de julho de 2026" */
 export function formatDate(isoDate: string): string {
   const date = new Date(`${isoDate}T00:00:00Z`);

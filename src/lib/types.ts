@@ -95,6 +95,13 @@ export interface ReportZipEntry {
   sourcePdfPaths: string[];
 }
 
+/** Disk usage of everything the app itself created — the Configurações storage indicator. */
+export interface StorageUsage {
+  dbBytes: number;
+  importsBytes: number;
+  importsFileCount: number;
+}
+
 /** Content-hash of a picked file, computed before any parsing happens. */
 export interface FileHash {
   path: string;

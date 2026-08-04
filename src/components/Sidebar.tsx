@@ -1,4 +1,4 @@
-import { BarChart3, Briefcase, Building2, Clock, FileUp, Users } from "lucide-react";
+import { BarChart3, Briefcase, Building2, Clock, FileUp, Settings, Users } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 const NAV_ITEMS = [
@@ -8,6 +8,10 @@ const NAV_ITEMS = [
   { to: "/", label: "Colaboradores", icon: Users, end: true },
   { to: "/reports", label: "Relatórios", icon: BarChart3, end: false },
 ];
+
+function navLinkClass({ isActive }: { isActive: boolean }): string {
+  return `app-nav-link${isActive ? " active" : ""}`;
+}
 
 export default function Sidebar() {
   return (
@@ -21,17 +25,17 @@ export default function Sidebar() {
 
       <div className="app-nav-links">
         {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={end}
-            className={({ isActive }) => `app-nav-link${isActive ? " active" : ""}`}
-          >
+          <NavLink key={to} to={to} end={end} className={navLinkClass}>
             <Icon size={18} />
             <span>{label}</span>
           </NavLink>
         ))}
       </div>
+
+      <NavLink to="/settings" className={navLinkClass}>
+        <Settings size={18} />
+        <span>Configurações</span>
+      </NavLink>
     </nav>
   );
 }
