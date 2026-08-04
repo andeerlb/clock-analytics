@@ -46,5 +46,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0007_clients.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 8,
+            description: "clients are many-to-many with companies, not one-to-many",
+            sql: include_str!("../migrations/0008_clients_many_to_many.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

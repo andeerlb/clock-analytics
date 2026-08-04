@@ -65,6 +65,7 @@ export default function ImportPage() {
   const [provider, setProvider] = useState("");
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [clientId, setClientId] = useState("");
+  const [companyId, setCompanyId] = useState("");
   const [paths, setPaths] = useState<string[]>([]);
   const [fileStatuses, setFileStatuses] = useState<Map<string, FileStatus>>(new Map());
   const [fileResults, setFileResults] = useState<FileParseResult[]>([]);
@@ -170,10 +171,30 @@ export default function ImportPage() {
   );
   const duplicateCount = paths.length - eligiblePaths.length;
 
+  // `clients` has one row per (client, company) link, so grab the first
+  // match just for the client's own identity (name/cnpj) — those are the
+  // same across every row for a given client.
   const selectedClient = useMemo(
     () => clients.find((c) => String(c.id) === clientId) ?? null,
     [clients, clientId],
   );
+
+  // Every company the selected client is linked to — this is what the
+  // "Empresa" select offers, since a client can be tied to more than one.
+  const clientCompanies = useMemo(
+    () => clients.filter((c) => String(c.id) === clientId),
+    [clients, clientId],
+  );
+
+  // Auto-select the company when the client only has one; otherwise force
+  // an explicit choice (and clear any stale choice from a previous client).
+  useEffect(() => {
+    if (clientCompanies.length === 1) {
+      setCompanyId(String(clientCompanies[0].companyId));
+    } else {
+      setCompanyId("");
+    }
+  }, [clientCompanies]);
 
   // Flat list of every successfully parsed sheet, in file order — this is
   // what conflict-checking and saving iterate over. Index into this array
@@ -301,7 +322,7 @@ export default function ImportPage() {
   }
 
   async function handleSave() {
-    if (!selectedClient) return;
+    if (!selectedClient || !companyId) return;
     setBusy(true);
     setError(null);
     try {
@@ -336,6 +357,7 @@ export default function ImportPage() {
         lastImportId = await saveParsedTimesheet(
           sheets[i],
           selectedClient.id,
+          Number(companyId),
           conflict?.existingImportId,
           sourceFileIdByHash.get(fileHash),
         );
@@ -400,14 +422,24 @@ export default function ImportPage() {
           </div>
           <div className="field" style={{ flex: "1 1 180px" }}>
             <label htmlFor="company">Empresa</label>
-            <input
+            <select
               id="company"
-              type="text"
-              value={selectedClient?.companyName ?? ""}
-              disabled
-              placeholder="Definida pelo cliente"
-            />
-            <p className="field-hint">Definida automaticamente pelo cliente selecionado.</p>
+              value={companyId}
+              onChange={(e) => setCompanyId(e.target.value)}
+              disabled={clientCompanies.length <= 1}
+            >
+              {clientCompanies.length !== 1 && <option value="">Selecione uma empresa</option>}
+              {clientCompanies.map((c) => (
+                <option key={c.companyId} value={c.companyId}>
+                  {c.companyName}
+                </option>
+              ))}
+            </select>
+            <p className="field-hint">
+              {clientCompanies.length > 1
+                ? "Esse cliente está vinculado a mais de uma empresa — escolha uma."
+                : "Definida automaticamente pelo cliente selecionado."}
+            </p>
           </div>
           <div className="field" style={{ flex: "1 1 220px" }}>
             <label htmlFor="provider">Provedor</label>
@@ -497,7 +529,7 @@ export default function ImportPage() {
         <div className="card-footer">
           <button
             type="button"
-            disabled={eligiblePaths.length === 0 || !provider || !clientId || busy}
+            disabled={eligiblePaths.length === 0 || !provider || !clientId || !companyId || busy}
             onClick={handleParse}
           >
             {busy ? "Processando..." : `Processar ${eligiblePaths.length || ""} PDF(s)`}

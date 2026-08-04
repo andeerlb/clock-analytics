@@ -50,7 +50,9 @@ export default function ClientsPage() {
         <h2>Clientes</h2>
       </div>
       <p className="page-subtitle">
-        Cada cliente pertence a uma empresa. Ao importar, selecionar o cliente já define a empresa.
+        O CNPJ do cliente é único: cadastrar o mesmo CNPJ para outra empresa apenas vincula o
+        cliente já existente a ela, em vez de duplicá-lo. Ao importar, selecione o cliente e, se
+        ele estiver vinculado a mais de uma empresa, escolha qual delas.
       </p>
 
       {error && <div className="error-box">{error}</div>}

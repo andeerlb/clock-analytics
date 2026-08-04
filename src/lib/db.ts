@@ -139,9 +139,10 @@ export async function deleteImport(importId: number): Promise<void> {
 /**
  * Persists one parsed timesheet (and its days/punches) into SQLite, under
  * `clientId` — the client the user explicitly selected before importing,
- * not whatever `sheet.company` says. Clients (and their parent company) are
- * pre-registered (see `createClient`/`createCompany`); imports no longer
- * create either on the fly.
+ * not whatever `sheet.company` says — and `companyId`, the specific
+ * company (among that client's linked companies) chosen for this import.
+ * Clients/companies are pre-registered (see `createClient`/`createCompany`);
+ * imports no longer create either on the fly.
  * Pass `replaceImportId` to overwrite an existing conflicting import
  * (same employee+client+overlapping period) instead of adding alongside it.
  * Pass `sourceFileId` (from `logSourceFile`) to link back to the whole
@@ -151,6 +152,7 @@ export async function deleteImport(importId: number): Promise<void> {
 export async function saveParsedTimesheet(
   sheet: ParsedTimesheet,
   clientId: number,
+  companyId: number,
   replaceImportId?: number,
   sourceFileId?: number,
 ): Promise<number> {
@@ -160,14 +162,15 @@ export async function saveParsedTimesheet(
     await deleteImport(replaceImportId);
   }
 
-  // The company is derived from the client (not passed separately) so the
-  // two can never end up mismatched.
-  const clientRow = await db.select<{ companyId: number }[]>(
-    "SELECT company_id AS companyId FROM clients WHERE id = $1",
-    [clientId],
+  // A client can be linked to more than one company, so the pairing has to
+  // be validated explicitly rather than derived.
+  const link = await db.select<{ clientId: number }[]>(
+    "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
+    [clientId, companyId],
   );
-  if (clientRow.length === 0) throw new Error("Cliente não encontrado.");
-  const companyId = clientRow[0].companyId;
+  if (link.length === 0) {
+    throw new Error("Esse cliente não está vinculado à empresa selecionada.");
+  }
 
   const employeeId = await upsertEmployee(
     db,
@@ -278,6 +281,10 @@ export async function createCompany(name: string, cnpj: string): Promise<number>
   return result.lastInsertId as number;
 }
 
+// One row per (client, company) link — a client with multiple companies
+// shows up once per company here, which is the shape both the ClientsPage
+// table and the ImportPage "which companies is this client linked to"
+// lookup want.
 export interface ClientRow {
   id: number;
   name: string;
@@ -291,7 +298,8 @@ export async function listClients(): Promise<ClientRow[]> {
   return db.select<ClientRow[]>(`
     SELECT cl.id, cl.name, cl.cnpj, c.id AS companyId, c.name AS companyName
     FROM clients cl
-    JOIN companies c ON c.id = cl.company_id
+    JOIN client_companies cc ON cc.client_id = cl.id
+    JOIN companies c ON c.id = cc.company_id
     ORDER BY c.name, cl.name
   `);
 }
@@ -306,17 +314,21 @@ export async function listClientsWithStats(): Promise<ClientWithStats[]> {
     SELECT cl.id, cl.name, cl.cnpj, c.id AS companyId, c.name AS companyName,
            COUNT(DISTINCT e.id) AS employeeCount
     FROM clients cl
-    JOIN companies c ON c.id = cl.company_id
+    JOIN client_companies cc ON cc.client_id = cl.id
+    JOIN companies c ON c.id = cc.company_id
     LEFT JOIN employees e ON e.client_id = cl.id
-    GROUP BY cl.id
+    GROUP BY cl.id, c.id
     ORDER BY c.name, cl.name
   `);
 }
 
 /**
- * Registers a new client under `companyId`. CNPJ only needs to be unique
- * within that company — registering a CNPJ that's already there is
- * rejected, same rationale as `createCompany`.
+ * Registers a client under `companyId`. A client's CNPJ is a globally
+ * unique physical entity — just like a company's — but the same client can
+ * be linked to more than one company. So this either creates a brand new
+ * client (no client with that CNPJ exists yet) or links an existing one
+ * (found by CNPJ) to this additional company. Linking the same client to
+ * the same company twice is rejected.
  */
 export async function createClient(
   companyId: number,
@@ -325,18 +337,34 @@ export async function createClient(
 ): Promise<number> {
   const db = await getDb();
   const normalizedCnpj = normalizeCnpj(cnpj);
-  const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM clients WHERE company_id = $1 AND cnpj = $2",
-    [companyId, normalizedCnpj],
-  );
+
+  const existing = await db.select<{ id: number }[]>("SELECT id FROM clients WHERE cnpj = $1", [
+    normalizedCnpj,
+  ]);
+
+  let clientId: number;
   if (existing.length > 0) {
-    throw new Error("Essa empresa já tem um cliente cadastrado com esse CNPJ.");
+    clientId = existing[0].id;
+    const existingLink = await db.select<{ clientId: number }[]>(
+      "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
+      [clientId, companyId],
+    );
+    if (existingLink.length > 0) {
+      throw new Error("Esse cliente já está vinculado a essa empresa.");
+    }
+  } else {
+    const result = await db.execute("INSERT INTO clients (name, cnpj) VALUES ($1, $2)", [
+      name.trim(),
+      normalizedCnpj,
+    ]);
+    clientId = result.lastInsertId as number;
   }
-  const result = await db.execute(
-    "INSERT INTO clients (company_id, name, cnpj) VALUES ($1, $2, $3)",
-    [companyId, name.trim(), normalizedCnpj],
+
+  await db.execute(
+    "INSERT INTO client_companies (client_id, company_id) VALUES ($1, $2)",
+    [clientId, companyId],
   );
-  return result.lastInsertId as number;
+  return clientId;
 }
 
 export async function listImports(): Promise<StoredImport[]> {
