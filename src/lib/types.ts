@@ -73,6 +73,9 @@ export interface FileParseResult {
 
 export type ImportStatus = "success" | "warning" | "error";
 
+/** Which import flow a source file went through — each has its own history. */
+export type ImportType = "timesheet" | "payment";
+
 export function importStatusOf(result: Pick<FileParseResult, "sheets" | "error">): ImportStatus {
   if (!result.error) return "success";
   return result.sheets.length > 0 ? "warning" : "error";
@@ -148,6 +151,7 @@ export interface ImportFileRow {
   fileName: string;
   fileHash: string;
   provider: string;
+  importType: ImportType;
   status: ImportStatus;
   errorMessage: string | null;
   originalPdfPath: string;

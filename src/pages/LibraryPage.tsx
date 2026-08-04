@@ -385,7 +385,7 @@ export default function LibraryPage() {
         {loading && <p className="muted" style={{ padding: "1.4rem" }}>Carregando...</p>}
         {!loading && imports.length === 0 && (
           <p className="muted" style={{ padding: "1.4rem" }}>
-            Nenhum importe ainda. <Link to="/import">Comece importando um PDF</Link>.
+            Nenhum importe ainda. <Link to="/import/timesheet">Comece importando um PDF</Link>.
           </p>
         )}
         {!loading && imports.length > 0 && filteredImports.length === 0 && (

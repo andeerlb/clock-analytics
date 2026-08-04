@@ -70,5 +70,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0011_import_pending_count.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 12,
+            description: "scope source files to their import type (timesheet vs. payment)",
+            sql: include_str!("../migrations/0012_source_file_import_type.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

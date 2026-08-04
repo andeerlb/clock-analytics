@@ -198,6 +198,19 @@ h6 {
   margin: 0.2rem 0 1.5rem;
 }
 
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-bottom: 0.8rem;
+}
+
+.back-link:hover {
+  color: var(--accent-hover);
+}
+
 .card {
   background: var(--card-bg);
   border: 1px solid var(--border);
@@ -671,6 +684,54 @@ tr:last-child td {
 .tip-card p {
   margin: 0;
   font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.2rem;
+}
+
+.choice-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.6rem;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.2);
+  color: var(--text);
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.choice-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  color: var(--text);
+}
+
+.choice-card-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.choice-card h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+
+.choice-card p {
+  margin: 0;
+  font-size: 0.85rem;
   color: var(--text-muted);
 }
 

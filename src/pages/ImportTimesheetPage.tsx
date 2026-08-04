@@ -2,6 +2,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   AlertCircle,
   AlertTriangle,
+  ArrowLeft,
   CheckCircle2,
   Eye,
   FileText,
@@ -61,7 +62,7 @@ type PreviewRow =
 const PREVIEW_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
-export default function ImportPage() {
+export default function ImportTimesheetPage() {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [provider, setProvider] = useState("");
   const [clients, setClients] = useState<ClientRow[]>([]);
@@ -138,7 +139,7 @@ export default function ImportPage() {
   }, [paths]);
 
   function refreshRecentFiles() {
-    listImportFiles().then(setRecentFiles);
+    listImportFiles("timesheet").then(setRecentFiles);
   }
 
   function addPaths(newPaths: string[]) {
@@ -361,6 +362,7 @@ export default function ImportPage() {
           fileName: result.fileName,
           pageCount: result.pageCount,
           provider,
+          importType: "timesheet",
           status: importStatusOf(result),
           errorMessage: result.error,
           originalPdfPath: result.originalPdfPath,
@@ -406,6 +408,10 @@ export default function ImportPage() {
 
   return (
     <div>
+      <Link to="/import" className="back-link">
+        <ArrowLeft size={14} />
+        Importar
+      </Link>
       <div className="page-header">
         <h2>Importar espelhos de ponto</h2>
       </div>

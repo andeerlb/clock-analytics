@@ -7,7 +7,9 @@ import { FiltersProvider } from "./contexts/FiltersContext";
 import { checkPopplerStatus } from "./lib/api";
 import ClientsPage from "./pages/ClientsPage";
 import CompaniesPage from "./pages/CompaniesPage";
-import ImportPage from "./pages/ImportPage";
+import ImportChooserPage from "./pages/ImportChooserPage";
+import ImportPaymentsPage from "./pages/ImportPaymentsPage";
+import ImportTimesheetPage from "./pages/ImportTimesheetPage";
 import LibraryPage from "./pages/LibraryPage";
 import EmployeeDetailPage from "./pages/EmployeeDetailPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -44,7 +46,9 @@ function App() {
               <Route path="/" element={<LibraryPage />} />
               <Route path="/companies" element={<CompaniesPage />} />
               <Route path="/clients" element={<ClientsPage />} />
-              <Route path="/import" element={<ImportPage />} />
+              <Route path="/import" element={<ImportChooserPage />} />
+              <Route path="/import/timesheet" element={<ImportTimesheetPage />} />
+              <Route path="/import/payments" element={<ImportPaymentsPage />} />
               <Route path="/employee/:importId" element={<EmployeeDetailPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>

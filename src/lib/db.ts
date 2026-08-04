@@ -6,6 +6,7 @@ import type {
   DuplicateFileInfo,
   ImportFileRow,
   ImportStatus,
+  ImportType,
   ParsedTimesheet,
   StoredDayRecord,
   StoredImport,
@@ -72,6 +73,7 @@ export async function logSourceFile(input: {
   fileName: string;
   pageCount: number;
   provider: string;
+  importType: ImportType;
   status: ImportStatus;
   errorMessage: string | null;
   originalPdfPath: string;
@@ -79,12 +81,13 @@ export async function logSourceFile(input: {
   const db = await getDb();
   await db.execute(
     `INSERT INTO source_files
-       (file_name, file_hash, page_count, provider, status, error_message, original_pdf_path)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (file_name, file_hash, page_count, provider, import_type, status, error_message, original_pdf_path)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT(file_hash) DO UPDATE SET
        file_name = excluded.file_name,
        page_count = excluded.page_count,
        provider = excluded.provider,
+       import_type = excluded.import_type,
        status = excluded.status,
        error_message = excluded.error_message,
        original_pdf_path = excluded.original_pdf_path,
@@ -94,6 +97,7 @@ export async function logSourceFile(input: {
       input.fileHash,
       input.pageCount,
       input.provider,
+      input.importType,
       input.status,
       input.errorMessage,
       input.originalPdfPath,
@@ -659,15 +663,16 @@ export async function findConflicts(
   return conflicts;
 }
 
-/** The import history: every file ever processed, most recent first. */
-export async function listImportFiles(): Promise<ImportFileRow[]> {
+/** The import history for one import flow (timesheet or payment), most recent first. */
+export async function listImportFiles(importType: ImportType): Promise<ImportFileRow[]> {
   const db = await getDb();
-  return db.select<ImportFileRow[]>(`
-    SELECT
+  return db.select<ImportFileRow[]>(
+    `SELECT
       id,
       file_name AS fileName,
       file_hash AS fileHash,
       provider,
+      import_type AS importType,
       status,
       error_message AS errorMessage,
       original_pdf_path AS originalPdfPath,
@@ -675,8 +680,10 @@ export async function listImportFiles(): Promise<ImportFileRow[]> {
       imported_at AS importedAt,
       saved_at AS savedAt
     FROM source_files
-    ORDER BY imported_at DESC
-  `);
+    WHERE import_type = $1
+    ORDER BY imported_at DESC`,
+    [importType],
+  );
 }
 
 /**
