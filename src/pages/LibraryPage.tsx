@@ -2,12 +2,21 @@ import { Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import DateRangePicker from "../components/DateRangePicker";
+import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
 import { openOriginalPdf } from "../lib/api";
 import { colorForName, initials } from "../lib/avatar";
+import { toIso, todayUtc } from "../lib/calendar";
 import { listClients, listCompanies, listImports, type ClientRow, type CompanyRow } from "../lib/db";
 import { formatDate, formatDateTime } from "../lib/format";
+import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
 import type { StoredImport } from "../lib/types";
+
+/** Default period on load: the current calendar month so far — this field is never empty. */
+function defaultPeriodStart(): string {
+  const today = todayUtc();
+  return toIso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)));
+}
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
@@ -21,8 +30,11 @@ export default function LibraryPage() {
   const [search, setSearch] = useState("");
   const [companyId, setCompanyId] = useState("");
   const [clientId, setClientId] = useState("");
-  const [periodStart, setPeriodStart] = useState("");
-  const [periodEnd, setPeriodEnd] = useState("");
+  const [periodStart, setPeriodStart] = useState(defaultPeriodStart);
+  const [periodEnd, setPeriodEnd] = useState(() => toIso(todayUtc()));
+  const [selectedStatuses, setSelectedStatuses] = useState<Set<PeriodStatusId>>(
+    () => new Set(PERIOD_STATUS_OPTIONS.map((o) => o.id)),
+  );
 
   useEffect(() => {
     Promise.all([listImports(), listCompanies(), listClients()])
@@ -46,7 +58,7 @@ export default function LibraryPage() {
   // gets stuck showing an out-of-range page.
   useEffect(() => {
     setPage(0);
-  }, [search, companyId, clientId, periodStart, periodEnd]);
+  }, [search, companyId, clientId, periodStart, periodEnd, selectedStatuses]);
 
   const filteredImports = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -56,13 +68,13 @@ export default function LibraryPage() {
       if (query && !imp.employeeName.toLowerCase().includes(query)) {
         return false;
       }
-      // Period range filter: keep imports whose period overlaps the
-      // selected range — an empty bound means "no constraint on that side".
-      if (periodStart && imp.periodEnd < periodStart) return false;
-      if (periodEnd && imp.periodStart > periodEnd) return false;
+      if (imp.periodEnd < periodStart || imp.periodStart > periodEnd) return false;
+      for (const opt of PERIOD_STATUS_OPTIONS) {
+        if (opt.matches(imp) && !selectedStatuses.has(opt.id)) return false;
+      }
       return true;
     });
-  }, [imports, search, companyId, clientId, periodStart, periodEnd]);
+  }, [imports, search, companyId, clientId, periodStart, periodEnd, selectedStatuses]);
 
   const pageCount = Math.max(1, Math.ceil(filteredImports.length / pageSize));
   const pageItems = useMemo(
@@ -70,7 +82,9 @@ export default function LibraryPage() {
     [filteredImports, page, pageSize],
   );
 
-  const hasFilters = Boolean(search || companyId || clientId || periodStart || periodEnd);
+  const hasFilters = Boolean(
+    search || companyId || clientId || selectedStatuses.size !== PERIOD_STATUS_OPTIONS.length,
+  );
 
   return (
     <div>
@@ -146,6 +160,27 @@ export default function LibraryPage() {
                   setPeriodStart(s);
                   setPeriodEnd(e);
                 }}
+                allowClear={false}
+              />
+            </div>
+            <div className="field">
+              <label>Status no período</label>
+              <MultiSelectDropdown
+                options={PERIOD_STATUS_OPTIONS}
+                selected={selectedStatuses}
+                onToggle={(id) =>
+                  setSelectedStatuses((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(id)) next.delete(id);
+                    else next.add(id);
+                    return next;
+                  })
+                }
+                onSelectAll={() => setSelectedStatuses(new Set(PERIOD_STATUS_OPTIONS.map((o) => o.id)))}
+                onSelectNone={() => setSelectedStatuses(new Set())}
+                allLabel="Todos os status"
+                noneLabel="Nenhum filtro selecionado"
+                countLabel={(n, total) => `${n} de ${total} filtros`}
               />
             </div>
           </div>
