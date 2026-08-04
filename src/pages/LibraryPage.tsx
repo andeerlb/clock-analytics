@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import Pagination from "../components/Pagination";
 import { openOriginalPdf } from "../lib/api";
 import { colorForName, initials } from "../lib/avatar";
-import { listCompanies, listImports, type CompanyRow } from "../lib/db";
+import { listClients, listCompanies, listImports, type ClientRow, type CompanyRow } from "../lib/db";
 import { formatDate, formatDateTime } from "../lib/format";
 import type { StoredImport } from "../lib/types";
 
@@ -13,38 +13,46 @@ const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 export default function LibraryPage() {
   const [imports, setImports] = useState<StoredImport[]>([]);
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
+  const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const [search, setSearch] = useState("");
   const [companyId, setCompanyId] = useState("");
+  const [clientId, setClientId] = useState("");
   const [periodStart, setPeriodStart] = useState("");
   const [periodEnd, setPeriodEnd] = useState("");
 
   useEffect(() => {
-    Promise.all([listImports(), listCompanies()])
-      .then(([importsRows, companyRows]) => {
+    Promise.all([listImports(), listCompanies(), listClients()])
+      .then(([importsRows, companyRows, clientRows]) => {
         setImports(importsRows);
         setCompanies(companyRows);
+        setClients(clientRows);
       })
       .finally(() => setLoading(false));
   }, []);
+
+  // `listClients` has one row per (client, company) link — dedupe down to
+  // one option per client for this filter, which is independent of company.
+  const clientOptions = useMemo(() => {
+    const seen = new Map<number, ClientRow>();
+    for (const c of clients) if (!seen.has(c.id)) seen.set(c.id, c);
+    return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [clients]);
 
   // Reset to the first page whenever a filter changes, so pagination never
   // gets stuck showing an out-of-range page.
   useEffect(() => {
     setPage(0);
-  }, [search, companyId, periodStart, periodEnd]);
+  }, [search, companyId, clientId, periodStart, periodEnd]);
 
   const filteredImports = useMemo(() => {
     const query = search.trim().toLowerCase();
     return imports.filter((imp) => {
       if (companyId && String(imp.companyId) !== companyId) return false;
-      if (
-        query &&
-        !imp.employeeName.toLowerCase().includes(query) &&
-        !imp.companyName.toLowerCase().includes(query)
-      ) {
+      if (clientId && String(imp.clientId) !== clientId) return false;
+      if (query && !imp.employeeName.toLowerCase().includes(query)) {
         return false;
       }
       // Period range filter: keep imports whose period overlaps the
@@ -53,7 +61,7 @@ export default function LibraryPage() {
       if (periodEnd && imp.periodStart > periodEnd) return false;
       return true;
     });
-  }, [imports, search, companyId, periodStart, periodEnd]);
+  }, [imports, search, companyId, clientId, periodStart, periodEnd]);
 
   const pageCount = Math.max(1, Math.ceil(filteredImports.length / pageSize));
   const pageItems = useMemo(
@@ -61,7 +69,7 @@ export default function LibraryPage() {
     [filteredImports, page, pageSize],
   );
 
-  const hasFilters = Boolean(search || companyId || periodStart || periodEnd);
+  const hasFilters = Boolean(search || companyId || clientId || periodStart || periodEnd);
 
   return (
     <div>
@@ -93,7 +101,7 @@ export default function LibraryPage() {
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Colaborador ou empresa..."
+                  placeholder="Nome do colaborador..."
                   style={{ width: "100%", paddingLeft: "2rem" }}
                 />
               </div>
@@ -107,6 +115,21 @@ export default function LibraryPage() {
               >
                 <option value="">Todas</option>
                 {companies.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="client-filter">Cliente</label>
+              <select
+                id="client-filter"
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+              >
+                <option value="">Todos</option>
+                {clientOptions.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
                   </option>

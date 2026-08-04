@@ -48,6 +48,8 @@ function blankDay(importInfo: StoredImport, date: string): StoredDayRecord {
     employeeCpf: importInfo.employeeCpf,
     companyId: importInfo.companyId,
     companyName: importInfo.companyName,
+    clientId: importInfo.clientId,
+    clientName: importInfo.clientName,
     originalPdfPath: importInfo.originalPdfPath,
     date,
     weekday: weekdayAbbr(date),
@@ -139,6 +141,8 @@ export default function EmployeeDetailPage() {
             {formatDate(importInfo.periodEnd)}</strong>
             <span style={{ margin: "0 0.6rem", color: "var(--border)" }}>|</span>
             Empresa: <strong style={{ color: "var(--text)" }}>{importInfo.companyName}</strong>
+            <span style={{ margin: "0 0.6rem", color: "var(--border)" }}>|</span>
+            Cliente: <strong style={{ color: "var(--text)" }}>{importInfo.clientName}</strong>
           </p>
         </div>
         <div style={{ display: "flex", gap: "0.6rem", flexShrink: 0 }}>

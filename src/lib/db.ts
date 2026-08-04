@@ -378,6 +378,8 @@ export async function listImports(): Promise<StoredImport[]> {
       e.cpf AS employeeCpf,
       c.id AS companyId,
       c.name AS companyName,
+      cl.id AS clientId,
+      cl.name AS clientName,
       i.period_start AS periodStart,
       i.period_end AS periodEnd,
       i.original_pdf_path AS originalPdfPath,
@@ -387,6 +389,7 @@ export async function listImports(): Promise<StoredImport[]> {
     FROM imports i
     JOIN employees e ON e.id = i.employee_id
     JOIN companies c ON c.id = e.company_id
+    LEFT JOIN clients cl ON cl.id = e.client_id
     LEFT JOIN source_files sf ON sf.id = i.source_file_id
     ORDER BY i.imported_at DESC
   `);
@@ -395,6 +398,7 @@ export async function listImports(): Promise<StoredImport[]> {
 interface DayRecordFilters {
   importId?: number;
   companyId?: number;
+  clientId?: number;
   periodStart?: string;
   periodEnd?: string;
 }
@@ -414,6 +418,10 @@ export async function listStoredDayRecords(
   if (filters.companyId !== undefined) {
     params.push(filters.companyId);
     conditions.push(`c.id = $${params.length}`);
+  }
+  if (filters.clientId !== undefined) {
+    params.push(filters.clientId);
+    conditions.push(`cl.id = $${params.length}`);
   }
   if (filters.periodStart !== undefined) {
     params.push(filters.periodStart);
@@ -435,6 +443,8 @@ export async function listStoredDayRecords(
       e.cpf AS employeeCpf,
       c.id AS companyId,
       c.name AS companyName,
+      cl.id AS clientId,
+      cl.name AS clientName,
       i.original_pdf_path AS originalPdfPath,
       d.date AS date,
       d.weekday AS weekday,
@@ -446,6 +456,7 @@ export async function listStoredDayRecords(
     JOIN imports i ON i.id = d.import_id
     JOIN employees e ON e.id = i.employee_id
     JOIN companies c ON c.id = e.company_id
+    LEFT JOIN clients cl ON cl.id = e.client_id
     ${where}
     ORDER BY e.name, d.date
     `,

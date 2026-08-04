@@ -137,6 +137,8 @@ export interface StoredDayRecord {
   employeeCpf: string;
   companyId: number;
   companyName: string;
+  clientId: number;
+  clientName: string;
   originalPdfPath: string;
   date: string;
   weekday: string;
@@ -155,6 +157,8 @@ export interface StoredImport {
   employeeCpf: string;
   companyId: number;
   companyName: string;
+  clientId: number;
+  clientName: string;
   periodStart: string;
   periodEnd: string;
   /** This employee's own PDF (their split-off page, for a multi-page batch). */
