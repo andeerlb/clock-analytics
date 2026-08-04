@@ -1009,8 +1009,8 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
   );
   if (rows.length === 0) throw new Error("Template não encontrado.");
 
-  const groupRows = await db.select<{ id: number; headerRow: number }[]>(
-    "SELECT id, header_row AS headerRow FROM payment_template_groups WHERE template_id = $1",
+  const groupRows = await db.select<{ id: number }[]>(
+    "SELECT id FROM payment_template_groups WHERE template_id = $1",
     [id],
   );
   const groups: PaymentTemplateGroup[] = [];
@@ -1026,7 +1026,7 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
        ORDER BY column_letter`,
       [g.id],
     );
-    groups.push({ headerRow: g.headerRow, sheetNames: sheetRows.map((r) => r.sheetName), fieldMappings });
+    groups.push({ sheetNames: sheetRows.map((r) => r.sheetName), fieldMappings });
   }
 
   return { ...rows[0], groups };
@@ -1051,8 +1051,8 @@ async function insertTemplateGroups(
 ): Promise<void> {
   for (const group of groups) {
     const result = await db.execute(
-      "INSERT INTO payment_template_groups (template_id, header_row) VALUES ($1, $2)",
-      [templateId, group.headerRow],
+      "INSERT INTO payment_template_groups (template_id) VALUES ($1)",
+      [templateId],
     );
     const groupId = result.lastInsertId as number;
     for (const sheetName of group.sheetNames) {

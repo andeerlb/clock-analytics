@@ -224,12 +224,17 @@ export interface PaymentTemplateFieldMapping {
 /**
  * Different sheets in the same workbook can have genuinely different
  * layouts, so a template maps one or more independent "groups" instead of
- * a single flat header row + mapping — sheets with an identical structure
- * share a group; sheets that differ get their own. CSV has no sheets, so
- * it always has exactly one group with an empty `sheetNames`.
+ * a single flat mapping — sheets with an identical structure share a
+ * group; sheets that differ get their own. CSV has no sheets, so it
+ * always has exactly one group with an empty `sheetNames`.
+ *
+ * There's no header-row field here on purpose: which physical row is real
+ * data isn't decided at template-configuration time, it's decided at
+ * import time by trying to parse each row's "data" field as a date —
+ * whichever rows fail (typically a header, title, or footer row) are
+ * skipped automatically.
  */
 export interface PaymentTemplateGroup {
-  headerRow: number;
   sheetNames: string[];
   fieldMappings: PaymentTemplateFieldMapping[];
 }

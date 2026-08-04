@@ -35,7 +35,7 @@ import {
   type EmployeeRow,
   type PaymentShiftInput,
 } from "../lib/db";
-import { formatDateTime, parseDateWithFormat } from "../lib/format";
+import { formatDate, formatDateTime, parseDateWithFormat } from "../lib/format";
 import type {
   ImportFileRow,
   ImportStatus,
@@ -59,8 +59,8 @@ interface PaymentPreviewRow {
   role: string;
   schedule: string;
   note: string | null;
-  workDateRaw: string;
-  workDate: string | null;
+  /** Always a valid ISO date — rows whose "data" field doesn't parse are filtered out before this is ever built (see `handleProcess`), not shown as an error row. */
+  workDate: string;
   isDuplicate: boolean;
 }
 
@@ -68,6 +68,8 @@ interface PaymentFileResult {
   fileHash: string;
   fileName: string;
   rows: PaymentPreviewRow[];
+  /** How many physical rows in this file weren't real data — no valid date in the mapped "data" column, so presumed to be a title/header/footer row. */
+  skippedCount: number;
   error: string | null;
 }
 
@@ -226,6 +228,7 @@ export default function ImportPaymentsPage() {
 
   const errorCount = fileResults.filter((r) => r.error).length;
   const duplicateCount = shiftRows.filter((r) => r.isDuplicate).length;
+  const skippedCount = fileResults.reduce((sum, r) => sum + r.skippedCount, 0);
 
   const previewPageCount = Math.max(1, Math.ceil(previewRows.length / previewPageSize));
   const previewPageItems = useMemo(
@@ -233,8 +236,8 @@ export default function ImportPaymentsPage() {
     [previewRows, previewPage, previewPageSize],
   );
 
-  const selectableCount = shiftRows.filter((r) => r.employee && r.workDate).length;
-  const allSelected = selectableCount > 0 && shiftRows.every((r, i) => selectedRows.has(i) || !r.employee || !r.workDate);
+  const selectableCount = shiftRows.filter((r) => r.employee).length;
+  const allSelected = selectableCount > 0 && shiftRows.every((r, i) => selectedRows.has(i) || !r.employee);
 
   function toggleRow(index: number) {
     setSelectedRows((prev) => {
@@ -249,7 +252,7 @@ export default function ImportPaymentsPage() {
     if (allSelected) {
       setSelectedRows(new Set());
     } else {
-      setSelectedRows(new Set(shiftRows.flatMap((r, i) => (r.employee && r.workDate ? [i] : []))));
+      setSelectedRows(new Set(shiftRows.flatMap((r, i) => (r.employee ? [i] : []))));
     }
   }
 
@@ -285,7 +288,6 @@ export default function ImportPaymentsPage() {
             path,
             selectedTemplate.groups.map((g) => ({
               sheetNames: g.sheetNames,
-              headerRow: g.headerRow,
               fieldMappings: g.fieldMappings.map(
                 (fm) => [fm.columnLetter, fm.targetField] as [string, string],
               ),
@@ -294,15 +296,25 @@ export default function ImportPaymentsPage() {
           );
 
           const rows: PaymentPreviewRow[] = [];
+          let skippedCount = 0;
           for (const applied_row of applied) {
-            const cpf = applied_row.fields.cpf || null;
-            const matricula = applied_row.fields.matricula || null;
-            const nome = applied_row.fields.nome || null;
-            const employee = await findEmployeeByIdentifiers(selectedClient.id, cpf, matricula, nome);
+            // No fixed header row anymore — a physical row is only "real
+            // data" if its mapped "data" column actually parses as a
+            // date. Anything that doesn't (a title, header, or footer
+            // row) is silently skipped here, not shown as an error row.
             const workDateRaw = applied_row.fields.data ?? "";
             const workDate = workDateRaw
               ? parseDateWithFormat(workDateRaw, selectedTemplate.dateFormat)
               : null;
+            if (!workDate) {
+              skippedCount++;
+              continue;
+            }
+
+            const cpf = applied_row.fields.cpf || null;
+            const matricula = applied_row.fields.matricula || null;
+            const nome = applied_row.fields.nome || null;
+            const employee = await findEmployeeByIdentifiers(selectedClient.id, cpf, matricula, nome);
             rows.push({
               fileHash,
               fileName,
@@ -313,21 +325,20 @@ export default function ImportPaymentsPage() {
               role: applied_row.fields.funcao ?? "",
               schedule: applied_row.fields.horario ?? "",
               note: applied_row.fields.observacao || null,
-              workDateRaw,
               workDate,
               isDuplicate: false,
             });
           }
-          results.push({ fileHash, fileName, rows, error: null });
+          results.push({ fileHash, fileName, rows, skippedCount, error: null });
         } catch (e) {
-          results.push({ fileHash, fileName, rows: [], error: String(e) });
+          results.push({ fileHash, fileName, rows: [], skippedCount: 0, error: String(e) });
         }
       }
 
       const allRows = results.flatMap((r) => r.rows);
-      const candidates = allRows.filter((r) => r.employee && r.workDate);
+      const candidates = allRows.filter((r) => r.employee);
       const dupIndices = await findDuplicatePaymentShifts(
-        candidates.map((r) => ({ employeeId: r.employee!.id, workDate: r.workDate!, local: r.local })),
+        candidates.map((r) => ({ employeeId: r.employee!.id, workDate: r.workDate, local: r.local })),
       );
       dupIndices.forEach((i) => {
         candidates[i].isDuplicate = true;
@@ -335,7 +346,7 @@ export default function ImportPaymentsPage() {
 
       const defaultSelected = new Set<number>();
       allRows.forEach((r, i) => {
-        if (r.employee && r.workDate && !r.isDuplicate) defaultSelected.add(i);
+        if (r.employee && !r.isDuplicate) defaultSelected.add(i);
       });
 
       setFileResults(results);
@@ -374,7 +385,7 @@ export default function ImportPaymentsPage() {
       for (let i = 0; i < shiftRows.length; i++) {
         if (!selectedRows.has(i)) continue;
         const row = shiftRows[i];
-        if (!row.employee || !row.workDate) continue;
+        if (!row.employee) continue;
         const fileHash = shiftRowFileHash[i];
         shiftInputs.push({
           employeeId: row.employee.id,
@@ -593,6 +604,11 @@ export default function ImportPaymentsPage() {
                 <div className="table-toolbar">
                   <div className="counts">
                     <span>{shiftRows.length} registro(s) encontrado(s)</span>
+                    {skippedCount > 0 && (
+                      <span className="count-chip" title="Linhas sem uma data válida na coluna mapeada — presumidas título, cabeçalho ou rodapé">
+                        {skippedCount} linha(s) ignorada(s)
+                      </span>
+                    )}
                     {duplicateCount > 0 && <span className="count-chip">{duplicateCount} possível(is) duplicata(s)</span>}
                     {errorCount > 0 && (
                       <span className="badge file-error">
@@ -647,7 +663,7 @@ export default function ImportPaymentsPage() {
                         }
 
                         const { row, index } = item;
-                        const canSelect = Boolean(row.employee && row.workDate);
+                        const canSelect = Boolean(row.employee);
                         return (
                           <tr key={index}>
                             <td className="checkbox-cell">
@@ -672,11 +688,11 @@ export default function ImportPaymentsPage() {
                               )}
                             </td>
                             <td>{row.local}</td>
-                            <td>{row.workDate ?? <span className="muted">{row.workDateRaw || "—"}</span>}</td>
+                            <td>{formatDate(row.workDate)}</td>
                             <td>{row.role}</td>
                             <td>{row.schedule}</td>
                             <td>
-                              {row.employee && row.workDate && !row.isDuplicate && (
+                              {row.employee && !row.isDuplicate && (
                                 <span className="badge ok">
                                   <PlusCircle size={13} />
                                   Novo
@@ -695,13 +711,7 @@ export default function ImportPaymentsPage() {
                                   </div>
                                 </div>
                               )}
-                              {!row.workDate && (
-                                <span className="badge warn">
-                                  <AlertTriangle size={13} />
-                                  Data inválida
-                                </span>
-                              )}
-                              {row.employee && row.workDate && row.isDuplicate && (
+                              {row.employee && row.isDuplicate && (
                                 <span className="badge overwrite">
                                   <AlertTriangle size={13} />
                                   Possível duplicata

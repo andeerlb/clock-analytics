@@ -111,7 +111,6 @@ export function copyPaymentSample(sourcePath: string): Promise<string> {
 /** The bit of a `PaymentTemplateGroup` (see types.ts) actually needed to read rows — id/headerLabel don't matter here. */
 export interface PaymentTemplateGroupSpec {
   sheetNames: string[];
-  headerRow: number;
   /** (columnLetter, targetField) pairs. */
   fieldMappings: [string, string][];
 }

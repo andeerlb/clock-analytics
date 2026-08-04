@@ -112,5 +112,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0018_payment_shifts.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 19,
+            description: "drop payment_template_groups.header_row — row validity is decided at import time by date-parseability instead",
+            sql: include_str!("../migrations/0019_payment_template_drop_header_row.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

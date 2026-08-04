@@ -138,14 +138,15 @@ pub fn copy_sample(data_dir: &Path, source_path: &str) -> Result<String, String>
 
 /// One payment template group's own slice of the config needed to read
 /// it — mirrors `PaymentTemplateGroup` on the TS side, minus the parts
-/// (id, header_label) that don't matter for actually reading rows.
+/// (id, header_label) that don't matter for actually reading rows. There's
+/// no header-row here on purpose — which physical row is real data isn't
+/// decided here, it's decided by the caller trying to parse each row's
+/// "data" field as a date (see `apply_template`'s doc comment).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupSpec {
     /// Empty for csv — there's exactly one implicit group.
     pub sheet_names: Vec<String>,
-    /// 1-indexed physical row holding the header; data starts right after.
-    pub header_row: u32,
     /// (columnLetter, targetField) pairs — deliberately a tuple list, not a
     /// map, since duplicate target fields across columns should never
     /// happen (the wizard already prevents it) but a tuple list doesn't
@@ -180,11 +181,14 @@ fn is_blank_row(fields: &HashMap<String, String>) -> bool {
     fields.values().all(|v| v.trim().is_empty())
 }
 
-/// Reads every row of `path` according to `groups`' column mappings —
-/// the real, unbounded counterpart to `preview`. `header_row` is skipped;
-/// everything after it becomes one `AppliedPaymentRow`, with blank rows
-/// (every mapped field empty) dropped rather than turned into "colaborador
-/// não encontrado" noise in the preview.
+/// Reads every non-blank row of `path` according to `groups`' column
+/// mappings — the real, unbounded counterpart to `preview`. There's no
+/// header-row skip: every physical row (blank ones aside) comes back as
+/// an `AppliedPaymentRow`, including whatever turns out to be a title or
+/// header row. It's up to the caller to decide which rows are real data —
+/// in practice, by trying to parse each row's "data" field as a date and
+/// discarding whichever don't, since a title/header/footer row won't have
+/// one.
 pub fn apply_template(
     path: &str,
     groups: &[GroupSpec],
@@ -207,9 +211,6 @@ pub fn apply_template(
         let mut out = Vec::new();
         for (i, record) in reader.records().enumerate() {
             let row_number = (i + 1) as u32;
-            if row_number <= group.header_row {
-                continue;
-            }
             let record = record.map_err(|e| e.to_string())?;
             let fields: HashMap<String, String> = group
                 .field_mappings
@@ -237,9 +238,6 @@ pub fn apply_template(
                 .map_err(|e| e.to_string())?;
             for (i, row) in range.rows().enumerate() {
                 let row_number = (i + 1) as u32;
-                if row_number <= group.header_row {
-                    continue;
-                }
                 let fields: HashMap<String, String> = group
                     .field_mappings
                     .iter()

@@ -940,16 +940,12 @@ tr.row-error:hover {
 }
 
 .sheet-tab.excluded {
-  color: var(--text-muted);
   opacity: 0.55;
-  text-decoration: line-through;
 }
 
 .sheet-tab-check {
   display: flex;
   align-items: center;
-  color: var(--text-muted);
-  flex-shrink: 0;
 }
 
 .sheet-tab:not(.excluded) .sheet-tab-check {
@@ -1027,16 +1023,6 @@ tr.row-error:hover {
   text-align: center;
   position: sticky;
   left: 0;
-}
-
-.spreadsheet-grid tbody tr.header-row-selected td {
-  background: var(--accent-soft);
-  font-weight: 600;
-}
-
-.spreadsheet-grid tbody tr:not(.header-row-selected):hover td {
-  cursor: pointer;
-  background: rgba(255, 255, 255, 0.03);
 }
 
 .spreadsheet-grid th.mapping-header {
