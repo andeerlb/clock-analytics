@@ -5,7 +5,7 @@ import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import { openOriginalPdf } from "../lib/api";
 import { OVERTIME_THRESHOLD_MINUTES, formatMinutes, isWeekend, sumIntervalMinutes } from "../lib/analysis";
 import { listImports, listStoredDayRecords } from "../lib/db";
-import { formatDate, formatDateCompact } from "../lib/format";
+import { formatDate, formatDateCompact, formatDateTime } from "../lib/format";
 import type { StoredDayRecord, StoredImport } from "../lib/types";
 
 /** A day with no day_record at all (outside what the parser captured) — as opposed to a real, recorded zero. */
@@ -184,24 +184,6 @@ export default function EmployeeDetailPage() {
             Cliente: <strong style={{ color: "var(--text)" }}>{importInfo.clientName}</strong>
           </p>
         </div>
-        <div style={{ display: "flex", gap: "0.6rem", flexShrink: 0 }}>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() =>
-              openOriginalPdf(importInfo.sourceOriginalPdfPath ?? importInfo.originalPdfPath)
-            }
-          >
-            <FileText size={15} style={{ marginRight: "0.4rem" }} />
-            Ver arquivo original
-          </button>
-          {hasSeparateOriginal && (
-            <button type="button" onClick={() => openOriginalPdf(importInfo.originalPdfPath)}>
-              <FileText size={15} style={{ marginRight: "0.4rem" }} />
-              Ver arquivo do colaborador
-            </button>
-          )}
-        </div>
       </div>
 
       <div className="summary-row">
@@ -239,7 +221,28 @@ export default function EmployeeDetailPage() {
         </div>
       </div>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "0.6rem" }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", marginBottom: "0.6rem", flexWrap: "wrap", gap: "0.8rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.8rem" }}>
+          <span className="muted" style={{ fontSize: "0.85rem" }}>
+            Gerado em: <strong style={{ color: "var(--text)" }}>{formatDateTime(importInfo.importedAt)}</strong>
+          </span>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() =>
+              openOriginalPdf(importInfo.sourceOriginalPdfPath ?? importInfo.originalPdfPath)
+            }
+          >
+            <FileText size={15} style={{ marginRight: "0.4rem" }} />
+            Ver arquivo
+          </button>
+          {hasSeparateOriginal && (
+            <button type="button" onClick={() => openOriginalPdf(importInfo.originalPdfPath)}>
+              <FileText size={15} style={{ marginRight: "0.4rem" }} />
+              Ver arquivo do colaborador
+            </button>
+          )}
+        </div>
         <MultiSelectDropdown
           options={DAY_STATUS_OPTIONS}
           selected={selectedStatuses}
