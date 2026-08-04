@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
-import { openOriginalPdf } from "../lib/api";
+import PdfViewerModal from "../components/PdfViewerModal";
 import { colorForName, initials } from "../lib/avatar";
 import { toIso, todayUtc } from "../lib/calendar";
 import { listClients, listCompanies, listImports, type ClientRow, type CompanyRow } from "../lib/db";
@@ -35,6 +35,7 @@ export default function LibraryPage() {
   const [selectedStatuses, setSelectedStatuses] = useState<Set<PeriodStatusId>>(
     () => new Set(PERIOD_STATUS_OPTIONS.map((o) => o.id)),
   );
+  const [viewerImport, setViewerImport] = useState<StoredImport | null>(null);
 
   useEffect(() => {
     Promise.all([listImports(), listCompanies(), listClients()])
@@ -232,8 +233,8 @@ export default function LibraryPage() {
                       <button
                         type="button"
                         className="secondary"
-                        onClick={() => openOriginalPdf(imp.originalPdfPath)}
-                        title="Abrir o PDF deste colaborador"
+                        onClick={() => setViewerImport(imp)}
+                        title="Ver o PDF deste colaborador"
                       >
                         PDF
                       </button>
@@ -262,6 +263,12 @@ export default function LibraryPage() {
           </>
         )}
       </div>
+
+      <PdfViewerModal
+        path={viewerImport?.originalPdfPath ?? null}
+        title={viewerImport ? `${viewerImport.employeeName} — ${formatDate(viewerImport.periodStart)} a ${formatDate(viewerImport.periodEnd)}` : undefined}
+        onClose={() => setViewerImport(null)}
+      />
     </div>
   );
 }

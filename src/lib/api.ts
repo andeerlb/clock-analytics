@@ -16,8 +16,14 @@ export function parseImport(provider: string, paths: string[]): Promise<FilePars
   return invoke("parse_import", { provider, paths });
 }
 
-export function openOriginalPdf(path: string): Promise<void> {
-  return invoke("open_original_pdf", { path });
+/** Opens `path`'s containing folder in the OS file manager ("abrir no explorador de arquivos"). */
+export function revealInFileManager(path: string): Promise<void> {
+  return invoke("reveal_in_file_manager", { path });
+}
+
+/** Raw bytes of a PDF, for the in-app viewer to render. */
+export async function readPdfBytes(path: string): Promise<ArrayBuffer> {
+  return invoke("read_pdf_bytes", { path });
 }
 
 /** Opens the native file picker, restricted to PDFs, multi-select on. */

@@ -2,7 +2,7 @@ import { FileText, TrendingDown, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
-import { openOriginalPdf } from "../lib/api";
+import PdfViewerModal from "../components/PdfViewerModal";
 import { OVERTIME_THRESHOLD_MINUTES, formatMinutes, isWeekend, sumIntervalMinutes } from "../lib/analysis";
 import { listImports, listStoredDayRecords } from "../lib/db";
 import { formatDate, formatDateCompact, formatDateTime } from "../lib/format";
@@ -103,6 +103,7 @@ export default function EmployeeDetailPage() {
     () => new Set(DAY_STATUS_OPTIONS.map((o) => o.id)),
   );
   const [loading, setLoading] = useState(true);
+  const [viewer, setViewer] = useState<{ path: string; title: string } | null>(null);
 
   useEffect(() => {
     if (!importId) return;
@@ -216,14 +217,25 @@ export default function EmployeeDetailPage() {
             type="button"
             className="secondary"
             onClick={() =>
-              openOriginalPdf(importInfo.sourceOriginalPdfPath ?? importInfo.originalPdfPath)
+              setViewer({
+                path: importInfo.sourceOriginalPdfPath ?? importInfo.originalPdfPath,
+                title: hasSeparateOriginal ? "Arquivo original" : `${importInfo.employeeName} — ${formatDate(importInfo.periodStart)} a ${formatDate(importInfo.periodEnd)}`,
+              })
             }
           >
             <FileText size={15} style={{ marginRight: "0.4rem" }} />
             Ver arquivo
           </button>
           {hasSeparateOriginal && (
-            <button type="button" onClick={() => openOriginalPdf(importInfo.originalPdfPath)}>
+            <button
+              type="button"
+              onClick={() =>
+                setViewer({
+                  path: importInfo.originalPdfPath,
+                  title: `${importInfo.employeeName} — ${formatDate(importInfo.periodStart)} a ${formatDate(importInfo.periodEnd)}`,
+                })
+              }
+            >
               <FileText size={15} style={{ marginRight: "0.4rem" }} />
               Ver arquivo do colaborador
             </button>
@@ -366,6 +378,8 @@ export default function EmployeeDetailPage() {
           </div>
         </div>
       </div>
+
+      <PdfViewerModal path={viewer?.path ?? null} title={viewer?.title} onClose={() => setViewer(null)} />
     </div>
   );
 }

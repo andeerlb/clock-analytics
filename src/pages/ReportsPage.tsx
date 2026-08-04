@@ -1,10 +1,11 @@
 import { save } from "@tauri-apps/plugin-dialog";
-import { Archive, Building2, Users } from "lucide-react";
+import { Archive, Building2, FolderOpen, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
-import { generateReportZip } from "../lib/api";
+import PdfViewerModal from "../components/PdfViewerModal";
+import { generateReportZip, revealInFileManager } from "../lib/api";
 import { toIso, todayUtc } from "../lib/calendar";
 import { listClients, listCompanies, listImports, type ClientRow, type CompanyRow } from "../lib/db";
 import { formatPeriod, sanitizeFileName } from "../lib/format";
@@ -86,6 +87,7 @@ export default function ReportsPage() {
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [viewerImport, setViewerImport] = useState<StoredImport | null>(null);
 
   useEffect(() => {
     Promise.all([listCompanies(), listClients(), listImports()])
@@ -137,6 +139,14 @@ export default function ReportsPage() {
     () => filteredImports.slice(page * pageSize, page * pageSize + pageSize),
     [filteredImports, page, pageSize],
   );
+
+  async function handleReveal(path: string) {
+    try {
+      await revealInFileManager(path);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   async function handleGenerateZip() {
     const entries = buildZipEntries(filteredImports, mode);
@@ -302,6 +312,7 @@ export default function ReportsPage() {
                     <th>Cliente</th>
                     <th>Colaborador</th>
                     <th>Período</th>
+                    <th>Ações</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -311,6 +322,28 @@ export default function ReportsPage() {
                       <td>{imp.clientName}</td>
                       <td>{imp.employeeName}</td>
                       <td>{formatPeriod(imp.periodStart, imp.periodEnd)}</td>
+                      <td>
+                        <div style={{ display: "flex", gap: "0.4rem" }}>
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() => setViewerImport(imp)}
+                            title="Ver o PDF deste colaborador"
+                          >
+                            PDF
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost"
+                            style={{ padding: "0.3rem" }}
+                            onClick={() => handleReveal(imp.originalPdfPath)}
+                            aria-label="Abrir no explorador de arquivos"
+                            title="Abrir no explorador de arquivos"
+                          >
+                            <FolderOpen size={16} />
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -335,6 +368,12 @@ export default function ReportsPage() {
           </>
         )}
       </div>
+
+      <PdfViewerModal
+        path={viewerImport?.originalPdfPath ?? null}
+        title={viewerImport ? `${viewerImport.employeeName} — ${formatPeriod(viewerImport.periodStart, viewerImport.periodEnd)}` : undefined}
+        onClose={() => setViewerImport(null)}
+      />
     </div>
   );
 }

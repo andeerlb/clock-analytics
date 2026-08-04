@@ -249,9 +249,27 @@ fn copy_into_imports_dir(source_path: &str, imports_dir: &Path) -> Result<String
     Ok(dest.to_string_lossy().to_string())
 }
 
+/// Opens the OS file manager on the folder containing `path` — "abrir no
+/// explorador de arquivos". There's no cross-platform "reveal and select
+/// this exact file" primitive in the opener plugin, so this opens the
+/// parent folder instead.
 #[tauri::command]
-pub fn open_original_pdf(app: AppHandle, path: String) -> Result<(), String> {
-    app.opener().open_path(path, None::<&str>).map_err(|e| e.to_string())
+pub fn reveal_in_file_manager(app: AppHandle, path: String) -> Result<(), String> {
+    let parent = Path::new(&path)
+        .parent()
+        .ok_or_else(|| "Arquivo sem diretório pai.".to_string())?;
+    app.opener()
+        .open_path(parent.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// Raw bytes of a PDF, for the in-app viewer (pdf.js on the frontend) to
+/// render — returning `tauri::ipc::Response` instead of a JSON-wrapped
+/// `Vec<u8>` avoids base64/array overhead for what can be a few hundred KB.
+#[tauri::command]
+pub fn read_pdf_bytes(path: String) -> Result<tauri::ipc::Response, String> {
+    let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 /// Builds the Relatórios export zip. The frontend already knows the

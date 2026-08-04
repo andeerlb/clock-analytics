@@ -16,7 +16,8 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Pagination from "../components/Pagination";
-import { hashFiles, listProviders, openOriginalPdf, parseImport, pickPdfFiles } from "../lib/api";
+import PdfViewerModal from "../components/PdfViewerModal";
+import { hashFiles, listProviders, parseImport, pickPdfFiles } from "../lib/api";
 import { colorForName, initials } from "../lib/avatar";
 import {
   findConflicts,
@@ -80,6 +81,7 @@ export default function ImportPage() {
   const [dragActive, setDragActive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [viewerFile, setViewerFile] = useState<ImportFileRow | null>(null);
 
   useEffect(() => {
     listProviders().then((list) => {
@@ -779,7 +781,7 @@ export default function ImportPage() {
                         type="button"
                         className="ghost"
                         style={{ padding: "0.3rem" }}
-                        onClick={() => openOriginalPdf(f.originalPdfPath)}
+                        onClick={() => setViewerFile(f)}
                         aria-label="Visualizar"
                         title="Visualizar"
                       >
@@ -840,6 +842,12 @@ export default function ImportPage() {
         </div>
       </div>
       </div>
+
+      <PdfViewerModal
+        path={viewerFile?.originalPdfPath ?? null}
+        title={viewerFile?.fileName}
+        onClose={() => setViewerFile(null)}
+      />
     </div>
   );
 }
