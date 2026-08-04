@@ -1,17 +1,29 @@
-import { save } from "@tauri-apps/plugin-dialog";
-import { AlertTriangle, Archive, Database, FolderOpen, Sparkles, Trash2 } from "lucide-react";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import {
+  AlertTriangle,
+  Archive,
+  CheckCircle2,
+  Database,
+  FileCheck2,
+  FolderOpen,
+  Sparkles,
+  Trash2,
+  XCircle,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   backupAppData,
+  checkPopplerStatus,
   clearImportsDir,
   deletePaths,
   getStorageUsage,
   openAppDataDir,
+  setPopplerDir,
 } from "../lib/api";
 import { clearAllData, findRedundantOriginals, markOriginalsRemoved, vacuumDatabase } from "../lib/db";
 import { formatBytes } from "../lib/format";
-import type { StorageUsage } from "../lib/types";
+import type { PopplerStatus, StorageUsage } from "../lib/types";
 
 const CLEAR_CONFIRM_PHRASE = "APAGAR TUDO";
 
@@ -29,6 +41,11 @@ export default function SettingsPage() {
   const [confirmText, setConfirmText] = useState("");
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [popplerStatus, setPopplerStatusState] = useState<PopplerStatus | null>(null);
+  const [popplerDirInput, setPopplerDirInput] = useState("");
+  const [popplerSaving, setPopplerSaving] = useState(false);
+  const [popplerError, setPopplerError] = useState<string | null>(null);
 
   // Employees need their company and client to survive (both are required
   // references); clients need their company. Checking a more specific level
@@ -64,7 +81,36 @@ export default function SettingsPage() {
 
   useEffect(() => {
     refreshStorage();
+    refreshPopplerStatus();
   }, []);
+
+  function refreshPopplerStatus() {
+    return checkPopplerStatus()
+      .then((status) => {
+        setPopplerStatusState(status);
+        setPopplerDirInput(status.popplerDir ?? "");
+      })
+      .catch((e) => setPopplerError(String(e)));
+  }
+
+  async function handleChoosePopplerDir() {
+    const selection = await open({ directory: true });
+    if (typeof selection === "string") setPopplerDirInput(selection);
+  }
+
+  async function handleSavePopplerDir() {
+    setPopplerError(null);
+    setPopplerSaving(true);
+    try {
+      const status = await setPopplerDir(popplerDirInput.trim() || null);
+      setPopplerStatusState(status);
+      setPopplerDirInput(status.popplerDir ?? "");
+    } catch (e) {
+      setPopplerError(String(e));
+    } finally {
+      setPopplerSaving(false);
+    }
+  }
 
   async function handleVacuum() {
     setError(null);
@@ -148,6 +194,63 @@ export default function SettingsPage() {
       </p>
 
       {error && <div className="error-box">{error}</div>}
+
+      <div className="card">
+        <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <FileCheck2 size={18} />
+          Ferramentas de PDF (Poppler)
+        </h3>
+        <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
+          A importação e exportação de PDFs depende de quatro ferramentas de linha de comando do
+          Poppler (pdfinfo, pdftotext, pdfseparate, pdfunite). Se alguma não for encontrada, informe
+          abaixo a pasta onde elas estão instaladas (ex.: a pasta <code>bin</code> do Homebrew).
+        </p>
+
+        {popplerError && <div className="error-box">{popplerError}</div>}
+
+        {popplerStatus && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", marginBottom: "1rem" }}>
+            {popplerStatus.binaries.map((b) => (
+              <div key={b.name} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
+                {b.found ? (
+                  <CheckCircle2 size={16} color="var(--accent)" />
+                ) : (
+                  <XCircle size={16} color="var(--danger)" />
+                )}
+                <code>{b.name}</code>
+                {b.found && b.path && (
+                  <span className="muted" style={{ fontSize: "0.8rem" }}>
+                    — {b.path}
+                  </span>
+                )}
+                {!b.found && (
+                  <span style={{ color: "var(--danger)", fontSize: "0.8rem" }}>não encontrado</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="field-row" style={{ alignItems: "flex-end" }}>
+          <div className="field" style={{ flex: "1 1 260px", marginBottom: 0 }}>
+            <label htmlFor="poppler-dir">Pasta dos binários do Poppler (opcional)</label>
+            <input
+              id="poppler-dir"
+              type="text"
+              value={popplerDirInput}
+              onChange={(e) => setPopplerDirInput(e.target.value)}
+              placeholder="ex.: /opt/homebrew/bin"
+            />
+          </div>
+          <button type="button" className="secondary" onClick={handleChoosePopplerDir}>
+            <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
+            Escolher pasta
+          </button>
+          <button type="button" onClick={handleSavePopplerDir} disabled={popplerSaving}>
+            {popplerSaving ? "Salvando..." : "Salvar e testar"}
+          </button>
+        </div>
+      </div>
 
       <div className="card">
         <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>

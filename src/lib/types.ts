@@ -102,6 +102,25 @@ export interface StorageUsage {
   importsFileCount: number;
 }
 
+/** Whether a single Poppler CLI tool (pdfinfo/pdftotext/pdfseparate/pdfunite) was found. */
+export interface PopplerBinaryStatus {
+  name: string;
+  found: boolean;
+  path: string | null;
+}
+
+/**
+ * Whether the app can find the Poppler CLI tools it shells out to for PDF
+ * import/export. Checked at startup and on Configurações — a missing
+ * install shows up as guidance there instead of an opaque "failed to spawn"
+ * error the first time an import is attempted.
+ */
+export interface PopplerStatus {
+  allFound: boolean;
+  popplerDir: string | null;
+  binaries: PopplerBinaryStatus[];
+}
+
 /** Content-hash of a picked file, computed before any parsing happens. */
 export interface FileHash {
   path: string;

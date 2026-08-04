@@ -1,6 +1,9 @@
-import { HashRouter, Route, Routes } from "react-router-dom";
+import { AlertTriangle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { HashRouter, Link, Route, Routes } from "react-router-dom";
 import "./App.css";
 import Sidebar from "./components/Sidebar";
+import { checkPopplerStatus } from "./lib/api";
 import ClientsPage from "./pages/ClientsPage";
 import CompaniesPage from "./pages/CompaniesPage";
 import ImportPage from "./pages/ImportPage";
@@ -10,11 +13,32 @@ import ReportsPage from "./pages/ReportsPage";
 import SettingsPage from "./pages/SettingsPage";
 
 function App() {
+  const [popplerMissing, setPopplerMissing] = useState(false);
+
+  useEffect(() => {
+    checkPopplerStatus()
+      .then((status) => setPopplerMissing(!status.allFound))
+      .catch(() => setPopplerMissing(false));
+  }, []);
+
   return (
     <HashRouter>
       <div className="app-shell">
         <Sidebar />
         <main className="app-content">
+          {popplerMissing && (
+            <div className="error-box" style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+              <AlertTriangle size={18} style={{ flexShrink: 0 }} />
+              <span>
+                Não foi possível encontrar as ferramentas do Poppler (pdftotext, pdfinfo etc.),
+                necessárias para importar e exportar PDFs. Vá em{" "}
+                <Link to="/settings" style={{ color: "inherit", textDecoration: "underline" }}>
+                  Configurações
+                </Link>{" "}
+                para ajustar a pasta onde elas estão instaladas.
+              </span>
+            </div>
+          )}
           <Routes>
             <Route path="/" element={<LibraryPage />} />
             <Route path="/companies" element={<CompaniesPage />} />

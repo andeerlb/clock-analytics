@@ -4,7 +4,9 @@ mod hashing;
 mod model;
 mod parsers;
 mod pdf_extract;
+mod poppler;
 mod report_zip;
+mod settings;
 mod storage;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -31,6 +33,8 @@ pub fn run() {
             commands::delete_paths,
             commands::clear_imports_dir,
             commands::backup_app_data,
+            commands::check_poppler_status,
+            commands::set_poppler_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

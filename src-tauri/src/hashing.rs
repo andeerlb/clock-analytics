@@ -22,9 +22,10 @@ pub fn file_name(path: &str) -> String {
 
 /// Number of pages in a PDF, via `pdfinfo` (Poppler) — cheap enough to run
 /// on every file picked, before deciding whether it needs to be split into
-/// one timesheet per page.
-pub fn page_count(path: &str) -> Result<u32, String> {
-    let output = Command::new("pdfinfo")
+/// one timesheet per page. `poppler_dir` is the user's manual override from
+/// Configurações, if set — see `crate::poppler::resolve`.
+pub fn page_count(path: &str, poppler_dir: Option<&str>) -> Result<u32, String> {
+    let output = Command::new(crate::poppler::resolve("pdfinfo", poppler_dir))
         .arg(path)
         .output()
         .map_err(|e| format!("failed to spawn pdfinfo: {e}"))?;

@@ -2,7 +2,9 @@ use crate::hashing;
 use crate::model::{FileHash, ParsedTimesheet};
 use crate::parsers;
 use crate::pdf_extract;
+use crate::poppler;
 use crate::report_zip::{self, ReportZipEntry};
+use crate::settings::{self, AppSettings};
 use crate::storage::{self, StorageUsage};
 use serde::Serialize;
 use std::fs;
@@ -32,13 +34,14 @@ pub fn list_providers() -> Vec<ProviderInfo> {
 /// (even if it was renamed or picked from a different folder) — and
 /// whether it's a single timesheet or a multi-page batch.
 #[tauri::command]
-pub fn hash_files(paths: Vec<String>) -> Result<Vec<FileHash>, String> {
+pub fn hash_files(app: AppHandle, paths: Vec<String>) -> Result<Vec<FileHash>, String> {
+    let poppler_dir = load_settings(&app)?.poppler_dir;
     paths
         .into_iter()
         .map(|path| {
             let hash = hashing::hash_file(&path).map_err(|e| e.to_string())?;
             let file_name = hashing::file_name(&path);
-            let page_count = hashing::page_count(&path)?;
+            let page_count = hashing::page_count(&path, poppler_dir.as_deref())?;
             Ok(FileHash { path, file_name, hash, page_count })
         })
         .collect()
@@ -90,6 +93,7 @@ pub fn parse_import(
     paths: Vec<String>,
 ) -> Result<Vec<FileParseResult>, String> {
     let parser = parsers::get_parser(&provider).ok_or_else(|| format!("unknown provider '{provider}'"))?;
+    let poppler_dir = load_settings(&app)?.poppler_dir;
 
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let imports_dir = data_dir.join("imports");
@@ -133,7 +137,7 @@ pub fn parse_import(
                 continue;
             }
         };
-        let page_count = match hashing::page_count(&source_path) {
+        let page_count = match hashing::page_count(&source_path, poppler_dir.as_deref()) {
             Ok(n) => n,
             Err(e) => {
                 results.push(FileParseResult {
@@ -150,13 +154,19 @@ pub fn parse_import(
         };
 
         let (sheets, error) = if page_count <= 1 {
-            match parse_single_page(&source_path, &file_name, &file_hash, &original_pdf_path, parser.as_ref())
-            {
+            match parse_single_page(
+                &source_path,
+                &file_name,
+                &file_hash,
+                &original_pdf_path,
+                parser.as_ref(),
+                poppler_dir.as_deref(),
+            ) {
                 Ok(sheets) => (sheets, None),
                 Err(e) => (Vec::new(), Some(e)),
             }
         } else {
-            parse_multi_page(&source_path, &file_name, parser.as_ref(), &imports_dir)
+            parse_multi_page(&source_path, &file_name, parser.as_ref(), &imports_dir, poppler_dir.as_deref())
         };
 
         results.push(FileParseResult {
@@ -179,8 +189,9 @@ fn parse_single_page(
     file_hash: &str,
     dest: &str,
     parser: &dyn parsers::TimesheetParser,
+    poppler_dir: Option<&str>,
 ) -> Result<Vec<ParsedTimesheet>, String> {
-    let raw_text = pdf_extract::extract_text(source_path).map_err(|e| e.to_string())?;
+    let raw_text = pdf_extract::extract_text(source_path, poppler_dir).map_err(|e| e.to_string())?;
     let mut parsed = parser.parse(&raw_text, dest).map_err(|e| e.to_string())?;
     for sheet in &mut parsed {
         sheet.original_file_hash = file_hash.to_string();
@@ -196,13 +207,14 @@ fn parse_multi_page(
     file_name: &str,
     parser: &dyn parsers::TimesheetParser,
     imports_dir: &Path,
+    poppler_dir: Option<&str>,
 ) -> (Vec<ParsedTimesheet>, Option<String>) {
     let temp_dir = imports_dir.join(format!("split-{}", uuid::Uuid::new_v4()));
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         return (Vec::new(), Some(e.to_string()));
     }
 
-    let page_paths = match pdf_extract::split_pages(source_path, &temp_dir) {
+    let page_paths = match pdf_extract::split_pages(source_path, &temp_dir, poppler_dir) {
         Ok(p) => p,
         Err(e) => {
             let _ = fs::remove_dir_all(&temp_dir);
@@ -215,7 +227,7 @@ fn parse_multi_page(
     for (i, page_path) in page_paths.iter().enumerate() {
         let page_path_str = page_path.to_string_lossy().to_string();
         let outcome = (|| -> Result<Vec<ParsedTimesheet>, String> {
-            let raw_text = pdf_extract::extract_text(&page_path_str).map_err(|e| e.to_string())?;
+            let raw_text = pdf_extract::extract_text(&page_path_str, poppler_dir).map_err(|e| e.to_string())?;
             let page_hash = hashing::hash_file(&page_path_str).map_err(|e| e.to_string())?;
             let dest = copy_into_imports_dir(&page_path_str, imports_dir)?;
 
@@ -298,8 +310,13 @@ pub fn copy_pdf_to(source_path: String, dest_path: String) -> Result<(), String>
 /// formatting lives in TS) — this just moves bytes into an archive, merging
 /// with `pdfunite` first wherever an entry has more than one source PDF.
 #[tauri::command]
-pub fn generate_report_zip(entries: Vec<ReportZipEntry>, dest_zip_path: String) -> Result<(), String> {
-    report_zip::build(&entries, &dest_zip_path)
+pub fn generate_report_zip(
+    app: AppHandle,
+    entries: Vec<ReportZipEntry>,
+    dest_zip_path: String,
+) -> Result<(), String> {
+    let poppler_dir = load_settings(&app)?.poppler_dir;
+    report_zip::build(&entries, &dest_zip_path, poppler_dir.as_deref())
 }
 
 /// Disk usage of the DB and the copied PDFs — the storage indicator on the
@@ -330,4 +347,67 @@ pub fn clear_imports_dir(app: AppHandle) -> Result<(), String> {
 pub fn backup_app_data(app: AppHandle, dest_zip_path: String) -> Result<(), String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     storage::backup(&data_dir, &dest_zip_path)
+}
+
+fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(settings::load(&data_dir))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PopplerBinaryStatus {
+    pub name: String,
+    pub found: bool,
+    pub path: Option<String>,
+}
+
+/// Whether each Poppler CLI tool the app depends on (`pdfinfo`,
+/// `pdftotext`, `pdfseparate`, `pdfunite`) was found — checked eagerly at
+/// startup and shown in Configurações, rather than surfacing as an obscure
+/// "failed to spawn" error the first time an import is attempted.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PopplerStatus {
+    pub all_found: bool,
+    pub poppler_dir: Option<String>,
+    pub binaries: Vec<PopplerBinaryStatus>,
+}
+
+fn poppler_status(poppler_dir: Option<String>) -> PopplerStatus {
+    let binaries: Vec<PopplerBinaryStatus> = poppler::BINARIES
+        .iter()
+        .map(|name| {
+            let resolved = poppler::resolve(name, poppler_dir.as_deref());
+            let found = resolved.is_absolute();
+            PopplerBinaryStatus {
+                name: (*name).to_string(),
+                found,
+                path: found.then(|| resolved.to_string_lossy().to_string()),
+            }
+        })
+        .collect();
+    let all_found = binaries.iter().all(|b| b.found);
+    PopplerStatus { all_found, poppler_dir, binaries }
+}
+
+/// Checked once on app startup and again whenever Configurações is opened —
+/// surfaces a missing Poppler install up front instead of only at import
+/// time.
+#[tauri::command]
+pub fn check_poppler_status(app: AppHandle) -> Result<PopplerStatus, String> {
+    Ok(poppler_status(load_settings(&app)?.poppler_dir))
+}
+
+/// Saves the user's manual override for where to find the Poppler CLI tools
+/// (Configurações → "Pasta dos binários do Poppler") and re-checks status
+/// against it. `dir` empty/`None` clears the override, going back to
+/// auto-detection.
+#[tauri::command]
+pub fn set_poppler_dir(app: AppHandle, dir: Option<String>) -> Result<PopplerStatus, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let mut current = settings::load(&data_dir);
+    current.poppler_dir = dir.filter(|d| !d.trim().is_empty());
+    settings::save(&data_dir, &current)?;
+    Ok(poppler_status(current.poppler_dir))
 }

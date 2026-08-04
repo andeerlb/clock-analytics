@@ -14,11 +14,12 @@ use std::process::Command;
 /// `-layout` is slower but the line structure it produces is stable
 /// regardless of how the source PDF was generated.
 ///
-/// NOTE: for distribution across Linux/macOS/Windows, `pdftotext` needs to
-/// be bundled as a Tauri sidecar binary per platform rather than relying on
-/// a system install. This wrapper is the single seam that would change.
-pub fn extract_text(pdf_path: &str) -> Result<String, ParseError> {
-    let output = Command::new("pdftotext")
+/// Resolved via [`crate::poppler::resolve`] rather than a bare `Command::new`
+/// — see that function for why (bundled `.app` builds don't get the dev
+/// machine's `$PATH`). `poppler_dir` is the user's manual override from
+/// Configurações, if set.
+pub fn extract_text(pdf_path: &str, poppler_dir: Option<&str>) -> Result<String, ParseError> {
+    let output = Command::new(crate::poppler::resolve("pdftotext", poppler_dir))
         .arg("-layout")
         .arg(pdf_path)
         .arg("-") // write to stdout
@@ -39,9 +40,13 @@ pub fn extract_text(pdf_path: &str) -> Result<String, ParseError> {
 /// employee's timesheet — one page per person. `out_dir` must be empty/
 /// exclusive to this call so the numbered output files can be collected
 /// unambiguously.
-pub fn split_pages(pdf_path: &str, out_dir: &Path) -> Result<Vec<PathBuf>, ParseError> {
+pub fn split_pages(
+    pdf_path: &str,
+    out_dir: &Path,
+    poppler_dir: Option<&str>,
+) -> Result<Vec<PathBuf>, ParseError> {
     let pattern = out_dir.join("page-%d.pdf");
-    let output = Command::new("pdfseparate")
+    let output = Command::new(crate::poppler::resolve("pdfseparate", poppler_dir))
         .arg(pdf_path)
         .arg(&pattern)
         .output()

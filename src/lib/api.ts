@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { FileHash, FileParseResult, ProviderInfo, ReportZipEntry, StorageUsage } from "./types";
+import type {
+  FileHash,
+  FileParseResult,
+  PopplerStatus,
+  ProviderInfo,
+  ReportZipEntry,
+  StorageUsage,
+} from "./types";
 
 export function listProviders(): Promise<ProviderInfo[]> {
   return invoke("list_providers");
@@ -69,4 +76,14 @@ export function clearImportsDir(): Promise<void> {
 /** Zips the DB and imports/ to `destZipPath` — the backup offered before "Limpar tudo". */
 export function backupAppData(destZipPath: string): Promise<void> {
   return invoke("backup_app_data", { destZipPath });
+}
+
+/** Whether pdfinfo/pdftotext/pdfseparate/pdfunite were found — checked at startup and on Configurações. */
+export function checkPopplerStatus(): Promise<PopplerStatus> {
+  return invoke("check_poppler_status");
+}
+
+/** Saves (or, passing null, clears) the manual override for where to find the Poppler CLI tools. */
+export function setPopplerDir(dir: string | null): Promise<PopplerStatus> {
+  return invoke("set_poppler_dir", { dir });
 }

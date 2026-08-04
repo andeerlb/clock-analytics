@@ -20,7 +20,7 @@ pub struct ReportZipEntry {
     pub source_pdf_paths: Vec<String>,
 }
 
-pub fn build(entries: &[ReportZipEntry], dest_zip_path: &str) -> Result<(), String> {
+pub fn build(entries: &[ReportZipEntry], dest_zip_path: &str, poppler_dir: Option<&str>) -> Result<(), String> {
     let file = fs::File::create(dest_zip_path).map_err(|e| e.to_string())?;
     let mut zip = ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -31,7 +31,7 @@ pub fn build(entries: &[ReportZipEntry], dest_zip_path: &str) -> Result<(), Stri
         }
 
         let merged_tmp_path = if entry.source_pdf_paths.len() > 1 {
-            Some(merge_pdfs(&entry.source_pdf_paths)?)
+            Some(merge_pdfs(&entry.source_pdf_paths, poppler_dir)?)
         } else {
             None
         };
@@ -54,11 +54,11 @@ pub fn build(entries: &[ReportZipEntry], dest_zip_path: &str) -> Result<(), Stri
 /// (Poppler) — same family as the `pdftotext`/`pdfseparate` calls already
 /// used for parsing. Result is written to a temp file the caller is
 /// responsible for cleaning up once it's been read.
-fn merge_pdfs(paths: &[String]) -> Result<String, String> {
+fn merge_pdfs(paths: &[String], poppler_dir: Option<&str>) -> Result<String, String> {
     let out_path = std::env::temp_dir().join(format!("clock-analytics-merged-{}.pdf", uuid::Uuid::new_v4()));
     let out_path_str = out_path.to_string_lossy().to_string();
 
-    let output = Command::new("pdfunite")
+    let output = Command::new(crate::poppler::resolve("pdfunite", poppler_dir))
         .args(paths)
         .arg(&out_path_str)
         .output()
