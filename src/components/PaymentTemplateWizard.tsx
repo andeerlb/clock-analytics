@@ -1,4 +1,17 @@
-import { CheckSquare, ChevronLeft, ChevronRight, Eye, FolderOpen, Plus, Square, Trash2, X } from "lucide-react";
+import {
+  CheckSquare,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  FolderOpen,
+  Info,
+  Pencil,
+  Plus,
+  Square,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { listSpreadsheetSheets, pickPaymentFile, previewSpreadsheet } from "../lib/api";
 import {
@@ -13,16 +26,21 @@ import {
 } from "../lib/db";
 import { columnLetter, fileNameFromPath } from "../lib/format";
 import {
+  DEFAULT_IDENTIFIER_PRIORITY,
   IDENTIFIER_FIELD_PRECEDENCE,
   PAYMENT_TARGET_FIELDS,
   PAYMENT_TARGET_FIELD_LABELS,
   REQUIRED_PAYMENT_FIELDS,
+  type IdentifierAttempt,
+  type IdentifierField,
   type PaymentFileKind,
   type PaymentTargetField,
   type PaymentTemplateGroup,
   type PaymentTemplateRow,
   type PaymentTemplateRuleKind,
 } from "../lib/types";
+
+const IDENTIFIER_FIELDS: IdentifierField[] = ["cpf", "matricula", "nome"];
 
 /**
  * A file is only ever used transiently, to help build the mapping — it's
@@ -125,10 +143,15 @@ export default function PaymentTemplateWizard({
   // picking a field for it, same interaction as the live grid's header
   // select, just without real data underneath. Reset per active group.
   const [extraColumns, setExtraColumns] = useState(0);
+  // Which column's select was last focused — purely a visual highlight
+  // (tinted header + column, small pencil icon) so it's obvious which
+  // column you're currently mapping in a wide table.
+  const [focusedColumn, setFocusedColumn] = useState<number | null>(null);
 
   const [name, setName] = useState("");
   const [dateFormat, setDateFormat] = useState("DD/MM/YYYY");
   const [rules, setRules] = useState<WizardRule[]>([]);
+  const [identifierAttempts, setIdentifierAttempts] = useState<IdentifierAttempt[]>(DEFAULT_IDENTIFIER_PRIORITY);
 
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -164,6 +187,7 @@ export default function PaymentTemplateWizard({
       setName("");
       setDateFormat("DD/MM/YYYY");
       setRules([]);
+      setIdentifierAttempts(DEFAULT_IDENTIFIER_PRIORITY.map((a) => [...a]));
       return;
     }
 
@@ -182,6 +206,7 @@ export default function PaymentTemplateWizard({
         clientId: r.clientId,
       })),
     );
+    setIdentifierAttempts(target.identifierPriority.map((a) => [...a]));
     hydrateFromTemplate(target);
   }, [target]);
 
@@ -293,48 +318,48 @@ export default function PaymentTemplateWizard({
     if (sheetName === activeSheet) return;
     setActiveSheet(sheetName);
     setExtraColumns(0);
+    setFocusedColumn(null);
     refetchRows(sheetName, delimiter);
   }
 
-  /** Toggles every member of a group (a merged group's sheets, or a single unmerged sheet) in or out of the import together. */
-  function toggleGroupIncluded(members: string[]) {
+  /** Includes or excludes a single sheet from the import — independent of whatever it's mirroring, since that's just where its mapping comes from, not a shared identity. */
+  function toggleSheetIncluded(sheet: string) {
     setIncludedSheets((prev) => {
       const next = new Set(prev);
-      const allIncluded = members.every((m) => next.has(m));
-      for (const m of members) {
-        if (allIncluded) next.delete(m);
-        else next.add(m);
+      if (next.has(sheet)) next.delete(sheet);
+      else next.add(sheet);
+      return next;
+    });
+  }
+
+  /** "Espelhar mapeamento": the active sheet (and anyone already sharing its mapping) adopts `sourceSheet`'s mapping instead of its own. */
+  function mirrorActiveSheet(sourceSheet: string) {
+    if (!activeSheet) return;
+    const activeKey = groupKeyOf(activeSheet);
+    const sourceKey = groupKeyOf(sourceSheet);
+    if (sourceKey === activeKey) return;
+
+    // `groupKeyOf` only follows one hop, so if the active sheet was itself
+    // anchoring other sheets, repointing just it would strand them
+    // pointing at a key that's no longer self-referential. Repoint every
+    // sheet that currently resolves to activeKey in one pass instead.
+    setSheetGroupOf((prev) => {
+      const next = { ...prev };
+      for (const s of sheets) {
+        if ((next[s] ?? s) === activeKey) next[s] = sourceKey;
       }
       return next;
     });
   }
 
-  /** Merges `otherSheet` into the active sheet's group, or splits it back into its own fresh one if already merged. */
-  function toggleSheetMerge(otherSheet: string) {
+  /** Splits the active sheet back out into its own independent mapping, keeping whatever it was mirroring as a starting point (used by the "própria" option, and implicitly by any manual edit — see `setColumnMapping`). */
+  function detachActiveSheet() {
     if (!activeSheet) return;
-    const activeKey = groupKeyOf(activeSheet);
-    const otherKey = groupKeyOf(otherSheet);
-
-    if (otherKey === activeKey) {
-      // Split just this one sheet back out into its own fresh group —
-      // anyone else still resolving to the same key stays put.
-      setSheetGroupOf((prev) => ({ ...prev, [otherSheet]: otherSheet }));
-      setGroupMapping((prev) => ({ ...prev, [otherSheet]: {} }));
-      setGroupFieldLabels((prev) => ({ ...prev, [otherSheet]: {} }));
-      return;
-    }
-
-    // `groupKeyOf` only follows one hop, so if otherSheet was itself
-    // anchoring other sheets, repointing just otherSheet would strand
-    // them pointing at a key that's no longer self-referential. Repoint
-    // every sheet that currently resolves to otherKey in one pass instead.
-    setSheetGroupOf((prev) => {
-      const next = { ...prev };
-      for (const s of sheets) {
-        if ((next[s] ?? s) === otherKey) next[s] = activeKey;
-      }
-      return next;
-    });
+    const sourceKey = groupKeyOf(activeSheet);
+    if (sourceKey === activeSheet) return;
+    setSheetGroupOf((prev) => ({ ...prev, [activeSheet]: activeSheet }));
+    setGroupMapping((prev) => ({ ...prev, [activeSheet]: { ...(prev[sourceKey] ?? {}) } }));
+    setGroupFieldLabels((prev) => ({ ...prev, [activeSheet]: { ...(prev[sourceKey] ?? {}) } }));
   }
 
   function handleDelimiterChange(newDelimiter: string) {
@@ -347,30 +372,41 @@ export default function PaymentTemplateWizard({
   }
 
   function setColumnMapping(colIndex: number, field: PaymentTargetField | "", headerLabel?: string | null) {
-    const key = groupKeyOf(activeSheet);
+    const sourceKey = groupKeyOf(activeSheet);
+    // Editing while mirroring another sheet's mapping forks it into the
+    // active sheet's own independent group first — the mirrored sheet
+    // keeps its mapping untouched, only the active one changes. Below,
+    // reading from `sourceKey` and writing to `targetKey` in the same
+    // pass is what makes that fork carry over the mirrored values instead
+    // of starting the active sheet from a blank mapping.
+    const isMirroring = activeSheet !== null && fileKind !== "csv" && sourceKey !== activeSheet;
+    const targetKey = isMirroring ? activeSheet : sourceKey;
+
+    if (isMirroring) {
+      setSheetGroupOf((prev) => ({ ...prev, [activeSheet]: activeSheet }));
+    }
+
     setGroupMapping((prev) => {
-      const current = prev[key] ?? {};
-      const next = { ...current };
+      const current = { ...(prev[sourceKey] ?? {}) };
       if (!field) {
-        delete next[colIndex];
+        delete current[colIndex];
       } else {
-        for (const k of Object.keys(next)) {
+        for (const k of Object.keys(current)) {
           const idx = Number(k);
-          if (idx !== colIndex && next[idx] === field) delete next[idx];
+          if (idx !== colIndex && current[idx] === field) delete current[idx];
         }
-        next[colIndex] = field;
+        current[colIndex] = field;
       }
-      return { ...prev, [key]: next };
+      return { ...prev, [targetKey]: current };
     });
     setGroupFieldLabels((prev) => {
-      const current = prev[key] ?? {};
-      const next = { ...current };
+      const current = { ...(prev[sourceKey] ?? {}) };
       if (!field) {
-        delete next[colIndex];
+        delete current[colIndex];
       } else if (headerLabel !== undefined) {
-        next[colIndex] = headerLabel;
+        current[colIndex] = headerLabel;
       }
-      return { ...prev, [key]: next };
+      return { ...prev, [targetKey]: current };
     });
   }
 
@@ -421,6 +457,38 @@ export default function PaymentTemplateWizard({
     setRules((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }
 
+  function addIdentifierAttempt() {
+    setIdentifierAttempts((prev) => [...prev, []]);
+  }
+
+  function removeIdentifierAttempt(index: number) {
+    setIdentifierAttempts((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function toggleIdentifierField(index: number, field: IdentifierField) {
+    setIdentifierAttempts((prev) =>
+      prev.map((attempt, i) =>
+        i === index
+          ? attempt.includes(field)
+            ? attempt.filter((f) => f !== field)
+            : [...attempt, field]
+          : attempt,
+      ),
+    );
+  }
+
+  function moveIdentifierAttempt(index: number, direction: -1 | 1) {
+    setIdentifierAttempts((prev) => {
+      const target = index + direction;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  const isIdentifierPriorityValid = identifierAttempts.length > 0 && identifierAttempts.every((a) => a.length > 0);
+
   const activeGroupKey = groupKeyOf(activeSheet);
   const mapping = groupMapping[activeGroupKey] ?? {};
 
@@ -446,27 +514,6 @@ export default function PaymentTemplateWizard({
       ? [CSV_GROUP_KEY]
       : Array.from(new Set(sheets.filter((s) => includedSheets.has(s)).map((s) => groupKeyOf(s))));
 
-  // One tab per sheet, except included sheets that were merged into another
-  // included sheet's group collapse into a single tab (with a "(+N)"
-  // count) — excluded sheets always show individually, since merging only
-  // applies to sheets actually being imported.
-  const allTabEntries = (() => {
-    if (fileKind === "csv") return [] as { key: string; members: string[] }[];
-    const seen = new Set<string>();
-    const entries: { key: string; members: string[] }[] = [];
-    for (const s of sheets) {
-      if (includedSheets.has(s)) {
-        const key = groupKeyOf(s);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        entries.push({ key, members: sheets.filter((m) => includedSheets.has(m) && groupKeyOf(m) === key) });
-      } else {
-        entries.push({ key: s, members: [s] });
-      }
-    }
-    return entries;
-  })();
-
   // Read-only readout of the row-validity filter — there's nothing to
   // configure here, it's just whichever column each included group already
   // has mapped to "data" (see the `PaymentTemplateGroup` doc comment).
@@ -476,14 +523,38 @@ export default function PaymentTemplateWizard({
     return { key, columnLabel: index !== undefined ? columnLetter(Number(index)) : null };
   });
 
-  const canAdvance =
-    currentStep === "file"
-      ? filePath !== null
-      : currentStep === "mapping"
-        ? (sheets.length === 0 || includedSheets.size > 0) &&
-          includedGroupKeys.length > 0 &&
-          includedGroupKeys.every(isGroupMappingValid)
-        : false;
+  // Every other included sheet — candidates for "espelhar mapeamento"
+  // (including whichever one the active sheet currently mirrors, if any,
+  // so that value shows up selected in the dropdown below).
+  const mirrorOptions = sheets.filter((s) => s !== activeSheet && includedSheets.has(s));
+  const mirroringSheet = activeSheet && activeGroupKey !== activeSheet ? activeGroupKey : "";
+
+  /** Validates the current step and either advances or blocks with an explanation — an attempt to advance always gets a reaction, not just a silently-disabled button. */
+  function handleAdvance() {
+    setError(null);
+    if (currentStep === "file" && filePath === null) {
+      setError("Selecione um arquivo antes de avançar.");
+      return;
+    }
+    if (currentStep === "mapping") {
+      if (sheets.length > 0 && includedSheets.size === 0) {
+        setError("Selecione ao menos uma aba para importar.");
+        return;
+      }
+      if (includedGroupKeys.length === 0) {
+        setError("Nenhuma configuração de colunas para mapear.");
+        return;
+      }
+      const invalidKey = includedGroupKeys.find((k) => !isGroupMappingValid(k));
+      if (invalidKey) {
+        setError(
+          `"${invalidKey}": mapeie um identificador (CPF, Matrícula ou Nome) e os campos Local, Data, Função e Horário antes de avançar.`,
+        );
+        return;
+      }
+    }
+    setStepIndex((s) => s + 1);
+  }
 
   async function handleSave() {
     if (!fileKind || !name.trim()) return;
@@ -525,6 +596,7 @@ export default function PaymentTemplateWizard({
         fileKind,
         delimiter: fileKind === "csv" ? delimiter : null,
         dateFormat,
+        identifierPriority: identifierAttempts,
         groups,
         rules: ruleInputs,
       };
@@ -544,44 +616,6 @@ export default function PaymentTemplateWizard({
   }
 
   /** Checklist of other included sheets that can be merged into (or split out of) the active sheet's group. */
-  function renderMergeChecklist() {
-    if (!activeSheet || !includedSheets.has(activeSheet) || includedSheets.size <= 1) return null;
-    return (
-      <div className="field" style={{ marginTop: "1rem" }}>
-        <label>Estas abas usam o mesmo mapeamento de "{activeSheet}":</label>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.7rem", marginTop: "0.5rem" }}>
-          {sheets
-            .filter((s) => s !== activeSheet && includedSheets.has(s))
-            .map((s) => (
-              <span key={s} style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}>
-                <input
-                  type="checkbox"
-                  id={`merge-${s}`}
-                  checked={groupKeyOf(s) === activeGroupKey}
-                  onChange={() => toggleSheetMerge(s)}
-                />
-                <label htmlFor={`merge-${s}`} style={{ fontSize: "0.85rem", cursor: "pointer" }}>
-                  {s}
-                </label>
-                {filePath && (
-                  <button
-                    type="button"
-                    className="ghost"
-                    style={{ padding: "0.1rem 0.3rem" }}
-                    onClick={() => handleSheetClick(s)}
-                    title={`Visualizar "${s}"`}
-                    aria-label={`Visualizar "${s}"`}
-                  >
-                    <Eye size={12} />
-                  </button>
-                )}
-              </span>
-            ))}
-        </div>
-      </div>
-    );
-  }
-
   if (!target) return null;
 
   return (
@@ -651,173 +685,228 @@ export default function PaymentTemplateWizard({
         )}
 
         {currentStep === "mapping" && (
-          <div>
-            {fileKind === "csv" && (
-              <div className="field" style={{ maxWidth: "16rem", marginBottom: "0.9rem" }}>
-                <label>Delimitador</label>
-                <select value={delimiter ?? ","} onChange={(e) => handleDelimiterChange(e.target.value)}>
-                  {DELIMITER_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <p className="muted" style={{ marginTop: 0 }}>
-              Para cada coluna, escolha a qual campo ela corresponde. É preciso mapear um
-              identificador (CPF, Matrícula ou Nome — se mais de um for mapeado, o CPF tem
-              prioridade, depois a Matrícula, depois o Nome) e os campos Local, Data, Função e
-              Horário{includedGroupKeys.length > 1 ? " em cada configuração." : "."}
-            </p>
-
+          <div style={{ display: "flex", gap: "1.2rem", alignItems: "flex-start" }}>
             {sheets.length > 1 && (
-              <div className="sheet-tabs">
-                {allTabEntries.map(({ key, members }) => {
-                  const included = members.every((m) => includedSheets.has(m));
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      className={`sheet-tab${key === activeGroupKey ? " active" : ""}${included ? "" : " excluded"}`}
-                      onClick={() => handleSheetClick(key)}
-                    >
-                      <span
-                        className="sheet-tab-check"
-                        role="checkbox"
-                        aria-checked={included}
-                        aria-label={included ? `Remover "${key}" da importação` : `Incluir "${key}" na importação`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleGroupIncluded(members);
-                        }}
+              <aside className="mapping-sidebar">
+                <div className="mapping-sidebar-header">
+                  <strong>Mapeamento por aba</strong>
+                  <p className="muted">Selecione a aba para configurar</p>
+                </div>
+                <nav className="mapping-sidebar-nav">
+                  {sheets.map((s) => {
+                    const included = includedSheets.has(s);
+                    const groupKey = groupKeyOf(s);
+                    const mirroring = groupKey !== s ? groupKey : null;
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        className={`mapping-sidebar-item${s === activeSheet ? " active" : ""}${included ? "" : " excluded"}`}
+                        onClick={() => handleSheetClick(s)}
                       >
-                        {included ? <CheckSquare size={14} /> : <Square size={14} />}
-                      </span>
-                      {key}
-                      {members.length > 1 ? ` (+${members.length - 1})` : ""}
-                      {included && !isGroupMappingValid(key) && (
                         <span
-                          title="Faltam mapear um identificador e/ou Local, Data, Função, Horário"
-                          style={{ color: "var(--warning)", fontSize: "1.1em", lineHeight: 1 }}
+                          className="mapping-sidebar-check"
+                          role="checkbox"
+                          aria-checked={included}
+                          aria-label={included ? `Remover "${s}" da importação` : `Incluir "${s}" na importação`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleSheetIncluded(s);
+                          }}
                         >
-                          •
+                          {included ? <CheckSquare size={14} /> : <Square size={14} />}
                         </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
+                        <span className="mapping-sidebar-label">
+                          {s}
+                          {mirroring && <span className="mapping-sidebar-mirroring"> → {mirroring}</span>}
+                        </span>
+                        {included && !isGroupMappingValid(groupKey) && (
+                          <span
+                            className="mapping-sidebar-warn"
+                            title="Faltam mapear um identificador e/ou Local, Data, Função, Horário"
+                          >
+                            •
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </nav>
+              </aside>
             )}
 
-            {!filePath ? (
-              <div className={`spreadsheet-grid-scroll${sheets.length > 1 ? " attached-to-tabs" : ""}`}>
-                <table className="spreadsheet-grid">
-                  <thead>
-                    <tr>
-                      <th className="corner">#</th>
-                      {noFileColumns.map((c) => {
-                        const field = mapping[c];
-                        const label = groupFieldLabels[activeGroupKey]?.[c];
-                        return (
-                          <th key={c} className={`mapping-header${field ? " is-mapped" : ""}`}>
-                            <span className="header-label">
-                              {columnLetter(c)}
-                              {label ? ` — ${label}` : ""}
-                            </span>
-                            <select
-                              value={field ?? ""}
-                              onChange={(e) => setColumnMapping(c, e.target.value as PaymentTargetField | "")}
-                            >
-                              <option value="">Ignorar</option>
-                              {PAYMENT_TARGET_FIELDS.map((f) => (
-                                <option key={f} value={f}>
-                                  {PAYMENT_TARGET_FIELD_LABELS[f]}
-                                </option>
-                              ))}
-                            </select>
-                          </th>
-                        );
-                      })}
-                      <th className="corner">
-                        <button
-                          type="button"
-                          className="ghost"
-                          style={{ padding: "0.2rem" }}
-                          onClick={() => setExtraColumns((n) => n + 1)}
-                          title="Adicionar coluna"
-                          aria-label="Adicionar coluna"
-                        >
-                          <Plus size={14} />
-                        </button>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td className="row-gutter muted" colSpan={noFileColumns.length + 2} style={{ fontStyle: "italic" }}>
-                        Editando a configuração já salva — sem dados de exemplo.
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="wizard-instructions">
+                <h4>
+                  <Info size={16} />
+                  Instruções de mapeamento
+                </h4>
+                <p>
+                  Para cada coluna da planilha, escolha na lista qual campo do sistema ela
+                  representa — ou deixe como "Ignorar" se a coluna não for usada. Se outra aba já
+                  tem a mesma estrutura, use "Espelhar mapeamento" abaixo em vez de mapear tudo de
+                  novo.
+                </p>
               </div>
-            ) : (
-              <>
-                {loadingPreview && <p className="muted">Carregando...</p>}
-                {!loadingPreview && rows.length === 0 && <p className="muted">Nenhuma linha encontrada.</p>}
-                {!loadingPreview && rows.length > 0 && (
-                  <div className={`spreadsheet-grid-scroll${sheets.length > 1 ? " attached-to-tabs" : ""}`}>
-                    <table className="spreadsheet-grid">
-                      <thead>
-                        <tr>
-                          <th className="corner">#</th>
-                          {columns.map((c) => {
-                            const field = mapping[c];
-                            return (
-                              <th key={c} className={`mapping-header${field ? " is-mapped" : ""}`}>
-                                <span className="header-label">
-                                  {columnLetter(c)} — {firstRowHint[c] || "(vazio)"}
-                                </span>
-                                <select
-                                  value={field ?? ""}
-                                  onChange={(e) =>
-                                    setColumnMapping(
-                                      c,
-                                      e.target.value as PaymentTargetField | "",
-                                      firstRowHint[c] ?? null,
-                                    )
-                                  }
+
+              {fileKind === "csv" && (
+                <div className="field" style={{ maxWidth: "16rem", marginBottom: "0.9rem" }}>
+                  <label>Delimitador</label>
+                  <select value={delimiter ?? ","} onChange={(e) => handleDelimiterChange(e.target.value)}>
+                    {DELIMITER_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {sheets.length > 1 && (
+                <div className="mapping-mirror-toolbar">
+                  <span className="mapping-mirror-toolbar-label">Espelhar mapeamento:</span>
+                  <select
+                    value={mirroringSheet}
+                    onChange={(e) => {
+                      if (e.target.value) mirrorActiveSheet(e.target.value);
+                      else detachActiveSheet();
+                    }}
+                  >
+                    <option value="">Própria (não espelhada)</option>
+                    {mirrorOptions.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {!filePath ? (
+                <div className="spreadsheet-grid-scroll">
+                  <table className="spreadsheet-grid">
+                    <thead>
+                      <tr>
+                        <th className="corner">#</th>
+                        {noFileColumns.map((c) => {
+                          const field = mapping[c];
+                          const label = groupFieldLabels[activeGroupKey]?.[c];
+                          const focused = c === focusedColumn;
+                          return (
+                            <th
+                              key={c}
+                              className={`mapping-header${field ? " is-mapped" : ""}${focused ? " focused" : ""}`}
+                            >
+                              <span className="header-label">
+                                {columnLetter(c)}
+                                {label ? ` — ${label}` : ""}
+                                {focused && <Pencil size={12} />}
+                              </span>
+                              <select
+                                value={field ?? ""}
+                                onFocus={() => setFocusedColumn(c)}
+                                onChange={(e) => setColumnMapping(c, e.target.value as PaymentTargetField | "")}
+                              >
+                                <option value="">Ignorar</option>
+                                {PAYMENT_TARGET_FIELDS.map((f) => (
+                                  <option key={f} value={f}>
+                                    {PAYMENT_TARGET_FIELD_LABELS[f]}
+                                  </option>
+                                ))}
+                              </select>
+                            </th>
+                          );
+                        })}
+                        <th className="corner">
+                          <button
+                            type="button"
+                            className="ghost"
+                            style={{ padding: "0.2rem" }}
+                            onClick={() => setExtraColumns((n) => n + 1)}
+                            title="Adicionar coluna"
+                            aria-label="Adicionar coluna"
+                          >
+                            <Plus size={14} />
+                          </button>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td
+                          className="row-gutter muted"
+                          colSpan={noFileColumns.length + 2}
+                          style={{ fontStyle: "italic" }}
+                        >
+                          Editando a configuração já salva — sem dados de exemplo.
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <>
+                  {loadingPreview && <p className="muted">Carregando...</p>}
+                  {!loadingPreview && rows.length === 0 && <p className="muted">Nenhuma linha encontrada.</p>}
+                  {!loadingPreview && rows.length > 0 && (
+                    <div className="spreadsheet-grid-scroll">
+                      <table className="spreadsheet-grid">
+                        <thead>
+                          <tr>
+                            <th className="corner">#</th>
+                            {columns.map((c) => {
+                              const field = mapping[c];
+                              const focused = c === focusedColumn;
+                              return (
+                                <th
+                                  key={c}
+                                  className={`mapping-header${field ? " is-mapped" : ""}${focused ? " focused" : ""}`}
                                 >
-                                  <option value="">Ignorar</option>
-                                  {PAYMENT_TARGET_FIELDS.map((f) => (
-                                    <option key={f} value={f}>
-                                      {PAYMENT_TARGET_FIELD_LABELS[f]}
-                                    </option>
-                                  ))}
-                                </select>
-                              </th>
-                            );
-                          })}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {sampleRows.map((row, i) => (
-                          <tr key={i}>
-                            <td className="row-gutter">{i + 1}</td>
-                            {columns.map((c) => (
-                              <td key={c}>{row[c] ?? ""}</td>
-                            ))}
+                                  <span className="header-label">
+                                    {columnLetter(c)} — {firstRowHint[c] || "(vazio)"}
+                                    {focused && <Pencil size={12} />}
+                                  </span>
+                                  <select
+                                    value={field ?? ""}
+                                    onFocus={() => setFocusedColumn(c)}
+                                    onChange={(e) =>
+                                      setColumnMapping(
+                                        c,
+                                        e.target.value as PaymentTargetField | "",
+                                        firstRowHint[c] ?? null,
+                                      )
+                                    }
+                                  >
+                                    <option value="">Ignorar</option>
+                                    {PAYMENT_TARGET_FIELDS.map((f) => (
+                                      <option key={f} value={f}>
+                                        {PAYMENT_TARGET_FIELD_LABELS[f]}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </th>
+                              );
+                            })}
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </>
-            )}
-            {renderMergeChecklist()}
+                        </thead>
+                        <tbody>
+                          {sampleRows.map((row, i) => (
+                            <tr key={i}>
+                              <td className="row-gutter">{i + 1}</td>
+                              {columns.map((c) => (
+                                <td key={c} className={c === focusedColumn ? "col-focused" : undefined}>
+                                  {row[c] ?? ""}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         )}
 
@@ -870,6 +959,90 @@ export default function PaymentTemplateWizard({
                   </li>
                 ))}
               </ul>
+            </div>
+
+            <div className="card" style={{ marginTop: "1.2rem" }}>
+              <label>Prioridade de identificação</label>
+              <p className="muted" style={{ marginTop: "0.3rem" }}>
+                Cada tentativa é um conjunto de campos que precisam bater juntos, no mesmo
+                colaborador — tentadas em ordem, a primeira que encontrar um colaborador vence.
+                Pelo menos uma tentativa é obrigatória.
+              </p>
+
+              {identifierAttempts.map((attempt, i) => (
+                <div
+                  key={i}
+                  className="field-row"
+                  style={{
+                    alignItems: "center",
+                    marginTop: "0.8rem",
+                    paddingTop: "0.8rem",
+                    borderTop: "1px solid var(--border)",
+                  }}
+                >
+                  <span className="muted" style={{ minWidth: "1.4rem" }}>
+                    {i + 1}.
+                  </span>
+                  {IDENTIFIER_FIELDS.map((f) => (
+                    <label
+                      key={f}
+                      style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.85rem", cursor: "pointer" }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={attempt.includes(f)}
+                        onChange={() => toggleIdentifierField(i, f)}
+                      />
+                      {PAYMENT_TARGET_FIELD_LABELS[f]}
+                    </label>
+                  ))}
+                  <div style={{ marginLeft: "auto", display: "flex", gap: "0.2rem" }}>
+                    <button
+                      type="button"
+                      className="ghost"
+                      style={{ padding: "0.3rem" }}
+                      onClick={() => moveIdentifierAttempt(i, -1)}
+                      disabled={i === 0}
+                      aria-label="Mover para cima"
+                      title="Mover para cima"
+                    >
+                      <ChevronUp size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      style={{ padding: "0.3rem" }}
+                      onClick={() => moveIdentifierAttempt(i, 1)}
+                      disabled={i === identifierAttempts.length - 1}
+                      aria-label="Mover para baixo"
+                      title="Mover para baixo"
+                    >
+                      <ChevronDown size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      style={{ padding: "0.3rem" }}
+                      onClick={() => removeIdentifierAttempt(i)}
+                      aria-label="Remover tentativa"
+                      title="Remover tentativa"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+
+              {identifierAttempts.length === 0 && (
+                <p className="field-hint" style={{ marginTop: "0.6rem" }}>
+                  Nenhuma tentativa cadastrada — pelo menos uma é obrigatória para salvar.
+                </p>
+              )}
+
+              <button type="button" className="secondary" style={{ marginTop: "1rem" }} onClick={addIdentifierAttempt}>
+                <Plus size={14} style={{ marginRight: "0.3rem" }} />
+                Adicionar tentativa
+              </button>
             </div>
 
             <div className="card" style={{ marginTop: "1.2rem" }}>
@@ -1034,7 +1207,7 @@ export default function PaymentTemplateWizard({
           Voltar
         </button>
         {stepIndex < steps.length - 1 ? (
-          <button type="button" onClick={() => setStepIndex((s) => s + 1)} disabled={!canAdvance || busy}>
+          <button type="button" onClick={handleAdvance} disabled={busy}>
             Avançar
             <ChevronRight size={15} style={{ marginLeft: "0.3rem" }} />
           </button>
@@ -1042,7 +1215,13 @@ export default function PaymentTemplateWizard({
           <button
             type="button"
             onClick={handleSave}
-            disabled={busy || !name.trim() || rules.length === 0 || rules.some((r) => !isRuleValid(r))}
+            disabled={
+              busy ||
+              !name.trim() ||
+              rules.length === 0 ||
+              rules.some((r) => !isRuleValid(r)) ||
+              !isIdentifierPriorityValid
+            }
           >
             {busy ? "Salvando..." : "Salvar"}
           </button>

@@ -201,6 +201,22 @@ export const PAYMENT_TARGET_FIELDS: PaymentTargetField[] = [
 /** Highest to lowest precedence — see the `PaymentTargetField` doc comment. */
 export const IDENTIFIER_FIELD_PRECEDENCE: PaymentTargetField[] = ["cpf", "matricula", "nome"];
 
+export type IdentifierField = "cpf" | "matricula" | "nome";
+
+/**
+ * One "tentativa" of matching a payment row to an employee — every field
+ * listed must match the *same* employee together (an AND). A template's
+ * full identifier priority is an ordered list of these; they're tried in
+ * sequence and the first one that finds an employee wins (an OR across
+ * tentativas). Configurable per template — see `findEmployeeByAttempts` in
+ * db.ts — rather than the single fixed cpf > matricula > nome precedence
+ * this replaced.
+ */
+export type IdentifierAttempt = IdentifierField[];
+
+/** Reproduces the old fixed precedence: three single-field tentativas, same order. */
+export const DEFAULT_IDENTIFIER_PRIORITY: IdentifierAttempt[] = [["cpf"], ["matricula"], ["nome"]];
+
 /** Mapping one of these (besides an identifier) is required for a group to be usable. */
 export const REQUIRED_PAYMENT_FIELDS: PaymentTargetField[] = ["local", "data", "funcao", "horario"];
 
@@ -274,6 +290,7 @@ export interface PaymentTemplateRow extends PaymentTemplateListRow {
   dateFormat: string;
   groups: PaymentTemplateGroup[];
   rules: PaymentTemplateRule[];
+  identifierPriority: IdentifierAttempt[];
   createdAt: string;
 }
 

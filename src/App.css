@@ -25,6 +25,20 @@
   --nav-active-bg: #3131c0;
   --nav-active-text: #b0b2ff;
 
+  /* Distinct, more saturated violet used only for the payment template
+     wizard's Mapeamento sidebar (its own reference mockup's
+     secondary-container) — kept separate from --nav-active-bg so the
+     app's real sidebar nav isn't affected. */
+  --mapper-active-bg: #7000ff;
+  --mapper-active-text: #ffffff;
+
+  /* Softer, translucent grid lines for the wizard's spreadsheet-style
+     tables — same hue as --border, lower opacity, so a dense table of
+     many columns doesn't read as a harsh grid. --border-softer is the
+     even-lighter variant used for body-row separators specifically. */
+  --border-soft: rgba(66, 71, 84, 0.5);
+  --border-softer: rgba(66, 71, 84, 0.3);
+
   --danger: #ffb4ab;
   --danger-soft: rgba(255, 180, 171, 0.15);
   --error-container: #93000a;
@@ -863,7 +877,13 @@ tr.row-error:hover {
   background: var(--error-container-soft);
 }
 
-/* Payment template wizard */
+/* Payment template wizard — spacing/radii below mirror the reference
+   mockup's own design tokens as literally as this app's real layout
+   allows: table-cell-px 12px, table-cell-py 8px, stack-tight 8px,
+   container-gap 16px/24px, base 4px; radius scale DEFAULT 2px, lg 4px,
+   xl 8px, full (circles) 50%. Pixel units on purpose in this section,
+   not rem — :root sets a 15px base font-size, and rem-scaling these would
+   drift from the mockup's absolute px tokens. */
 
 .wizard-steps {
   display: flex;
@@ -876,87 +896,191 @@ tr.row-error:hover {
   flex-shrink: 0;
 }
 
+.wizard-steps .wizard-step {
+  padding-bottom: 4px;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s ease;
+}
+
 .wizard-steps .wizard-step.active {
-  color: var(--text);
-  font-weight: 600;
+  color: var(--accent);
+  font-weight: 700;
+  border-bottom-color: var(--accent);
 }
 
 .wizard-steps .wizard-step.done {
   color: var(--accent);
 }
 
-.sheet-tabs {
+/* Left-hand sheet/group nav for the wizard's Mapeamento step, replacing a
+   horizontal tab bar — one item per group, a checkbox toggles inclusion
+   without leaving the item, clicking the rest of the row switches which
+   group's mapping is shown. */
+.mapping-sidebar {
+  flex: 0 0 256px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  align-self: flex-start;
+}
+
+.mapping-sidebar-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.mapping-sidebar-header strong {
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.mapping-sidebar-header p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+
+.mapping-sidebar-nav {
   display: flex;
-  gap: 0.3rem;
-  overflow-x: auto;
-  /* Setting only overflow-x implicitly computes overflow-y to auto too
-     (CSS overflow spec) — without pinning it to hidden, a phantom
-     vertical scrollbar/gutter shows up even when only the row itself
-     overflows horizontally. No scrollbar-gutter here on purpose: unlike
-     the grid, this bar should only take up space when it's actually
-     scrollable, not reserve it up front. */
-  overflow-y: hidden;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  max-height: 28rem;
+  overflow-y: auto;
 }
 
-.sheet-tabs::-webkit-scrollbar {
-  height: 10px;
-}
-
-.sheet-tabs::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.sheet-tabs::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 6px;
-}
-
-.sheet-tabs::-webkit-scrollbar-thumb:hover {
-  background: var(--outline);
-}
-
-.sheet-tab {
+.mapping-sidebar-item {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.4rem 0.7rem;
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 6px 6px 0 0;
-  background: var(--surface-variant);
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
   color: var(--text-muted);
+  font-size: 14px;
   cursor: pointer;
-  font-size: 0.85rem;
-  white-space: nowrap;
-  position: relative;
-  top: 1px;
+  text-align: left;
+  width: 100%;
+  transition: background-color 0.15s ease;
 }
 
-.sheet-tab.active {
-  background: var(--card-bg);
-  color: var(--text);
-  font-weight: 600;
-  z-index: 1;
+.mapping-sidebar-item:hover {
+  background: var(--surface-container-high);
 }
 
-.sheet-tab.excluded {
+.mapping-sidebar-item.active {
+  background: var(--mapper-active-bg);
+  color: var(--mapper-active-text);
+  font-weight: 700;
+}
+
+.mapping-sidebar-item.excluded {
   opacity: 0.55;
 }
 
-.sheet-tab-check {
+.mapping-sidebar-check {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
 }
 
-.sheet-tab:not(.excluded) .sheet-tab-check {
+.mapping-sidebar-item:not(.excluded) .mapping-sidebar-check {
   color: var(--accent);
+}
+
+.mapping-sidebar-item.active:not(.excluded) .mapping-sidebar-check {
+  color: var(--mapper-active-text);
+}
+
+.mapping-sidebar-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "LOJA_16 → LOJA_25" — a sheet currently mirroring another's mapping. */
+.mapping-sidebar-mirroring {
+  opacity: 0.75;
+  font-size: 0.85em;
+}
+
+.mapping-sidebar-warn {
+  flex-shrink: 0;
+  color: var(--warning);
+  font-size: 1.1em;
+  line-height: 1;
+}
+
+/* Numbered instructions banner at the top of the Mapeamento step. */
+.wizard-instructions {
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 0 4px 4px 0;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.wizard-instructions h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 16px;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.wizard-instructions h4 svg {
+  color: var(--accent);
+}
+
+.wizard-instructions p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+/* "Espelhar mapeamento": picking another included sheet here makes the
+   active sheet adopt its mapping (see `mirrorActiveSheet`) — the select's
+   own value reflects whether the active sheet currently mirrors one. */
+.mapping-mirror-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  margin-bottom: 16px;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.mapping-mirror-toolbar-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.mapping-mirror-toolbar select {
+  min-width: 14rem;
+  border-radius: 2px;
 }
 
 .spreadsheet-grid-scroll {
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 4px;
   max-height: 22rem;
+  background: var(--surface-container-lowest);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
   /* Without this, the webview's overlay-style scrollbars float on top of
      the last row/column instead of reserving their own track — this
      forces a fixed, non-overlapping gutter. Deliberately not
@@ -988,12 +1112,6 @@ tr.row-error:hover {
   background: var(--surface-variant);
 }
 
-.spreadsheet-grid-scroll.attached-to-tabs {
-  border-top: none;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-}
-
 .spreadsheet-grid {
   border-collapse: collapse;
   font-size: 0.82rem;
@@ -1002,23 +1120,27 @@ tr.row-error:hover {
 
 .spreadsheet-grid th,
 .spreadsheet-grid td {
-  border: 1px solid var(--border);
-  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border-softer);
+  padding: 8px 12px;
   white-space: nowrap;
 }
 
 .spreadsheet-grid thead th {
-  background: var(--surface-variant);
+  background: var(--surface-container-high);
   color: var(--text-muted);
+  font-size: 12px;
   font-weight: 600;
+  border-bottom: 2px solid var(--border);
+  border-right-color: var(--border-soft);
   position: sticky;
   top: 0;
   z-index: 1;
+  backdrop-filter: blur(6px);
 }
 
 .spreadsheet-grid td.row-gutter,
 .spreadsheet-grid th.corner {
-  background: var(--surface-variant);
+  background: var(--sidebar-bg);
   color: var(--text-muted);
   text-align: center;
   position: sticky;
@@ -1026,23 +1148,67 @@ tr.row-error:hover {
 }
 
 .spreadsheet-grid th.mapping-header {
-  background: var(--card-bg);
+  background: var(--surface-container-high);
   position: static;
+  vertical-align: top;
 }
 
 .spreadsheet-grid th.mapping-header .header-label {
-  display: block;
-  margin-bottom: 0.3rem;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
   color: var(--text);
   font-weight: 600;
+  white-space: normal;
 }
 
 .spreadsheet-grid select {
   font-size: 0.78rem;
   padding: 0.2em 0.4em;
   width: 100%;
+  border-radius: 2px;
 }
 
 .spreadsheet-grid th.mapping-header.is-mapped {
   background: var(--accent-soft);
+}
+
+.spreadsheet-grid th.mapping-header.focused {
+  background: var(--accent-soft);
+  border-bottom: 2px solid var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.spreadsheet-grid th.mapping-header.focused .header-label {
+  color: var(--accent);
+}
+
+.spreadsheet-grid tbody td {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+}
+
+.spreadsheet-grid tbody tr:nth-child(even) td:not(.row-gutter) {
+  background: var(--sidebar-bg);
+}
+
+.spreadsheet-grid tbody tr:hover td:not(.row-gutter) {
+  background: var(--surface-variant);
+}
+
+.spreadsheet-grid tbody tr:hover td.row-gutter {
+  background: var(--surface-variant);
+}
+
+.spreadsheet-grid td.col-focused {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.spreadsheet-grid tbody tr:hover td.col-focused {
+  background: var(--accent-soft);
+  filter: brightness(1.2);
 }

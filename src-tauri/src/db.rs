@@ -142,5 +142,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0023_payment_template_drop_sample_file.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 24,
+            description: "add payment_templates.identifier_priority — configurable ordered list of AND'd identifier-field attempts, replacing the hardcoded cpf/matricula/nome precedence",
+            sql: include_str!("../migrations/0024_payment_template_identifier_priority.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

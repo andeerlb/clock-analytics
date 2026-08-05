@@ -4,6 +4,7 @@ import { normalizeCnpj, normalizeCpf } from "./format";
 import type {
   ConflictInfo,
   DuplicateFileInfo,
+  IdentifierAttempt,
   ImportFileRow,
   ImportStatus,
   ImportType,
@@ -979,9 +980,11 @@ export async function listPaymentTemplates(): Promise<PaymentTemplateListRow[]> 
 
 export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow> {
   const db = await getDb();
-  const rows = await db.select<Omit<PaymentTemplateRow, "groups" | "rules">[]>(
+  const rows = await db.select<
+    (Omit<PaymentTemplateRow, "groups" | "rules" | "identifierPriority"> & { identifierPriority: string })[]
+  >(
     `SELECT pt.id, pt.name, pt.file_kind AS fileKind, pt.delimiter,
-            pt.date_format AS dateFormat,
+            pt.date_format AS dateFormat, pt.identifier_priority AS identifierPriority,
             pt.created_at AS createdAt, pt.updated_at AS updatedAt
      FROM payment_templates pt
      WHERE pt.id = $1`,
@@ -1037,7 +1040,12 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
     caseInsensitive: Boolean(r.caseInsensitive),
   }));
 
-  return { ...rows[0], groups, rules };
+  return {
+    ...rows[0],
+    identifierPriority: JSON.parse(rows[0].identifierPriority) as IdentifierAttempt[],
+    groups,
+    rules,
+  };
 }
 
 export interface PaymentTemplateRuleInput {
@@ -1054,6 +1062,7 @@ export interface PaymentTemplateInput {
   fileKind: PaymentFileKind;
   delimiter: string | null;
   dateFormat: string;
+  identifierPriority: IdentifierAttempt[];
   groups: PaymentTemplateGroup[];
   rules: PaymentTemplateRuleInput[];
 }
@@ -1130,9 +1139,9 @@ async function deleteTemplateRules(db: Database, templateId: number): Promise<vo
 export async function createPaymentTemplate(input: PaymentTemplateInput): Promise<number> {
   const db = await getDb();
   const result = await db.execute(
-    `INSERT INTO payment_templates (name, file_kind, delimiter, date_format)
-     VALUES ($1, $2, $3, $4)`,
-    [input.name, input.fileKind, input.delimiter, input.dateFormat],
+    `INSERT INTO payment_templates (name, file_kind, delimiter, date_format, identifier_priority)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [input.name, input.fileKind, input.delimiter, input.dateFormat, JSON.stringify(input.identifierPriority)],
   );
   const templateId = result.lastInsertId as number;
   await insertTemplateGroups(db, templateId, input.groups);
@@ -1144,9 +1153,10 @@ export async function updatePaymentTemplate(id: number, input: PaymentTemplateIn
   const db = await getDb();
   await db.execute(
     `UPDATE payment_templates SET
-       name = $1, file_kind = $2, delimiter = $3, date_format = $4, updated_at = datetime('now')
-     WHERE id = $5`,
-    [input.name, input.fileKind, input.delimiter, input.dateFormat, id],
+       name = $1, file_kind = $2, delimiter = $3, date_format = $4,
+       identifier_priority = $5, updated_at = datetime('now')
+     WHERE id = $6`,
+    [input.name, input.fileKind, input.delimiter, input.dateFormat, JSON.stringify(input.identifierPriority), id],
   );
   await deleteTemplateGroups(db, id);
   await insertTemplateGroups(db, id, input.groups);
@@ -1163,16 +1173,17 @@ export async function deletePaymentTemplate(id: number): Promise<void> {
 }
 
 /**
- * Resolves a payment row's employee within `clientId`, trying CPF, then
- * matrícula, then nome, in that order — the precedence already defined in
- * `IDENTIFIER_FIELD_PRECEDENCE`. Whichever one hits first wins; the others
- * (if also mapped) are never consulted.
+ * Resolves a payment row's employee within `clientId` by walking a
+ * template's `identifierPriority` — every field in one "tentativa" must
+ * match the *same* employee together (an AND); tentativas are tried in
+ * order and the first one that finds an employee wins (an OR across
+ * tentativas). A tentativa is skipped outright if any of its fields has no
+ * raw value for this row — there's nothing to match on.
  */
-export async function findEmployeeByIdentifiers(
+export async function findEmployeeByAttempts(
   clientId: number,
-  cpf: string | null,
-  matricula: string | null,
-  nome: string | null,
+  attempts: IdentifierAttempt[],
+  values: { cpf: string | null; matricula: string | null; nome: string | null },
 ): Promise<EmployeeRow | null> {
   const db = await getDb();
   const select = `SELECT e.id, e.name, e.cpf, e.matricula,
@@ -1181,27 +1192,44 @@ export async function findEmployeeByIdentifiers(
     FROM employees e
     JOIN clients cl ON cl.id = e.client_id
     JOIN companies c ON c.id = e.company_id
-    WHERE e.client_id = $1 AND `;
+    WHERE e.client_id = $1`;
 
-  if (cpf) {
-    const normalizedCpf = normalizeCpf(cpf);
-    if (normalizedCpf.length === 11) {
-      const rows = await db.select<EmployeeRow[]>(`${select}e.cpf = $2`, [clientId, normalizedCpf]);
-      if (rows.length > 0) return rows[0];
+  for (const attempt of attempts) {
+    if (attempt.length === 0) continue;
+    const conditions: string[] = [];
+    const params: (string | number)[] = [clientId];
+    let skip = false;
+
+    for (const field of attempt) {
+      if (field === "cpf") {
+        const normalized = values.cpf ? normalizeCpf(values.cpf) : "";
+        if (normalized.length !== 11) {
+          skip = true;
+          break;
+        }
+        params.push(normalized);
+        conditions.push(`e.cpf = $${params.length}`);
+      } else if (field === "matricula") {
+        const trimmed = values.matricula?.trim();
+        if (!trimmed) {
+          skip = true;
+          break;
+        }
+        params.push(trimmed);
+        conditions.push(`e.matricula = $${params.length}`);
+      } else {
+        const trimmed = values.nome?.trim();
+        if (!trimmed) {
+          skip = true;
+          break;
+        }
+        params.push(trimmed);
+        conditions.push(`lower(e.name) = lower($${params.length})`);
+      }
     }
-  }
-  if (matricula?.trim()) {
-    const rows = await db.select<EmployeeRow[]>(`${select}e.matricula = $2`, [
-      clientId,
-      matricula.trim(),
-    ]);
-    if (rows.length > 0) return rows[0];
-  }
-  if (nome?.trim()) {
-    const rows = await db.select<EmployeeRow[]>(`${select}lower(e.name) = lower($2)`, [
-      clientId,
-      nome.trim(),
-    ]);
+
+    if (skip) continue;
+    const rows = await db.select<EmployeeRow[]>(`${select} AND ${conditions.join(" AND ")}`, params);
     if (rows.length > 0) return rows[0];
   }
   return null;

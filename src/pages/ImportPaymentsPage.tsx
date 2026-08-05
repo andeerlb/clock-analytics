@@ -23,7 +23,7 @@ import {
 import { colorForName, initials } from "../lib/avatar";
 import {
   findDuplicatePaymentShifts,
-  findEmployeeByIdentifiers,
+  findEmployeeByAttempts,
   getPaymentTemplate,
   listImportFiles,
   listPaymentTemplates,
@@ -301,7 +301,11 @@ export default function ImportPaymentsPage() {
             const matricula = applied_row.fields.matricula || null;
             const nome = applied_row.fields.nome || null;
             const employee = route
-              ? await findEmployeeByIdentifiers(route.clientId, cpf, matricula, nome)
+              ? await findEmployeeByAttempts(route.clientId, selectedTemplate.identifierPriority, {
+                  cpf,
+                  matricula,
+                  nome,
+                })
               : null;
             const scheduleRaw = applied_row.fields.horario ?? "";
             const parsedSchedule = parseScheduleToMinutes(scheduleRaw);
