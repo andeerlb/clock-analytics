@@ -5,6 +5,10 @@ import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "./periodStatus";
 import type {
   ConflictInfo,
   DuplicateFileInfo,
+  EmployeeTemplateFieldMapping,
+  EmployeeTemplateGroup,
+  EmployeeTemplateListRow,
+  EmployeeTemplateRow,
   IdentifierAttempt,
   ImportFileRow,
   ImportStatus,
@@ -1467,6 +1471,165 @@ export async function deletePaymentTemplate(id: number): Promise<void> {
   await deleteTemplateRules(db, id);
   await deleteTemplateStatusRules(db, id);
   await db.execute("DELETE FROM payment_templates WHERE id = $1", [id]);
+}
+
+export async function listEmployeeTemplates(): Promise<EmployeeTemplateListRow[]> {
+  const db = await getDb();
+  return db.select<EmployeeTemplateListRow[]>(`
+    SELECT et.id, et.name, et.file_kind AS fileKind, et.updated_at AS updatedAt
+    FROM employee_templates et
+    ORDER BY et.updated_at DESC
+  `);
+}
+
+export async function getEmployeeTemplate(id: number): Promise<EmployeeTemplateRow> {
+  const db = await getDb();
+  const rows = await db.select<
+    (Omit<EmployeeTemplateRow, "groups" | "identifierPriority"> & { identifierPriority: string })[]
+  >(
+    `SELECT et.id, et.name, et.file_kind AS fileKind, et.delimiter,
+            et.identifier_priority AS identifierPriority,
+            et.created_at AS createdAt, et.updated_at AS updatedAt
+     FROM employee_templates et
+     WHERE et.id = $1`,
+    [id],
+  );
+  if (rows.length === 0) throw new Error("Template não encontrado.");
+
+  const groupRows = await db.select<{ id: number }[]>(
+    "SELECT id FROM employee_template_groups WHERE template_id = $1",
+    [id],
+  );
+  const groups: EmployeeTemplateGroup[] = [];
+  for (const g of groupRows) {
+    const sheetRows = await db.select<{ sheetName: string }[]>(
+      "SELECT sheet_name AS sheetName FROM employee_template_sheets WHERE group_id = $1 ORDER BY sheet_name",
+      [g.id],
+    );
+    const fieldMappings = await db.select<EmployeeTemplateFieldMapping[]>(
+      `SELECT column_letter AS columnLetter, target_field AS targetField, header_label AS headerLabel
+       FROM employee_template_fields
+       WHERE group_id = $1
+       ORDER BY column_letter`,
+      [g.id],
+    );
+    groups.push({ sheetNames: sheetRows.map((r) => r.sheetName), fieldMappings });
+  }
+
+  return {
+    ...rows[0],
+    identifierPriority: JSON.parse(rows[0].identifierPriority) as IdentifierAttempt[],
+    groups,
+  };
+}
+
+export interface EmployeeTemplateInput {
+  name: string;
+  fileKind: PaymentFileKind;
+  delimiter: string | null;
+  identifierPriority: IdentifierAttempt[];
+  groups: EmployeeTemplateGroup[];
+}
+
+async function insertEmployeeTemplateGroups(
+  db: Database,
+  templateId: number,
+  groups: EmployeeTemplateGroup[],
+): Promise<void> {
+  for (const group of groups) {
+    const result = await db.execute(
+      "INSERT INTO employee_template_groups (template_id) VALUES ($1)",
+      [templateId],
+    );
+    const groupId = result.lastInsertId as number;
+    for (const sheetName of group.sheetNames) {
+      await db.execute(
+        "INSERT INTO employee_template_sheets (group_id, sheet_name) VALUES ($1, $2)",
+        [groupId, sheetName],
+      );
+    }
+    for (const mapping of group.fieldMappings) {
+      await db.execute(
+        `INSERT INTO employee_template_fields (group_id, column_letter, target_field, header_label)
+         VALUES ($1, $2, $3, $4)`,
+        [groupId, mapping.columnLetter, mapping.targetField, mapping.headerLabel],
+      );
+    }
+  }
+}
+
+/** Deletes every group under a template, and (via their group_id) every sheet/field row under those groups. */
+async function deleteEmployeeTemplateGroups(db: Database, templateId: number): Promise<void> {
+  const groupRows = await db.select<{ id: number }[]>(
+    "SELECT id FROM employee_template_groups WHERE template_id = $1",
+    [templateId],
+  );
+  if (groupRows.length === 0) return;
+  const ids = groupRows.map((r) => r.id);
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
+  await db.execute(`DELETE FROM employee_template_fields WHERE group_id IN (${placeholders})`, ids);
+  await db.execute(`DELETE FROM employee_template_sheets WHERE group_id IN (${placeholders})`, ids);
+  await db.execute("DELETE FROM employee_template_groups WHERE template_id = $1", [templateId]);
+}
+
+export async function createEmployeeTemplate(input: EmployeeTemplateInput): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute(
+    `INSERT INTO employee_templates (name, file_kind, delimiter, identifier_priority)
+     VALUES ($1, $2, $3, $4)`,
+    [input.name, input.fileKind, input.delimiter, JSON.stringify(input.identifierPriority)],
+  );
+  const templateId = result.lastInsertId as number;
+  await insertEmployeeTemplateGroups(db, templateId, input.groups);
+  return templateId;
+}
+
+export async function updateEmployeeTemplate(id: number, input: EmployeeTemplateInput): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `UPDATE employee_templates SET
+       name = $1, file_kind = $2, delimiter = $3,
+       identifier_priority = $4, updated_at = datetime('now')
+     WHERE id = $5`,
+    [input.name, input.fileKind, input.delimiter, JSON.stringify(input.identifierPriority), id],
+  );
+  await deleteEmployeeTemplateGroups(db, id);
+  await insertEmployeeTemplateGroups(db, id, input.groups);
+}
+
+/**
+ * Deletes the template and its groups (and their sheets/field mappings).
+ * Unlike `deletePaymentTemplate`, there's no back-reference to null out
+ * first — employees created via import don't carry a link back to the
+ * template that created them.
+ */
+export async function deleteEmployeeTemplate(id: number): Promise<void> {
+  const db = await getDb();
+  await deleteEmployeeTemplateGroups(db, id);
+  await db.execute("DELETE FROM employee_templates WHERE id = $1", [id]);
+}
+
+export interface EmployeeImportRow {
+  clientId: number;
+  companyId: number;
+  name: string;
+  cpf: string;
+  matricula: string | null;
+}
+
+/**
+ * Plain bulk insert — no upsert. Anything matching an already-registered
+ * employee was already filtered out of the selectable set by
+ * ImportEmployeesPage before this is ever called (see `findEmployeeByAttempts`).
+ */
+export async function createEmployeesFromImport(rows: EmployeeImportRow[]): Promise<void> {
+  const db = await getDb();
+  for (const row of rows) {
+    await db.execute(
+      "INSERT INTO employees (company_id, client_id, name, cpf, matricula) VALUES ($1, $2, $3, $4, $5)",
+      [row.companyId, row.clientId, row.name.trim(), normalizeCpf(row.cpf), row.matricula?.trim() || null],
+    );
+  }
 }
 
 export interface EmployeeAliasRow {

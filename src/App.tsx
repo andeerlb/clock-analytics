@@ -9,7 +9,9 @@ import ClientFormPage from "./pages/ClientFormPage";
 import ClientsPage from "./pages/ClientsPage";
 import CompaniesPage from "./pages/CompaniesPage";
 import CompanyFormPage from "./pages/CompanyFormPage";
+import EmployeeTemplatesPage from "./pages/EmployeeTemplatesPage";
 import ImportChooserPage from "./pages/ImportChooserPage";
+import ImportEmployeesPage from "./pages/ImportEmployeesPage";
 import ImportPaymentsPage from "./pages/ImportPaymentsPage";
 import ImportTimesheetPage from "./pages/ImportTimesheetPage";
 import LibraryPage from "./pages/LibraryPage";
@@ -64,6 +66,8 @@ function App() {
               <Route path="/import/timesheet" element={<ImportTimesheetPage />} />
               <Route path="/import/payments" element={<ImportPaymentsPage />} />
               <Route path="/import/payments/templates" element={<PaymentTemplatesPage />} />
+              <Route path="/import/employees" element={<ImportEmployeesPage />} />
+              <Route path="/import/employees/templates" element={<EmployeeTemplatesPage />} />
               <Route path="/employee/:importId" element={<EmployeeDetailPage />} />
               <Route path="/payments" element={<PaymentsPage />} />
               <Route path="/payments/:employeeId/:competencia" element={<PaymentDetailPage />} />

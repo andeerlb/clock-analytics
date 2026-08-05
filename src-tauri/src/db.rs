@@ -190,5 +190,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0031_payment_shift_previous.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 32,
+            description: "add employee_templates — reusable column-mapping templates for the colaboradores import flow, mirroring payment_templates but without company/client routing rules, date parsing, or status rules",
+            sql: include_str!("../migrations/0032_employee_templates.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

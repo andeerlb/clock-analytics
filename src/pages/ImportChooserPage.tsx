@@ -1,4 +1,4 @@
-import { Banknote, FileText } from "lucide-react";
+import { Banknote, FileText, Users } from "lucide-react";
 import { Link } from "react-router-dom";
 
 export default function ImportChooserPage() {
@@ -26,6 +26,15 @@ export default function ImportChooserPage() {
           <div>
             <h3>Pagamentos</h3>
             <p>Importe pagamentos a partir de arquivos CSV, Excel ou ODS.</p>
+          </div>
+        </Link>
+        <Link to="/import/employees" className="choice-card">
+          <div className="choice-card-icon">
+            <Users size={22} />
+          </div>
+          <div>
+            <h3>Colaboradores</h3>
+            <p>Importe colaboradores a partir de arquivos CSV, Excel ou ODS.</p>
           </div>
         </Link>
       </div>

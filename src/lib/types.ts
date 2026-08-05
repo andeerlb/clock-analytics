@@ -103,7 +103,7 @@ export interface FileParseResult {
 export type ImportStatus = "success" | "warning" | "error";
 
 /** Which import flow a source file went through — each has its own history. */
-export type ImportType = "timesheet" | "payment";
+export type ImportType = "timesheet" | "payment" | "employee";
 
 export function importStatusOf(result: Pick<FileParseResult, "sheets" | "error">): ImportStatus {
   if (!result.error) return "success";
@@ -376,6 +376,53 @@ export interface PaymentTemplateRow extends PaymentTemplateListRow {
   groups: PaymentTemplateGroup[];
   rules: PaymentTemplateRule[];
   statusRules: PaymentStatusRule[];
+  identifierPriority: IdentifierAttempt[];
+  createdAt: string;
+}
+
+/**
+ * A known field an employee-import template's column can map to — a strict
+ * subset of PaymentTargetField's vocabulary (same three string values), so
+ * a mapped row's raw field keys line up unchanged with the existing
+ * IdentifierAttempt/findEmployeeByAttempts machinery.
+ */
+export type EmployeeTargetField = "cpf" | "matricula" | "nome";
+
+export const EMPLOYEE_TARGET_FIELDS: EmployeeTargetField[] = ["cpf", "matricula", "nome"];
+
+export const EMPLOYEE_TARGET_FIELD_LABELS: Record<EmployeeTargetField, string> = {
+  cpf: "CPF",
+  matricula: "Matrícula",
+  nome: "Nome",
+};
+
+/** Mapping both of these is required for a group to be usable — both are NOT NULL columns on `employees`. matricula stays optional. */
+export const REQUIRED_EMPLOYEE_FIELDS: EmployeeTargetField[] = ["cpf", "nome"];
+
+export interface EmployeeTemplateFieldMapping {
+  columnLetter: string;
+  targetField: EmployeeTargetField;
+  headerLabel: string | null;
+}
+
+/** Same per-sheet-group shape as PaymentTemplateGroup — see its doc comment. */
+export interface EmployeeTemplateGroup {
+  sheetNames: string[];
+  fieldMappings: EmployeeTemplateFieldMapping[];
+}
+
+/** One row per saved employee-import template — the list view. */
+export interface EmployeeTemplateListRow {
+  id: number;
+  name: string;
+  fileKind: PaymentFileKind;
+  updatedAt: string;
+}
+
+/** Full shape of an employee-import template, including its column-mapping groups and identifier priority. */
+export interface EmployeeTemplateRow extends EmployeeTemplateListRow {
+  delimiter: string | null;
+  groups: EmployeeTemplateGroup[];
   identifierPriority: IdentifierAttempt[];
   createdAt: string;
 }
