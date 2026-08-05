@@ -184,5 +184,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0030_payment_value_rules_threshold_minutes.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 31,
+            description: "add payment_shifts.previous_shift_id — links a 'pago' row back to the pendente/erro row it replaces, so paying never mutates history",
+            sql: include_str!("../migrations/0031_payment_shift_previous.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

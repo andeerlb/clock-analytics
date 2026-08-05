@@ -1,14 +1,24 @@
-import { AlertCircle, CheckCircle2, Clock3, Moon, Sun } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock3, History, Moon, Sun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
+import ConfirmPaymentModal from "../components/ConfirmPaymentModal";
 import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
-import { getCompany, getEmployee, listPaymentShiftsForEmployeeMonth, type CompanyDetail, type EmployeeRow } from "../lib/db";
+import PreviousShiftModal from "../components/PreviousShiftModal";
+import {
+  getCompany,
+  getEmployee,
+  listPaymentShiftsForEmployeeMonth,
+  markPaymentShiftPaid,
+  type CompanyDetail,
+  type EmployeeRow,
+} from "../lib/db";
 import {
   classifyShiftPeriod,
   formatCurrencyBRL,
   formatDate,
+  formatDateTime,
   formatMinutesAsTime,
   parseTimeToMinutes,
   resolvePaymentValue,
@@ -59,6 +69,10 @@ export default function PaymentDetailPage() {
   );
   const [periodStart, setPeriodStart] = useState(navState?.periodStart ?? "");
   const [periodEnd, setPeriodEnd] = useState(navState?.periodEnd ?? "");
+  const [payingShift, setPayingShift] = useState<PaymentShiftRow | null>(null);
+  const [paying, setPaying] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
+  const [viewingPreviousId, setViewingPreviousId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!competencia || Number.isNaN(id)) return;
@@ -72,6 +86,21 @@ export default function PaymentDetailPage() {
       .catch((e) => setError(String(e instanceof Error ? e.message : e)))
       .finally(() => setLoading(false));
   }, [id, competencia]);
+
+  async function handleConfirmPayment(amount: number) {
+    if (!payingShift || !competencia) return;
+    setPaying(true);
+    setPayError(null);
+    try {
+      await markPaymentShiftPaid(payingShift.id, amount);
+      setShifts(await listPaymentShiftsForEmployeeMonth(id, competencia));
+      setPayingShift(null);
+    } catch (e) {
+      setPayError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setPaying(false);
+    }
+  }
 
   function toggleStatus(status: PaymentShiftStatus) {
     setSelectedStatuses((prev) => {
@@ -91,8 +120,16 @@ export default function PaymentDetailPage() {
     return classifyShiftPeriod(company.nightShiftRule, nightStart, nightEnd, s.scheduleStartMinutes, s.scheduleEndMinutes);
   }
 
-  /** `null` when there's no schedule on this shift, or the company has no (or no matching) pay-value rule — shown as "—", not R$ 0,00. */
+  /**
+   * A `pago` row's Valor is whatever was confirmed at payment time — frozen
+   * forever in `s.amount`, never recomputed even if the company's rules
+   * change later. Every other status has no stored amount yet, so this
+   * falls back to a live estimate from the company's current rules (`null`
+   * when there's no schedule on the shift, or no matching rule — shown as
+   * "—", not R$ 0,00).
+   */
   function shiftValue(s: PaymentShiftRow): number | null {
+    if (s.amount !== null) return s.amount;
     if (!company || s.scheduleStartMinutes === null || s.scheduleEndMinutes === null) return null;
     const duration = shiftDurationMinutes(s.scheduleStartMinutes, s.scheduleEndMinutes);
     return resolvePaymentValue(company.valueRules, duration);
@@ -188,6 +225,8 @@ export default function PaymentDetailPage() {
                   <th>Valor</th>
                   <th>Observação</th>
                   <th>Status</th>
+                  <th>Importado em</th>
+                  <th>Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -235,6 +274,27 @@ export default function PaymentDetailPage() {
                           </div>
                         )}
                       </td>
+                      <td className="muted" style={{ fontSize: "0.8rem" }}>
+                        {formatDateTime(s.importedAt)}
+                      </td>
+                      <td>
+                        {(s.status === "pendente" || s.status === "erro") && (
+                          <button type="button" className="secondary" onClick={() => setPayingShift(s)}>
+                            Fazer pagamento
+                          </button>
+                        )}
+                        {s.previousShiftId !== null && (
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => setViewingPreviousId(s.previousShiftId)}
+                            title="Ver status anterior a este pagamento"
+                          >
+                            <History size={13} style={{ marginRight: "0.3rem" }} />
+                            Status anterior
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -243,6 +303,22 @@ export default function PaymentDetailPage() {
           </div>
         )}
       </div>
+
+      {payingShift && (
+        <ConfirmPaymentModal
+          shift={payingShift}
+          suggestedAmount={shiftValue(payingShift)}
+          busy={paying}
+          error={payError}
+          onConfirm={handleConfirmPayment}
+          onCancel={() => {
+            setPayingShift(null);
+            setPayError(null);
+          }}
+        />
+      )}
+
+      <PreviousShiftModal shiftId={viewingPreviousId} company={company} onClose={() => setViewingPreviousId(null)} />
     </div>
   );
 }

@@ -1698,6 +1698,16 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
   }
 }
 
+/**
+ * A shift's "current" row is whichever one nothing else points to via
+ * `previous_shift_id` — once "Fazer pagamento" creates a new row linked
+ * back to a pendente/erro one, that older row is superseded and drops out
+ * of every list/summary/total, staying only as history reachable through
+ * the link on the row that replaced it (see `getPaymentShift`).
+ */
+const HEAD_SHIFT_CONDITION =
+  "ps.id NOT IN (SELECT previous_shift_id FROM payment_shifts WHERE previous_shift_id IS NOT NULL)";
+
 /** Which aggregated column each "Status" checkbox reads — a group matches a status once at least one of its shifts has it. */
 const PAYMENT_STATUS_HAVING_CONDITIONS: Record<PaymentShiftStatus, string> = {
   pendente: "SUM(CASE WHEN ps.status = 'pendente' THEN 1 ELSE 0 END) > 0",
@@ -1820,6 +1830,7 @@ export async function listPaymentShiftSummaries(
   const conditions: string[] = [];
   const params: (string | number)[] = [];
 
+  conditions.push(HEAD_SHIFT_CONDITION);
   const search = query.search?.trim();
   if (search) {
     params.push(search);
@@ -1889,24 +1900,102 @@ export async function listPaymentShiftSummaries(
   return { rows, total };
 }
 
-/** Every shift for one colaborador in one competência ("YYYY-MM") — the Pagamentos detail. */
+const PAYMENT_SHIFT_SELECT_COLUMNS = `
+  ps.id, ps.employee_id AS employeeId, e.name AS employeeName,
+  ps.local, ps.work_date AS workDate, ps.role,
+  ps.schedule_start_minutes AS scheduleStartMinutes,
+  ps.schedule_end_minutes AS scheduleEndMinutes, ps.note,
+  ps.status, ps.error_message AS errorMessage, ps.amount, ps.imported_at AS importedAt,
+  ps.previous_shift_id AS previousShiftId
+`;
+
+const PAYMENT_SHIFT_FROM_CLAUSE = `
+  FROM payment_shifts ps
+  JOIN employees e ON e.id = ps.employee_id
+`;
+
+/** Every *current* shift (see `HEAD_SHIFT_CONDITION`) for one colaborador in one competência ("YYYY-MM") — the Pagamentos detail. */
 export async function listPaymentShiftsForEmployeeMonth(
   employeeId: number,
   competencia: string,
 ): Promise<PaymentShiftRow[]> {
   const db = await getDb();
   return db.select<PaymentShiftRow[]>(
-    `SELECT ps.id, ps.employee_id AS employeeId, e.name AS employeeName,
-            ps.local, ps.work_date AS workDate, ps.role,
-            ps.schedule_start_minutes AS scheduleStartMinutes,
-            ps.schedule_end_minutes AS scheduleEndMinutes, ps.note,
-            ps.status, ps.error_message AS errorMessage, ps.amount, ps.imported_at AS importedAt
-     FROM payment_shifts ps
-     JOIN employees e ON e.id = ps.employee_id
-     WHERE ps.employee_id = $1 AND strftime('%Y-%m', ps.work_date) = $2
+    `SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS}
+     ${PAYMENT_SHIFT_FROM_CLAUSE}
+     WHERE ps.employee_id = $1 AND strftime('%Y-%m', ps.work_date) = $2 AND ${HEAD_SHIFT_CONDITION}
      ORDER BY ps.work_date, ps.id`,
     [employeeId, competencia],
   );
+}
+
+/**
+ * A single shift by id, current or superseded — used to open the "ver
+ * status anterior" link on a `pago` row, which points at a row that
+ * `listPaymentShiftsForEmployeeMonth` no longer returns on its own since
+ * it's not a head row anymore.
+ */
+export async function getPaymentShift(id: number): Promise<PaymentShiftRow> {
+  const db = await getDb();
+  const rows = await db.select<PaymentShiftRow[]>(
+    `SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS} ${PAYMENT_SHIFT_FROM_CLAUSE} WHERE ps.id = $1`,
+    [id],
+  );
+  if (rows.length === 0) throw new Error("Turno não encontrado.");
+  return rows[0];
+}
+
+/**
+ * "Fazer pagamento": always inserts a brand-new row instead of mutating
+ * `shiftId`'s row — copies its core shift fields, sets status = 'pago',
+ * the confirmed `amount`, and links `previousShiftId` back to it. From
+ * this point on `shiftId`'s row is frozen (only ever read, never written)
+ * and drops out of every head-only list/summary/total.
+ */
+export async function markPaymentShiftPaid(shiftId: number, amount: number): Promise<number> {
+  const db = await getDb();
+  const rows = await db.select<
+    {
+      employeeId: number;
+      templateId: number | null;
+      sourceFileId: number | null;
+      local: string;
+      workDate: string;
+      role: string;
+      scheduleStartMinutes: number | null;
+      scheduleEndMinutes: number | null;
+      note: string | null;
+    }[]
+  >(
+    `SELECT employee_id AS employeeId, template_id AS templateId, source_file_id AS sourceFileId,
+            local, work_date AS workDate, role,
+            schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes, note
+     FROM payment_shifts WHERE id = $1`,
+    [shiftId],
+  );
+  if (rows.length === 0) throw new Error("Turno não encontrado.");
+  const s = rows[0];
+
+  const result = await db.execute(
+    `INSERT INTO payment_shifts
+       (employee_id, template_id, source_file_id, local, work_date, role,
+        schedule_start_minutes, schedule_end_minutes, note, status, amount, previous_shift_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pago', $10, $11)`,
+    [
+      s.employeeId,
+      s.templateId,
+      s.sourceFileId,
+      s.local,
+      s.workDate,
+      s.role,
+      s.scheduleStartMinutes,
+      s.scheduleEndMinutes,
+      s.note,
+      amount,
+      shiftId,
+    ],
+  );
+  return result.lastInsertId as number;
 }
 
 /**
@@ -1953,7 +2042,11 @@ export async function clearAllData(options: ClearDataOptions = {}): Promise<void
   await db.execute("DELETE FROM import_files");
   // Payment shifts are import history too (one row per imported work
   // shift), same category as day_records/punches — always cleared, and
-  // before source_files/employees since it references both.
+  // before source_files/employees since it references both. The table is
+  // self-referencing (previous_shift_id, for "Fazer pagamento" history),
+  // so null those out first — otherwise the bulk delete can violate that
+  // FK mid-way through, depending on delete order.
+  await db.execute("UPDATE payment_shifts SET previous_shift_id = NULL WHERE previous_shift_id IS NOT NULL");
   await db.execute("DELETE FROM payment_shifts");
   await db.execute("DELETE FROM source_files");
 

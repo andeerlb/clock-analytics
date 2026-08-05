@@ -409,6 +409,8 @@ export interface PaymentShiftRow {
   errorMessage: string | null;
   amount: number | null;
   importedAt: string;
+  /** The pendente/erro row this one replaces, if "Fazer pagamento" created it — that older row is frozen (never edited again) once this points to it. `null` for a row nothing has replaced yet. */
+  previousShiftId: number | null;
 }
 
 /** One row per (colaborador, competência) — the Pagamentos list. */
