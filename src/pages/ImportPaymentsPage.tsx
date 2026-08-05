@@ -62,7 +62,7 @@ const STATUS_BADGE: Record<ImportStatus, { className: string; label: string; ico
  * counts and what the toolbar's chips filter by (see `rowFilter`).
  * "valid"/"duplicate" are the only two with a resolved `employee`.
  */
-type RowCategory = "valid" | "duplicate" | "not-found" | "unresolved-route" | "skipped" | "out-of-period";
+type RowCategory = "valid" | "duplicate" | "not-found" | "unresolved-route" | "skipped";
 type RowFilter = RowCategory | "error" | "all" | "selected";
 
 interface PaymentPreviewRow {
@@ -71,6 +71,8 @@ interface PaymentPreviewRow {
   sheetName: string | null;
   rowNumber: number;
   employee: EmployeeRow | null;
+  /** Raw "nome" column text, shown when `employee` couldn't be resolved so it's clear whether the name was even read from the file. */
+  nameRaw: string;
   local: string;
   role: string;
   /** Raw Horário text, kept only to display when `parseScheduleToMinutes` can't make sense of it. */
@@ -245,7 +247,6 @@ export default function ImportPaymentsPage() {
       "not-found": 0,
       "unresolved-route": 0,
       skipped: 0,
-      "out-of-period": 0,
     };
     for (const r of shiftRows) counts[r.category]++;
     return counts;
@@ -254,7 +255,6 @@ export default function ImportPaymentsPage() {
   const errorCount = fileResults.filter((r) => r.error).length;
   const duplicateCount = categoryCounts.duplicate;
   const skippedCount = categoryCounts.skipped;
-  const outOfPeriodCount = categoryCounts["out-of-period"];
 
   const previewPageCount = Math.max(1, Math.ceil(previewRows.length / previewPageSize));
   const previewPageItems = useMemo(
@@ -339,6 +339,7 @@ export default function ImportPaymentsPage() {
               fileName,
               sheetName: applied_row.sheetName,
               rowNumber: applied_row.rowNumber,
+              nameRaw: applied_row.fields.nome ?? "",
               local: applied_row.fields.local ?? "",
               role: applied_row.fields.funcao ?? "",
               scheduleRaw,
@@ -367,16 +368,10 @@ export default function ImportPaymentsPage() {
             }
 
             // Optional período filter, same "data" column/formato já
-            // usados acima.
+            // usados acima — rows outside it are excluded entirely, not
+            // just flagged: the whole point of setting a period is to only
+            // bring back what's inside it.
             if ((periodStart && workDate < periodStart) || (periodEnd && workDate > periodEnd)) {
-              rows.push({
-                ...base,
-                employee: null,
-                workDate,
-                isDuplicate: false,
-                unresolvedRoute: false,
-                category: "out-of-period",
-              });
               continue;
             }
 
@@ -723,16 +718,6 @@ export default function ImportPaymentsPage() {
                         {skippedCount} linha(s) ignorada(s)
                       </button>
                     )}
-                    {outOfPeriodCount > 0 && (
-                      <button
-                        type="button"
-                        className={`count-chip chip-filter${rowFilter === "out-of-period" ? " active" : ""}`}
-                        onClick={() => toggleRowFilter("out-of-period")}
-                        title="Linhas com data válida, mas fora do período selecionado. Clique para filtrar."
-                      >
-                        {outOfPeriodCount} fora do período
-                      </button>
-                    )}
                     {errorCount > 0 && (
                       <button
                         type="button"
@@ -824,7 +809,9 @@ export default function ImportPaymentsPage() {
                                   {row.employee.name}
                                 </div>
                               ) : (
-                                <span className="muted">—</span>
+                                <span className="muted" title={row.nameRaw ? "Nome lido da planilha, mas não encontrado no cadastro" : undefined}>
+                                  {row.nameRaw || "—"}
+                                </span>
                               )}
                             </td>
                             <td>{row.local}</td>
@@ -890,9 +877,6 @@ export default function ImportPaymentsPage() {
                                 <span className="badge neutral" title="A coluna mapeada como Data não pôde ser interpretada nesta linha">
                                   Data não reconhecida
                                 </span>
-                              )}
-                              {row.category === "out-of-period" && (
-                                <span className="badge neutral">Fora do período selecionado</span>
                               )}
                             </td>
                           </tr>
