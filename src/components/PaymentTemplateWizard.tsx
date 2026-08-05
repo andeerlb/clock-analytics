@@ -1,13 +1,18 @@
 import {
+  ArrowRight,
   CheckSquare,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  Filter,
   FolderOpen,
+  GitBranch,
   Info,
+  ListOrdered,
   Pencil,
   Plus,
+  Route,
   Square,
   Trash2,
   X,
@@ -911,277 +916,278 @@ export default function PaymentTemplateWizard({
         )}
 
         {currentStep === "details" && (
-          <div>
-            <div className="card" style={{ maxWidth: "36rem" }}>
-              <div className="field" style={{ marginBottom: "1rem" }}>
-                <label htmlFor="template-name">Nome do template</label>
-                <input
-                  id="template-name"
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Ex.: Folha mensal — Provedor X"
-                />
-              </div>
-              <div className="field" style={{ maxWidth: "16rem" }}>
-                <label htmlFor="template-date-format">Formato de data</label>
-                <select
-                  id="template-date-format"
-                  value={dateFormat}
-                  onChange={(e) => setDateFormat(e.target.value)}
-                >
-                  {DATE_FORMAT_OPTIONS.map((f) => (
-                    <option key={f} value={f}>
-                      {f}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <p className="field-hint" style={{ marginTop: "1rem" }}>
-                {includedGroupKeys.length === 1
-                  ? "1 configuração de colunas."
-                  : `${includedGroupKeys.length} configurações de colunas diferentes.`}
-                {sheets.length > 1 && ` ${includedSheets.size} de ${sheets.length} aba(s) selecionada(s).`}
-              </p>
-            </div>
-
-            <div className="card" style={{ maxWidth: "36rem", marginTop: "1.2rem" }}>
-              <label>Filtro de linha válida</label>
-              <p className="muted" style={{ marginTop: "0.3rem" }}>
-                Tipo de filtro: Data (único disponível por enquanto). Uma linha só é considerada
-                válida quando a coluna abaixo consegue ser interpretada como data, no formato
-                configurado acima.
-              </p>
-              <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem", fontSize: "0.85rem" }}>
-                {dataFilterEntries.map((e) => (
-                  <li key={e.key}>
-                    {e.key}: coluna {e.columnLabel ?? "—"}
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="card" style={{ marginTop: "1.2rem" }}>
-              <label>Prioridade de identificação</label>
-              <p className="muted" style={{ marginTop: "0.3rem" }}>
-                Cada tentativa é um conjunto de campos que precisam bater juntos, no mesmo
-                colaborador — tentadas em ordem, a primeira que encontrar um colaborador vence.
-                Pelo menos uma tentativa é obrigatória.
-              </p>
-
-              {identifierAttempts.map((attempt, i) => (
-                <div
-                  key={i}
-                  className="field-row"
-                  style={{
-                    alignItems: "center",
-                    marginTop: "0.8rem",
-                    paddingTop: "0.8rem",
-                    borderTop: "1px solid var(--border)",
-                  }}
-                >
-                  <span className="muted" style={{ minWidth: "1.4rem" }}>
-                    {i + 1}.
-                  </span>
-                  {IDENTIFIER_FIELDS.map((f) => (
-                    <label
-                      key={f}
-                      style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.85rem", cursor: "pointer" }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={attempt.includes(f)}
-                        onChange={() => toggleIdentifierField(i, f)}
-                      />
-                      {PAYMENT_TARGET_FIELD_LABELS[f]}
-                    </label>
-                  ))}
-                  <div style={{ marginLeft: "auto", display: "flex", gap: "0.2rem" }}>
-                    <button
-                      type="button"
-                      className="ghost"
-                      style={{ padding: "0.3rem" }}
-                      onClick={() => moveIdentifierAttempt(i, -1)}
-                      disabled={i === 0}
-                      aria-label="Mover para cima"
-                      title="Mover para cima"
-                    >
-                      <ChevronUp size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost"
-                      style={{ padding: "0.3rem" }}
-                      onClick={() => moveIdentifierAttempt(i, 1)}
-                      disabled={i === identifierAttempts.length - 1}
-                      aria-label="Mover para baixo"
-                      title="Mover para baixo"
-                    >
-                      <ChevronDown size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost"
-                      style={{ padding: "0.3rem" }}
-                      onClick={() => removeIdentifierAttempt(i)}
-                      aria-label="Remover tentativa"
-                      title="Remover tentativa"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
+          <div className="details-layout">
+            <aside className="details-sidebar">
+              <div className="glass-panel">
+                <div className="field-code">
+                  <label htmlFor="template-name">Nome do template</label>
+                  <input
+                    id="template-name"
+                    className="glass-input"
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Ex.: Folha mensal — Provedor X"
+                  />
                 </div>
-              ))}
-
-              {identifierAttempts.length === 0 && (
-                <p className="field-hint" style={{ marginTop: "0.6rem" }}>
-                  Nenhuma tentativa cadastrada — pelo menos uma é obrigatória para salvar.
-                </p>
-              )}
-
-              <button type="button" className="secondary" style={{ marginTop: "1rem" }} onClick={addIdentifierAttempt}>
-                <Plus size={14} style={{ marginRight: "0.3rem" }} />
-                Adicionar tentativa
-              </button>
-            </div>
-
-            <div className="card" style={{ marginTop: "1.2rem" }}>
-              <label>Regras de roteamento (Empresa/Cliente)</label>
-              <p className="muted" style={{ marginTop: "0.3rem" }}>
-                Decide, linha a linha, a Empresa/Cliente de destino a partir do valor de um campo
-                já mapeado — avaliadas em ordem, a primeira que bater vence. Sempre obrigatório,
-                mesmo se o arquivo sempre pertencer a um único cliente (nesse caso, use só uma
-                regra "senão").
-              </p>
-
-              {rules.map((rule, i) => (
-                <div
-                  key={i}
-                  className="field-row"
-                  style={{
-                    alignItems: "flex-end",
-                    marginTop: "0.8rem",
-                    paddingTop: "0.8rem",
-                    borderTop: "1px solid var(--border)",
-                  }}
-                >
-                  {rule.kind === "condition" ? (
-                    <>
-                      <div className="field" style={{ flex: "1 1 150px" }}>
-                        <label>Campo</label>
-                        <select
-                          value={rule.field}
-                          onChange={(e) => updateRule(i, { field: e.target.value as PaymentTargetField })}
-                        >
-                          {PAYMENT_TARGET_FIELDS.map((f) => (
-                            <option key={f} value={f}>
-                              {PAYMENT_TARGET_FIELD_LABELS[f]}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="field" style={{ flex: "2 1 220px" }}>
-                        <label>Valores possíveis</label>
-                        <input
-                          type="text"
-                          value={rule.valuesText}
-                          onChange={(e) => updateRule(i, { valuesText: e.target.value })}
-                          placeholder="Ex.: FLV, Mercearia"
-                        />
-                        <label
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "0.35rem",
-                            marginTop: "0.4rem",
-                            fontSize: "0.8rem",
-                            fontWeight: 400,
-                            cursor: "pointer",
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={rule.caseInsensitive}
-                            onChange={(e) => updateRule(i, { caseInsensitive: e.target.checked })}
-                          />
-                          Ignorar maiúsculas/minúsculas
-                        </label>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="field" style={{ flex: "3 1 300px" }}>
-                      <label>Senão — se nenhuma regra acima bater, usa esta</label>
-                    </div>
-                  )}
-                  <div className="field" style={{ flex: "1 1 160px" }}>
-                    <label>Empresa</label>
-                    <select
-                      value={rule.companyId ?? ""}
-                      onChange={(e) =>
-                        updateRule(i, {
-                          companyId: e.target.value ? Number(e.target.value) : null,
-                          clientId: null,
-                        })
-                      }
-                    >
-                      <option value="">Selecione</option>
-                      {companies.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="field" style={{ flex: "1 1 160px" }}>
-                    <label>Cliente</label>
-                    <select
-                      value={rule.clientId ?? ""}
-                      onChange={(e) =>
-                        updateRule(i, { clientId: e.target.value ? Number(e.target.value) : null })
-                      }
-                      disabled={!rule.companyId}
-                    >
-                      <option value="">Selecione</option>
-                      {clientsAll
-                        .filter((c) => c.companyId === rule.companyId)
-                        .map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                          </option>
-                        ))}
-                    </select>
-                  </div>
-                  <button
-                    type="button"
-                    className="ghost"
-                    style={{ padding: "0.4rem" }}
-                    onClick={() => removeRule(i)}
-                    aria-label="Remover regra"
-                    title="Remover regra"
+                <div className="field-code">
+                  <label htmlFor="template-date-format">Formato de data</label>
+                  <select
+                    id="template-date-format"
+                    className="glass-input"
+                    value={dateFormat}
+                    onChange={(e) => setDateFormat(e.target.value)}
                   >
-                    <Trash2 size={14} />
-                  </button>
+                    {DATE_FORMAT_OPTIONS.map((f) => (
+                      <option key={f} value={f}>
+                        {f}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              ))}
 
-              {rules.length === 0 && (
-                <p className="field-hint" style={{ marginTop: "0.6rem" }}>
-                  Nenhuma regra cadastrada — pelo menos uma é obrigatória para salvar.
+                <h4 className="glass-panel-heading" style={{ marginTop: "1.2rem" }}>
+                  <Filter size={16} />
+                  Filtro de linha válida
+                </h4>
+                <p className="glass-panel-desc">
+                  Tipo de filtro: Data (único disponível por enquanto). Uma linha só é
+                  considerada válida quando a coluna abaixo consegue ser interpretada como data,
+                  no formato configurado acima.
                 </p>
-              )}
-
-              <div style={{ display: "flex", gap: "0.6rem", marginTop: "1rem" }}>
-                <button type="button" className="secondary" onClick={addConditionRule}>
-                  <Plus size={14} style={{ marginRight: "0.3rem" }} />
-                  Adicionar regra
-                </button>
-                {!hasElseRule && (
-                  <button type="button" className="secondary" onClick={addElseRule}>
-                    <Plus size={14} style={{ marginRight: "0.3rem" }} />
-                    Adicionar "senão"
-                  </button>
-                )}
+                <div className="filter-entries">
+                  {dataFilterEntries.map((e) => (
+                    <div key={e.key} className="filter-entry">
+                      <span>{e.key}</span>
+                      <span className="filter-entry-col">coluna {e.columnLabel ?? "—"}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
+            </aside>
+
+            <div className="details-main">
+              <section className="glass-panel">
+                <h3 className="glass-panel-heading">
+                  <ListOrdered size={18} />
+                  Prioridade de identificação
+                </h3>
+                <p className="glass-panel-desc">
+                  Cada tentativa é um conjunto de campos que precisam bater juntos, no mesmo
+                  colaborador — tentadas em ordem, a primeira que encontrar um colaborador vence.
+                  Pelo menos uma tentativa é obrigatória.
+                </p>
+
+                {identifierAttempts.map((attempt, i) => (
+                  <div key={i} className="identifier-attempt-row">
+                    {i > 0 && <div className="identifier-attempt-connector" />}
+                    <div className="logic-card identifier-attempt">
+                      <div className={`identifier-attempt-num${i === 0 ? " first" : ""}`}>{i + 1}</div>
+                      <div className="identifier-attempt-fields">
+                        {IDENTIFIER_FIELDS.map((f) => (
+                          <label
+                            key={f}
+                            className={`identifier-field-pill${attempt.includes(f) ? " checked" : ""}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={attempt.includes(f)}
+                              onChange={() => toggleIdentifierField(i, f)}
+                            />
+                            {PAYMENT_TARGET_FIELD_LABELS[f]}
+                          </label>
+                        ))}
+                      </div>
+                      <div className="logic-card-actions">
+                        <button
+                          type="button"
+                          className="ghost"
+                          style={{ padding: "0.3rem" }}
+                          onClick={() => moveIdentifierAttempt(i, -1)}
+                          disabled={i === 0}
+                          aria-label="Mover para cima"
+                          title="Mover para cima"
+                        >
+                          <ChevronUp size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          style={{ padding: "0.3rem" }}
+                          onClick={() => moveIdentifierAttempt(i, 1)}
+                          disabled={i === identifierAttempts.length - 1}
+                          aria-label="Mover para baixo"
+                          title="Mover para baixo"
+                        >
+                          <ChevronDown size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          style={{ padding: "0.3rem" }}
+                          onClick={() => removeIdentifierAttempt(i)}
+                          aria-label="Remover tentativa"
+                          title="Remover tentativa"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {identifierAttempts.length === 0 && (
+                  <p className="field-hint" style={{ marginTop: "0.6rem" }}>
+                    Nenhuma tentativa cadastrada — pelo menos uma é obrigatória para salvar.
+                  </p>
+                )}
+
+                <button
+                  type="button"
+                  className="glow-button"
+                  style={{ marginTop: "1rem" }}
+                  onClick={addIdentifierAttempt}
+                >
+                  <Plus size={14} />
+                  Adicionar tentativa
+                </button>
+              </section>
+
+              <section className="glass-panel">
+                <h3 className="glass-panel-heading">
+                  <Route size={18} />
+                  Regras de roteamento (Empresa/Cliente)
+                </h3>
+                <p className="glass-panel-desc">
+                  Decide, linha a linha, a Empresa/Cliente de destino a partir do valor de um
+                  campo já mapeado — avaliadas em ordem, a primeira que bater vence. Sempre
+                  obrigatório, mesmo se o arquivo sempre pertencer a um único cliente (nesse
+                  caso, use só uma regra "senão").
+                </p>
+
+                <div className="rule-list">
+                  {rules.map((rule, i) => (
+                    <div key={i} className={`logic-card rule-card${rule.kind === "else" ? " rule-card-else" : ""}`}>
+                      <div className="rule-card-icon">
+                        {rule.kind === "else" ? <GitBranch size={18} /> : <ArrowRight size={18} />}
+                      </div>
+                      <div className="rule-card-grid">
+                        {rule.kind === "condition" ? (
+                          <>
+                            <div className="field-code">
+                              <label>Se [Campo]</label>
+                              <select
+                                className="glass-input"
+                                value={rule.field}
+                                onChange={(e) => updateRule(i, { field: e.target.value as PaymentTargetField })}
+                              >
+                                {PAYMENT_TARGET_FIELDS.map((f) => (
+                                  <option key={f} value={f}>
+                                    {PAYMENT_TARGET_FIELD_LABELS[f]}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="field-code">
+                              <label>== [Valores possíveis]</label>
+                              <input
+                                className="glass-input"
+                                type="text"
+                                value={rule.valuesText}
+                                onChange={(e) => updateRule(i, { valuesText: e.target.value })}
+                                placeholder="Ex.: FLV, Mercearia"
+                              />
+                              <label className="field-code-checkbox">
+                                <input
+                                  type="checkbox"
+                                  checked={rule.caseInsensitive}
+                                  onChange={(e) => updateRule(i, { caseInsensitive: e.target.checked })}
+                                />
+                                Ignorar maiúsculas/minúsculas
+                              </label>
+                            </div>
+                          </>
+                        ) : (
+                          <span className="rule-card-else-label">
+                            SENÃO — se nenhuma regra acima bater, usa esta
+                          </span>
+                        )}
+                        <div className="field-code consequence">
+                          <label>Então [Empresa]</label>
+                          <select
+                            className="glass-input"
+                            value={rule.companyId ?? ""}
+                            onChange={(e) =>
+                              updateRule(i, {
+                                companyId: e.target.value ? Number(e.target.value) : null,
+                                clientId: null,
+                              })
+                            }
+                          >
+                            <option value="">Selecione</option>
+                            {companies.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="field-code consequence">
+                          <label>E [Cliente]</label>
+                          <select
+                            className="glass-input"
+                            value={rule.clientId ?? ""}
+                            onChange={(e) =>
+                              updateRule(i, { clientId: e.target.value ? Number(e.target.value) : null })
+                            }
+                            disabled={!rule.companyId}
+                          >
+                            <option value="">Selecione</option>
+                            {clientsAll
+                              .filter((c) => c.companyId === rule.companyId)
+                              .map((c) => (
+                                <option key={c.id} value={c.id}>
+                                  {c.name}
+                                </option>
+                              ))}
+                          </select>
+                        </div>
+                        <div className="rule-card-delete">
+                          <button
+                            type="button"
+                            className="ghost"
+                            style={{ padding: "0.4rem" }}
+                            onClick={() => removeRule(i)}
+                            aria-label="Remover regra"
+                            title="Remover regra"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {rules.length === 0 && (
+                  <p className="field-hint" style={{ marginTop: "0.6rem" }}>
+                    Nenhuma regra cadastrada — pelo menos uma é obrigatória para salvar.
+                  </p>
+                )}
+
+                <div style={{ display: "flex", gap: "0.6rem", marginTop: "1rem" }}>
+                  <button type="button" className="glow-button" onClick={addConditionRule}>
+                    <Plus size={14} />
+                    Adicionar regra
+                  </button>
+                  {!hasElseRule && (
+                    <button type="button" className="glow-button" onClick={addElseRule}>
+                      <Plus size={14} />
+                      Adicionar "senão"
+                    </button>
+                  )}
+                </div>
+              </section>
             </div>
           </div>
         )}
