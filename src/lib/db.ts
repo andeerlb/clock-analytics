@@ -24,6 +24,7 @@ import type {
   PaymentShiftStatus,
   PaymentShiftSummaryRow,
   PaymentStatusRule,
+  ShiftPeriod,
   StoredDayRecord,
   StoredImport,
 } from "./types";
@@ -1664,6 +1665,88 @@ const PAYMENT_STATUS_HAVING_CONDITIONS: Record<PaymentShiftStatus, string> = {
   pago: "SUM(CASE WHEN ps.status = 'pago' THEN 1 ELSE 0 END) > 0",
 };
 
+/**
+ * SQL-side mirror of `classifyShiftPeriod` (format.ts) — every rule there
+ * has an equivalent boolean/arithmetic expression here, built the same way
+ * (split each side into up to two non-wrapping `[start,end)` pieces on the
+ * 0-1440 circle, then compare pieces pairwise) so the "Diurno/Noturno"
+ * filter on the Pagamentos list agrees with the badge shown on the detail
+ * page. Kept as plain string-building instead of a stored SQL function
+ * since this project only ever talks to SQLite through the JS driver.
+ */
+function intervalPiecesSql(startExpr: string, endExpr: string): { p1s: string; p1e: string; p2s: string; p2e: string } {
+  const wraps = `(${endExpr} < ${startExpr})`;
+  return {
+    p1s: startExpr,
+    p1e: `(CASE WHEN ${wraps} THEN 1440 ELSE ${endExpr} END)`,
+    p2s: "0",
+    p2e: `(CASE WHEN ${wraps} THEN ${endExpr} ELSE 0 END)`,
+  };
+}
+
+function piecePairs(a: ReturnType<typeof intervalPiecesSql>, b: ReturnType<typeof intervalPiecesSql>) {
+  return [
+    [a.p1s, a.p1e, b.p1s, b.p1e],
+    [a.p1s, a.p1e, b.p2s, b.p2e],
+    [a.p2s, a.p2e, b.p1s, b.p1e],
+    [a.p2s, a.p2e, b.p2s, b.p2e],
+  ] as const;
+}
+
+/** Whether two (possibly midnight-wrapping) time-of-day ranges overlap at all. */
+function rangesOverlapSql(aStart: string, aEnd: string, bStart: string, bEnd: string): string {
+  const pairs = piecePairs(intervalPiecesSql(aStart, aEnd), intervalPiecesSql(bStart, bEnd));
+  return `(${pairs.map(([as, ae, bs, be]) => `(${as} < ${be} AND ${bs} < ${ae})`).join(" OR ")})`;
+}
+
+/** Total overlap, in minutes, between two (possibly midnight-wrapping) time-of-day ranges. */
+function overlapMinutesSql(aStart: string, aEnd: string, bStart: string, bEnd: string): string {
+  const pairs = piecePairs(intervalPiecesSql(aStart, aEnd), intervalPiecesSql(bStart, bEnd));
+  return `(${pairs.map(([as, ae, bs, be]) => `MAX(0, MIN(${ae}, ${be}) - MAX(${as}, ${bs}))`).join(" + ")})`;
+}
+
+/** Whether `point` falls in a (possibly midnight-wrapping) `[start, end)` range. */
+function timeInRangeSql(pointExpr: string, startExpr: string, endExpr: string): string {
+  return `(CASE WHEN ${endExpr} < ${startExpr}
+    THEN (${pointExpr} >= ${startExpr} OR ${pointExpr} < ${endExpr})
+    ELSE (${pointExpr} >= ${startExpr} AND ${pointExpr} < ${endExpr}) END)`;
+}
+
+/**
+ * SQL fragments for classifying a `payment_shifts` row (already joined as
+ * `ps`, with its employee's company already joined as `c`) as "noturno" —
+ * `hasSchedule` (a row with no parsed horário is neither diurno nor
+ * noturno, same as `classifyShiftPeriod`'s caller returning `null`) and
+ * `isNoturno` (the rule-dependent classification itself, only meaningful
+ * where `hasSchedule` holds) are kept separate so a caller can build both
+ * "is noturno" (`hasSchedule AND isNoturno`) and "is diurno" (`hasSchedule
+ * AND NOT isNoturno`) without `NOT` accidentally flipping missing-schedule
+ * rows into false positives.
+ */
+function shiftPeriodSql(): { hasSchedule: string; isNoturno: string } {
+  const nightStart = "((CAST(substr(c.night_start_time,1,2) AS INTEGER) * 60) + CAST(substr(c.night_start_time,4,2) AS INTEGER))";
+  const nightEnd = "((CAST(substr(c.night_end_time,1,2) AS INTEGER) * 60) + CAST(substr(c.night_end_time,4,2) AS INTEGER))";
+  const shiftStart = "ps.schedule_start_minutes";
+  const shiftEnd = "ps.schedule_end_minutes";
+
+  const startInRange = timeInRangeSql(shiftStart, nightStart, nightEnd);
+  const endInRange = timeInRangeSql(shiftEnd, nightStart, nightEnd);
+  const overlaps = rangesOverlapSql(shiftStart, shiftEnd, nightStart, nightEnd);
+  const overlapMinutes = overlapMinutesSql(shiftStart, shiftEnd, nightStart, nightEnd);
+  const duration = `(CASE WHEN ${shiftEnd} > ${shiftStart} THEN ${shiftEnd} - ${shiftStart} ELSE 1440 - ${shiftStart} + ${shiftEnd} END)`;
+  const majorityOverlap = `(${duration} > 0 AND ${overlapMinutes} * 2 >= ${duration})`;
+
+  const isNoturno = `(CASE c.night_shift_rule
+    WHEN 'start-in-range' THEN ${startInRange}
+    WHEN 'end-in-range' THEN ${endInRange}
+    WHEN 'start-or-end-in-range' THEN (${startInRange} OR ${endInRange})
+    WHEN 'majority-overlap' THEN ${majorityOverlap}
+    ELSE ${overlaps}
+  END)`;
+
+  return { hasSchedule: `(${shiftStart} IS NOT NULL AND ${shiftEnd} IS NOT NULL)`, isNoturno };
+}
+
 export interface ListPaymentShiftSummariesQuery {
   /** Substring match on employee name — case-insensitive only for ASCII (SQLite's `LOWER()` doesn't case-fold accents). */
   search?: string;
@@ -1673,6 +1756,8 @@ export interface ListPaymentShiftSummariesQuery {
   periodStart?: string;
   periodEnd?: string;
   statuses: PaymentShiftStatus[];
+  /** Diurno/noturno, per `shiftPeriodSql` — named `shiftPeriods` (not `periods`) to not collide with `periodStart`/`periodEnd` above, which are a date range. */
+  shiftPeriods: ShiftPeriod[];
   page: number;
   pageSize: number;
 }
@@ -1680,15 +1765,16 @@ export interface ListPaymentShiftSummariesQuery {
 /**
  * One row per (colaborador, competência) — the Pagamentos list. Filtered
  * and paginated in SQL: the row-level filters (search/empresa/cliente/
- * período) go in WHERE, before the GROUP BY; the status filter reads the
- * aggregated SUMs, so it has to go in HAVING instead. An empty `statuses`
- * matches nothing (same as the in-memory version's behavior for an empty
- * selected set) and short-circuits before querying.
+ * período) go in WHERE, before the GROUP BY; the status and diurno/noturno
+ * filters both read aggregated SUMs, so they go in HAVING instead. An
+ * empty `statuses` or `shiftPeriods` matches nothing (same as the
+ * in-memory version's behavior for an empty selected set) and
+ * short-circuits before querying.
  */
 export async function listPaymentShiftSummaries(
   query: ListPaymentShiftSummariesQuery,
 ): Promise<PagedResult<PaymentShiftSummaryRow>> {
-  if (query.statuses.length === 0) return { rows: [], total: 0 };
+  if (query.statuses.length === 0 || query.shiftPeriods.length === 0) return { rows: [], total: 0 };
 
   const db = await getDb();
   const conditions: string[] = [];
@@ -1712,11 +1798,22 @@ export async function listPaymentShiftSummaries(
     conditions.push(`ps.work_date <= $${params.length}`);
   }
 
+  const havingParts: string[] = [];
+  if (query.statuses.length < 3) {
+    havingParts.push(`(${query.statuses.map((s) => PAYMENT_STATUS_HAVING_CONDITIONS[s]).join(" OR ")})`);
+  }
+  if (query.shiftPeriods.length < 2) {
+    const { hasSchedule, isNoturno } = shiftPeriodSql();
+    const shiftPeriodConditions = query.shiftPeriods.map((p) =>
+      p === "noturno"
+        ? `SUM(CASE WHEN ${hasSchedule} AND ${isNoturno} THEN 1 ELSE 0 END) > 0`
+        : `SUM(CASE WHEN ${hasSchedule} AND NOT ${isNoturno} THEN 1 ELSE 0 END) > 0`,
+    );
+    havingParts.push(`(${shiftPeriodConditions.join(" OR ")})`);
+  }
+
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const havingClause =
-    query.statuses.length < 3
-      ? `HAVING (${query.statuses.map((s) => PAYMENT_STATUS_HAVING_CONDITIONS[s]).join(" OR ")})`
-      : "";
+  const havingClause = havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : "";
   const from = `FROM payment_shifts ps
     JOIN employees e ON e.id = ps.employee_id
     JOIN clients cl ON cl.id = e.client_id

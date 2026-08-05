@@ -29,6 +29,9 @@ export const NIGHT_SHIFT_RULE_LABELS: Record<NightShiftRule, string> = {
   "majority-overlap": "Mais da metade do turno dentro do intervalo noturno",
 };
 
+/** A payment shift classified against its company's night window — see `classifyShiftPeriod` in `format.ts`. */
+export type ShiftPeriod = "diurno" | "noturno";
+
 export interface Employee {
   name: string;
   cpf: string;

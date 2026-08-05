@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { toIso, todayUtc } from "../lib/calendar";
 import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
-import type { PaymentShiftStatus } from "../lib/types";
+import type { PaymentShiftStatus, ShiftPeriod } from "../lib/types";
 
 /** Default period on load: the current calendar month so far — never empty. */
 function defaultPeriodStart(): string {
@@ -12,6 +12,7 @@ function defaultPeriodStart(): string {
 export const LIBRARY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 export const PAYMENTS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const PAYMENT_SHIFT_STATUSES: PaymentShiftStatus[] = ["pendente", "erro", "pago"];
+const SHIFT_PERIODS: ShiftPeriod[] = ["diurno", "noturno"];
 
 export type ReportMode = "per-employee" | "per-client";
 
@@ -47,6 +48,8 @@ export interface PaymentsFilters {
   setPeriod: (start: string, end: string) => void;
   selectedStatuses: Set<PaymentShiftStatus>;
   setSelectedStatuses: Dispatch<SetStateAction<Set<PaymentShiftStatus>>>;
+  selectedShiftPeriods: Set<ShiftPeriod>;
+  setSelectedShiftPeriods: Dispatch<SetStateAction<Set<ShiftPeriod>>>;
   page: number;
   setPage: Dispatch<SetStateAction<number>>;
   pageSize: number;
@@ -112,6 +115,9 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
   const [paymentsSelectedStatuses, setPaymentsSelectedStatuses] = useState<Set<PaymentShiftStatus>>(
     () => new Set(PAYMENT_SHIFT_STATUSES),
   );
+  const [paymentsSelectedShiftPeriods, setPaymentsSelectedShiftPeriods] = useState<Set<ShiftPeriod>>(
+    () => new Set(SHIFT_PERIODS),
+  );
   const [paymentsPage, setPaymentsPage] = useState(0);
   const [paymentsPageSize, setPaymentsPageSize] = useState(PAYMENTS_PAGE_SIZE_OPTIONS[0]);
 
@@ -130,6 +136,8 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
     },
     selectedStatuses: paymentsSelectedStatuses,
     setSelectedStatuses: setPaymentsSelectedStatuses,
+    selectedShiftPeriods: paymentsSelectedShiftPeriods,
+    setSelectedShiftPeriods: setPaymentsSelectedShiftPeriods,
     page: paymentsPage,
     setPage: setPaymentsPage,
     pageSize: paymentsPageSize,

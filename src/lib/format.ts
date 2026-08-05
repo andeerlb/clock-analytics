@@ -1,4 +1,4 @@
-import type { NightShiftRule, PaymentShiftStatus } from "./types";
+import type { NightShiftRule, PaymentShiftStatus, ShiftPeriod } from "./types";
 
 /** Bytes -> "12.3 MB" — the Configurações storage indicator. */
 export function formatBytes(bytes: number): string {
@@ -329,7 +329,7 @@ export function classifyShiftPeriod(
   nightEndMinutes: number,
   shiftStartMinutes: number,
   shiftEndMinutes: number,
-): "diurno" | "noturno" {
+): ShiftPeriod {
   const startInRange = isTimeInRange(shiftStartMinutes, nightStartMinutes, nightEndMinutes);
   const endInRange = isTimeInRange(shiftEndMinutes, nightStartMinutes, nightEndMinutes);
 

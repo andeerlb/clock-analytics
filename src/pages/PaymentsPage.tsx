@@ -1,4 +1,4 @@
-import { Building2, Search, Users } from "lucide-react";
+import { Building2, Moon, Search, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Avatar from "../components/Avatar";
@@ -7,13 +7,19 @@ import MultiSelectDropdown, { type MultiSelectOption } from "../components/Multi
 import Pagination from "../components/Pagination";
 import { PAYMENTS_PAGE_SIZE_OPTIONS, usePaymentsFilters } from "../contexts/FiltersContext";
 import { listClients, listCompanies, listPaymentShiftSummaries, type ClientRow, type CompanyRow } from "../lib/db";
-import type { PaymentShiftStatus, PaymentShiftSummaryRow } from "../lib/types";
+import type { PaymentShiftStatus, PaymentShiftSummaryRow, ShiftPeriod } from "../lib/types";
 import type { PaymentDetailNavState } from "./PaymentDetailPage";
 
 const STATUS_OPTIONS: MultiSelectOption<PaymentShiftStatus>[] = [
   { id: "pendente", label: "Pendente" },
   { id: "erro", label: "Erro" },
   { id: "pago", label: "Pago" },
+];
+
+/** A summary row matches once at least one of its shifts falls in a checked bucket — same "at least one" semantics as Status, and the same SQL-side HAVING pattern (see `shiftPeriodSql` in db.ts). */
+const SHIFT_PERIOD_OPTIONS: MultiSelectOption<ShiftPeriod>[] = [
+  { id: "diurno", label: "Diurno" },
+  { id: "noturno", label: "Noturno" },
 ];
 
 /** "2026-02" -> "fev/2026" */
@@ -35,6 +41,8 @@ export default function PaymentsPage() {
     setPeriod,
     selectedStatuses,
     setSelectedStatuses,
+    selectedShiftPeriods,
+    setSelectedShiftPeriods,
     page,
     setPage,
     pageSize,
@@ -65,6 +73,7 @@ export default function PaymentsPage() {
       periodStart: periodStart || undefined,
       periodEnd: periodEnd || undefined,
       statuses: Array.from(selectedStatuses),
+      shiftPeriods: Array.from(selectedShiftPeriods),
       page,
       pageSize,
     })
@@ -79,7 +88,17 @@ export default function PaymentsPage() {
     return () => {
       cancelled = true;
     };
-  }, [search, selectedCompanyIds, selectedClientIds, periodStart, periodEnd, selectedStatuses, page, pageSize]);
+  }, [
+    search,
+    selectedCompanyIds,
+    selectedClientIds,
+    periodStart,
+    periodEnd,
+    selectedStatuses,
+    selectedShiftPeriods,
+    page,
+    pageSize,
+  ]);
 
   const clientOptions = useMemo(() => {
     const scoped =
@@ -113,6 +132,13 @@ export default function PaymentsPage() {
     setSelectedStatuses(next);
     setPage(0);
   }
+  function toggleShiftPeriod(id: ShiftPeriod) {
+    const next = new Set(selectedShiftPeriods);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedShiftPeriods(next);
+    setPage(0);
+  }
 
   const hasFilters = Boolean(
     search.trim() ||
@@ -120,7 +146,8 @@ export default function PaymentsPage() {
       selectedClientIds.size > 0 ||
       periodStart ||
       periodEnd ||
-      selectedStatuses.size < STATUS_OPTIONS.length,
+      selectedStatuses.size < STATUS_OPTIONS.length ||
+      selectedShiftPeriods.size < SHIFT_PERIOD_OPTIONS.length,
   );
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
@@ -230,6 +257,25 @@ export default function PaymentsPage() {
               }}
               allLabel="Todos os status"
               noneLabel="Nenhum status"
+            />
+          </div>
+          <div className="field">
+            <label>Diurno/Noturno</label>
+            <MultiSelectDropdown
+              options={SHIFT_PERIOD_OPTIONS}
+              selected={selectedShiftPeriods}
+              onToggle={toggleShiftPeriod}
+              onSelectAll={() => {
+                setSelectedShiftPeriods(new Set(SHIFT_PERIOD_OPTIONS.map((o) => o.id)));
+                setPage(0);
+              }}
+              onSelectNone={() => {
+                setSelectedShiftPeriods(new Set());
+                setPage(0);
+              }}
+              icon={Moon}
+              allLabel="Diurno e noturno"
+              noneLabel="Nenhum"
             />
           </div>
         </div>
