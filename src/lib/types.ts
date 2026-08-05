@@ -212,10 +212,18 @@ export type IdentifierField = "cpf" | "matricula" | "nome";
  * db.ts — rather than the single fixed cpf > matricula > nome precedence
  * this replaced.
  */
-export type IdentifierAttempt = IdentifierField[];
+export interface IdentifierAttempt {
+  fields: IdentifierField[];
+  /** Whether matricula/nome matching folds case — same idea as `PaymentTemplateRule.caseInsensitive`. Doesn't affect cpf, which is always digit-normalized regardless. */
+  caseInsensitive: boolean;
+}
 
-/** Reproduces the old fixed precedence: three single-field tentativas, same order. */
-export const DEFAULT_IDENTIFIER_PRIORITY: IdentifierAttempt[] = [["cpf"], ["matricula"], ["nome"]];
+/** Reproduces the old fixed precedence: three single-field tentativas, same order, case-insensitive (matching the old hardcoded nome behavior). */
+export const DEFAULT_IDENTIFIER_PRIORITY: IdentifierAttempt[] = [
+  { fields: ["cpf"], caseInsensitive: true },
+  { fields: ["matricula"], caseInsensitive: true },
+  { fields: ["nome"], caseInsensitive: true },
+];
 
 /** Mapping one of these (besides an identifier) is required for a group to be usable. */
 export const REQUIRED_PAYMENT_FIELDS: PaymentTargetField[] = ["local", "data", "funcao", "horario"];

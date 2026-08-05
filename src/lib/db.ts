@@ -1201,13 +1201,14 @@ export async function findEmployeeByAttempts(
     WHERE e.client_id = $1`;
 
   for (const attempt of attempts) {
-    if (attempt.length === 0) continue;
+    if (attempt.fields.length === 0) continue;
     const conditions: string[] = [];
     const params: (string | number)[] = [clientId];
     let skip = false;
 
-    for (const field of attempt) {
+    for (const field of attempt.fields) {
       if (field === "cpf") {
+        // Always digit-normalized — case doesn't apply.
         const normalized = values.cpf ? normalizeCpf(values.cpf) : "";
         if (normalized.length !== 11) {
           skip = true;
@@ -1222,7 +1223,9 @@ export async function findEmployeeByAttempts(
           break;
         }
         params.push(trimmed);
-        conditions.push(`e.matricula = $${params.length}`);
+        conditions.push(
+          attempt.caseInsensitive ? `lower(e.matricula) = lower($${params.length})` : `e.matricula = $${params.length}`,
+        );
       } else {
         const trimmed = values.nome?.trim();
         if (!trimmed) {
@@ -1230,7 +1233,9 @@ export async function findEmployeeByAttempts(
           break;
         }
         params.push(trimmed);
-        conditions.push(`lower(e.name) = lower($${params.length})`);
+        conditions.push(
+          attempt.caseInsensitive ? `lower(e.name) = lower($${params.length})` : `e.name = $${params.length}`,
+        );
       }
     }
 

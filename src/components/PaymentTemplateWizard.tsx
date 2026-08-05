@@ -205,7 +205,7 @@ export default function PaymentTemplateWizard({
       setName("");
       setDateFormat("DD/MM/YYYY");
       setRules([]);
-      setIdentifierAttempts(DEFAULT_IDENTIFIER_PRIORITY.map((a) => [...a]));
+      setIdentifierAttempts(DEFAULT_IDENTIFIER_PRIORITY.map((a) => ({ ...a, fields: [...a.fields] })));
       return;
     }
 
@@ -224,7 +224,7 @@ export default function PaymentTemplateWizard({
         clientId: r.clientId,
       })),
     );
-    setIdentifierAttempts(target.identifierPriority.map((a) => [...a]));
+    setIdentifierAttempts(target.identifierPriority.map((a) => ({ ...a, fields: [...a.fields] })));
     hydrateFromTemplate(target);
   }, [target]);
 
@@ -520,7 +520,7 @@ export default function PaymentTemplateWizard({
   }
 
   function addIdentifierAttempt() {
-    setIdentifierAttempts((prev) => [...prev, []]);
+    setIdentifierAttempts((prev) => [...prev, { fields: [], caseInsensitive: true }]);
   }
 
   function removeIdentifierAttempt(index: number) {
@@ -531,11 +531,20 @@ export default function PaymentTemplateWizard({
     setIdentifierAttempts((prev) =>
       prev.map((attempt, i) =>
         i === index
-          ? attempt.includes(field)
-            ? attempt.filter((f) => f !== field)
-            : [...attempt, field]
+          ? {
+              ...attempt,
+              fields: attempt.fields.includes(field)
+                ? attempt.fields.filter((f) => f !== field)
+                : [...attempt.fields, field],
+            }
           : attempt,
       ),
+    );
+  }
+
+  function toggleIdentifierCaseInsensitive(index: number) {
+    setIdentifierAttempts((prev) =>
+      prev.map((attempt, i) => (i === index ? { ...attempt, caseInsensitive: !attempt.caseInsensitive } : attempt)),
     );
   }
 
@@ -549,7 +558,8 @@ export default function PaymentTemplateWizard({
     });
   }
 
-  const isIdentifierPriorityValid = identifierAttempts.length > 0 && identifierAttempts.every((a) => a.length > 0);
+  const isIdentifierPriorityValid =
+    identifierAttempts.length > 0 && identifierAttempts.every((a) => a.fields.length > 0);
 
   const activeGroupKey = groupKeyOf(activeSheet);
   const mapping = groupMapping[activeGroupKey] ?? {};
@@ -1116,16 +1126,24 @@ export default function PaymentTemplateWizard({
                         {IDENTIFIER_FIELDS.map((f) => (
                           <label
                             key={f}
-                            className={`identifier-field-pill${attempt.includes(f) ? " checked" : ""}`}
+                            className={`identifier-field-pill${attempt.fields.includes(f) ? " checked" : ""}`}
                           >
                             <input
                               type="checkbox"
-                              checked={attempt.includes(f)}
+                              checked={attempt.fields.includes(f)}
                               onChange={() => toggleIdentifierField(i, f)}
                             />
                             {PAYMENT_TARGET_FIELD_LABELS[f]}
                           </label>
                         ))}
+                        <label className="field-code-checkbox">
+                          <input
+                            type="checkbox"
+                            checked={attempt.caseInsensitive}
+                            onChange={() => toggleIdentifierCaseInsensitive(i)}
+                          />
+                          Ignorar maiúsculas/minúsculas
+                        </label>
                       </div>
                       <div className="logic-card-actions">
                         <button

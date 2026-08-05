@@ -6,6 +6,7 @@ import {
   Eye,
   FileText,
   FolderOpen,
+  ListChecks,
   PlusCircle,
   Search,
   Settings2,
@@ -56,6 +57,14 @@ const STATUS_BADGE: Record<ImportStatus, { className: string; label: string; ico
   error: { className: "badge file-error", label: "Falha", icon: AlertCircle },
 };
 
+/**
+ * Every row lands in exactly one bucket — this is both what the toolbar
+ * counts and what the toolbar's chips filter by (see `rowFilter`).
+ * "valid"/"duplicate" are the only two with a resolved `employee`.
+ */
+type RowCategory = "valid" | "duplicate" | "not-found" | "unresolved-route" | "skipped" | "out-of-period";
+type RowFilter = RowCategory | "error" | "all" | "selected";
+
 interface PaymentPreviewRow {
   fileHash: string;
   fileName: string;
@@ -69,21 +78,20 @@ interface PaymentPreviewRow {
   scheduleStartMinutes: number | null;
   scheduleEndMinutes: number | null;
   note: string | null;
-  /** Always a valid ISO date — rows whose "data" field doesn't parse are filtered out before this is ever built (see `handleProcess`), not shown as an error row. */
-  workDate: string;
+  /** `null` when the mapped "data" column didn't parse (category "skipped") — shown as `workDateRaw` instead. */
+  workDate: string | null;
+  /** Raw "data" column text, for display when `workDate` is null. */
+  workDateRaw: string;
   isDuplicate: boolean;
   /** No rule in the template's routing chain matched this row's field value — `employee` is always `null` when this is `true` (the lookup never runs without a resolved client). */
   unresolvedRoute: boolean;
+  category: RowCategory;
 }
 
 interface PaymentFileResult {
   fileHash: string;
   fileName: string;
   rows: PaymentPreviewRow[];
-  /** How many physical rows in this file weren't real data — no valid date in the mapped "data" column, so presumed to be a title/header/footer row. */
-  skippedCount: number;
-  /** How many otherwise-valid rows fell outside the optional período filter. */
-  outOfPeriodCount: number;
   error: string | null;
 }
 
@@ -107,6 +115,7 @@ export default function ImportPaymentsPage() {
   const [periodStart, setPeriodStart] = useState("");
   const [periodEnd, setPeriodEnd] = useState("");
   const [confirmFullImport, setConfirmFullImport] = useState(false);
+  const [rowFilter, setRowFilter] = useState<RowFilter>("all");
 
   const [paths, setPaths] = useState<string[]>([]);
   const [fileHashes, setFileHashes] = useState<Map<string, { hash: string; fileName: string }>>(
@@ -183,6 +192,7 @@ export default function ImportPaymentsPage() {
     setFileResults([]);
     setSelectedRows(new Set());
     setPreviewPage(0);
+    setRowFilter("all");
   }
 
   function reset() {
@@ -203,26 +213,48 @@ export default function ImportPaymentsPage() {
     [fileResults],
   );
 
+  // The toolbar's chips both count and filter by these — clicking one sets
+  // `rowFilter`, this just decides what actually renders. `idx` still
+  // increments for every row regardless of match, since it's the absolute
+  // position `selectedRows`/`shiftRows` key off of, not a display index.
   const previewRows = useMemo(() => {
     const out: DisplayRow[] = [];
     let idx = 0;
     for (const result of fileResults) {
       if (result.error) {
-        out.push({ kind: "error", fileName: result.fileName, message: result.error });
-      } else {
-        for (const row of result.rows) {
-          out.push({ kind: "shift", index: idx, row });
-          idx++;
+        if (rowFilter === "all" || rowFilter === "error") {
+          out.push({ kind: "error", fileName: result.fileName, message: result.error });
         }
+        continue;
+      }
+      for (const row of result.rows) {
+        const matches =
+          rowFilter === "all" ||
+          (rowFilter === "selected" ? selectedRows.has(idx) : rowFilter === row.category);
+        if (matches) out.push({ kind: "shift", index: idx, row });
+        idx++;
       }
     }
     return out;
-  }, [fileResults]);
+  }, [fileResults, rowFilter, selectedRows]);
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<RowCategory, number> = {
+      valid: 0,
+      duplicate: 0,
+      "not-found": 0,
+      "unresolved-route": 0,
+      skipped: 0,
+      "out-of-period": 0,
+    };
+    for (const r of shiftRows) counts[r.category]++;
+    return counts;
+  }, [shiftRows]);
 
   const errorCount = fileResults.filter((r) => r.error).length;
-  const duplicateCount = shiftRows.filter((r) => r.isDuplicate).length;
-  const skippedCount = fileResults.reduce((sum, r) => sum + r.skippedCount, 0);
-  const outOfPeriodCount = fileResults.reduce((sum, r) => sum + r.outOfPeriodCount, 0);
+  const duplicateCount = categoryCounts.duplicate;
+  const skippedCount = categoryCounts.skipped;
+  const outOfPeriodCount = categoryCounts["out-of-period"];
 
   const previewPageCount = Math.max(1, Math.ceil(previewRows.length / previewPageSize));
   const previewPageItems = useMemo(
@@ -232,6 +264,11 @@ export default function ImportPaymentsPage() {
 
   const selectableCount = shiftRows.filter((r) => r.employee).length;
   const allSelected = selectableCount > 0 && shiftRows.every((r, i) => selectedRows.has(i) || !r.employee);
+
+  function toggleRowFilter(category: RowFilter) {
+    setRowFilter((prev) => (prev === category ? "all" : category));
+    setPreviewPage(0);
+  }
 
   function toggleRow(index: number) {
     setSelectedRows((prev) => {
@@ -290,28 +327,56 @@ export default function ImportPaymentsPage() {
           );
 
           const rows: PaymentPreviewRow[] = [];
-          let skippedCount = 0;
-          let outOfPeriodCount = 0;
           for (const applied_row of applied) {
-            // No fixed header row anymore — a physical row is only "real
-            // data" if its mapped "data" column actually parses as a
-            // date. Anything that doesn't (a title, header, or footer
-            // row) is silently skipped here, not shown as an error row.
             const workDateRaw = applied_row.fields.data ?? "";
             const workDate = workDateRaw
               ? parseDateWithFormat(workDateRaw, selectedTemplate.dateFormat)
               : null;
+            const scheduleRaw = applied_row.fields.horario ?? "";
+            const parsedSchedule = parseScheduleToMinutes(scheduleRaw);
+            const base = {
+              fileHash,
+              fileName,
+              sheetName: applied_row.sheetName,
+              rowNumber: applied_row.rowNumber,
+              local: applied_row.fields.local ?? "",
+              role: applied_row.fields.funcao ?? "",
+              scheduleRaw,
+              scheduleStartMinutes: parsedSchedule?.startMinutes ?? null,
+              scheduleEndMinutes: parsedSchedule?.endMinutes ?? null,
+              note: applied_row.fields.observacao || null,
+              workDateRaw,
+            };
+
+            // No fixed header row anymore — a physical row is only "real
+            // data" if its mapped "data" column actually parses as a
+            // date. Anything that doesn't (a title, header, or footer
+            // row) still shows up here, flagged "skipped", instead of
+            // vanishing silently — the toolbar's filter chips are how you
+            // double-check nothing real got dropped.
             if (!workDate) {
-              skippedCount++;
+              rows.push({
+                ...base,
+                employee: null,
+                workDate: null,
+                isDuplicate: false,
+                unresolvedRoute: false,
+                category: "skipped",
+              });
               continue;
             }
 
             // Optional período filter, same "data" column/formato já
-            // usados acima — rows outside it are excluded but counted
-            // separately from skippedCount (those had no valid date at
-            // all; these did, just outside the chosen range).
+            // usados acima.
             if ((periodStart && workDate < periodStart) || (periodEnd && workDate > periodEnd)) {
-              outOfPeriodCount++;
+              rows.push({
+                ...base,
+                employee: null,
+                workDate,
+                isDuplicate: false,
+                unresolvedRoute: false,
+                category: "out-of-period",
+              });
               continue;
             }
 
@@ -329,38 +394,29 @@ export default function ImportPaymentsPage() {
                   nome,
                 })
               : null;
-            const scheduleRaw = applied_row.fields.horario ?? "";
-            const parsedSchedule = parseScheduleToMinutes(scheduleRaw);
             rows.push({
-              fileHash,
-              fileName,
-              sheetName: applied_row.sheetName,
-              rowNumber: applied_row.rowNumber,
+              ...base,
               employee,
-              local: applied_row.fields.local ?? "",
-              role: applied_row.fields.funcao ?? "",
-              scheduleRaw,
-              scheduleStartMinutes: parsedSchedule?.startMinutes ?? null,
-              scheduleEndMinutes: parsedSchedule?.endMinutes ?? null,
-              note: applied_row.fields.observacao || null,
               workDate,
               isDuplicate: false,
               unresolvedRoute: !route,
+              category: !route ? "unresolved-route" : !employee ? "not-found" : "valid",
             });
           }
-          results.push({ fileHash, fileName, rows, skippedCount, outOfPeriodCount, error: null });
+          results.push({ fileHash, fileName, rows, error: null });
         } catch (e) {
-          results.push({ fileHash, fileName, rows: [], skippedCount: 0, outOfPeriodCount: 0, error: String(e) });
+          results.push({ fileHash, fileName, rows: [], error: String(e) });
         }
       }
 
       const allRows = results.flatMap((r) => r.rows);
       const candidates = allRows.filter((r) => r.employee);
       const dupIndices = await findDuplicatePaymentShifts(
-        candidates.map((r) => ({ employeeId: r.employee!.id, workDate: r.workDate, local: r.local })),
+        candidates.map((r) => ({ employeeId: r.employee!.id, workDate: r.workDate!, local: r.local })),
       );
       dupIndices.forEach((i) => {
         candidates[i].isDuplicate = true;
+        candidates[i].category = "duplicate";
       });
 
       const defaultSelected = new Set<number>();
@@ -371,6 +427,7 @@ export default function ImportPaymentsPage() {
       setFileResults(results);
       setSelectedRows(defaultSelected);
       setPreviewPage(0);
+      setRowFilter("all");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -413,7 +470,7 @@ export default function ImportPaymentsPage() {
       for (let i = 0; i < shiftRows.length; i++) {
         if (!selectedRows.has(i)) continue;
         const row = shiftRows[i];
-        if (!row.employee) continue;
+        if (!row.employee || row.workDate === null) continue;
         const fileHash = shiftRowFileHash[i];
         shiftInputs.push({
           employeeId: row.employee.id,
@@ -595,7 +652,7 @@ export default function ImportPaymentsPage() {
                       Cancelar
                     </button>
                     <button type="button" onClick={handleSave} disabled={busy || selectedRows.size === 0}>
-                      {busy ? "Salvando..." : "Salvar"}
+                      {busy ? "Salvando..." : `Salvar (${selectedRows.size})`}
                     </button>
                   </div>
                 </div>
@@ -605,22 +662,87 @@ export default function ImportPaymentsPage() {
                 <div className="table-toolbar">
                   <div className="counts">
                     <span>{shiftRows.length} registro(s) encontrado(s)</span>
+                    <button
+                      type="button"
+                      className={`badge ok chip-filter${rowFilter === "selected" ? " active" : ""}`}
+                      onClick={() => toggleRowFilter("selected")}
+                      title="Linhas marcadas — vão ser importadas ao salvar. Clique para filtrar."
+                    >
+                      <ListChecks size={13} />
+                      {selectedRows.size} a importar
+                    </button>
+                    <button
+                      type="button"
+                      className={`badge info chip-filter${rowFilter === "valid" ? " active" : ""}`}
+                      onClick={() => toggleRowFilter("valid")}
+                      title="Colaborador encontrado, sem turno igual já importado. Clique para filtrar."
+                    >
+                      <CheckCircle2 size={13} />
+                      {categoryCounts.valid} novo(s)
+                    </button>
+                    {duplicateCount > 0 && (
+                      <button
+                        type="button"
+                        className={`badge overwrite chip-filter${rowFilter === "duplicate" ? " active" : ""}`}
+                        onClick={() => toggleRowFilter("duplicate")}
+                        title="Clique para filtrar"
+                      >
+                        <AlertTriangle size={13} />
+                        {duplicateCount} possível(is) duplicata(s)
+                      </button>
+                    )}
+                    {categoryCounts["not-found"] > 0 && (
+                      <button
+                        type="button"
+                        className={`badge warn chip-filter${rowFilter === "not-found" ? " active" : ""}`}
+                        onClick={() => toggleRowFilter("not-found")}
+                        title="Clique para filtrar"
+                      >
+                        <AlertTriangle size={13} />
+                        {categoryCounts["not-found"]} colaborador não encontrado
+                      </button>
+                    )}
+                    {categoryCounts["unresolved-route"] > 0 && (
+                      <button
+                        type="button"
+                        className={`badge warn chip-filter${rowFilter === "unresolved-route" ? " active" : ""}`}
+                        onClick={() => toggleRowFilter("unresolved-route")}
+                        title="Clique para filtrar"
+                      >
+                        <AlertTriangle size={13} />
+                        {categoryCounts["unresolved-route"]} empresa/cliente não definido
+                      </button>
+                    )}
                     {skippedCount > 0 && (
-                      <span className="count-chip" title="Linhas sem uma data válida na coluna mapeada — presumidas título, cabeçalho ou rodapé">
+                      <button
+                        type="button"
+                        className={`count-chip chip-filter${rowFilter === "skipped" ? " active" : ""}`}
+                        onClick={() => toggleRowFilter("skipped")}
+                        title="Linhas sem uma data válida na coluna mapeada — presumidas título, cabeçalho ou rodapé. Clique para filtrar."
+                      >
                         {skippedCount} linha(s) ignorada(s)
-                      </span>
+                      </button>
                     )}
                     {outOfPeriodCount > 0 && (
-                      <span className="count-chip" title="Linhas com data válida, mas fora do período selecionado">
+                      <button
+                        type="button"
+                        className={`count-chip chip-filter${rowFilter === "out-of-period" ? " active" : ""}`}
+                        onClick={() => toggleRowFilter("out-of-period")}
+                        title="Linhas com data válida, mas fora do período selecionado. Clique para filtrar."
+                      >
                         {outOfPeriodCount} fora do período
-                      </span>
+                      </button>
                     )}
-                    {duplicateCount > 0 && <span className="count-chip">{duplicateCount} possível(is) duplicata(s)</span>}
                     {errorCount > 0 && (
-                      <span className="badge file-error">
+                      <button
+                        type="button"
+                        className={`badge file-error chip-filter${rowFilter === "error" ? " active" : ""}`}
+                        onClick={() => toggleRowFilter("error")}
+                        title="Clique para filtrar"
+                      >
                         <AlertCircle size={13} />
                         {errorCount} erro(s)
-                      </span>
+                      </button>
                     )}
                   </div>
                 </div>
@@ -647,6 +769,13 @@ export default function ImportPaymentsPage() {
                       </tr>
                     </thead>
                     <tbody>
+                      {previewRows.length === 0 && rowFilter !== "all" && (
+                        <tr>
+                          <td colSpan={7} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
+                            Nenhuma linha nesta categoria.
+                          </td>
+                        </tr>
+                      )}
                       {previewPageItems.map((item, i) => {
                         if (item.kind === "error") {
                           return (
@@ -694,7 +823,15 @@ export default function ImportPaymentsPage() {
                               )}
                             </td>
                             <td>{row.local}</td>
-                            <td>{formatDate(row.workDate)}</td>
+                            <td>
+                              {row.workDate ? (
+                                formatDate(row.workDate)
+                              ) : (
+                                <span className="muted" title="Data não reconhecida">
+                                  {row.workDateRaw || "—"}
+                                </span>
+                              )}
+                            </td>
                             <td>{row.role}</td>
                             <td>
                               {row.scheduleStartMinutes !== null && row.scheduleEndMinutes !== null ? (
@@ -706,13 +843,19 @@ export default function ImportPaymentsPage() {
                               )}
                             </td>
                             <td>
-                              {row.employee && !row.isDuplicate && (
+                              {row.category === "valid" && (
                                 <span className="badge ok">
                                   <PlusCircle size={13} />
                                   Novo
                                 </span>
                               )}
-                              {!row.employee && row.unresolvedRoute && (
+                              {row.category === "duplicate" && (
+                                <span className="badge overwrite">
+                                  <AlertTriangle size={13} />
+                                  Possível duplicata
+                                </span>
+                              )}
+                              {row.category === "unresolved-route" && (
                                 <div style={{ marginBottom: "0.3rem" }}>
                                   <span className="badge warn">
                                     <AlertTriangle size={13} />
@@ -725,7 +868,7 @@ export default function ImportPaymentsPage() {
                                   </div>
                                 </div>
                               )}
-                              {!row.employee && !row.unresolvedRoute && (
+                              {row.category === "not-found" && (
                                 <div style={{ marginBottom: "0.3rem" }}>
                                   <span className="badge warn">
                                     <AlertTriangle size={13} />
@@ -738,11 +881,13 @@ export default function ImportPaymentsPage() {
                                   </div>
                                 </div>
                               )}
-                              {row.employee && row.isDuplicate && (
-                                <span className="badge overwrite">
-                                  <AlertTriangle size={13} />
-                                  Possível duplicata
+                              {row.category === "skipped" && (
+                                <span className="badge neutral" title="A coluna mapeada como Data não pôde ser interpretada nesta linha">
+                                  Data não reconhecida
                                 </span>
+                              )}
+                              {row.category === "out-of-period" && (
+                                <span className="badge neutral">Fora do período selecionado</span>
                               )}
                             </td>
                           </tr>

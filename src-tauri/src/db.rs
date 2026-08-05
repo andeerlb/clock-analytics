@@ -148,5 +148,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0024_payment_template_identifier_priority.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 25,
+            description: "add a per-tentativa case-insensitive flag to payment_templates.identifier_priority, matching payment_template_rules' values",
+            sql: include_str!("../migrations/0025_payment_template_identifier_case.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
