@@ -62,11 +62,17 @@ export async function pickPaymentFile(): Promise<string | null> {
   return typeof selection === "string" ? selection : null;
 }
 
-/** Same filter as `pickPaymentFile`, multi-select — for actually importing (one template can be applied to several files at once). */
-export async function pickPaymentFiles(): Promise<string[]> {
+/**
+ * Multi-select — for actually importing (one template can be applied to
+ * several files at once). Unlike `pickPaymentFile`, filtered to a single
+ * format: the template chosen for this import already fixes its expected
+ * file format, so there's no "which format is this" left to figure out
+ * like there is when first building a template from a sample file.
+ */
+export async function pickPaymentFiles(extensions: string[]): Promise<string[]> {
   const selection = await open({
     multiple: true,
-    filters: [{ name: "Planilha de pagamentos", extensions: ["csv", "xlsx", "xls", "ods"] }],
+    filters: [{ name: "Planilha de pagamentos", extensions }],
   });
   if (!selection) return [];
   return Array.isArray(selection) ? selection : [selection];

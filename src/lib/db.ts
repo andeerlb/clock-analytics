@@ -1548,9 +1548,9 @@ export interface ListPaymentShiftSummariesQuery {
   search?: string;
   companyIds?: number[];
   clientIds?: number[];
-  /** "YYYY-MM", inclusive on both ends — either can be omitted to leave that side open. */
-  competenciaStart?: string;
-  competenciaEnd?: string;
+  /** "YYYY-MM-DD", inclusive on both ends — either can be omitted to leave that side open. Same day-level `DateRangePicker` as Cartão Ponto, not competência-granularity. */
+  periodStart?: string;
+  periodEnd?: string;
   statuses: PaymentShiftStatus[];
   page: number;
   pageSize: number;
@@ -1559,10 +1559,10 @@ export interface ListPaymentShiftSummariesQuery {
 /**
  * One row per (colaborador, competência) — the Pagamentos list. Filtered
  * and paginated in SQL: the row-level filters (search/empresa/cliente/
- * competência) go in WHERE, before the GROUP BY; the status filter reads
- * the aggregated SUMs, so it has to go in HAVING instead. An empty
- * `statuses` matches nothing (same as the in-memory version's behavior for
- * an empty selected set) and short-circuits before querying.
+ * período) go in WHERE, before the GROUP BY; the status filter reads the
+ * aggregated SUMs, so it has to go in HAVING instead. An empty `statuses`
+ * matches nothing (same as the in-memory version's behavior for an empty
+ * selected set) and short-circuits before querying.
  */
 export async function listPaymentShiftSummaries(
   query: ListPaymentShiftSummariesQuery,
@@ -1582,13 +1582,13 @@ export async function listPaymentShiftSummaries(
   if (companyClause) conditions.push(companyClause);
   const clientClause = inClause("cl.id", query.clientIds ?? [], params);
   if (clientClause) conditions.push(clientClause);
-  if (query.competenciaStart) {
-    params.push(query.competenciaStart);
-    conditions.push(`strftime('%Y-%m', ps.work_date) >= $${params.length}`);
+  if (query.periodStart) {
+    params.push(query.periodStart);
+    conditions.push(`ps.work_date >= $${params.length}`);
   }
-  if (query.competenciaEnd) {
-    params.push(query.competenciaEnd);
-    conditions.push(`strftime('%Y-%m', ps.work_date) <= $${params.length}`);
+  if (query.periodEnd) {
+    params.push(query.periodEnd);
+    conditions.push(`ps.work_date <= $${params.length}`);
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";

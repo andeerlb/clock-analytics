@@ -2,6 +2,7 @@ import { Building2, Search, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Avatar from "../components/Avatar";
+import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
 import { listClients, listCompanies, listPaymentShiftSummaries, type ClientRow, type CompanyRow } from "../lib/db";
@@ -31,8 +32,8 @@ export default function PaymentsPage() {
   const [search, setSearch] = useState("");
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<Set<string>>(new Set());
   const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
-  const [competenciaStart, setCompetenciaStart] = useState("");
-  const [competenciaEnd, setCompetenciaEnd] = useState("");
+  const [periodStart, setPeriodStart] = useState("");
+  const [periodEnd, setPeriodEnd] = useState("");
   const [selectedStatuses, setSelectedStatuses] = useState<Set<PaymentShiftStatus>>(
     new Set(STATUS_OPTIONS.map((o) => o.id)),
   );
@@ -54,8 +55,8 @@ export default function PaymentsPage() {
       search,
       companyIds: Array.from(selectedCompanyIds, Number),
       clientIds: Array.from(selectedClientIds, Number),
-      competenciaStart: competenciaStart || undefined,
-      competenciaEnd: competenciaEnd || undefined,
+      periodStart: periodStart || undefined,
+      periodEnd: periodEnd || undefined,
       statuses: Array.from(selectedStatuses),
       page,
       pageSize,
@@ -71,7 +72,7 @@ export default function PaymentsPage() {
     return () => {
       cancelled = true;
     };
-  }, [search, selectedCompanyIds, selectedClientIds, competenciaStart, competenciaEnd, selectedStatuses, page, pageSize]);
+  }, [search, selectedCompanyIds, selectedClientIds, periodStart, periodEnd, selectedStatuses, page, pageSize]);
 
   const clientOptions = useMemo(() => {
     const scoped =
@@ -110,8 +111,8 @@ export default function PaymentsPage() {
     search.trim() ||
       selectedCompanyIds.size > 0 ||
       selectedClientIds.size > 0 ||
-      competenciaStart ||
-      competenciaEnd ||
+      periodStart ||
+      periodEnd ||
       selectedStatuses.size < STATUS_OPTIONS.length,
   );
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
@@ -186,26 +187,14 @@ export default function PaymentsPage() {
               noneLabel="Nenhum cliente"
             />
           </div>
-          <div className="field" style={{ flex: "0 1 130px" }}>
-            <label htmlFor="payments-competencia-start">De</label>
-            <input
-              id="payments-competencia-start"
-              type="month"
-              value={competenciaStart}
-              onChange={(e) => {
-                setCompetenciaStart(e.target.value);
-                setPage(0);
-              }}
-            />
-          </div>
-          <div className="field" style={{ flex: "0 1 130px" }}>
-            <label htmlFor="payments-competencia-end">Até</label>
-            <input
-              id="payments-competencia-end"
-              type="month"
-              value={competenciaEnd}
-              onChange={(e) => {
-                setCompetenciaEnd(e.target.value);
+          <div className="field">
+            <label>Período</label>
+            <DateRangePicker
+              startValue={periodStart}
+              endValue={periodEnd}
+              onChange={(start, end) => {
+                setPeriodStart(start);
+                setPeriodEnd(end);
                 setPage(0);
               }}
             />

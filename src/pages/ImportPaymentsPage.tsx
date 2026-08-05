@@ -37,6 +37,7 @@ import {
   type PaymentShiftInput,
 } from "../lib/db";
 import {
+  fileNameFromPath,
   formatDate,
   formatDateTime,
   formatMinutesAsTime,
@@ -49,6 +50,7 @@ import {
   PAYMENT_SHIFT_STATUS_LABELS,
   type ImportFileRow,
   type ImportStatus,
+  type PaymentFileKind,
   type PaymentShiftStatus,
   type PaymentTemplateListRow,
   type PaymentTemplateRow,
@@ -65,6 +67,13 @@ const PAYMENT_STATUS_BADGE_CLASS: Record<PaymentShiftStatus, string> = {
   pendente: "badge neutral",
   erro: "badge file-error",
   pago: "badge ok",
+};
+
+const PAYMENT_FILE_KIND_LABELS: Record<PaymentFileKind, string> = {
+  csv: "CSV",
+  xlsx: "Excel (XLSX)",
+  xls: "Excel (XLS)",
+  ods: "ODS",
 };
 
 /**
@@ -228,9 +237,24 @@ export default function ImportPaymentsPage() {
   }
 
   async function handlePick() {
+    if (!selectedTemplate) return;
     setError(null);
-    const selected = await pickPaymentFiles();
-    if (selected.length > 0) addPaths(selected);
+    const selected = await pickPaymentFiles([selectedTemplate.fileKind]);
+    if (selected.length === 0) return;
+
+    // The OS dialog is already filtered to the template's format, but
+    // that's a soft filter on some platforms (an "all files" toggle is
+    // usually still reachable) — checked again here so a mismatched file
+    // never silently gets treated as if it matched.
+    const suffix = `.${selectedTemplate.fileKind}`;
+    const valid = selected.filter((p) => p.toLowerCase().endsWith(suffix));
+    const invalid = selected.filter((p) => !p.toLowerCase().endsWith(suffix));
+    if (invalid.length > 0) {
+      setError(
+        `O template "${selectedTemplate.name}" espera arquivos ${PAYMENT_FILE_KIND_LABELS[selectedTemplate.fileKind]}. Ignorado(s) por formato incompatível: ${invalid.map(fileNameFromPath).join(", ")}`,
+      );
+    }
+    if (valid.length > 0) addPaths(valid);
   }
 
   const shiftRows = useMemo(() => fileResults.flatMap((r) => r.rows), [fileResults]);
@@ -590,9 +614,17 @@ export default function ImportPaymentsPage() {
                 </div>
                 <h4>Selecione os arquivos</h4>
                 <p className="muted" style={{ margin: 0 }}>
-                  CSV, Excel ou ODS — suporta múltiplos arquivos com o mesmo template.
+                  {selectedTemplate
+                    ? `Formato do template: ${PAYMENT_FILE_KIND_LABELS[selectedTemplate.fileKind]} — suporta múltiplos arquivos.`
+                    : "Selecione um template para saber o formato aceito."}
                 </p>
-                <button type="button" className="secondary" onClick={handlePick}>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={handlePick}
+                  disabled={!selectedTemplate}
+                  title={selectedTemplate ? undefined : "Selecione um template primeiro"}
+                >
                   <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
                   Procurar arquivos
                 </button>

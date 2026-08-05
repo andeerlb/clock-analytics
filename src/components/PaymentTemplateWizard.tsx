@@ -120,16 +120,11 @@ function isRuleValid(r: WizardRule): boolean {
 interface WizardStatusRule {
   kind: PaymentTemplateRuleKind;
   field: PaymentTargetField;
-  /** Raw comma-separated input; ignored when `kind === "else"`. */
+  /** Raw comma-separated input; ignored when `kind === "else"`. Left blank, matches rows where the mapped field is itself empty — see `resolvePaymentStatus`. */
   valuesText: string;
   /** Ignored when `kind === "else"`. */
   caseInsensitive: boolean;
   status: PaymentShiftStatus;
-}
-
-function isStatusRuleValid(r: WizardStatusRule): boolean {
-  if (r.kind === "else") return true;
-  return r.valuesText.split(",").map((v) => v.trim()).filter(Boolean).length > 0;
 }
 
 function fileKindFromPath(path: string): PaymentFileKind {
@@ -1471,6 +1466,9 @@ export default function PaymentTemplateWizard({
                                   onChange={(e) => updateStatusRule(i, { valuesText: e.target.value })}
                                   placeholder="Ex.: PAGO, QUITADO"
                                 />
+                                <p className="field-hint" style={{ margin: "0.3rem 0 0" }}>
+                                  Em branco, casa quando o campo mapeado vier vazio.
+                                </p>
                                 <label className="field-code-checkbox">
                                   <input
                                     type="checkbox"
@@ -1580,7 +1578,6 @@ export default function PaymentTemplateWizard({
               !name.trim() ||
               rules.length === 0 ||
               rules.some((r) => !isRuleValid(r)) ||
-              statusRules.some((r) => !isStatusRuleValid(r)) ||
               !isIdentifierPriorityValid
             }
           >

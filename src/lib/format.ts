@@ -313,6 +313,12 @@ export function resolvePaymentRoute(
  * empty chain, since this feature is optional) — the caller falls back to
  * the default `"pendente"`, not a manual-resolution state like an
  * unresolved route: an unmatched status is a normal, expected outcome.
+ *
+ * A `"condition"` rule with an empty `values` (the "Valores possíveis"
+ * field left blank) matches when the row's mapped field is itself empty or
+ * missing — a deliberate configuration, not a placeholder for "no
+ * condition set" — rather than being skipped like `resolvePaymentRoute`
+ * skips a rule with no raw value to compare.
  */
 export function resolvePaymentStatus(
   rules: {
@@ -326,10 +332,14 @@ export function resolvePaymentStatus(
 ): PaymentShiftStatus | null {
   for (const rule of rules) {
     if (rule.kind === "else") return rule.status;
-    const raw = rule.field ? fields[rule.field] : undefined;
+    const raw = (rule.field ? fields[rule.field] : undefined)?.trim() ?? "";
+    if (rule.values.length === 0) {
+      if (!raw) return rule.status;
+      continue;
+    }
     if (!raw) continue;
     const fold = (s: string) => (rule.caseInsensitive ? s.toLowerCase() : s);
-    const normalized = fold(raw.trim());
+    const normalized = fold(raw);
     if (rule.values.some((v) => fold(v.trim()) === normalized)) return rule.status;
   }
   return null;
