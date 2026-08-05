@@ -201,13 +201,6 @@ export default function LibraryPage() {
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
-  const hasFilters = Boolean(
-    search ||
-      selectedCompanyIds.size > 0 ||
-      selectedClientIds.size > 0 ||
-      selectedStatuses.size !== PERIOD_STATUS_OPTIONS.length,
-  );
-
   async function handleReveal(path: string) {
     try {
       await revealInFileManager(path);
@@ -261,9 +254,8 @@ export default function LibraryPage() {
 
       {error && <div className="error-box">{error}</div>}
 
-      {!(total === 0 && !hasFilters) && (
-        <div className="card">
-          <div className="field-row" style={{ marginBottom: 0 }}>
+      <div className="card">
+        <div className="field-row" style={{ marginBottom: 0 }}>
             <div className="field" style={{ flex: "2 1 240px" }}>
               <label htmlFor="search">Buscar</label>
               <div style={{ position: "relative" }}>
@@ -396,19 +388,14 @@ export default function LibraryPage() {
               </button>
             </div>
           )}
-        </div>
-      )}
+      </div>
 
       <div className="card table-card">
         {loading && imports.length === 0 && <p className="muted" style={{ padding: "1.4rem" }}>Carregando...</p>}
-        {!loading && total === 0 && !hasFilters && (
+        {!loading && total === 0 && (
           <p className="muted" style={{ padding: "1.4rem" }}>
-            Nenhum importe ainda. <Link to="/import/timesheet">Comece importando um PDF</Link>.
-          </p>
-        )}
-        {!loading && total === 0 && hasFilters && (
-          <p className="muted" style={{ padding: "1.4rem" }}>
-            Nenhum colaborador encontrado para esse filtro.
+            Nenhum resultado para os filtros selecionados. Considere ajustar os filtros ou{" "}
+            <Link to="/import/timesheet">importar um novo PDF</Link>.
           </p>
         )}
         {total > 0 && (
