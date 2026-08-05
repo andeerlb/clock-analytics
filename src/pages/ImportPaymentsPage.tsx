@@ -13,12 +13,13 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
 import DateRangePicker from "../components/DateRangePicker";
 import EmployeePicker from "../components/EmployeePicker";
 import Pagination from "../components/Pagination";
+import type { EmployeeFormNavState } from "./EmployeeFormPage";
 import {
   applyPaymentTemplate,
   hashPaymentFile,
@@ -116,6 +117,8 @@ interface PaymentPreviewRow {
   unresolvedRoute: boolean;
   /** The route's resolved client, if any — `null` unless a routing rule matched. Kept on the row (not just used transiently) so a "colaborador não encontrado" row's "vincular colaborador" picker knows which client to search within. */
   resolvedClientId: number | null;
+  /** The route's resolved company, alongside `resolvedClientId` — same routing rule, so "Cadastrar colaborador" can hand off exactly which client/empresa this row already resolved to, instead of leaving them to pick blind. */
+  resolvedCompanyId: number | null;
   /** Resolved from the template's status rules, falling back to `"pendente"` when none match (or none are configured) — see `resolvePaymentStatus`. */
   paymentStatus: PaymentShiftStatus;
   category: RowCategory;
@@ -126,6 +129,28 @@ interface PaymentFileResult {
   fileName: string;
   rows: PaymentPreviewRow[];
   error: string | null;
+}
+
+/**
+ * A snapshot of everything worth restoring on this page, attached to its
+ * own history entry (via `navigate(".", {replace:true, state})`) right
+ * before leaving for "Cadastrar colaborador" — so clicking "Voltar" there
+ * (a plain `navigate(-1)`, see `BackButton`) pops back to this exact
+ * preview instead of a blank page. Derived state (`selectedTemplate`,
+ * `fileHashes`) isn't included — restoring `templateId`/`paths` makes
+ * their own effects recompute it the same way a fresh load would.
+ */
+interface PaymentImportNavState {
+  templateId: string;
+  periodStart: string;
+  periodEnd: string;
+  paths: string[];
+  fileResults: PaymentFileResult[];
+  selectedRows: Set<number>;
+  rowFilter: RowFilter;
+  nameSearch: string;
+  previewPage: number;
+  previewPageSize: number;
 }
 
 type DisplayRow =
@@ -145,29 +170,34 @@ const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 export default function ImportPaymentsPage() {
   const navigate = useNavigate();
+  // Only used as the initial values below — once here, each piece of state
+  // is this page's own, independently adjustable from that point on (same
+  // "read once, then own it" pattern as `PaymentDetailPage`'s navState).
+  const location = useLocation();
+  const restored = location.state as PaymentImportNavState | null;
 
   const [templates, setTemplates] = useState<PaymentTemplateListRow[]>([]);
-  const [templateId, setTemplateId] = useState("");
+  const [templateId, setTemplateId] = useState(restored?.templateId ?? "");
   const [selectedTemplate, setSelectedTemplate] = useState<PaymentTemplateRow | null>(null);
 
   // Optional — filters rows by the template's mapped "data" column. Left
   // empty, processing goes through the whole file (with confirmation, see
   // handleProcessClick).
-  const [periodStart, setPeriodStart] = useState("");
-  const [periodEnd, setPeriodEnd] = useState("");
+  const [periodStart, setPeriodStart] = useState(restored?.periodStart ?? "");
+  const [periodEnd, setPeriodEnd] = useState(restored?.periodEnd ?? "");
   const [confirmFullImport, setConfirmFullImport] = useState(false);
-  const [rowFilter, setRowFilter] = useState<RowFilter>("all");
-  const [nameSearch, setNameSearch] = useState("");
+  const [rowFilter, setRowFilter] = useState<RowFilter>(restored?.rowFilter ?? "all");
+  const [nameSearch, setNameSearch] = useState(restored?.nameSearch ?? "");
 
-  const [paths, setPaths] = useState<string[]>([]);
+  const [paths, setPaths] = useState<string[]>(restored?.paths ?? []);
   const [fileHashes, setFileHashes] = useState<Map<string, { hash: string; fileName: string }>>(
     new Map(),
   );
 
-  const [fileResults, setFileResults] = useState<PaymentFileResult[]>([]);
-  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
-  const [previewPage, setPreviewPage] = useState(0);
-  const [previewPageSize, setPreviewPageSize] = useState(PREVIEW_PAGE_SIZE_OPTIONS[0]);
+  const [fileResults, setFileResults] = useState<PaymentFileResult[]>(restored?.fileResults ?? []);
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(restored?.selectedRows ?? new Set());
+  const [previewPage, setPreviewPage] = useState(restored?.previewPage ?? 0);
+  const [previewPageSize, setPreviewPageSize] = useState(restored?.previewPageSize ?? PREVIEW_PAGE_SIZE_OPTIONS[0]);
 
   const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
   const [recentFilesTotal, setRecentFilesTotal] = useState(0);
@@ -421,6 +451,7 @@ export default function ImportPaymentsPage() {
                 isDuplicate: false,
                 unresolvedRoute: false,
                 resolvedClientId: null,
+                resolvedCompanyId: null,
                 category: "skipped",
               });
               continue;
@@ -455,6 +486,7 @@ export default function ImportPaymentsPage() {
               isDuplicate: false,
               unresolvedRoute: !route,
               resolvedClientId: route?.clientId ?? null,
+              resolvedCompanyId: route?.companyId ?? null,
               category: !route ? "unresolved-route" : !employee ? "not-found" : "valid",
             });
           }
@@ -592,6 +624,38 @@ export default function ImportPaymentsPage() {
       return next;
     });
     setFileResults([...fileResults]);
+  }
+
+  /**
+   * "Cadastrar colaborador" on a "colaborador não encontrado" row: this
+   * preview took real processing to build (file reads, DB lookups), so
+   * instead of losing it, it's attached to this page's own history entry
+   * first — `navigate(-1)` from the cadastro form (see `BackButton`) then
+   * pops back to this exact state instead of a blank page.
+   */
+  function handleRegisterEmployee(row: PaymentPreviewRow) {
+    const snapshot: PaymentImportNavState = {
+      templateId,
+      periodStart,
+      periodEnd,
+      paths,
+      fileResults,
+      selectedRows,
+      rowFilter,
+      nameSearch,
+      previewPage,
+      previewPageSize,
+    };
+    navigate(".", { replace: true, state: snapshot });
+    // The row's routing rule already resolved exactly which cliente/empresa
+    // this colaborador belongs to — hand that off too instead of leaving
+    // it to be picked blind.
+    const employeeFormState: EmployeeFormNavState = {
+      prefillName: row.nameRaw,
+      prefillClientId: row.resolvedClientId ?? undefined,
+      prefillCompanyId: row.resolvedCompanyId ?? undefined,
+    };
+    navigate("/employees/new", { state: employeeFormState });
   }
 
   /** No período set means "the whole file" — that's easy to do by accident, so it's confirmed instead of just silently processing everything. */
@@ -1091,9 +1155,14 @@ export default function ImportPaymentsPage() {
                                     Colaborador não encontrado
                                   </span>
                                   <div style={{ marginTop: "0.25rem" }}>
-                                    <Link to="/employees/new" style={{ fontSize: "0.78rem" }}>
+                                    <button
+                                      type="button"
+                                      className="link-button"
+                                      style={{ fontSize: "0.78rem" }}
+                                      onClick={() => handleRegisterEmployee(row)}
+                                    >
                                       Cadastrar colaborador
-                                    </Link>
+                                    </button>
                                   </div>
                                 </div>
                               )}

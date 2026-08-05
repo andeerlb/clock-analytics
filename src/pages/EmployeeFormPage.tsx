@@ -1,6 +1,6 @@
 import { Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import {
   addEmployeeAlias,
@@ -15,17 +15,36 @@ import {
 } from "../lib/db";
 import { maskCpf } from "../lib/format";
 
+/**
+ * What a "Cadastrar colaborador" shortcut (e.g. from the payment import
+ * preview) hands off — a name to start the form pre-filled with, and,
+ * whenever the shortcut already resolved exactly which cliente/empresa the
+ * colaborador belongs to (e.g. via a template's routing rule), that too.
+ */
+export interface EmployeeFormNavState {
+  prefillName?: string;
+  prefillClientId?: number;
+  prefillCompanyId?: number;
+}
+
 export default function EmployeeFormPage() {
   const { id } = useParams<{ id: string }>();
   const isEditing = id !== undefined;
   const navigate = useNavigate();
+  const location = useLocation();
+  // Only used as the initial values below — irrelevant once editing takes
+  // over the form, and never applies to `isEditing` at all (an existing
+  // colaborador's fields always come from `getEmployee`).
+  const prefill = !isEditing ? (location.state as EmployeeFormNavState | null) : null;
 
   const [clients, setClients] = useState<ClientRow[]>([]);
-  const [clientId, setClientId] = useState("");
-  const [companyId, setCompanyId] = useState("");
+  const [clientId, setClientId] = useState(prefill?.prefillClientId !== undefined ? String(prefill.prefillClientId) : "");
+  const [companyId, setCompanyId] = useState(
+    prefill?.prefillCompanyId !== undefined ? String(prefill.prefillCompanyId) : "",
+  );
   const [clientName, setClientName] = useState("");
   const [companyName, setCompanyName] = useState("");
-  const [name, setName] = useState("");
+  const [name, setName] = useState(prefill?.prefillName ?? "");
   const [cpf, setCpf] = useState("");
   const [matricula, setMatricula] = useState("");
   const [loading, setLoading] = useState(isEditing);
@@ -83,6 +102,11 @@ export default function EmployeeFormPage() {
   );
 
   useEffect(() => {
+    // Already a valid choice for this clientCompanies set — leave it alone.
+    // Covers both a still-fresh manual pick and a pre-filled `companyId`
+    // that only becomes checkable once `clients` finishes loading (this
+    // effect re-runs then too, since `clientCompanies` changes reference).
+    if (clientCompanies.some((c) => String(c.companyId) === companyId)) return;
     if (clientCompanies.length === 1) {
       setCompanyId(String(clientCompanies[0].companyId));
     } else {

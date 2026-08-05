@@ -1,16 +1,18 @@
-import { AlertCircle, CheckCircle2, Clock3, History, Moon, Sun } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock3, History, Moon, RotateCcw, Sun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
+import ConfirmModal from "../components/ConfirmModal";
 import ConfirmPaymentModal from "../components/ConfirmPaymentModal";
 import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
-import PreviousShiftModal from "../components/PreviousShiftModal";
+import ShiftHistoryModal from "../components/ShiftHistoryModal";
 import {
   getCompany,
   getEmployee,
   listPaymentShiftsForEmployeeMonth,
   markPaymentShiftPaid,
+  revertPaymentShiftToPending,
   type CompanyDetail,
   type EmployeeRow,
 } from "../lib/db";
@@ -72,7 +74,10 @@ export default function PaymentDetailPage() {
   const [payingShift, setPayingShift] = useState<PaymentShiftRow | null>(null);
   const [paying, setPaying] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
-  const [viewingPreviousId, setViewingPreviousId] = useState<number | null>(null);
+  const [revertingShift, setRevertingShift] = useState<PaymentShiftRow | null>(null);
+  const [reverting, setReverting] = useState(false);
+  const [revertError, setRevertError] = useState<string | null>(null);
+  const [viewingHistoryId, setViewingHistoryId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!competencia || Number.isNaN(id)) return;
@@ -99,6 +104,21 @@ export default function PaymentDetailPage() {
       setPayError(String(e instanceof Error ? e.message : e));
     } finally {
       setPaying(false);
+    }
+  }
+
+  async function handleConfirmRevert() {
+    if (!revertingShift || !competencia) return;
+    setReverting(true);
+    setRevertError(null);
+    try {
+      await revertPaymentShiftToPending(revertingShift.id);
+      setShifts(await listPaymentShiftsForEmployeeMonth(id, competencia));
+      setRevertingShift(null);
+    } catch (e) {
+      setRevertError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setReverting(false);
     }
   }
 
@@ -283,12 +303,23 @@ export default function PaymentDetailPage() {
                             Fazer pagamento
                           </button>
                         )}
+                        {s.status === "pago" && (
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => setRevertingShift(s)}
+                            title="Voltar este turno para pendente"
+                          >
+                            <RotateCcw size={13} style={{ marginRight: "0.3rem" }} />
+                            Voltar para pendente
+                          </button>
+                        )}
                         {s.previousShiftId !== null && (
                           <button
                             type="button"
                             className="ghost"
-                            onClick={() => setViewingPreviousId(s.previousShiftId)}
-                            title="Ver status anterior a este pagamento"
+                            onClick={() => setViewingHistoryId(s.previousShiftId)}
+                            title="Ver histórico de status deste turno"
                           >
                             <History size={13} style={{ marginRight: "0.3rem" }} />
                             Status anterior
@@ -318,7 +349,23 @@ export default function PaymentDetailPage() {
         />
       )}
 
-      <PreviousShiftModal shiftId={viewingPreviousId} company={company} onClose={() => setViewingPreviousId(null)} />
+      {revertingShift && (
+        <ConfirmModal
+          title="Voltar para pendente"
+          message={`Isso cria um novo registro com status "Pendente" para ${formatDate(revertingShift.workDate)} · ${revertingShift.local}. O registro pago atual não será alterado, ficando disponível no histórico.`}
+          confirmLabel={reverting ? "Revertendo..." : "Voltar para pendente"}
+          confirmDisabled={reverting}
+          danger={false}
+          error={revertError}
+          onConfirm={handleConfirmRevert}
+          onCancel={() => {
+            setRevertingShift(null);
+            setRevertError(null);
+          }}
+        />
+      )}
+
+      <ShiftHistoryModal shiftId={viewingHistoryId} company={company} onClose={() => setViewingHistoryId(null)} />
     </div>
   );
 }

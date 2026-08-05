@@ -2115,6 +2115,31 @@ export async function getPaymentShift(id: number): Promise<PaymentShiftRow> {
   return rows[0];
 }
 
+interface PaymentShiftCoreFields {
+  employeeId: number;
+  templateId: number | null;
+  sourceFileId: number | null;
+  local: string;
+  workDate: string;
+  role: string;
+  scheduleStartMinutes: number | null;
+  scheduleEndMinutes: number | null;
+  note: string | null;
+}
+
+/** Shared by every status-transition function below — the fields that always carry over unchanged into the new row. */
+async function readPaymentShiftCoreFields(db: Database, shiftId: number): Promise<PaymentShiftCoreFields> {
+  const rows = await db.select<PaymentShiftCoreFields[]>(
+    `SELECT employee_id AS employeeId, template_id AS templateId, source_file_id AS sourceFileId,
+            local, work_date AS workDate, role,
+            schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes, note
+     FROM payment_shifts WHERE id = $1`,
+    [shiftId],
+  );
+  if (rows.length === 0) throw new Error("Turno não encontrado.");
+  return rows[0];
+}
+
 /**
  * "Fazer pagamento": always inserts a brand-new row instead of mutating
  * `shiftId`'s row — copies its core shift fields, sets status = 'pago',
@@ -2124,27 +2149,7 @@ export async function getPaymentShift(id: number): Promise<PaymentShiftRow> {
  */
 export async function markPaymentShiftPaid(shiftId: number, amount: number): Promise<number> {
   const db = await getDb();
-  const rows = await db.select<
-    {
-      employeeId: number;
-      templateId: number | null;
-      sourceFileId: number | null;
-      local: string;
-      workDate: string;
-      role: string;
-      scheduleStartMinutes: number | null;
-      scheduleEndMinutes: number | null;
-      note: string | null;
-    }[]
-  >(
-    `SELECT employee_id AS employeeId, template_id AS templateId, source_file_id AS sourceFileId,
-            local, work_date AS workDate, role,
-            schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes, note
-     FROM payment_shifts WHERE id = $1`,
-    [shiftId],
-  );
-  if (rows.length === 0) throw new Error("Turno não encontrado.");
-  const s = rows[0];
+  const s = await readPaymentShiftCoreFields(db, shiftId);
 
   const result = await db.execute(
     `INSERT INTO payment_shifts
@@ -2166,6 +2171,57 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
     ],
   );
   return result.lastInsertId as number;
+}
+
+/**
+ * Undoes a payment the same append-only way "Fazer pagamento" applies one:
+ * a brand-new row with status back to `pendente` (amount cleared — it's no
+ * longer paid, so there's nothing to show there until it's paid again),
+ * linked back to `shiftId`. `shiftId`'s `pago` row is never mutated, just
+ * like every other transition — it stays reachable as history, and a shift
+ * can be paid and reverted more than once, each hop its own row.
+ */
+export async function revertPaymentShiftToPending(shiftId: number): Promise<number> {
+  const db = await getDb();
+  const s = await readPaymentShiftCoreFields(db, shiftId);
+
+  const result = await db.execute(
+    `INSERT INTO payment_shifts
+       (employee_id, template_id, source_file_id, local, work_date, role,
+        schedule_start_minutes, schedule_end_minutes, note, status, amount, previous_shift_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pendente', NULL, $10)`,
+    [
+      s.employeeId,
+      s.templateId,
+      s.sourceFileId,
+      s.local,
+      s.workDate,
+      s.role,
+      s.scheduleStartMinutes,
+      s.scheduleEndMinutes,
+      s.note,
+      shiftId,
+    ],
+  );
+  return result.lastInsertId as number;
+}
+
+/**
+ * Walks the append-only chain backward from `shiftId` via
+ * `previousShiftId`, returning every row from oldest to most recent
+ * (including `shiftId` itself) — the full "Status anterior" history for a
+ * shift, not just one hop back, since a shift can be paid, reverted to
+ * pendente, and paid again more than once.
+ */
+export async function getPaymentShiftHistory(shiftId: number): Promise<PaymentShiftRow[]> {
+  const chain: PaymentShiftRow[] = [];
+  let currentId: number | null = shiftId;
+  while (currentId !== null) {
+    const shift: PaymentShiftRow = await getPaymentShift(currentId);
+    chain.push(shift);
+    currentId = shift.previousShiftId;
+  }
+  return chain.reverse();
 }
 
 /**

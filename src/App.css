@@ -383,6 +383,30 @@ button.ghost:hover {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text);
 }
+/* A <button> that needs to look and behave like the plain `a` styles above
+   — for actions that aren't real navigation (they run extra logic first),
+   so a <Link> isn't the right element even though the visual should match
+   one. Needs the compound `button.link-button` selector (not just
+   `.link-button`) to actually out-specificity the base `button`/`button:hover`
+   rules' background/box-shadow/font-weight above — a bare class alone loses
+   that fight since `button:hover` (element+pseudo) ties or beats a lone
+   class on specificity. */
+button.link-button {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 400;
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+button.link-button:hover {
+  background: none;
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
 
 table {
   width: 100%;
