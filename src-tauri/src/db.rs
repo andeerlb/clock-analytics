@@ -208,5 +208,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0034_normalize_employee_cpf.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 35,
+            description: "add payment_shifts.extra_data — raw values of columns the template left unmapped, kept for history instead of discarded",
+            sql: include_str!("../migrations/0035_payment_shift_extra_data.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

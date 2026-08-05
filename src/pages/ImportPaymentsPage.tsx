@@ -121,6 +121,8 @@ interface PaymentPreviewRow {
   resolvedCompanyId: number | null;
   /** Resolved from the template's status rules, falling back to `"pendente"` when none match (or none are configured) — see `resolvePaymentStatus`. */
   paymentStatus: PaymentShiftStatus;
+  /** Every non-blank column the template left unmapped on this row — kept for history/audit instead of discarded. */
+  extraFields: Record<string, string>;
   category: RowCategory;
 }
 
@@ -435,6 +437,7 @@ export default function ImportPaymentsPage() {
               workDateRaw,
               paymentStatus:
                 resolvePaymentStatus(selectedTemplate.statusRules, applied_row.fields) ?? "pendente",
+              extraFields: applied_row.extraFields,
             };
 
             // No fixed header row anymore — a physical row is only "real
@@ -706,6 +709,7 @@ export default function ImportPaymentsPage() {
           scheduleEndMinutes: row.scheduleEndMinutes,
           note: row.note,
           status: row.paymentStatus,
+          extraData: Object.keys(row.extraFields).length > 0 ? row.extraFields : null,
         });
         savedFileHashes.add(fileHash);
       }

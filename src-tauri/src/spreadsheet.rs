@@ -143,6 +143,12 @@ pub struct AppliedPaymentRow {
     pub row_number: u32,
     /// targetField -> raw text value.
     pub fields: HashMap<String, String>,
+    /// columnLetter -> raw text value, for every non-blank column the
+    /// template left unmapped ("Ignorar") — kept for history/audit instead
+    /// of discarded, in case something worth knowing was in a column
+    /// nobody thought to map. Blank cells are left out, same as a
+    /// genuinely blank row never becoming an `AppliedPaymentRow` at all.
+    pub extra_fields: HashMap<String, String>,
 }
 
 /// Spreadsheet-style column letter ("A", "Z", "AA") -> 0-indexed column
@@ -156,6 +162,21 @@ fn column_index(letter: &str) -> Option<usize> {
         n = n * 26 + (ch.to_ascii_uppercase() as usize - 'A' as usize + 1);
     }
     n.checked_sub(1)
+}
+
+/// 0-indexed column number -> spreadsheet-style column letter — the inverse
+/// of `column_index`, mirroring the frontend's `columnLetter`. Used to
+/// label a column left unmapped by the template (`extra_fields`), since it
+/// has no target-field name to fall back on.
+fn column_letter(index0: usize) -> String {
+    let mut n = index0 + 1;
+    let mut letters = String::new();
+    while n > 0 {
+        let rem = (n - 1) % 26;
+        letters.insert(0, (b'A' + rem as u8) as char);
+        n = (n - 1) / 26;
+    }
+    letters
 }
 
 fn is_blank_row(fields: &HashMap<String, String>) -> bool {
@@ -179,6 +200,11 @@ pub fn apply_template(
         let group = groups
             .first()
             .ok_or("nenhuma configuração de colunas definida")?;
+        let mapped_indices: std::collections::HashSet<usize> = group
+            .field_mappings
+            .iter()
+            .filter_map(|(letter, _)| column_index(letter))
+            .collect();
         let delim_byte = delimiter
             .and_then(|d| d.as_bytes().first().copied())
             .unwrap_or_else(|| detect_delimiter(path));
@@ -205,7 +231,14 @@ pub fn apply_template(
             if is_blank_row(&fields) {
                 continue;
             }
-            out.push(AppliedPaymentRow { sheet_name: None, row_number, fields });
+            let extra_fields: HashMap<String, String> = record
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| !mapped_indices.contains(idx))
+                .map(|(idx, value)| (column_letter(idx), value.trim().to_string()))
+                .filter(|(_, value)| !value.is_empty())
+                .collect();
+            out.push(AppliedPaymentRow { sheet_name: None, row_number, fields, extra_fields });
         }
         return Ok(out);
     }
@@ -213,6 +246,11 @@ pub fn apply_template(
     let mut workbook = open_workbook_auto(path).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for group in groups {
+        let mapped_indices: std::collections::HashSet<usize> = group
+            .field_mappings
+            .iter()
+            .filter_map(|(letter, _)| column_index(letter))
+            .collect();
         for sheet_name in &group.sheet_names {
             let range = workbook
                 .worksheet_range(sheet_name)
@@ -244,10 +282,18 @@ pub fn apply_template(
                 if is_blank_row(&fields) {
                     continue;
                 }
+                let extra_fields: HashMap<String, String> = row
+                    .iter()
+                    .enumerate()
+                    .filter(|(idx, _)| !mapped_indices.contains(idx))
+                    .map(|(idx, cell)| (column_letter(idx), cell.to_string().trim().to_string()))
+                    .filter(|(_, value)| !value.is_empty())
+                    .collect();
                 out.push(AppliedPaymentRow {
                     sheet_name: Some(sheet_name.clone()),
                     row_number,
                     fields,
+                    extra_fields,
                 });
             }
         }

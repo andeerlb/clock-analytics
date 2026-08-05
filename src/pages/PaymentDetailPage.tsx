@@ -5,6 +5,7 @@ import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
 import ConfirmPaymentModal from "../components/ConfirmPaymentModal";
 import DateRangePicker from "../components/DateRangePicker";
+import ExtraColumnsModal from "../components/ExtraColumnsModal";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
 import ShiftHistoryModal from "../components/ShiftHistoryModal";
 import {
@@ -78,6 +79,7 @@ export default function PaymentDetailPage() {
   const [reverting, setReverting] = useState(false);
   const [revertError, setRevertError] = useState<string | null>(null);
   const [viewingHistoryId, setViewingHistoryId] = useState<number | null>(null);
+  const [viewingExtraData, setViewingExtraData] = useState<Record<string, string> | null>(null);
 
   useEffect(() => {
     if (!competencia || Number.isNaN(id)) return;
@@ -282,7 +284,22 @@ export default function PaymentDetailPage() {
                           : "—"}
                       </td>
                       <td>{value !== null ? formatCurrencyBRL(value) : "—"}</td>
-                      <td className="muted">{s.note ?? "—"}</td>
+                      <td className="muted">
+                        {s.note ?? "—"}
+                        {s.extraData && Object.keys(s.extraData).length > 0 && (
+                          <div style={{ marginTop: "0.25rem" }}>
+                            <button
+                              type="button"
+                              className="ghost"
+                              style={{ padding: "0.1rem 0.4rem", fontSize: "0.72rem" }}
+                              onClick={() => setViewingExtraData(s.extraData)}
+                              title="Ver colunas não mapeadas lidas do arquivo"
+                            >
+                              +{Object.keys(s.extraData).length} coluna(s)
+                            </button>
+                          </div>
+                        )}
+                      </td>
                       <td>
                         <span className={badge.className}>
                           <BadgeIcon size={13} />
@@ -366,6 +383,7 @@ export default function PaymentDetailPage() {
       )}
 
       <ShiftHistoryModal shiftId={viewingHistoryId} company={company} onClose={() => setViewingHistoryId(null)} />
+      <ExtraColumnsModal data={viewingExtraData} onClose={() => setViewingExtraData(null)} />
     </div>
   );
 }

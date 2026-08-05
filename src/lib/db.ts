@@ -1841,6 +1841,8 @@ export interface PaymentShiftInput {
   note: string | null;
   /** Resolved from the template's status rules (see `resolvePaymentStatus`), falling back to `"pendente"` when none match — not always `"pendente"` anymore. */
   status: PaymentShiftStatus;
+  /** Every non-blank column the template left unmapped on this row (see `AppliedPaymentRow.extraFields`) — `null` when there was nothing left unmapped. */
+  extraData: Record<string, string> | null;
 }
 
 /** Bulk-inserts shifts — `valor` and any further `pago` transition still happen in a later step. */
@@ -1850,8 +1852,8 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
     await db.execute(
       `INSERT INTO payment_shifts
          (employee_id, template_id, source_file_id, local, work_date, role,
-          schedule_start_minutes, schedule_end_minutes, note, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          schedule_start_minutes, schedule_end_minutes, note, status, extra_data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
         r.employeeId,
         r.templateId,
@@ -1863,6 +1865,7 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
         r.scheduleEndMinutes,
         r.note,
         r.status,
+        r.extraData ? JSON.stringify(r.extraData) : null,
       ],
     );
   }
@@ -2076,7 +2079,7 @@ const PAYMENT_SHIFT_SELECT_COLUMNS = `
   ps.schedule_start_minutes AS scheduleStartMinutes,
   ps.schedule_end_minutes AS scheduleEndMinutes, ps.note,
   ps.status, ps.error_message AS errorMessage, ps.amount, ps.imported_at AS importedAt,
-  ps.previous_shift_id AS previousShiftId
+  ps.previous_shift_id AS previousShiftId, ps.extra_data AS extraData
 `;
 
 const PAYMENT_SHIFT_FROM_CLAUSE = `
@@ -2084,19 +2087,27 @@ const PAYMENT_SHIFT_FROM_CLAUSE = `
   JOIN employees e ON e.id = ps.employee_id
 `;
 
+type PaymentShiftRowRaw = Omit<PaymentShiftRow, "extraData"> & { extraData: string | null };
+
+/** `extra_data` is stored as a JSON string (or NULL) — parsed once here so every reader gets the real `Record<string, string> | null` shape. */
+function parsePaymentShiftRow(row: PaymentShiftRowRaw): PaymentShiftRow {
+  return { ...row, extraData: row.extraData ? JSON.parse(row.extraData) : null };
+}
+
 /** Every *current* shift (see `HEAD_SHIFT_CONDITION`) for one colaborador in one competência ("YYYY-MM") — the Pagamentos detail. */
 export async function listPaymentShiftsForEmployeeMonth(
   employeeId: number,
   competencia: string,
 ): Promise<PaymentShiftRow[]> {
   const db = await getDb();
-  return db.select<PaymentShiftRow[]>(
+  const rows = await db.select<PaymentShiftRowRaw[]>(
     `SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS}
      ${PAYMENT_SHIFT_FROM_CLAUSE}
      WHERE ps.employee_id = $1 AND strftime('%Y-%m', ps.work_date) = $2 AND ${HEAD_SHIFT_CONDITION}
      ORDER BY ps.work_date, ps.id`,
     [employeeId, competencia],
   );
+  return rows.map(parsePaymentShiftRow);
 }
 
 /**
@@ -2107,12 +2118,12 @@ export async function listPaymentShiftsForEmployeeMonth(
  */
 export async function getPaymentShift(id: number): Promise<PaymentShiftRow> {
   const db = await getDb();
-  const rows = await db.select<PaymentShiftRow[]>(
+  const rows = await db.select<PaymentShiftRowRaw[]>(
     `SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS} ${PAYMENT_SHIFT_FROM_CLAUSE} WHERE ps.id = $1`,
     [id],
   );
   if (rows.length === 0) throw new Error("Turno não encontrado.");
-  return rows[0];
+  return parsePaymentShiftRow(rows[0]);
 }
 
 interface PaymentShiftCoreFields {
@@ -2125,6 +2136,8 @@ interface PaymentShiftCoreFields {
   scheduleStartMinutes: number | null;
   scheduleEndMinutes: number | null;
   note: string | null;
+  /** Raw JSON string as stored (or NULL) — passed straight through into the new row, not re-parsed, since a status transition never changes what was in the original file. */
+  extraData: string | null;
 }
 
 /** Shared by every status-transition function below — the fields that always carry over unchanged into the new row. */
@@ -2132,7 +2145,8 @@ async function readPaymentShiftCoreFields(db: Database, shiftId: number): Promis
   const rows = await db.select<PaymentShiftCoreFields[]>(
     `SELECT employee_id AS employeeId, template_id AS templateId, source_file_id AS sourceFileId,
             local, work_date AS workDate, role,
-            schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes, note
+            schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes, note,
+            extra_data AS extraData
      FROM payment_shifts WHERE id = $1`,
     [shiftId],
   );
@@ -2154,8 +2168,8 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
   const result = await db.execute(
     `INSERT INTO payment_shifts
        (employee_id, template_id, source_file_id, local, work_date, role,
-        schedule_start_minutes, schedule_end_minutes, note, status, amount, previous_shift_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pago', $10, $11)`,
+        schedule_start_minutes, schedule_end_minutes, note, status, amount, previous_shift_id, extra_data)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pago', $10, $11, $12)`,
     [
       s.employeeId,
       s.templateId,
@@ -2168,6 +2182,7 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
       s.note,
       amount,
       shiftId,
+      s.extraData,
     ],
   );
   return result.lastInsertId as number;
@@ -2188,8 +2203,8 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
   const result = await db.execute(
     `INSERT INTO payment_shifts
        (employee_id, template_id, source_file_id, local, work_date, role,
-        schedule_start_minutes, schedule_end_minutes, note, status, amount, previous_shift_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pendente', NULL, $10)`,
+        schedule_start_minutes, schedule_end_minutes, note, status, amount, previous_shift_id, extra_data)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pendente', NULL, $10, $11)`,
     [
       s.employeeId,
       s.templateId,
@@ -2201,6 +2216,7 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
       s.scheduleEndMinutes,
       s.note,
       shiftId,
+      s.extraData,
     ],
   );
   return result.lastInsertId as number;

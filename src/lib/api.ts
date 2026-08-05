@@ -121,6 +121,8 @@ export interface AppliedPaymentRow {
   /** 1-indexed physical row in the source file — for error messages. */
   rowNumber: number;
   fields: Record<string, string>;
+  /** columnLetter -> raw text value, for every non-blank column the template left unmapped ("Ignorar") — kept for history instead of discarded. */
+  extraFields: Record<string, string>;
 }
 
 /** Reads every row of a real payment file per a saved template's column mapping — the actual import-execution step. */
