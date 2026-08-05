@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { toIso, todayUtc } from "../lib/calendar";
 import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
+import type { PaymentShiftStatus } from "../lib/types";
 
 /** Default period on load: the current calendar month so far — never empty. */
 function defaultPeriodStart(): string {
@@ -9,6 +10,8 @@ function defaultPeriodStart(): string {
 }
 
 export const LIBRARY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+export const PAYMENTS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+const PAYMENT_SHIFT_STATUSES: PaymentShiftStatus[] = ["pendente", "erro", "pago"];
 
 export type ReportMode = "per-employee" | "per-client";
 
@@ -32,15 +35,38 @@ export interface LibraryFilters {
   setPageSize: (v: number) => void;
 }
 
+export interface PaymentsFilters {
+  search: string;
+  setSearch: (v: string) => void;
+  selectedCompanyIds: Set<string>;
+  setSelectedCompanyIds: (v: Set<string>) => void;
+  selectedClientIds: Set<string>;
+  setSelectedClientIds: (v: Set<string>) => void;
+  periodStart: string;
+  periodEnd: string;
+  setPeriod: (start: string, end: string) => void;
+  selectedStatuses: Set<PaymentShiftStatus>;
+  setSelectedStatuses: Dispatch<SetStateAction<Set<PaymentShiftStatus>>>;
+  page: number;
+  setPage: Dispatch<SetStateAction<number>>;
+  pageSize: number;
+  setPageSize: (v: number) => void;
+}
+
 const LibraryFiltersContext = createContext<LibraryFilters | null>(null);
+const PaymentsFiltersContext = createContext<PaymentsFilters | null>(null);
 
 /**
- * Holds the Cartão Ponto filter state above the router, so it survives
- * navigating away and back — to a collaborator's Cartão de Ponto, anywhere.
- * The route unmounts the page component on every visit; component-local
- * `useState` would reset to defaults each time, which is exactly what this
- * avoids by living one level up, in a provider mounted once for the whole
- * app.
+ * Holds the Cartão Ponto and Pagamentos filter state above the router, so
+ * each survives navigating away and back — to a collaborator's Cartão de
+ * Ponto or Pagamentos detail, anywhere. The route unmounts the page
+ * component on every visit; component-local `useState` would reset to
+ * defaults each time, which is exactly what this avoids by living one
+ * level up, in a provider mounted once for the whole app. Two separate
+ * contexts (not one shared shape) since the two screens' filters aren't
+ * the same fields (Cartão Ponto has `mode`, Pagamentos doesn't; the status
+ * options are different enums) — merging them would just make both sides
+ * carry fields that don't apply to them.
  */
 export function FiltersProvider({ children }: { children: ReactNode }) {
   const [search, setSearch] = useState("");
@@ -78,11 +104,53 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
     setPageSize,
   };
 
-  return <LibraryFiltersContext.Provider value={library}>{children}</LibraryFiltersContext.Provider>;
+  const [paymentsSearch, setPaymentsSearch] = useState("");
+  const [paymentsCompanyIds, setPaymentsCompanyIds] = useState<Set<string>>(new Set());
+  const [paymentsClientIds, setPaymentsClientIds] = useState<Set<string>>(new Set());
+  const [paymentsPeriodStart, setPaymentsPeriodStart] = useState("");
+  const [paymentsPeriodEnd, setPaymentsPeriodEnd] = useState("");
+  const [paymentsSelectedStatuses, setPaymentsSelectedStatuses] = useState<Set<PaymentShiftStatus>>(
+    () => new Set(PAYMENT_SHIFT_STATUSES),
+  );
+  const [paymentsPage, setPaymentsPage] = useState(0);
+  const [paymentsPageSize, setPaymentsPageSize] = useState(PAYMENTS_PAGE_SIZE_OPTIONS[0]);
+
+  const payments: PaymentsFilters = {
+    search: paymentsSearch,
+    setSearch: setPaymentsSearch,
+    selectedCompanyIds: paymentsCompanyIds,
+    setSelectedCompanyIds: setPaymentsCompanyIds,
+    selectedClientIds: paymentsClientIds,
+    setSelectedClientIds: setPaymentsClientIds,
+    periodStart: paymentsPeriodStart,
+    periodEnd: paymentsPeriodEnd,
+    setPeriod: (start, end) => {
+      setPaymentsPeriodStart(start);
+      setPaymentsPeriodEnd(end);
+    },
+    selectedStatuses: paymentsSelectedStatuses,
+    setSelectedStatuses: setPaymentsSelectedStatuses,
+    page: paymentsPage,
+    setPage: setPaymentsPage,
+    pageSize: paymentsPageSize,
+    setPageSize: setPaymentsPageSize,
+  };
+
+  return (
+    <LibraryFiltersContext.Provider value={library}>
+      <PaymentsFiltersContext.Provider value={payments}>{children}</PaymentsFiltersContext.Provider>
+    </LibraryFiltersContext.Provider>
+  );
 }
 
 export function useLibraryFilters(): LibraryFilters {
   const ctx = useContext(LibraryFiltersContext);
   if (!ctx) throw new Error("useLibraryFilters must be used within a FiltersProvider");
+  return ctx;
+}
+
+export function usePaymentsFilters(): PaymentsFilters {
+  const ctx = useContext(PaymentsFiltersContext);
+  if (!ctx) throw new Error("usePaymentsFilters must be used within a FiltersProvider");
   return ctx;
 }

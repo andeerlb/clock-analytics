@@ -5,16 +5,16 @@ import Avatar from "../components/Avatar";
 import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
+import { PAYMENTS_PAGE_SIZE_OPTIONS, usePaymentsFilters } from "../contexts/FiltersContext";
 import { listClients, listCompanies, listPaymentShiftSummaries, type ClientRow, type CompanyRow } from "../lib/db";
 import type { PaymentShiftStatus, PaymentShiftSummaryRow } from "../lib/types";
+import type { PaymentDetailNavState } from "./PaymentDetailPage";
 
 const STATUS_OPTIONS: MultiSelectOption<PaymentShiftStatus>[] = [
   { id: "pendente", label: "Pendente" },
   { id: "erro", label: "Erro" },
   { id: "pago", label: "Pago" },
 ];
-
-const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 /** "2026-02" -> "fev/2026" */
 function formatCompetencia(competencia: string): string {
@@ -23,22 +23,29 @@ function formatCompetencia(competencia: string): string {
 }
 
 export default function PaymentsPage() {
+  const {
+    search,
+    setSearch,
+    selectedCompanyIds,
+    setSelectedCompanyIds,
+    selectedClientIds,
+    setSelectedClientIds,
+    periodStart,
+    periodEnd,
+    setPeriod,
+    selectedStatuses,
+    setSelectedStatuses,
+    page,
+    setPage,
+    pageSize,
+    setPageSize,
+  } = usePaymentsFilters();
+
   const [summaries, setSummaries] = useState<PaymentShiftSummaryRow[]>([]);
   const [total, setTotal] = useState(0);
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
-
-  const [search, setSearch] = useState("");
-  const [selectedCompanyIds, setSelectedCompanyIds] = useState<Set<string>>(new Set());
-  const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
-  const [periodStart, setPeriodStart] = useState("");
-  const [periodEnd, setPeriodEnd] = useState("");
-  const [selectedStatuses, setSelectedStatuses] = useState<Set<PaymentShiftStatus>>(
-    new Set(STATUS_OPTIONS.map((o) => o.id)),
-  );
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
 
   useEffect(() => {
     Promise.all([listCompanies(), listClients()]).then(([companyRows, clientRows]) => {
@@ -117,6 +124,15 @@ export default function PaymentsPage() {
   );
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
+  // Handed to the detail page via `<Link state={...}>` so its own Status
+  // filter starts matching whatever was active here, instead of always
+  // resetting to "todos" — see `PaymentDetailNavState`.
+  const detailNavState: PaymentDetailNavState = {
+    statuses: Array.from(selectedStatuses),
+    periodStart,
+    periodEnd,
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -193,8 +209,7 @@ export default function PaymentsPage() {
               startValue={periodStart}
               endValue={periodEnd}
               onChange={(start, end) => {
-                setPeriodStart(start);
-                setPeriodEnd(end);
+                setPeriod(start, end);
                 setPage(0);
               }}
             />
@@ -252,7 +267,9 @@ export default function PaymentsPage() {
                       <td>
                         <div className="person-cell">
                           <Avatar name={s.employeeName} />
-                          <Link to={`/payments/${s.employeeId}/${s.competencia}`}>{s.employeeName}</Link>
+                          <Link to={`/payments/${s.employeeId}/${s.competencia}`} state={detailNavState}>
+                            {s.employeeName}
+                          </Link>
                         </div>
                       </td>
                       <td>{s.clientName}</td>
@@ -272,7 +289,7 @@ export default function PaymentsPage() {
               </table>
             </div>
 
-            {total > PAGE_SIZE_OPTIONS[0] && (
+            {total > PAYMENTS_PAGE_SIZE_OPTIONS[0] && (
               <Pagination
                 page={page}
                 pageCount={pageCount}
@@ -282,7 +299,7 @@ export default function PaymentsPage() {
                   page * pageSize + pageSize,
                 )} de ${total}`}
                 pageSize={pageSize}
-                pageSizeOptions={PAGE_SIZE_OPTIONS}
+                pageSizeOptions={PAYMENTS_PAGE_SIZE_OPTIONS}
                 onPageSizeChange={(size) => {
                   setPageSize(size);
                   setPage(0);

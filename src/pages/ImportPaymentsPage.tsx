@@ -79,9 +79,15 @@ const PAYMENT_FILE_KIND_LABELS: Record<PaymentFileKind, string> = {
 /**
  * Every row lands in exactly one bucket — this is both what the toolbar
  * counts and what the toolbar's chips filter by (see `rowFilter`).
- * "valid"/"duplicate" are the only two with a resolved `employee`.
+ * "valid"/"duplicate"/"duplicate-in-file" are the only ones with a
+ * resolved `employee`. "duplicate" means an exact match already exists in
+ * `payment_shifts` (see `findDuplicatePaymentShifts`) — offered as
+ * "reprocessar", not excluded outright. "duplicate-in-file" means this row
+ * is byte-for-byte identical to an earlier candidate row in this same
+ * import batch — a source-file artifact, not importable at all, since
+ * keeping both would just double-import the same shift within one run.
  */
-type RowCategory = "valid" | "duplicate" | "not-found" | "unresolved-route" | "skipped";
+type RowCategory = "valid" | "duplicate" | "duplicate-in-file" | "not-found" | "unresolved-route" | "skipped";
 type RowFilter = RowCategory | "error" | "all" | "selected";
 
 interface PaymentPreviewRow {
@@ -294,6 +300,7 @@ export default function ImportPaymentsPage() {
     const counts: Record<RowCategory, number> = {
       valid: 0,
       duplicate: 0,
+      "duplicate-in-file": 0,
       "not-found": 0,
       "unresolved-route": 0,
       skipped: 0,
@@ -304,6 +311,7 @@ export default function ImportPaymentsPage() {
 
   const errorCount = fileResults.filter((r) => r.error).length;
   const duplicateCount = categoryCounts.duplicate;
+  const duplicateInFileCount = categoryCounts["duplicate-in-file"];
   const skippedCount = categoryCounts.skipped;
 
   const previewPageCount = Math.max(1, Math.ceil(previewRows.length / previewPageSize));
@@ -312,8 +320,9 @@ export default function ImportPaymentsPage() {
     [previewRows, previewPage, previewPageSize],
   );
 
-  const selectableCount = shiftRows.filter((r) => r.employee).length;
-  const allSelected = selectableCount > 0 && shiftRows.every((r, i) => selectedRows.has(i) || !r.employee);
+  const isSelectable = (r: PaymentPreviewRow) => Boolean(r.employee) && r.category !== "duplicate-in-file";
+  const selectableCount = shiftRows.filter(isSelectable).length;
+  const allSelected = selectableCount > 0 && shiftRows.every((r, i) => selectedRows.has(i) || !isSelectable(r));
 
   function toggleRowFilter(category: RowFilter) {
     setRowFilter((prev) => (prev === category ? "all" : category));
@@ -333,7 +342,7 @@ export default function ImportPaymentsPage() {
     if (allSelected) {
       setSelectedRows(new Set());
     } else {
-      setSelectedRows(new Set(shiftRows.flatMap((r, i) => (r.employee ? [i] : []))));
+      setSelectedRows(new Set(shiftRows.flatMap((r, i) => (isSelectable(r) ? [i] : []))));
     }
   }
 
@@ -443,17 +452,49 @@ export default function ImportPaymentsPage() {
 
       const allRows = results.flatMap((r) => r.rows);
       const candidates = allRows.filter((r) => r.employee);
+
+      // Within this same batch, two candidate rows that agree on every
+      // column are the same shift repeated in the source file — only the
+      // first stays importable, so "vou importar apenas um" holds even
+      // before anything is compared against payment_shifts.
+      const seenInBatch = new Set<string>();
+      for (const r of candidates) {
+        const key = JSON.stringify([
+          r.employee!.id,
+          r.workDate,
+          r.local,
+          r.role,
+          r.scheduleStartMinutes,
+          r.scheduleEndMinutes,
+          r.note,
+        ]);
+        if (seenInBatch.has(key)) {
+          r.category = "duplicate-in-file";
+        } else {
+          seenInBatch.add(key);
+        }
+      }
+
+      const dbCheckCandidates = candidates.filter((r) => r.category !== "duplicate-in-file");
       const dupIndices = await findDuplicatePaymentShifts(
-        candidates.map((r) => ({ employeeId: r.employee!.id, workDate: r.workDate!, local: r.local })),
+        dbCheckCandidates.map((r) => ({
+          employeeId: r.employee!.id,
+          workDate: r.workDate!,
+          local: r.local,
+          role: r.role,
+          scheduleStartMinutes: r.scheduleStartMinutes,
+          scheduleEndMinutes: r.scheduleEndMinutes,
+          note: r.note,
+        })),
       );
       dupIndices.forEach((i) => {
-        candidates[i].isDuplicate = true;
-        candidates[i].category = "duplicate";
+        dbCheckCandidates[i].isDuplicate = true;
+        dbCheckCandidates[i].category = "duplicate";
       });
 
       const defaultSelected = new Set<number>();
       allRows.forEach((r, i) => {
-        if (r.employee && !r.isDuplicate) defaultSelected.add(i);
+        if (r.category === "valid") defaultSelected.add(i);
       });
 
       setFileResults(results);
@@ -682,8 +723,8 @@ export default function ImportPaymentsPage() {
                     </h3>
                     {duplicateCount > 0 ? (
                       <p className="muted" style={{ maxWidth: "42rem" }}>
-                        Algumas linhas parecem já ter sido importadas antes (mesmo colaborador,
-                        data e local). Revise a lista e marque o que você quer salvar.
+                        Algumas linhas batem, em todas as colunas, com um turno já salvo — marque
+                        a linha se quiser reprocessar (importar de novo) mesmo assim.
                       </p>
                     ) : (
                       <p className="muted">Revise os dados antes de confirmar.</p>
@@ -727,10 +768,20 @@ export default function ImportPaymentsPage() {
                         type="button"
                         className={`badge overwrite chip-filter${rowFilter === "duplicate" ? " active" : ""}`}
                         onClick={() => toggleRowFilter("duplicate")}
-                        title="Clique para filtrar"
+                        title="Todas as colunas batem com um turno já salvo. Clique para filtrar."
                       >
                         <AlertTriangle size={13} />
-                        {duplicateCount} possível(is) duplicata(s)
+                        {duplicateCount} já importado(s)
+                      </button>
+                    )}
+                    {duplicateInFileCount > 0 && (
+                      <button
+                        type="button"
+                        className={`count-chip chip-filter${rowFilter === "duplicate-in-file" ? " active" : ""}`}
+                        onClick={() => toggleRowFilter("duplicate-in-file")}
+                        title="Idêntica a outra linha já importável deste mesmo arquivo. Clique para filtrar."
+                      >
+                        {duplicateInFileCount} duplicado(s) no arquivo
                       </button>
                     )}
                     {categoryCounts["not-found"] > 0 && (
@@ -854,7 +905,7 @@ export default function ImportPaymentsPage() {
                         }
 
                         const { row, index } = item;
-                        const canSelect = Boolean(row.employee);
+                        const canSelect = Boolean(row.employee) && row.category !== "duplicate-in-file";
                         return (
                           <tr key={index}>
                             <td className="checkbox-cell">
@@ -914,10 +965,24 @@ export default function ImportPaymentsPage() {
                                   Novo
                                 </span>
                               )}
-                              {row.category === "duplicate" && (
-                                <span className="badge overwrite">
-                                  <AlertTriangle size={13} />
-                                  Possível duplicata
+                              {row.category === "duplicate" &&
+                                (selectedRows.has(index) ? (
+                                  <span className="badge warn">
+                                    <AlertTriangle size={13} />
+                                    Será reprocessado
+                                  </span>
+                                ) : (
+                                  <span className="badge overwrite" title="Todas as colunas batem com um turno já salvo. Marque a linha para reprocessar (importar de novo).">
+                                    <AlertTriangle size={13} />
+                                    Já importado
+                                  </span>
+                                ))}
+                              {row.category === "duplicate-in-file" && (
+                                <span
+                                  className="badge neutral"
+                                  title="Idêntico a outra linha deste mesmo arquivo — só a primeira ocorrência é importável."
+                                >
+                                  Duplicado no arquivo
                                 </span>
                               )}
                               {row.category === "unresolved-route" && (

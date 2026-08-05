@@ -1,7 +1,8 @@
 import { AlertCircle, CheckCircle2, Clock3 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useLocation, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
+import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
 import { getEmployee, listPaymentShiftsForEmployeeMonth, type EmployeeRow } from "../lib/db";
 import { formatDate, formatMinutesAsTime } from "../lib/format";
@@ -12,6 +13,13 @@ const STATUS_OPTIONS: MultiSelectOption<PaymentShiftStatus>[] = [
   { id: "erro", label: "Erro" },
   { id: "pago", label: "Pago" },
 ];
+
+/** What the Pagamentos list's `<Link state={...}>` hands off — the filters active there when the user clicked into this colaborador/competência, used as this page's own initial filter state (not kept in sync afterwards). */
+export interface PaymentDetailNavState {
+  statuses: PaymentShiftStatus[];
+  periodStart: string;
+  periodEnd: string;
+}
 
 const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: string; icon: typeof CheckCircle2 }> = {
   pendente: { className: "badge warn", label: "Pendente", icon: Clock3 },
@@ -27,6 +35,10 @@ function formatCompetenciaLong(competencia: string): string {
 
 export default function PaymentDetailPage() {
   const { employeeId, competencia } = useParams<{ employeeId: string; competencia: string }>();
+  const location = useLocation();
+  // Only used as the initial value below — once here, each filter is this
+  // page's own, independently adjustable from that point on.
+  const navState = location.state as PaymentDetailNavState | null;
   const id = Number(employeeId);
 
   const [employee, setEmployee] = useState<EmployeeRow | null>(null);
@@ -34,8 +46,10 @@ export default function PaymentDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedStatuses, setSelectedStatuses] = useState<Set<PaymentShiftStatus>>(
-    new Set(STATUS_OPTIONS.map((o) => o.id)),
+    () => new Set(navState?.statuses ?? STATUS_OPTIONS.map((o) => o.id)),
   );
+  const [periodStart, setPeriodStart] = useState(navState?.periodStart ?? "");
+  const [periodEnd, setPeriodEnd] = useState(navState?.periodEnd ?? "");
 
   useEffect(() => {
     if (!competencia || Number.isNaN(id)) return;
@@ -59,8 +73,14 @@ export default function PaymentDetailPage() {
   }
 
   const visibleShifts = useMemo(
-    () => shifts.filter((s) => selectedStatuses.size === 0 || selectedStatuses.has(s.status)),
-    [shifts, selectedStatuses],
+    () =>
+      shifts.filter((s) => {
+        if (selectedStatuses.size === 0 || !selectedStatuses.has(s.status)) return false;
+        if (periodStart && s.workDate < periodStart) return false;
+        if (periodEnd && s.workDate > periodEnd) return false;
+        return true;
+      }),
+    [shifts, selectedStatuses, periodStart, periodEnd],
   );
 
   if (loading) {
@@ -96,15 +116,25 @@ export default function PaymentDetailPage() {
       <div className="card card-flush">
         <div className="page-header" style={{ marginBottom: 0, alignItems: "center" }}>
           <span className="muted">{visibleShifts.length} de {shifts.length} turno(s)</span>
-          <MultiSelectDropdown
-            options={STATUS_OPTIONS}
-            selected={selectedStatuses}
-            onToggle={toggleStatus}
-            onSelectAll={() => setSelectedStatuses(new Set(STATUS_OPTIONS.map((o) => o.id)))}
-            onSelectNone={() => setSelectedStatuses(new Set())}
-            allLabel="Todos os status"
-            noneLabel="Nenhum status"
-          />
+          <div style={{ display: "flex", gap: "0.6rem" }}>
+            <DateRangePicker
+              startValue={periodStart}
+              endValue={periodEnd}
+              onChange={(start, end) => {
+                setPeriodStart(start);
+                setPeriodEnd(end);
+              }}
+            />
+            <MultiSelectDropdown
+              options={STATUS_OPTIONS}
+              selected={selectedStatuses}
+              onToggle={toggleStatus}
+              onSelectAll={() => setSelectedStatuses(new Set(STATUS_OPTIONS.map((o) => o.id)))}
+              onSelectNone={() => setSelectedStatuses(new Set())}
+              allLabel="Todos os status"
+              noneLabel="Nenhum status"
+            />
+          </div>
         </div>
       </div>
 

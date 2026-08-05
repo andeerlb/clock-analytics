@@ -1481,16 +1481,36 @@ export async function findEmployeeByAttempts(
  * additive: re-selecting a flagged row just adds another row, there's no
  * overwrite/replace semantics here.
  */
+/**
+ * A row only counts as a duplicate when it matches an existing shift on
+ * every column, not just employee/data/local — a partial match (say, same
+ * colaborador and day and local but a different horário) is a plausible
+ * second real shift, not a duplicate. An exact match is unambiguous, so
+ * the caller treats it as "já importado" (offer to reprocess) rather than
+ * a "possível duplicata" needing a judgment call.
+ */
 export async function findDuplicatePaymentShifts(
-  rows: { employeeId: number; workDate: string; local: string }[],
+  rows: {
+    employeeId: number;
+    workDate: string;
+    local: string;
+    role: string;
+    scheduleStartMinutes: number | null;
+    scheduleEndMinutes: number | null;
+    note: string | null;
+  }[],
 ): Promise<Set<number>> {
   const db = await getDb();
   const duplicates = new Set<number>();
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     const existing = await db.select<{ id: number }[]>(
-      "SELECT id FROM payment_shifts WHERE employee_id = $1 AND work_date = $2 AND local = $3",
-      [r.employeeId, r.workDate, r.local],
+      `SELECT id FROM payment_shifts
+       WHERE employee_id = $1 AND work_date = $2 AND local = $3 AND role = $4
+         AND IFNULL(schedule_start_minutes, -1) = IFNULL($5, -1)
+         AND IFNULL(schedule_end_minutes, -1) = IFNULL($6, -1)
+         AND IFNULL(note, '') = IFNULL($7, '')`,
+      [r.employeeId, r.workDate, r.local, r.role, r.scheduleStartMinutes, r.scheduleEndMinutes, r.note],
     );
     if (existing.length > 0) duplicates.add(i);
   }
