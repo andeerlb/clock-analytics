@@ -409,6 +409,8 @@ export interface EmployeeTemplateFieldMapping {
 export interface EmployeeTemplateGroup {
   sheetNames: string[];
   fieldMappings: EmployeeTemplateFieldMapping[];
+  /** 1-indexed physical row where this group's header/title ends — rows up to and including it are skipped at import time. `null` when no header row is marked (every row is treated as data). */
+  headerRow: number | null;
 }
 
 /** One row per saved employee-import template — the list view. */

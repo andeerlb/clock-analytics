@@ -196,6 +196,23 @@ h6 {
   text-decoration: none;
 }
 
+/* Groups GitHub + Configurações into their own card at the bottom of the
+   sidebar, set apart from the main nav links above (which flow into it via
+   .app-nav-links' flex: 1) instead of blending straight into the list. */
+.app-nav-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.4rem;
+  border-radius: 12px;
+  background: var(--surface-container);
+  border: 1px solid var(--border-soft);
+}
+
+.app-nav-footer .app-nav-link:hover {
+  background: var(--surface-variant);
+}
+
 /* Content */
 
 .app-content {
@@ -1248,6 +1265,25 @@ tr.row-error:hover {
 .spreadsheet-grid tbody tr:hover td.col-focused {
   background: var(--accent-soft);
   filter: brightness(1.2);
+}
+
+.spreadsheet-grid td.row-gutter.row-gutter-clickable {
+  cursor: pointer;
+}
+
+.spreadsheet-grid td.row-gutter.row-gutter-clickable:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.spreadsheet-grid td.row-gutter.row-gutter-active {
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-weight: 700;
+}
+
+.spreadsheet-grid tbody tr.row-header-skip td {
+  opacity: 0.45;
 }
 
 /* Detalhes step — "Mission Control" panels: a narrow sidebar (template

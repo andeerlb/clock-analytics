@@ -62,12 +62,19 @@ async function upsertEmployee(
   name: string,
   cpf: string,
 ): Promise<number> {
+  // Digits-only, same normalization every other write path to `employees`
+  // applies (createEmployeeManual/updateEmployee/createEmployeesFromImport)
+  // — the PDF parser's own CPF regex allows dots/dashes through, so this is
+  // the only thing standing between a punctuated CPF and a stored row that
+  // `findEmployeeByAttempts`'s digits-only comparison would then silently
+  // never match again.
+  const normalizedCpf = normalizeCpf(cpf);
   // Scoped to the client, not the broader company — a CPF is unique to the
   // specific legal entity (client) it worked for, and a company can have
   // several of those.
   const existing = await db.select<{ id: number }[]>(
     "SELECT id FROM employees WHERE client_id = $1 AND cpf = $2",
-    [clientId, cpf],
+    [clientId, normalizedCpf],
   );
   if (existing.length > 0) {
     await db.execute("UPDATE employees SET name = $1 WHERE id = $2", [name, existing[0].id]);
@@ -75,7 +82,7 @@ async function upsertEmployee(
   }
   const result = await db.execute(
     "INSERT INTO employees (company_id, client_id, name, cpf) VALUES ($1, $2, $3, $4)",
-    [companyId, clientId, name, cpf],
+    [companyId, clientId, name, normalizedCpf],
   );
   return result.lastInsertId as number;
 }
@@ -1496,8 +1503,8 @@ export async function getEmployeeTemplate(id: number): Promise<EmployeeTemplateR
   );
   if (rows.length === 0) throw new Error("Template não encontrado.");
 
-  const groupRows = await db.select<{ id: number }[]>(
-    "SELECT id FROM employee_template_groups WHERE template_id = $1",
+  const groupRows = await db.select<{ id: number; headerRow: number | null }[]>(
+    "SELECT id, header_row AS headerRow FROM employee_template_groups WHERE template_id = $1",
     [id],
   );
   const groups: EmployeeTemplateGroup[] = [];
@@ -1513,7 +1520,7 @@ export async function getEmployeeTemplate(id: number): Promise<EmployeeTemplateR
        ORDER BY column_letter`,
       [g.id],
     );
-    groups.push({ sheetNames: sheetRows.map((r) => r.sheetName), fieldMappings });
+    groups.push({ sheetNames: sheetRows.map((r) => r.sheetName), fieldMappings, headerRow: g.headerRow });
   }
 
   return {
@@ -1538,8 +1545,8 @@ async function insertEmployeeTemplateGroups(
 ): Promise<void> {
   for (const group of groups) {
     const result = await db.execute(
-      "INSERT INTO employee_template_groups (template_id) VALUES ($1)",
-      [templateId],
+      "INSERT INTO employee_template_groups (template_id, header_row) VALUES ($1, $2)",
+      [templateId, group.headerRow],
     );
     const groupId = result.lastInsertId as number;
     for (const sheetName of group.sheetNames) {

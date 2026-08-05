@@ -6,10 +6,10 @@ import GithubIcon from "./GithubIcon";
 import { checkForUpdate, REPO_URL } from "../lib/updateCheck";
 
 const NAV_ITEMS = [
+  { to: "/import", label: "Importar", icon: FileUp, end: false },
   { to: "/companies", label: "Empresas", icon: Building2, end: false },
   { to: "/clients", label: "Clientes", icon: Briefcase, end: false },
   { to: "/employees", label: "Colaboradores", icon: Users, end: false },
-  { to: "/import", label: "Importar", icon: FileUp, end: false },
   { to: "/", label: "Cartão Ponto", icon: Clock, end: true },
   { to: "/payments", label: "Pagamentos", icon: Wallet, end: false },
 ];
@@ -45,34 +45,36 @@ export default function Sidebar() {
         ))}
       </div>
 
-      <button
-        type="button"
-        className="app-nav-link ghost"
-        style={{ width: "100%", textAlign: "left" }}
-        onClick={() => openUrl(updateUrl ?? REPO_URL)}
-        title={updateUrl ? "Nova versão disponível no GitHub" : "Ver no GitHub"}
-      >
-        <GithubIcon size={18} />
-        <span>GitHub</span>
-        {updateUrl && (
-          <span
-            style={{
-              marginLeft: "auto",
-              width: 8,
-              height: 8,
-              borderRadius: "50%",
-              background: "var(--success)",
-              flexShrink: 0,
-            }}
-            aria-label="Nova versão disponível"
-          />
-        )}
-      </button>
+      <div className="app-nav-footer">
+        <button
+          type="button"
+          className="app-nav-link ghost"
+          style={{ width: "100%", textAlign: "left" }}
+          onClick={() => openUrl(updateUrl ?? REPO_URL)}
+          title={updateUrl ? "Nova versão disponível no GitHub" : "Ver no GitHub"}
+        >
+          <GithubIcon size={18} />
+          <span>GitHub</span>
+          {updateUrl && (
+            <span
+              style={{
+                marginLeft: "auto",
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                background: "var(--success)",
+                flexShrink: 0,
+              }}
+              aria-label="Nova versão disponível"
+            />
+          )}
+        </button>
 
-      <NavLink to="/settings" className={navLinkClass}>
-        <Settings size={18} />
-        <span>Configurações</span>
-      </NavLink>
+        <NavLink to="/settings" className={navLinkClass}>
+          <Settings size={18} />
+          <span>Configurações</span>
+        </NavLink>
+      </div>
     </nav>
   );
 }

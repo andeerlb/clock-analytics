@@ -30,7 +30,6 @@ import {
 import { createEmployeeTemplate, updateEmployeeTemplate, type EmployeeTemplateInput } from "../lib/db";
 import { columnLetter, fileNameFromPath } from "../lib/format";
 import {
-  DEFAULT_IDENTIFIER_PRIORITY,
   EMPLOYEE_TARGET_FIELDS,
   EMPLOYEE_TARGET_FIELD_LABELS,
   REQUIRED_EMPLOYEE_FIELDS,
@@ -43,6 +42,9 @@ import {
 } from "../lib/types";
 
 const IDENTIFIER_FIELDS: IdentifierField[] = ["cpf", "matricula", "nome"];
+
+/** Unlike payment templates' 3-tentativa default, an employee template starts with just CPF — matrícula/nome are opt-in per template instead of always pre-populated. */
+const DEFAULT_EMPLOYEE_IDENTIFIER_PRIORITY: IdentifierAttempt[] = [{ fields: ["cpf"], caseInsensitive: true }];
 
 /**
  * A file is only ever used transiently, to help build the mapping — it's
@@ -115,6 +117,10 @@ export default function EmployeeTemplateWizard({
   // template's `headerLabel` when editing without one. Never used for
   // matching, only to help a human recognize which column is which.
   const [groupFieldLabels, setGroupFieldLabels] = useState<Record<string, Record<number, string | null>>>({});
+  // 1-indexed physical row where each group's header/title ends — rows up
+  // to and including it are skipped at import time (see
+  // ImportEmployeesPage.tsx). `null`/absent means no header row marked.
+  const [groupHeaderRow, setGroupHeaderRow] = useState<Record<string, number | null>>({});
   // How many blank columns past the last already-mapped one are revealed in
   // the file-less grid (editing mode) — lets you map a brand new column by
   // picking a field for it, same interaction as the live grid's header
@@ -126,7 +132,9 @@ export default function EmployeeTemplateWizard({
   const [focusedColumn, setFocusedColumn] = useState<number | null>(null);
 
   const [name, setName] = useState("");
-  const [identifierAttempts, setIdentifierAttempts] = useState<IdentifierAttempt[]>(DEFAULT_IDENTIFIER_PRIORITY);
+  const [identifierAttempts, setIdentifierAttempts] = useState<IdentifierAttempt[]>(
+    DEFAULT_EMPLOYEE_IDENTIFIER_PRIORITY,
+  );
 
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -156,9 +164,10 @@ export default function EmployeeTemplateWizard({
       setSheetGroupOf({});
       setGroupMapping({});
       setGroupFieldLabels({});
+      setGroupHeaderRow({});
       setExtraColumns(0);
       setName("");
-      setIdentifierAttempts(DEFAULT_IDENTIFIER_PRIORITY.map((a) => ({ ...a, fields: [...a.fields] })));
+      setIdentifierAttempts(DEFAULT_EMPLOYEE_IDENTIFIER_PRIORITY.map((a) => ({ ...a, fields: [...a.fields] })));
       return;
     }
 
@@ -225,6 +234,7 @@ export default function EmployeeTemplateWizard({
     const newSheetGroupOf: Record<string, string> = {};
     const newGroupMapping: Record<string, Record<number, EmployeeTargetField>> = {};
     const newGroupFieldLabels: Record<string, Record<number, string | null>> = {};
+    const newGroupHeaderRow: Record<string, number | null> = {};
     const sheetNames: string[] = [];
 
     for (const group of t.groups) {
@@ -240,6 +250,7 @@ export default function EmployeeTemplateWizard({
       }
       newGroupMapping[repKey] = m;
       newGroupFieldLabels[repKey] = labels;
+      newGroupHeaderRow[repKey] = group.headerRow;
       for (const s of group.sheetNames) {
         newSheetGroupOf[s] = repKey;
         sheetNames.push(s);
@@ -250,6 +261,7 @@ export default function EmployeeTemplateWizard({
     setSheetGroupOf(newSheetGroupOf);
     setGroupMapping(newGroupMapping);
     setGroupFieldLabels(newGroupFieldLabels);
+    setGroupHeaderRow(newGroupHeaderRow);
     setIncludedSheets(new Set(sheetNames));
     setActiveSheet(sheetNames[0] ?? null);
     setRows([]);
@@ -271,6 +283,7 @@ export default function EmployeeTemplateWizard({
       setSheetGroupOf({});
       setGroupMapping({});
       setGroupFieldLabels({});
+      setGroupHeaderRow({});
       setExtraColumns(0);
       const preview = await previewSpreadsheet(path, firstSheet, null, 50);
       setRows(preview.rows);
@@ -364,6 +377,7 @@ export default function EmployeeTemplateWizard({
     setSheetGroupOf((prev) => ({ ...prev, [activeSheet]: activeSheet }));
     setGroupMapping((prev) => ({ ...prev, [activeSheet]: { ...(prev[sourceKey] ?? {}) } }));
     setGroupFieldLabels((prev) => ({ ...prev, [activeSheet]: { ...(prev[sourceKey] ?? {}) } }));
+    setGroupHeaderRow((prev) => ({ ...prev, [activeSheet]: prev[sourceKey] ?? null }));
   }
 
   function handleDelimiterChange(newDelimiter: string) {
@@ -412,6 +426,21 @@ export default function EmployeeTemplateWizard({
       }
       return { ...prev, [targetKey]: current };
     });
+  }
+
+  /** Marks (or clears) which physical row is the active group's last header/title row — forks off a mirrored mapping first, same as `setColumnMapping`, since this is also a per-group edit. */
+  function setHeaderRow(value: number | null) {
+    const sourceKey = groupKeyOf(activeSheet);
+    const isMirroring = activeSheet !== null && fileKind !== "csv" && sourceKey !== activeSheet;
+    const targetKey = isMirroring ? activeSheet : sourceKey;
+
+    if (isMirroring) {
+      setSheetGroupOf((prev) => ({ ...prev, [activeSheet]: activeSheet }));
+      setGroupMapping((prev) => ({ ...prev, [activeSheet]: { ...(prev[sourceKey] ?? {}) } }));
+      setGroupFieldLabels((prev) => ({ ...prev, [activeSheet]: { ...(prev[sourceKey] ?? {}) } }));
+    }
+
+    setGroupHeaderRow((prev) => ({ ...prev, [targetKey]: value }));
   }
 
   function isGroupMappingValid(key: string): boolean {
@@ -463,6 +492,7 @@ export default function EmployeeTemplateWizard({
 
   const activeGroupKey = groupKeyOf(activeSheet);
   const mapping = groupMapping[activeGroupKey] ?? {};
+  const activeHeaderRow = groupHeaderRow[activeGroupKey] ?? null;
 
   const colCount = rows.reduce((max, r) => Math.max(max, r.length), 0);
   const columns = Array.from({ length: colCount }, (_, i) => i);
@@ -537,7 +567,7 @@ export default function EmployeeTemplateWizard({
             headerLabel: labels[index] ?? null,
           };
         });
-        return { sheetNames, fieldMappings };
+        return { sheetNames, fieldMappings, headerRow: groupHeaderRow[key] ?? null };
       });
 
       const input: EmployeeTemplateInput = {
@@ -798,7 +828,38 @@ export default function EmployeeTemplateWizard({
               )}
 
               {!filePath ? (
-                <div className="spreadsheet-grid-scroll">
+                <>
+                  <div className="field" style={{ maxWidth: "22rem", marginBottom: "0.9rem" }}>
+                    <label htmlFor="header-row">Linha do cabeçalho</label>
+                    <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                      <input
+                        id="header-row"
+                        type="number"
+                        min={1}
+                        value={activeHeaderRow ?? ""}
+                        onChange={(e) => setHeaderRow(e.target.value ? Math.max(1, Number(e.target.value)) : null)}
+                        placeholder="Nenhuma"
+                        style={{ width: "6rem" }}
+                      />
+                      {activeHeaderRow !== null && (
+                        <button
+                          type="button"
+                          className="ghost"
+                          style={{ padding: "0.3rem" }}
+                          onClick={() => setHeaderRow(null)}
+                          aria-label="Remover marcação de cabeçalho"
+                          title="Remover marcação de cabeçalho"
+                        >
+                          <X size={14} />
+                        </button>
+                      )}
+                    </div>
+                    <p className="field-hint">
+                      Sem um arquivo de exemplo carregado não é possível clicar na linha — informe o
+                      número diretamente. Linhas até esta (inclusive) são ignoradas ao importar.
+                    </p>
+                  </div>
+                  <div className="spreadsheet-grid-scroll">
                   <table className="spreadsheet-grid">
                     <thead>
                       <tr>
@@ -858,9 +919,28 @@ export default function EmployeeTemplateWizard({
                       </tr>
                     </tbody>
                   </table>
-                </div>
+                  </div>
+                </>
               ) : (
                 <>
+                  <p className="field-hint" style={{ marginBottom: "0.9rem" }}>
+                    {activeHeaderRow !== null ? (
+                      <>
+                        Cabeçalho até a linha {activeHeaderRow} — linhas até ela são ignoradas ao
+                        importar.{" "}
+                        <button
+                          type="button"
+                          className="ghost"
+                          style={{ padding: "0 0.3rem" }}
+                          onClick={() => setHeaderRow(null)}
+                        >
+                          Remover marcação
+                        </button>
+                      </>
+                    ) : (
+                      "Clique no número de uma linha na tabela abaixo para marcar onde o cabeçalho termina."
+                    )}
+                  </p>
                   {loadingPreview && <p className="muted">Carregando...</p>}
                   {!loadingPreview && rows.length === 0 && <p className="muted">Nenhuma linha encontrada.</p>}
                   {!loadingPreview && rows.length > 0 && (
@@ -905,16 +985,31 @@ export default function EmployeeTemplateWizard({
                           </tr>
                         </thead>
                         <tbody>
-                          {sampleRows.map((row, i) => (
-                            <tr key={i}>
-                              <td className="row-gutter">{i + 1}</td>
-                              {columns.map((c) => (
-                                <td key={c} className={c === focusedColumn ? "col-focused" : undefined}>
-                                  {row[c] ?? ""}
+                          {sampleRows.map((row, i) => {
+                            const rowNumber = i + 1;
+                            const isHeaderRow = rowNumber === activeHeaderRow;
+                            const isBeforeHeader = activeHeaderRow !== null && rowNumber <= activeHeaderRow;
+                            return (
+                              <tr key={i} className={isBeforeHeader ? "row-header-skip" : undefined}>
+                                <td
+                                  className={`row-gutter row-gutter-clickable${isHeaderRow ? " row-gutter-active" : ""}`}
+                                  onClick={() => setHeaderRow(isHeaderRow ? null : rowNumber)}
+                                  title={
+                                    isHeaderRow
+                                      ? "Linha marcada como cabeçalho — clique para desmarcar"
+                                      : "Clique para marcar esta linha como cabeçalho"
+                                  }
+                                >
+                                  {rowNumber}
                                 </td>
-                              ))}
-                            </tr>
-                          ))}
+                                {columns.map((c) => (
+                                  <td key={c} className={c === focusedColumn ? "col-focused" : undefined}>
+                                    {row[c] ?? ""}
+                                  </td>
+                                ))}
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>

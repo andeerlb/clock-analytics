@@ -307,6 +307,16 @@ export default function ImportEmployeesPage() {
     setError(null);
     setBusy(true);
     try {
+      // Which group (sheet, or the implicit csv one) a parsed row's
+      // `sheetName` belongs to, and that group's configured header row —
+      // `null` when no header row is marked for it, so nothing is skipped.
+      function headerRowForSheet(sheetName: string | null): number | null {
+        const group = selectedTemplate!.groups.find((g) =>
+          sheetName === null ? g.sheetNames.length === 0 : g.sheetNames.includes(sheetName),
+        );
+        return group?.headerRow ?? null;
+      }
+
       const results: EmployeeFileResult[] = [];
       for (const path of paths) {
         const info = fileHashes.get(path);
@@ -324,6 +334,9 @@ export default function ImportEmployeesPage() {
 
           const rows: EmployeePreviewRow[] = [];
           for (const applied_row of applied) {
+            const headerRow = headerRowForSheet(applied_row.sheetName);
+            if (headerRow !== null && applied_row.rowNumber <= headerRow) continue;
+
             const cpfRaw = applied_row.fields.cpf ?? "";
             const matriculaRaw = applied_row.fields.matricula ?? "";
             const nameRaw = applied_row.fields.nome ?? "";

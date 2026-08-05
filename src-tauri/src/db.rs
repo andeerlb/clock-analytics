@@ -196,5 +196,17 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0032_employee_templates.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 33,
+            description: "add employee_template_groups.header_row — marks the last header/title row per sheet group, so import can start right after it",
+            sql: include_str!("../migrations/0033_employee_template_header_row.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 34,
+            description: "backfill employees.cpf to digits-only for any row stored punctuated by the timesheet-PDF-import path, before that path was fixed to normalize like every other write path",
+            sql: include_str!("../migrations/0034_normalize_employee_cpf.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
