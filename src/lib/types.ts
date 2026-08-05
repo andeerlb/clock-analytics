@@ -341,6 +341,34 @@ export interface PaymentStatusRule {
   status: PaymentShiftStatus;
 }
 
+export type PaymentValueRuleOperator = "=" | "!=" | ">" | ">=" | "<" | "<=";
+
+export const PAYMENT_VALUE_RULE_OPERATOR_LABELS: Record<PaymentValueRuleOperator, string> = {
+  "=": "Igual a",
+  "!=": "Diferente de",
+  ">": "Maior que",
+  ">=": "Maior ou igual a",
+  "<": "Menor que",
+  "<=": "Menor ou igual a",
+};
+
+/**
+ * One step of a company's (not a template's) if/else-if/else pay-value
+ * chain — see `resolvePaymentValue` in `format.ts`. A `"condition"` step
+ * matches when the shift's own duration (horas trabalhadas, summed from
+ * its Horário) compares to `thresholdMinutes` per `operator`; an `"else"`
+ * step (operator/thresholdMinutes both `null`) always matches. Entirely
+ * optional, same as `PaymentStatusRule` — a company with none of these has
+ * no computed Valor at all, not a zero.
+ */
+export interface PaymentValueRule {
+  kind: PaymentTemplateRuleKind;
+  operator: PaymentValueRuleOperator | null;
+  /** Duration threshold in whole minutes (not decimal hours) — "7h20" is exactly 440, comparable with `=`/`!=` without float rounding. */
+  thresholdMinutes: number | null;
+  amount: number;
+}
+
 /** Full shape of a payment import template, including its sheet groups and routing/status rules. */
 export interface PaymentTemplateRow extends PaymentTemplateListRow {
   delimiter: string | null;

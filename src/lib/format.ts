@@ -1,4 +1,9 @@
-import type { NightShiftRule, PaymentShiftStatus, ShiftPeriod } from "./types";
+import type { NightShiftRule, PaymentShiftStatus, PaymentValueRuleOperator, ShiftPeriod } from "./types";
+
+/** 120 -> "R$ 120,00" */
+export function formatCurrencyBRL(value: number): string {
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
+}
 
 /** Bytes -> "12.3 MB" — the Configurações storage indicator. */
 export function formatBytes(bytes: number): string {
@@ -310,8 +315,8 @@ function overlapMinutes(aStart: number, aEnd: number, bStart: number, bEnd: numb
   return total;
 }
 
-/** A range's own duration in minutes, accounting for a midnight crossing. */
-function rangeDurationMinutes(start: number, end: number): number {
+/** A range's own duration in minutes, accounting for a midnight crossing — e.g. a 22:00-06:00 shift is 480, not negative. */
+export function shiftDurationMinutes(start: number, end: number): number {
   return end > start ? end - start : 1440 - start + end;
 }
 
@@ -346,7 +351,7 @@ export function classifyShiftPeriod(
       break;
     case "majority-overlap": {
       const overlap = overlapMinutes(shiftStartMinutes, shiftEndMinutes, nightStartMinutes, nightEndMinutes);
-      const duration = rangeDurationMinutes(shiftStartMinutes, shiftEndMinutes);
+      const duration = shiftDurationMinutes(shiftStartMinutes, shiftEndMinutes);
       isNoturno = duration > 0 && overlap / duration >= 0.5;
       break;
     }
@@ -429,6 +434,41 @@ export function resolvePaymentStatus(
     const fold = (s: string) => (rule.caseInsensitive ? s.toLowerCase() : s);
     const normalized = fold(raw);
     if (rule.values.some((v) => fold(v.trim()) === normalized)) return rule.status;
+  }
+  return null;
+}
+
+/**
+ * Resolves a shift's Valor by walking a company's if/else-if/else
+ * pay-value chain — first match wins, same order-of-evaluation idea as
+ * `resolvePaymentStatus`. A `"condition"` step compares `durationMinutes`
+ * (the shift's own horas trabalhadas, see `shiftDurationMinutes`) to
+ * `thresholdMinutes` per `operator`; an `"else"` step always matches.
+ * `null` means no rule matched — including an empty chain, since this is
+ * entirely optional — the caller shows "—", not a zero (a zero would
+ * misleadingly read as "this shift is worth nothing").
+ */
+export function resolvePaymentValue(
+  rules: {
+    kind: "condition" | "else";
+    operator: PaymentValueRuleOperator | null;
+    thresholdMinutes: number | null;
+    amount: number;
+  }[],
+  durationMinutes: number,
+): number | null {
+  for (const rule of rules) {
+    if (rule.kind === "else") return rule.amount;
+    if (rule.operator === null || rule.thresholdMinutes === null) continue;
+    const matches = {
+      "=": durationMinutes === rule.thresholdMinutes,
+      "!=": durationMinutes !== rule.thresholdMinutes,
+      ">": durationMinutes > rule.thresholdMinutes,
+      ">=": durationMinutes >= rule.thresholdMinutes,
+      "<": durationMinutes < rule.thresholdMinutes,
+      "<=": durationMinutes <= rule.thresholdMinutes,
+    }[rule.operator];
+    if (matches) return rule.amount;
   }
   return null;
 }

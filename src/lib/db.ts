@@ -24,6 +24,7 @@ import type {
   PaymentShiftStatus,
   PaymentShiftSummaryRow,
   PaymentStatusRule,
+  PaymentValueRule,
   ShiftPeriod,
   StoredDayRecord,
   StoredImport,
@@ -321,6 +322,32 @@ export async function listCompanies(): Promise<CompanyRow[]> {
   );
 }
 
+/** Full company detail, including its optional pay-value chain — only `getCompany` fetches this; `listCompanies` stays lightweight for dropdowns. */
+export interface CompanyDetail extends CompanyRow {
+  valueRules: PaymentValueRule[];
+}
+
+/** Inserted in array order — same evaluation-by-insertion-order convention as the payment-template rule chains, see `resolvePaymentValue`. */
+async function insertCompanyValueRules(db: Database, companyId: number, rules: PaymentValueRule[]): Promise<void> {
+  for (const rule of rules) {
+    await db.execute(
+      `INSERT INTO payment_value_rules (company_id, kind, operator, threshold_minutes, amount)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        companyId,
+        rule.kind,
+        rule.kind === "condition" ? rule.operator : null,
+        rule.kind === "condition" ? rule.thresholdMinutes : null,
+        rule.amount,
+      ],
+    );
+  }
+}
+
+async function deleteCompanyValueRules(db: Database, companyId: number): Promise<void> {
+  await db.execute("DELETE FROM payment_value_rules WHERE company_id = $1", [companyId]);
+}
+
 /**
  * Registers a new company. CNPJ is the natural key — registering one that
  * already exists is rejected rather than silently updating the name, since
@@ -333,6 +360,7 @@ export async function createCompany(
   nightStartTime = "22:00",
   nightEndTime = "05:00",
   nightShiftRule: NightShiftRule = "overlap",
+  valueRules: PaymentValueRule[] = [],
 ): Promise<number> {
   const db = await getDb();
   const normalizedCnpj = normalizeCnpj(cnpj);
@@ -350,10 +378,12 @@ export async function createCompany(
     "INSERT INTO companies (name, cnpj, night_start_time, night_end_time, night_shift_rule) VALUES ($1, $2, $3, $4, $5)",
     [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule],
   );
-  return result.lastInsertId as number;
+  const companyId = result.lastInsertId as number;
+  await insertCompanyValueRules(db, companyId, valueRules);
+  return companyId;
 }
 
-export async function getCompany(id: number): Promise<CompanyRow> {
+export async function getCompany(id: number): Promise<CompanyDetail> {
   const db = await getDb();
   const rows = await db.select<CompanyRow[]>(
     `SELECT id, name, cnpj, night_start_time AS nightStartTime, night_end_time AS nightEndTime,
@@ -362,7 +392,14 @@ export async function getCompany(id: number): Promise<CompanyRow> {
     [id],
   );
   if (rows.length === 0) throw new Error("Empresa não encontrada.");
-  return rows[0];
+
+  const valueRules = await db.select<PaymentValueRule[]>(
+    `SELECT kind, operator, threshold_minutes AS thresholdMinutes, amount
+     FROM payment_value_rules WHERE company_id = $1 ORDER BY id`,
+    [id],
+  );
+
+  return { ...rows[0], valueRules };
 }
 
 export async function updateCompany(
@@ -372,6 +409,7 @@ export async function updateCompany(
   nightStartTime: string,
   nightEndTime: string,
   nightShiftRule: NightShiftRule,
+  valueRules: PaymentValueRule[],
 ): Promise<void> {
   const db = await getDb();
   const normalizedCnpj = normalizeCnpj(cnpj);
@@ -389,6 +427,8 @@ export async function updateCompany(
     "UPDATE companies SET name = $1, cnpj = $2, night_start_time = $3, night_end_time = $4, night_shift_rule = $5 WHERE id = $6",
     [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule, id],
   );
+  await deleteCompanyValueRules(db, id);
+  await insertCompanyValueRules(db, id, valueRules);
 }
 
 // One row per (client, company) link — a client with multiple companies
@@ -1938,6 +1978,9 @@ export async function clearAllData(options: ClearDataOptions = {}): Promise<void
     clearedTables.push("clients");
   }
   if (!keepCompanies) {
+    // Same FK-dangling concern as payment_template_rules above: every
+    // value rule requires a real company_id.
+    await db.execute("DELETE FROM payment_value_rules");
     await db.execute("DELETE FROM companies");
     clearedTables.push("companies");
   }

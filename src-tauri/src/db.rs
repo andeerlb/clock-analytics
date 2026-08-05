@@ -172,5 +172,17 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0028_company_night_shift_rule.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 29,
+            description: "add payment_value_rules — an optional per-company if/else-if/else chain deciding a shift's Valor from its own duration",
+            sql: include_str!("../migrations/0029_company_payment_value_rules.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 30,
+            description: "switch payment_value_rules' threshold from decimal hours to whole minutes",
+            sql: include_str!("../migrations/0030_payment_value_rules_threshold_minutes.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -4,8 +4,16 @@ import { useLocation, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
-import { getCompany, getEmployee, listPaymentShiftsForEmployeeMonth, type CompanyRow, type EmployeeRow } from "../lib/db";
-import { classifyShiftPeriod, formatDate, formatMinutesAsTime, parseTimeToMinutes } from "../lib/format";
+import { getCompany, getEmployee, listPaymentShiftsForEmployeeMonth, type CompanyDetail, type EmployeeRow } from "../lib/db";
+import {
+  classifyShiftPeriod,
+  formatCurrencyBRL,
+  formatDate,
+  formatMinutesAsTime,
+  parseTimeToMinutes,
+  resolvePaymentValue,
+  shiftDurationMinutes,
+} from "../lib/format";
 import type { PaymentShiftRow, PaymentShiftStatus } from "../lib/types";
 
 const STATUS_OPTIONS: MultiSelectOption<PaymentShiftStatus>[] = [
@@ -42,7 +50,7 @@ export default function PaymentDetailPage() {
   const id = Number(employeeId);
 
   const [employee, setEmployee] = useState<EmployeeRow | null>(null);
-  const [company, setCompany] = useState<CompanyRow | null>(null);
+  const [company, setCompany] = useState<CompanyDetail | null>(null);
   const [shifts, setShifts] = useState<PaymentShiftRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -81,6 +89,13 @@ export default function PaymentDetailPage() {
     const nightEnd = parseTimeToMinutes(company.nightEndTime);
     if (nightStart === null || nightEnd === null) return null;
     return classifyShiftPeriod(company.nightShiftRule, nightStart, nightEnd, s.scheduleStartMinutes, s.scheduleEndMinutes);
+  }
+
+  /** `null` when there's no schedule on this shift, or the company has no (or no matching) pay-value rule — shown as "—", not R$ 0,00. */
+  function shiftValue(s: PaymentShiftRow): number | null {
+    if (!company || s.scheduleStartMinutes === null || s.scheduleEndMinutes === null) return null;
+    const duration = shiftDurationMinutes(s.scheduleStartMinutes, s.scheduleEndMinutes);
+    return resolvePaymentValue(company.valueRules, duration);
   }
 
   const visibleShifts = useMemo(
@@ -169,6 +184,8 @@ export default function PaymentDetailPage() {
                   <th>Local</th>
                   <th>Função</th>
                   <th>Horário</th>
+                  <th>Horas trabalhadas</th>
+                  <th>Valor</th>
                   <th>Observação</th>
                   <th>Status</th>
                 </tr>
@@ -178,15 +195,17 @@ export default function PaymentDetailPage() {
                   const badge = STATUS_BADGE[s.status];
                   const BadgeIcon = badge.icon;
                   const period = shiftPeriod(s);
+                  const hasSchedule = s.scheduleStartMinutes !== null && s.scheduleEndMinutes !== null;
+                  const value = shiftValue(s);
                   return (
                     <tr key={s.id}>
                       <td>{formatDate(s.workDate)}</td>
                       <td>{s.local}</td>
                       <td>{s.role}</td>
                       <td>
-                        {s.scheduleStartMinutes !== null && s.scheduleEndMinutes !== null ? (
+                        {hasSchedule ? (
                           <>
-                            {formatMinutesAsTime(s.scheduleStartMinutes)} – {formatMinutesAsTime(s.scheduleEndMinutes)}
+                            {formatMinutesAsTime(s.scheduleStartMinutes!)} – {formatMinutesAsTime(s.scheduleEndMinutes!)}
                             {period && (
                               <span className={period === "noturno" ? "badge info" : "badge neutral"} style={{ marginLeft: "0.5rem" }}>
                                 {period === "noturno" ? <Moon size={12} /> : <Sun size={12} />}
@@ -198,6 +217,12 @@ export default function PaymentDetailPage() {
                           "—"
                         )}
                       </td>
+                      <td>
+                        {hasSchedule
+                          ? formatMinutesAsTime(shiftDurationMinutes(s.scheduleStartMinutes!, s.scheduleEndMinutes!))
+                          : "—"}
+                      </td>
+                      <td>{value !== null ? formatCurrencyBRL(value) : "—"}</td>
                       <td className="muted">{s.note ?? "—"}</td>
                       <td>
                         <span className={badge.className}>
