@@ -37,10 +37,16 @@ export default function SettingsPage() {
   const [vacuuming, setVacuuming] = useState(false);
   const [purging, setPurging] = useState(false);
   const [purgeMessage, setPurgeMessage] = useState<string | null>(null);
-  const [backupBeforeClear, setBackupBeforeClear] = useState(true);
+  const [backupDb, setBackupDb] = useState(true);
+  const [backupFiles, setBackupFiles] = useState(true);
   const [keepCompanies, setKeepCompanies] = useState(false);
   const [keepClients, setKeepClients] = useState(false);
   const [keepEmployees, setKeepEmployees] = useState(false);
+  // Templates are master/config data, independent of companies/clients/
+  // employees — default to kept, matching this app's behavior before these
+  // became explicit choices (a template has no FK into any of those three).
+  const [keepPaymentTemplates, setKeepPaymentTemplates] = useState(true);
+  const [keepEmployeeTemplates, setKeepEmployeeTemplates] = useState(true);
   const [confirmText, setConfirmText] = useState("");
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -167,7 +173,7 @@ export default function SettingsPage() {
     setError(null);
     setClearing(true);
     try {
-      if (backupBeforeClear) {
+      if (backupDb || backupFiles) {
         const destPath = await save({
           defaultPath: "pontoscan-backup.zip",
           filters: [{ name: "ZIP", extensions: ["zip"] }],
@@ -176,9 +182,9 @@ export default function SettingsPage() {
           setClearing(false);
           return;
         }
-        await backupAppData(destPath);
+        await backupAppData(destPath, backupDb, backupFiles);
       }
-      await clearAllData({ keepCompanies, keepClients, keepEmployees });
+      await clearAllData({ keepCompanies, keepClients, keepEmployees, keepPaymentTemplates, keepEmployeeTemplates });
       await clearImportsDir();
       navigate("/");
     } catch (e) {
@@ -381,14 +387,46 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem", marginBottom: "1.2rem" }}>
-          <input
-            type="checkbox"
-            checked={backupBeforeClear}
-            onChange={(e) => setBackupBeforeClear(e.target.checked)}
-          />
-          Fazer backup (zip do banco + PDFs) antes de apagar
-        </label>
+        <div style={{ marginBottom: "1.2rem" }}>
+          <p className="muted" style={{ fontSize: "0.8rem", marginBottom: "0.5rem" }}>
+            Templates de importação são configuração (mapeamento de colunas), não histórico —
+            independentes do cadastro acima, também podem ser mantidos.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
+              <input
+                type="checkbox"
+                checked={keepPaymentTemplates}
+                onChange={(e) => setKeepPaymentTemplates(e.target.checked)}
+              />
+              Manter templates de pagamento
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
+              <input
+                type="checkbox"
+                checked={keepEmployeeTemplates}
+                onChange={(e) => setKeepEmployeeTemplates(e.target.checked)}
+              />
+              Manter templates de colaboradores
+            </label>
+          </div>
+        </div>
+
+        <div style={{ marginBottom: "1.2rem" }}>
+          <p className="muted" style={{ fontSize: "0.8rem", marginBottom: "0.5rem" }}>
+            Backup antes de apagar — escolha o quê incluir no zip.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
+              <input type="checkbox" checked={backupDb} onChange={(e) => setBackupDb(e.target.checked)} />
+              Banco
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
+              <input type="checkbox" checked={backupFiles} onChange={(e) => setBackupFiles(e.target.checked)} />
+              PDFs
+            </label>
+          </div>
+        </div>
 
         <div className="field" style={{ maxWidth: "22rem", marginTop: "0.4rem", marginBottom: "1rem", gap: "0.6rem" }}>
           <label htmlFor="clear-confirm">
@@ -409,7 +447,11 @@ export default function SettingsPage() {
           disabled={clearing || confirmText.trim() !== CLEAR_CONFIRM_PHRASE}
           style={{ background: "var(--danger)", borderColor: "var(--danger)", color: "#410002" }}
         >
-          {backupBeforeClear ? <Archive size={15} style={{ marginRight: "0.4rem" }} /> : <Trash2 size={15} style={{ marginRight: "0.4rem" }} />}
+          {backupDb || backupFiles ? (
+            <Archive size={15} style={{ marginRight: "0.4rem" }} />
+          ) : (
+            <Trash2 size={15} style={{ marginRight: "0.4rem" }} />
+          )}
           {clearing ? "Apagando..." : "Apagar tudo"}
         </button>
       </div>

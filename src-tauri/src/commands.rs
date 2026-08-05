@@ -392,12 +392,17 @@ pub fn clear_imports_dir(app: AppHandle) -> Result<(), String> {
     storage::clear_imports_dir(&data_dir)
 }
 
-/// Zips the DB and `imports/` to `dest_zip_path` — the optional backup
+/// Zips the DB and/or `imports/` to `dest_zip_path` — the optional backup
 /// offered right before "Limpar tudo" wipes everything.
 #[tauri::command]
-pub fn backup_app_data(app: AppHandle, dest_zip_path: String) -> Result<(), String> {
+pub fn backup_app_data(
+    app: AppHandle,
+    dest_zip_path: String,
+    include_db: bool,
+    include_files: bool,
+) -> Result<(), String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    storage::backup(&data_dir, &dest_zip_path)
+    storage::backup(&data_dir, &dest_zip_path, include_db, include_files)
 }
 
 fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {

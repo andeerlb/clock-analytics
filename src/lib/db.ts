@@ -2185,6 +2185,10 @@ export interface ClearDataOptions {
   keepClients?: boolean;
   /** Keep employees — implies keeping their clients and companies too (both are required FKs). */
   keepEmployees?: boolean;
+  /** Keep payment-import templates and their column-mapping groups/rules. Independent of the others — a template has no FK into companies/clients/employees (routing/identification is resolved per row at import execution time, never baked into the template). */
+  keepPaymentTemplates?: boolean;
+  /** Keep colaborador-import templates and their column-mapping groups. Same independence as `keepPaymentTemplates`. */
+  keepEmployeeTemplates?: boolean;
 }
 
 /**
@@ -2196,8 +2200,10 @@ export interface ClearDataOptions {
  * Import/timesheet data (punches, day_records, imports, import_files,
  * source_files) is always wiped — there's no "keep" option for it, since
  * it's exactly what's re-derivable by re-importing the same PDFs. Master
- * data (companies/clients/employees) can optionally survive via `options`,
- * respecting the real dependency chain: employees → clients → companies.
+ * data (companies/clients/employees, and both template kinds) can
+ * optionally survive via `options` — companies/clients/employees respect
+ * the real dependency chain (employees → clients → companies), while the
+ * two template kinds are independent of that chain and of each other.
  */
 export async function clearAllData(options: ClearDataOptions = {}): Promise<void> {
   const db = await getDb();
@@ -2205,6 +2211,8 @@ export async function clearAllData(options: ClearDataOptions = {}): Promise<void
   const keepEmployees = Boolean(options.keepEmployees);
   const keepClients = Boolean(options.keepClients) || keepEmployees;
   const keepCompanies = Boolean(options.keepCompanies) || keepClients;
+  const keepPaymentTemplates = Boolean(options.keepPaymentTemplates);
+  const keepEmployeeTemplates = Boolean(options.keepEmployeeTemplates);
 
   await db.execute("DELETE FROM punches");
   await db.execute("DELETE FROM day_records");
@@ -2222,17 +2230,42 @@ export async function clearAllData(options: ClearDataOptions = {}): Promise<void
 
   const clearedTables = ["punches", "day_records", "imports", "import_files", "payment_shifts", "source_files"];
 
+  // Templates are master/config data, not import history — optional to
+  // keep, like companies/clients/employees, but independent of that chain:
+  // neither template kind has an FK into companies/clients/employees
+  // (routing/identification is resolved per row at import execution time).
+  if (!keepPaymentTemplates) {
+    await db.execute("DELETE FROM payment_template_rules");
+    await db.execute("DELETE FROM payment_template_status_rules");
+    await db.execute("DELETE FROM payment_template_fields");
+    await db.execute("DELETE FROM payment_template_sheets");
+    await db.execute("DELETE FROM payment_template_groups");
+    await db.execute("DELETE FROM payment_templates");
+    clearedTables.push("payment_templates");
+  }
+  if (!keepEmployeeTemplates) {
+    await db.execute("DELETE FROM employee_template_fields");
+    await db.execute("DELETE FROM employee_template_sheets");
+    await db.execute("DELETE FROM employee_template_groups");
+    await db.execute("DELETE FROM employee_templates");
+    clearedTables.push("employee_templates");
+  }
+
   if (!keepEmployees) {
+    // employee_aliases.employee_id is NOT NULL REFERENCES employees(id)
+    // with FK enforcement on for this connection (confirmed by a real
+    // SQLITE_CONSTRAINT_FOREIGNKEY here) — has to go first.
+    await db.execute("DELETE FROM employee_aliases");
     await db.execute("DELETE FROM employees");
-    clearedTables.push("employees");
+    clearedTables.push("employee_aliases", "employees");
   }
   if (!keepClients) {
-    // Payment templates aren't import history — they're master/config data
-    // like clients/companies, so "Limpar tudo" never deletes them. But
-    // every routing rule requires a real client_id (this connection
-    // doesn't enforce foreign keys, same reason deleteImport has to clean
-    // up manually elsewhere), so wiping clients would leave every rule
-    // dangling — drop the rules instead of leaving them pointing nowhere.
+    // A surviving payment template's routing rule still requires a real
+    // client_id, and this connection does enforce foreign keys — wiping
+    // clients out from under a kept template's rules would fail the same
+    // way the missing `employee_aliases` delete above did, so drop rules
+    // here too even when the template itself is kept. Redundant (and
+    // harmless) when `!keepPaymentTemplates` already cleared them above.
     // (keepCompanies can only be false when keepClients is too, so this
     // single spot covers a company wipe as well.)
     await db.execute("DELETE FROM payment_template_rules");

@@ -152,9 +152,9 @@ export function clearImportsDir(): Promise<void> {
   return invoke("clear_imports_dir");
 }
 
-/** Zips the DB and imports/ to `destZipPath` — the backup offered before "Limpar tudo". */
-export function backupAppData(destZipPath: string): Promise<void> {
-  return invoke("backup_app_data", { destZipPath });
+/** Zips the DB and/or imports/ to `destZipPath` — the backup offered before "Limpar tudo". Either side can be skipped. */
+export function backupAppData(destZipPath: string, includeDb: boolean, includeFiles: boolean): Promise<void> {
+  return invoke("backup_app_data", { destZipPath, includeDb, includeFiles });
 }
 
 /** Whether pdfinfo/pdftotext/pdfseparate/pdfunite were found — checked at startup and on Configurações. */

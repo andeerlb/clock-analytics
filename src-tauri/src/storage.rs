@@ -99,39 +99,50 @@ pub fn clear_imports_dir(data_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Zips up the database (with its WAL/SHM sidecars, if present) and the
+/// Zips up the database (with its WAL/SHM sidecars, if present) and/or the
 /// whole `imports/` and `payment_templates/` trees — an escape hatch to
 /// save a copy before "Limpar tudo" wipes everything, since this app keeps
-/// the only copy of its data.
-pub fn backup(data_dir: &Path, dest_zip_path: &str) -> Result<(), String> {
+/// the only copy of its data. `include_db`/`include_files` let the caller
+/// back up just one side (e.g. only the database, skipping the potentially
+/// much larger PDF files) instead of always bundling both.
+pub fn backup(
+    data_dir: &Path,
+    dest_zip_path: &str,
+    include_db: bool,
+    include_files: bool,
+) -> Result<(), String> {
     let file = fs::File::create(dest_zip_path).map_err(|e| e.to_string())?;
     let mut zip = ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
-    for suffix in ["", "-wal", "-shm"] {
-        let name = format!("pontoscan.db{suffix}");
-        let path = data_dir.join(&name);
-        if path.exists() {
-            let bytes = fs::read(&path).map_err(|e| e.to_string())?;
-            zip.start_file(&name, options).map_err(|e| e.to_string())?;
-            zip.write_all(&bytes).map_err(|e| e.to_string())?;
+    if include_db {
+        for suffix in ["", "-wal", "-shm"] {
+            let name = format!("pontoscan.db{suffix}");
+            let path = data_dir.join(&name);
+            if path.exists() {
+                let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+                zip.start_file(&name, options).map_err(|e| e.to_string())?;
+                zip.write_all(&bytes).map_err(|e| e.to_string())?;
+            }
         }
     }
 
-    let imports_dir = data_dir.join("imports");
-    if imports_dir.exists() {
-        add_dir_to_zip(&mut zip, &imports_dir, &imports_dir, "imports", options)?;
-    }
+    if include_files {
+        let imports_dir = data_dir.join("imports");
+        if imports_dir.exists() {
+            add_dir_to_zip(&mut zip, &imports_dir, &imports_dir, "imports", options)?;
+        }
 
-    let payment_templates_dir = data_dir.join("payment_templates");
-    if payment_templates_dir.exists() {
-        add_dir_to_zip(
-            &mut zip,
-            &payment_templates_dir,
-            &payment_templates_dir,
-            "payment_templates",
-            options,
-        )?;
+        let payment_templates_dir = data_dir.join("payment_templates");
+        if payment_templates_dir.exists() {
+            add_dir_to_zip(
+                &mut zip,
+                &payment_templates_dir,
+                &payment_templates_dir,
+                "payment_templates",
+                options,
+            )?;
+        }
     }
 
     zip.finish().map_err(|e| e.to_string())?;
