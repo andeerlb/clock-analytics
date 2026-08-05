@@ -160,5 +160,17 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0026_payment_template_status_rules.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 27,
+            description: "add employee_aliases — possíveis nomes a colaborador can also be matched by during payment import",
+            sql: include_str!("../migrations/0027_employee_aliases.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 28,
+            description: "add companies.night_shift_rule — which rule decides a payment shift counts as noturno against the company's night window",
+            sql: include_str!("../migrations/0028_company_night_shift_rule.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -1,16 +1,16 @@
 import { Building2, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { listCompaniesWithStats, type CompanyWithStats } from "../lib/db";
+import { listCompanies, type CompanyRow } from "../lib/db";
 import { formatCnpj } from "../lib/format";
 
 export default function CompaniesPage() {
   const navigate = useNavigate();
-  const [companies, setCompanies] = useState<CompanyWithStats[]>([]);
+  const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    listCompaniesWithStats()
+    listCompanies()
       .then(setCompanies)
       .finally(() => setLoading(false));
   }, []);
@@ -43,7 +43,6 @@ export default function CompaniesPage() {
                   <th>Empresa</th>
                   <th>CNPJ</th>
                   <th>Horário noturno</th>
-                  <th style={{ textAlign: "right" }}>Colaboradores</th>
                 </tr>
               </thead>
               <tbody>
@@ -61,7 +60,6 @@ export default function CompaniesPage() {
                     <td className="mono">
                       {c.nightStartTime}–{c.nightEndTime}
                     </td>
-                    <td style={{ textAlign: "right" }}>{c.employeeCount}</td>
                   </tr>
                 ))}
               </tbody>

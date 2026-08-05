@@ -1,11 +1,11 @@
-import { AlertCircle, CheckCircle2, Clock3 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock3, Moon, Sun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
-import { getEmployee, listPaymentShiftsForEmployeeMonth, type EmployeeRow } from "../lib/db";
-import { formatDate, formatMinutesAsTime } from "../lib/format";
+import { getCompany, getEmployee, listPaymentShiftsForEmployeeMonth, type CompanyRow, type EmployeeRow } from "../lib/db";
+import { classifyShiftPeriod, formatDate, formatMinutesAsTime, parseTimeToMinutes } from "../lib/format";
 import type { PaymentShiftRow, PaymentShiftStatus } from "../lib/types";
 
 const STATUS_OPTIONS: MultiSelectOption<PaymentShiftStatus>[] = [
@@ -42,6 +42,7 @@ export default function PaymentDetailPage() {
   const id = Number(employeeId);
 
   const [employee, setEmployee] = useState<EmployeeRow | null>(null);
+  const [company, setCompany] = useState<CompanyRow | null>(null);
   const [shifts, setShifts] = useState<PaymentShiftRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -55,9 +56,10 @@ export default function PaymentDetailPage() {
     if (!competencia || Number.isNaN(id)) return;
     setLoading(true);
     Promise.all([getEmployee(id), listPaymentShiftsForEmployeeMonth(id, competencia)])
-      .then(([employeeRow, shiftRows]) => {
+      .then(async ([employeeRow, shiftRows]) => {
         setEmployee(employeeRow);
         setShifts(shiftRows);
+        setCompany(await getCompany(employeeRow.companyId));
       })
       .catch((e) => setError(String(e instanceof Error ? e.message : e)))
       .finally(() => setLoading(false));
@@ -70,6 +72,15 @@ export default function PaymentDetailPage() {
       else next.add(status);
       return next;
     });
+  }
+
+  /** `null` when there's no company loaded yet, no schedule on this shift, or the company's night times don't parse. */
+  function shiftPeriod(s: PaymentShiftRow): "diurno" | "noturno" | null {
+    if (!company || s.scheduleStartMinutes === null || s.scheduleEndMinutes === null) return null;
+    const nightStart = parseTimeToMinutes(company.nightStartTime);
+    const nightEnd = parseTimeToMinutes(company.nightEndTime);
+    if (nightStart === null || nightEnd === null) return null;
+    return classifyShiftPeriod(company.nightShiftRule, nightStart, nightEnd, s.scheduleStartMinutes, s.scheduleEndMinutes);
   }
 
   const visibleShifts = useMemo(
@@ -166,15 +177,26 @@ export default function PaymentDetailPage() {
                 {visibleShifts.map((s) => {
                   const badge = STATUS_BADGE[s.status];
                   const BadgeIcon = badge.icon;
+                  const period = shiftPeriod(s);
                   return (
                     <tr key={s.id}>
                       <td>{formatDate(s.workDate)}</td>
                       <td>{s.local}</td>
                       <td>{s.role}</td>
                       <td>
-                        {s.scheduleStartMinutes !== null && s.scheduleEndMinutes !== null
-                          ? `${formatMinutesAsTime(s.scheduleStartMinutes)} – ${formatMinutesAsTime(s.scheduleEndMinutes)}`
-                          : "—"}
+                        {s.scheduleStartMinutes !== null && s.scheduleEndMinutes !== null ? (
+                          <>
+                            {formatMinutesAsTime(s.scheduleStartMinutes)} – {formatMinutesAsTime(s.scheduleEndMinutes)}
+                            {period && (
+                              <span className={period === "noturno" ? "badge info" : "badge neutral"} style={{ marginLeft: "0.5rem" }}>
+                                {period === "noturno" ? <Moon size={12} /> : <Sun size={12} />}
+                                {period === "noturno" ? "Noturno" : "Diurno"}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          "—"
+                        )}
                       </td>
                       <td className="muted">{s.note ?? "—"}</td>
                       <td>

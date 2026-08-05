@@ -1,19 +1,42 @@
 import { Plus, Users } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { listClientsWithStats, type ClientWithStats } from "../lib/db";
+import { listClients, type ClientRow } from "../lib/db";
 import { formatCnpj } from "../lib/format";
+
+interface ClientListRow {
+  id: number;
+  name: string;
+  cnpj: string;
+  companyNames: string[];
+}
+
+/** One row per client — `listClients` returns one row per (client, company) link, merged here since a client showing up once per empresa it's linked to is noise, not information. */
+function groupByClient(rows: ClientRow[]): ClientListRow[] {
+  const byId = new Map<number, ClientListRow>();
+  for (const r of rows) {
+    const existing = byId.get(r.id);
+    if (existing) {
+      existing.companyNames.push(r.companyName);
+    } else {
+      byId.set(r.id, { id: r.id, name: r.name, cnpj: r.cnpj, companyNames: [r.companyName] });
+    }
+  }
+  return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
 
 export default function ClientsPage() {
   const navigate = useNavigate();
-  const [clients, setClients] = useState<ClientWithStats[]>([]);
+  const [rawClients, setRawClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    listClientsWithStats()
-      .then(setClients)
+    listClients()
+      .then(setRawClients)
       .finally(() => setLoading(false));
   }, []);
+
+  const clients = useMemo(() => groupByClient(rawClients), [rawClients]);
 
   return (
     <div>
@@ -45,7 +68,6 @@ export default function ClientsPage() {
                   <th>Cliente</th>
                   <th>CNPJ</th>
                   <th>Empresa</th>
-                  <th style={{ textAlign: "right" }}>Colaboradores</th>
                 </tr>
               </thead>
               <tbody>
@@ -60,8 +82,7 @@ export default function ClientsPage() {
                       </div>
                     </td>
                     <td className="mono">{formatCnpj(c.cnpj)}</td>
-                    <td>{c.companyName}</td>
-                    <td style={{ textAlign: "right" }}>{c.employeeCount}</td>
+                    <td>{c.companyNames.join(", ")}</td>
                   </tr>
                 ))}
               </tbody>

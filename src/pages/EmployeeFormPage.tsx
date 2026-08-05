@@ -1,12 +1,17 @@
+import { Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import {
+  addEmployeeAlias,
   createEmployeeManual,
   getEmployee,
   listClients,
+  listEmployeeAliases,
+  removeEmployeeAlias,
   updateEmployee,
   type ClientRow,
+  type EmployeeAliasRow,
 } from "../lib/db";
 import { maskCpf } from "../lib/format";
 
@@ -27,6 +32,11 @@ export default function EmployeeFormPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [aliases, setAliases] = useState<EmployeeAliasRow[]>([]);
+  const [newAlias, setNewAlias] = useState("");
+  const [aliasBusy, setAliasBusy] = useState(false);
+  const [aliasError, setAliasError] = useState<string | null>(null);
+
   useEffect(() => {
     if (isEditing) {
       getEmployee(Number(id))
@@ -39,10 +49,31 @@ export default function EmployeeFormPage() {
         })
         .catch((e) => setError(String(e instanceof Error ? e.message : e)))
         .finally(() => setLoading(false));
+      listEmployeeAliases(Number(id)).then(setAliases);
     } else {
       listClients().then(setClients);
     }
   }, [id, isEditing]);
+
+  async function handleAddAlias(e: React.FormEvent) {
+    e.preventDefault();
+    setAliasError(null);
+    setAliasBusy(true);
+    try {
+      await addEmployeeAlias(Number(id), newAlias);
+      setNewAlias("");
+      setAliases(await listEmployeeAliases(Number(id)));
+    } catch (err) {
+      setAliasError(String(err instanceof Error ? err.message : err));
+    } finally {
+      setAliasBusy(false);
+    }
+  }
+
+  async function handleRemoveAlias(aliasId: number) {
+    await removeEmployeeAlias(aliasId);
+    setAliases((prev) => prev.filter((a) => a.id !== aliasId));
+  }
 
   // `clients` has one row per (client, company) link — same pattern as the
   // timesheet import form's Cliente/Empresa selects.
@@ -194,6 +225,57 @@ export default function EmployeeFormPage() {
 
             <button type="submit" disabled={busy}>
               {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
+            </button>
+          </form>
+        </div>
+      )}
+
+      {!loading && isEditing && (
+        <div className="card" style={{ maxWidth: "32rem", marginTop: "1.2rem" }}>
+          <h3 style={{ marginTop: 0 }}>Possíveis nomes</h3>
+          <p className="page-subtitle" style={{ marginTop: 0 }}>
+            Outras grafias do nome desse colaborador que podem aparecer em arquivos de pagamento
+            (ex.: "Anderson Lucas" para "Anderson Lucas Babinski") — consideradas junto com o nome
+            cadastrado ao buscar o colaborador durante a importação. Um nome só pode estar
+            vinculado a um colaborador por vez, dentro do mesmo cliente.
+          </p>
+
+          {aliasError && <div className="error-box">{aliasError}</div>}
+
+          {aliases.length > 0 && (
+            <div className="file-list" style={{ marginBottom: "0.8rem" }}>
+              {aliases.map((a) => (
+                <div className="file-row" key={a.id}>
+                  <div className="file-row-info">
+                    <div className="file-name">{a.alias}</div>
+                  </div>
+                  <div className="file-row-actions">
+                    <button
+                      type="button"
+                      className="ghost"
+                      style={{ padding: "0.3rem" }}
+                      onClick={() => handleRemoveAlias(a.id)}
+                      aria-label="Remover"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <form onSubmit={handleAddAlias} style={{ display: "flex", gap: "0.5rem" }}>
+            <input
+              type="text"
+              value={newAlias}
+              onChange={(e) => setNewAlias(e.target.value)}
+              placeholder="Ex.: Anderson Lucas"
+              style={{ flex: 1 }}
+            />
+            <button type="submit" className="secondary" disabled={aliasBusy || !newAlias.trim()}>
+              <Plus size={14} style={{ marginRight: "0.3rem" }} />
+              Adicionar
             </button>
           </form>
         </div>

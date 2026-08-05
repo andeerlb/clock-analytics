@@ -1,4 +1,4 @@
-import type { PaymentShiftStatus } from "./types";
+import type { NightShiftRule, PaymentShiftStatus } from "./types";
 
 /** Bytes -> "12.3 MB" — the Configurações storage indicator. */
 export function formatBytes(bytes: number): string {
@@ -268,6 +268,94 @@ export function formatMinutesAsTime(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/** "HH:MM" -> minutes-since-midnight, or `null` if it's not a valid time. Inverse of `formatMinutesAsTime`. */
+export function parseTimeToMinutes(value: string): number | null {
+  const match = value.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  if (h > 23 || m > 59) return null;
+  return h * 60 + m;
+}
+
+/**
+ * Splits a time-of-day range `[start, end)` (minutes-since-midnight) into
+ * one or two non-wrapping `[start, end)` pieces on the 0-1440 circle — a
+ * range that crosses midnight (`end < start`, e.g. 22:00-05:00) becomes
+ * `[start, 1440)` + `[0, end)`. Every range-comparison helper below reduces
+ * to comparing these non-wrapping pieces pairwise, which sidesteps having
+ * to special-case wraparound at each call site.
+ */
+function splitAtMidnight(start: number, end: number): [number, number][] {
+  return start <= end ? [[start, end]] : [[start, 1440], [0, end]];
+}
+
+/** Whether `point` (minutes-since-midnight) falls in `[start, end)`, wrapping past midnight if `end < start`. */
+function isTimeInRange(point: number, start: number, end: number): boolean {
+  return splitAtMidnight(start, end).some(([s, e]) => point >= s && point < e);
+}
+
+/** Total overlap, in minutes, between two time-of-day ranges — each may itself cross midnight. */
+function overlapMinutes(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
+  const aParts = splitAtMidnight(aStart, aEnd);
+  const bParts = splitAtMidnight(bStart, bEnd);
+  let total = 0;
+  for (const [as, ae] of aParts) {
+    for (const [bs, be] of bParts) {
+      total += Math.max(0, Math.min(ae, be) - Math.max(as, bs));
+    }
+  }
+  return total;
+}
+
+/** A range's own duration in minutes, accounting for a midnight crossing. */
+function rangeDurationMinutes(start: number, end: number): number {
+  return end > start ? end - start : 1440 - start + end;
+}
+
+/**
+ * Classifies a payment shift as "diurno" or "noturno" against a company's
+ * night window, per whichever `rule` that company has configured — see
+ * `NightShiftRule` in `types.ts` for what each one means. Both the shift's
+ * and the night window's own start/end can cross midnight (e.g. a
+ * 22:00-05:00 night window, or an overnight 22:00-06:00 shift); every rule
+ * here is wraparound-safe.
+ */
+export function classifyShiftPeriod(
+  rule: NightShiftRule,
+  nightStartMinutes: number,
+  nightEndMinutes: number,
+  shiftStartMinutes: number,
+  shiftEndMinutes: number,
+): "diurno" | "noturno" {
+  const startInRange = isTimeInRange(shiftStartMinutes, nightStartMinutes, nightEndMinutes);
+  const endInRange = isTimeInRange(shiftEndMinutes, nightStartMinutes, nightEndMinutes);
+
+  let isNoturno: boolean;
+  switch (rule) {
+    case "start-in-range":
+      isNoturno = startInRange;
+      break;
+    case "end-in-range":
+      isNoturno = endInRange;
+      break;
+    case "start-or-end-in-range":
+      isNoturno = startInRange || endInRange;
+      break;
+    case "majority-overlap": {
+      const overlap = overlapMinutes(shiftStartMinutes, shiftEndMinutes, nightStartMinutes, nightEndMinutes);
+      const duration = rangeDurationMinutes(shiftStartMinutes, shiftEndMinutes);
+      isNoturno = duration > 0 && overlap / duration >= 0.5;
+      break;
+    }
+    case "overlap":
+    default:
+      isNoturno = overlapMinutes(shiftStartMinutes, shiftEndMinutes, nightStartMinutes, nightEndMinutes) > 0;
+      break;
+  }
+  return isNoturno ? "noturno" : "diurno";
 }
 
 /**

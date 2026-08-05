@@ -57,7 +57,7 @@ export default function MultiSelectDropdown<T extends string>({
           : (countLabel ?? ((n, total) => `${n} de ${total}`))(selected.size, options.length);
 
   return (
-    <div style={{ position: "relative" }} ref={rootRef}>
+    <div style={{ position: "relative", display: "inline-block", alignSelf: "flex-start" }} ref={rootRef}>
       <button type="button" className="secondary" onClick={() => setOpen((o) => !o)} disabled={options.length === 0}>
         <Icon size={15} style={{ marginRight: "0.4rem" }} />
         {label}

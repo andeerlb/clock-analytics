@@ -9,6 +9,26 @@ export interface Company {
   cnpj: string;
 }
 
+/**
+ * Which rule decides a payment shift (own start/end time) counts as
+ * "noturno" against a company's night_start_time/night_end_time window —
+ * see `classifyShiftPeriod` in `format.ts` for how each is evaluated.
+ */
+export type NightShiftRule =
+  | "start-in-range"
+  | "end-in-range"
+  | "start-or-end-in-range"
+  | "overlap"
+  | "majority-overlap";
+
+export const NIGHT_SHIFT_RULE_LABELS: Record<NightShiftRule, string> = {
+  "start-in-range": "Início do turno dentro do intervalo noturno",
+  "end-in-range": "Fim do turno dentro do intervalo noturno",
+  "start-or-end-in-range": "Início ou fim do turno dentro do intervalo noturno",
+  overlap: "Qualquer sobreposição do turno com o intervalo noturno",
+  "majority-overlap": "Mais da metade do turno dentro do intervalo noturno",
+};
+
 export interface Employee {
   name: string;
   cpf: string;

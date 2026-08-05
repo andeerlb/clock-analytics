@@ -9,6 +9,7 @@ import type {
   ImportFileRow,
   ImportStatus,
   ImportType,
+  NightShiftRule,
   PagedResult,
   ParsedTimesheet,
   PaymentFileKind,
@@ -304,32 +305,19 @@ export interface CompanyRow {
   id: number;
   name: string;
   cnpj: string;
-  /** Shift hours from here until `nightEndTime` count as "noturno" — used to classify a payment template's Horário field. */
+  /** Shift hours from here until `nightEndTime` count as "noturno" — how much of that window a shift needs to hit is decided by `nightShiftRule`. */
   nightStartTime: string;
   nightEndTime: string;
+  nightShiftRule: NightShiftRule;
 }
 
 export async function listCompanies(): Promise<CompanyRow[]> {
   const db = await getDb();
   return db.select<CompanyRow[]>(
-    "SELECT id, name, cnpj, night_start_time AS nightStartTime, night_end_time AS nightEndTime FROM companies ORDER BY name",
+    `SELECT id, name, cnpj, night_start_time AS nightStartTime, night_end_time AS nightEndTime,
+            night_shift_rule AS nightShiftRule
+     FROM companies ORDER BY name`,
   );
-}
-
-export interface CompanyWithStats extends CompanyRow {
-  employeeCount: number;
-}
-
-export async function listCompaniesWithStats(): Promise<CompanyWithStats[]> {
-  const db = await getDb();
-  return db.select<CompanyWithStats[]>(`
-    SELECT c.id, c.name, c.cnpj, c.night_start_time AS nightStartTime, c.night_end_time AS nightEndTime,
-           COUNT(DISTINCT e.id) AS employeeCount
-    FROM companies c
-    LEFT JOIN employees e ON e.company_id = c.id
-    GROUP BY c.id
-    ORDER BY c.name
-  `);
 }
 
 /**
@@ -343,6 +331,7 @@ export async function createCompany(
   cnpj: string,
   nightStartTime = "22:00",
   nightEndTime = "05:00",
+  nightShiftRule: NightShiftRule = "overlap",
 ): Promise<number> {
   const db = await getDb();
   const normalizedCnpj = normalizeCnpj(cnpj);
@@ -357,8 +346,8 @@ export async function createCompany(
     throw new Error("Já existe uma empresa cadastrada com esse CNPJ.");
   }
   const result = await db.execute(
-    "INSERT INTO companies (name, cnpj, night_start_time, night_end_time) VALUES ($1, $2, $3, $4)",
-    [name.trim(), normalizedCnpj, nightStartTime, nightEndTime],
+    "INSERT INTO companies (name, cnpj, night_start_time, night_end_time, night_shift_rule) VALUES ($1, $2, $3, $4, $5)",
+    [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule],
   );
   return result.lastInsertId as number;
 }
@@ -366,7 +355,9 @@ export async function createCompany(
 export async function getCompany(id: number): Promise<CompanyRow> {
   const db = await getDb();
   const rows = await db.select<CompanyRow[]>(
-    "SELECT id, name, cnpj, night_start_time AS nightStartTime, night_end_time AS nightEndTime FROM companies WHERE id = $1",
+    `SELECT id, name, cnpj, night_start_time AS nightStartTime, night_end_time AS nightEndTime,
+            night_shift_rule AS nightShiftRule
+     FROM companies WHERE id = $1`,
     [id],
   );
   if (rows.length === 0) throw new Error("Empresa não encontrada.");
@@ -379,6 +370,7 @@ export async function updateCompany(
   cnpj: string,
   nightStartTime: string,
   nightEndTime: string,
+  nightShiftRule: NightShiftRule,
 ): Promise<void> {
   const db = await getDb();
   const normalizedCnpj = normalizeCnpj(cnpj);
@@ -393,8 +385,8 @@ export async function updateCompany(
     throw new Error("Já existe uma empresa cadastrada com esse CNPJ.");
   }
   await db.execute(
-    "UPDATE companies SET name = $1, cnpj = $2, night_start_time = $3, night_end_time = $4 WHERE id = $5",
-    [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, id],
+    "UPDATE companies SET name = $1, cnpj = $2, night_start_time = $3, night_end_time = $4, night_shift_rule = $5 WHERE id = $6",
+    [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule, id],
   );
 }
 
@@ -421,34 +413,19 @@ export async function listClients(): Promise<ClientRow[]> {
   `);
 }
 
-export interface ClientWithStats extends ClientRow {
-  employeeCount: number;
-}
-
-export async function listClientsWithStats(): Promise<ClientWithStats[]> {
-  const db = await getDb();
-  return db.select<ClientWithStats[]>(`
-    SELECT cl.id, cl.name, cl.cnpj, c.id AS companyId, c.name AS companyName,
-           COUNT(DISTINCT e.id) AS employeeCount
-    FROM clients cl
-    JOIN client_companies cc ON cc.client_id = cl.id
-    JOIN companies c ON c.id = cc.company_id
-    LEFT JOIN employees e ON e.client_id = cl.id
-    GROUP BY cl.id, c.id
-    ORDER BY c.name, cl.name
-  `);
-}
-
 /**
- * Registers a client under `companyId`. A client's CNPJ is a globally
- * unique physical entity — just like a company's — but the same client can
- * be linked to more than one company. So this either creates a brand new
- * client (no client with that CNPJ exists yet) or links an existing one
- * (found by CNPJ) to this additional company. Linking the same client to
- * the same company twice is rejected.
+ * Registers a client under one or more `companyIds`. A client's CNPJ is a
+ * globally unique physical entity — just like a company's — but the same
+ * client can be linked to more than one company. So this either creates a
+ * brand new client (no client with that CNPJ exists yet) or links an
+ * existing one (found by CNPJ) to whichever of `companyIds` it isn't
+ * already linked to — an already-linked company in the list is skipped,
+ * not rejected, since picking several companies at once naturally means
+ * some might already be linked (e.g. re-entering an existing CNPJ to add
+ * it to more companies).
  */
 export async function createClient(
-  companyId: number,
+  companyIds: number[],
   name: string,
   cnpj: string,
 ): Promise<number> {
@@ -456,6 +433,9 @@ export async function createClient(
   const normalizedCnpj = normalizeCnpj(cnpj);
   if (normalizedCnpj.length !== 14) {
     throw new Error("CNPJ deve ter 14 dígitos.");
+  }
+  if (companyIds.length === 0) {
+    throw new Error("Selecione pelo menos uma empresa.");
   }
 
   const existing = await db.select<{ id: number }[]>("SELECT id FROM clients WHERE cnpj = $1", [
@@ -465,13 +445,6 @@ export async function createClient(
   let clientId: number;
   if (existing.length > 0) {
     clientId = existing[0].id;
-    const existingLink = await db.select<{ clientId: number }[]>(
-      "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
-      [clientId, companyId],
-    );
-    if (existingLink.length > 0) {
-      throw new Error("Esse cliente já está vinculado a essa empresa.");
-    }
   } else {
     const result = await db.execute("INSERT INTO clients (name, cnpj) VALUES ($1, $2)", [
       name.trim(),
@@ -480,10 +453,18 @@ export async function createClient(
     clientId = result.lastInsertId as number;
   }
 
-  await db.execute(
-    "INSERT INTO client_companies (client_id, company_id) VALUES ($1, $2)",
-    [clientId, companyId],
-  );
+  for (const companyId of companyIds) {
+    const existingLink = await db.select<{ clientId: number }[]>(
+      "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
+      [clientId, companyId],
+    );
+    if (existingLink.length > 0) continue;
+    await db.execute("INSERT INTO client_companies (client_id, company_id) VALUES ($1, $2)", [
+      clientId,
+      companyId,
+    ]);
+  }
+
   return clientId;
 }
 
@@ -512,11 +493,52 @@ export async function getClient(id: number): Promise<ClientDetail> {
   return { ...rows[0], companies };
 }
 
+/** Links `clientId` to an additional `companyId` — a no-op if already linked. */
+export async function addClientCompany(clientId: number, companyId: number): Promise<void> {
+  const db = await getDb();
+  const existingLink = await db.select<{ clientId: number }[]>(
+    "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
+    [clientId, companyId],
+  );
+  if (existingLink.length > 0) return;
+  await db.execute("INSERT INTO client_companies (client_id, company_id) VALUES ($1, $2)", [
+    clientId,
+    companyId,
+  ]);
+}
+
 /**
- * Updates a client's own name/CNPJ — not its company links, which stay
- * managed the way they always have been (via `createClient`'s "link to an
- * additional company" path), since that's a many-to-many relationship, not
- * a simple field on the client itself.
+ * Unlinks `clientId` from `companyId` — rejected if it would leave the
+ * client with no empresa at all, or if there are colaboradores already
+ * registered under that specific (client, empresa) pair, since removing
+ * the link would leave their `company_id` pointing somewhere the client
+ * itself no longer claims to belong to.
+ */
+export async function removeClientCompany(clientId: number, companyId: number): Promise<void> {
+  const db = await getDb();
+  const linkCount = await db.select<{ count: number }[]>(
+    "SELECT COUNT(*) AS count FROM client_companies WHERE client_id = $1",
+    [clientId],
+  );
+  if ((linkCount[0]?.count ?? 0) <= 1) {
+    throw new Error("O cliente precisa continuar vinculado a pelo menos uma empresa.");
+  }
+  const employeeCount = await db.select<{ count: number }[]>(
+    "SELECT COUNT(*) AS count FROM employees WHERE client_id = $1 AND company_id = $2",
+    [clientId, companyId],
+  );
+  if ((employeeCount[0]?.count ?? 0) > 0) {
+    throw new Error("Existem colaboradores cadastrados para esse cliente nessa empresa — desvincule ou mova-os antes.");
+  }
+  await db.execute("DELETE FROM client_companies WHERE client_id = $1 AND company_id = $2", [
+    clientId,
+    companyId,
+  ]);
+}
+
+/**
+ * Updates a client's own name/CNPJ — its company links are managed
+ * separately, via `addClientCompany`/`removeClientCompany`.
  */
 export async function updateClient(id: number, name: string, cnpj: string): Promise<void> {
   const db = await getDb();
@@ -1406,6 +1428,75 @@ export async function deletePaymentTemplate(id: number): Promise<void> {
   await db.execute("DELETE FROM payment_templates WHERE id = $1", [id]);
 }
 
+export interface EmployeeAliasRow {
+  id: number;
+  employeeId: number;
+  alias: string;
+}
+
+/** Every "possível nome" registered for one colaborador, most recent first. */
+export async function listEmployeeAliases(employeeId: number): Promise<EmployeeAliasRow[]> {
+  const db = await getDb();
+  return db.select<EmployeeAliasRow[]>(
+    `SELECT id, employee_id AS employeeId, alias FROM employee_aliases WHERE employee_id = $1 ORDER BY id DESC`,
+    [employeeId],
+  );
+}
+
+/**
+ * Whether `alias` is already registered to some colaborador within
+ * `clientId` — `null` when it's free. Scoped per client, same as CPF
+ * uniqueness (the same alias text can be reused across different clients,
+ * just not within one). Case-insensitive, same ASCII-only limitation
+ * already accepted for name search elsewhere.
+ */
+export async function findEmployeeAliasOwner(
+  clientId: number,
+  alias: string,
+): Promise<{ id: number; name: string } | null> {
+  const db = await getDb();
+  const rows = await db.select<{ id: number; name: string }[]>(
+    `SELECT e.id, e.name
+     FROM employee_aliases ea
+     JOIN employees e ON e.id = ea.employee_id
+     WHERE e.client_id = $1 AND lower(ea.alias) = lower($2)`,
+    [clientId, alias.trim()],
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Registers `alias` for `employeeId` — throws a message naming the current
+ * owner if it's already someone else's within the same client. Already
+ * registered to this same employee is a silent no-op, not an error, since
+ * the payment-import "vincular colaborador" flow can call this repeatedly
+ * for several rows that share the same raw name.
+ */
+export async function addEmployeeAlias(employeeId: number, alias: string): Promise<void> {
+  const db = await getDb();
+  const trimmed = alias.trim();
+  if (!trimmed) throw new Error("Nome não pode ser vazio.");
+
+  const employeeRows = await db.select<{ clientId: number }[]>(
+    "SELECT client_id AS clientId FROM employees WHERE id = $1",
+    [employeeId],
+  );
+  if (employeeRows.length === 0) throw new Error("Colaborador não encontrado.");
+
+  const owner = await findEmployeeAliasOwner(employeeRows[0].clientId, trimmed);
+  if (owner && owner.id !== employeeId) {
+    throw new Error(`Esse nome já está vinculado a ${owner.name}.`);
+  }
+  if (owner) return;
+
+  await db.execute("INSERT INTO employee_aliases (employee_id, alias) VALUES ($1, $2)", [employeeId, trimmed]);
+}
+
+export async function removeEmployeeAlias(aliasId: number): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM employee_aliases WHERE id = $1", [aliasId]);
+}
+
 /**
  * Resolves a payment row's employee within `clientId` by walking a
  * template's `identifierPriority` — every field in one "tentativa" must
@@ -1460,9 +1551,19 @@ export async function findEmployeeByAttempts(
           skip = true;
           break;
         }
+        // Matches the colaborador's own name, or any "possível nome"
+        // (employee_aliases) registered for them — same caseInsensitive
+        // setting governs both, so a tentativa doesn't need a second flag.
         params.push(trimmed);
+        const nameParam = params.length;
+        params.push(trimmed);
+        const aliasParam = params.length;
+        const nameCmp = attempt.caseInsensitive ? `lower(e.name) = lower($${nameParam})` : `e.name = $${nameParam}`;
+        const aliasCmp = attempt.caseInsensitive
+          ? `lower(ea.alias) = lower($${aliasParam})`
+          : `ea.alias = $${aliasParam}`;
         conditions.push(
-          attempt.caseInsensitive ? `lower(e.name) = lower($${params.length})` : `e.name = $${params.length}`,
+          `(${nameCmp} OR EXISTS (SELECT 1 FROM employee_aliases ea WHERE ea.employee_id = e.id AND ${aliasCmp}))`,
         );
       }
     }

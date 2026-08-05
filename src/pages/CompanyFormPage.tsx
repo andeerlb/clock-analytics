@@ -3,6 +3,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import { createCompany, getCompany, updateCompany } from "../lib/db";
 import { maskCnpj } from "../lib/format";
+import { NIGHT_SHIFT_RULE_LABELS, type NightShiftRule } from "../lib/types";
+
+const NIGHT_SHIFT_RULES = Object.keys(NIGHT_SHIFT_RULE_LABELS) as NightShiftRule[];
 
 export default function CompanyFormPage() {
   const { id } = useParams<{ id: string }>();
@@ -13,6 +16,7 @@ export default function CompanyFormPage() {
   const [cnpj, setCnpj] = useState("");
   const [nightStartTime, setNightStartTime] = useState("22:00");
   const [nightEndTime, setNightEndTime] = useState("05:00");
+  const [nightShiftRule, setNightShiftRule] = useState<NightShiftRule>("overlap");
   const [loading, setLoading] = useState(isEditing);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +29,7 @@ export default function CompanyFormPage() {
         setCnpj(maskCnpj(c.cnpj));
         setNightStartTime(c.nightStartTime);
         setNightEndTime(c.nightEndTime);
+        setNightShiftRule(c.nightShiftRule);
       })
       .catch((e) => setError(String(e instanceof Error ? e.message : e)))
       .finally(() => setLoading(false));
@@ -36,9 +41,9 @@ export default function CompanyFormPage() {
     setBusy(true);
     try {
       if (isEditing) {
-        await updateCompany(Number(id), name, cnpj, nightStartTime, nightEndTime);
+        await updateCompany(Number(id), name, cnpj, nightStartTime, nightEndTime, nightShiftRule);
       } else {
-        await createCompany(name, cnpj, nightStartTime, nightEndTime);
+        await createCompany(name, cnpj, nightStartTime, nightEndTime, nightShiftRule);
       }
       navigate("/companies");
     } catch (err) {
@@ -112,6 +117,20 @@ export default function CompanyFormPage() {
                   required
                 />
               </div>
+            </div>
+            <div className="field" style={{ marginBottom: "1.2rem" }}>
+              <label htmlFor="company-night-rule">Considerar noturno quando</label>
+              <select
+                id="company-night-rule"
+                value={nightShiftRule}
+                onChange={(e) => setNightShiftRule(e.target.value as NightShiftRule)}
+              >
+                {NIGHT_SHIFT_RULES.map((rule) => (
+                  <option key={rule} value={rule}>
+                    {NIGHT_SHIFT_RULE_LABELS[rule]}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <button type="submit" disabled={busy}>

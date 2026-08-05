@@ -17,6 +17,7 @@ import { Link, useNavigate } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
 import DateRangePicker from "../components/DateRangePicker";
+import EmployeePicker from "../components/EmployeePicker";
 import Pagination from "../components/Pagination";
 import {
   applyPaymentTemplate,
@@ -25,6 +26,7 @@ import {
   type AppliedPaymentRow,
 } from "../lib/api";
 import {
+  addEmployeeAlias,
   findDuplicatePaymentShifts,
   findEmployeeByAttempts,
   getPaymentTemplate,
@@ -112,6 +114,8 @@ interface PaymentPreviewRow {
   isDuplicate: boolean;
   /** No rule in the template's routing chain matched this row's field value — `employee` is always `null` when this is `true` (the lookup never runs without a resolved client). */
   unresolvedRoute: boolean;
+  /** The route's resolved client, if any — `null` unless a routing rule matched. Kept on the row (not just used transiently) so a "colaborador não encontrado" row's "vincular colaborador" picker knows which client to search within. */
+  resolvedClientId: number | null;
   /** Resolved from the template's status rules, falling back to `"pendente"` when none match (or none are configured) — see `resolvePaymentStatus`. */
   paymentStatus: PaymentShiftStatus;
   category: RowCategory;
@@ -127,6 +131,14 @@ interface PaymentFileResult {
 type DisplayRow =
   | { kind: "shift"; index: number; row: PaymentPreviewRow }
   | { kind: "error"; fileName: string; message: string };
+
+/** Identifies "the same shift" for dedup purposes (within-batch and against payment_shifts) — every column that matters, status excluded — see `findDuplicatePaymentShifts`. */
+function shiftDedupKey(
+  employeeId: number,
+  r: Pick<PaymentPreviewRow, "workDate" | "local" | "role" | "scheduleStartMinutes" | "scheduleEndMinutes" | "note">,
+): string {
+  return JSON.stringify([employeeId, r.workDate, r.local, r.role, r.scheduleStartMinutes, r.scheduleEndMinutes, r.note]);
+}
 
 const PREVIEW_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
@@ -408,6 +420,7 @@ export default function ImportPaymentsPage() {
                 workDate: null,
                 isDuplicate: false,
                 unresolvedRoute: false,
+                resolvedClientId: null,
                 category: "skipped",
               });
               continue;
@@ -441,6 +454,7 @@ export default function ImportPaymentsPage() {
               workDate,
               isDuplicate: false,
               unresolvedRoute: !route,
+              resolvedClientId: route?.clientId ?? null,
               category: !route ? "unresolved-route" : !employee ? "not-found" : "valid",
             });
           }
@@ -459,15 +473,7 @@ export default function ImportPaymentsPage() {
       // before anything is compared against payment_shifts.
       const seenInBatch = new Set<string>();
       for (const r of candidates) {
-        const key = JSON.stringify([
-          r.employee!.id,
-          r.workDate,
-          r.local,
-          r.role,
-          r.scheduleStartMinutes,
-          r.scheduleEndMinutes,
-          r.note,
-        ]);
+        const key = shiftDedupKey(r.employee!.id, r);
         if (seenInBatch.has(key)) {
           r.category = "duplicate-in-file";
         } else {
@@ -507,6 +513,85 @@ export default function ImportPaymentsPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * "Vincular colaborador" on a "colaborador não encontrado" row: registers
+   * the row's raw name as a possível nome for `employee`, then resolves
+   * every still-unresolved row in this same batch that shares that exact
+   * raw name and client — not just the one clicked, since a repeated name
+   * usually means several rows in the same file. Re-runs the same
+   * within-batch and payment_shifts duplicate checks `handleProcess` does,
+   * scoped to just the newly-resolved rows, so they don't skip that check.
+   */
+  async function handleLinkEmployee(clickedIndex: number, employee: EmployeeRow) {
+    const clicked = shiftRows[clickedIndex];
+    if (!clicked || clicked.resolvedClientId === null) return;
+    setError(null);
+    try {
+      await addEmployeeAlias(employee.id, clicked.nameRaw);
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+      return;
+    }
+
+    const targetNameRaw = clicked.nameRaw.trim().toLowerCase();
+    const allRows = fileResults.flatMap((r) => r.rows);
+
+    // Every already-resolved candidate in the whole batch, so newly-linked
+    // rows are checked against rows that were "valid"/"duplicate" before
+    // this link too, not just against each other.
+    const seenInBatch = new Set<string>();
+    for (const r of allRows) {
+      if (r.employee) seenInBatch.add(shiftDedupKey(r.employee.id, r));
+    }
+
+    const newlyResolved = allRows.filter(
+      (r) =>
+        r.category === "not-found" &&
+        r.resolvedClientId === clicked.resolvedClientId &&
+        r.nameRaw.trim().toLowerCase() === targetNameRaw,
+    );
+
+    const dbCheckTargets: PaymentPreviewRow[] = [];
+    for (const r of newlyResolved) {
+      r.employee = employee;
+      const key = shiftDedupKey(employee.id, r);
+      if (seenInBatch.has(key)) {
+        r.category = "duplicate-in-file";
+      } else {
+        seenInBatch.add(key);
+        r.category = "valid";
+        dbCheckTargets.push(r);
+      }
+    }
+
+    if (dbCheckTargets.length > 0) {
+      const dupIndices = await findDuplicatePaymentShifts(
+        dbCheckTargets.map((r) => ({
+          employeeId: employee.id,
+          workDate: r.workDate!,
+          local: r.local,
+          role: r.role,
+          scheduleStartMinutes: r.scheduleStartMinutes,
+          scheduleEndMinutes: r.scheduleEndMinutes,
+          note: r.note,
+        })),
+      );
+      dupIndices.forEach((i) => {
+        dbCheckTargets[i].isDuplicate = true;
+        dbCheckTargets[i].category = "duplicate";
+      });
+    }
+
+    setSelectedRows((prev) => {
+      const next = new Set(prev);
+      allRows.forEach((r, i) => {
+        if (newlyResolved.includes(r) && r.category === "valid") next.add(i);
+      });
+      return next;
+    });
+    setFileResults([...fileResults]);
   }
 
   /** No período set means "the whole file" — that's easy to do by accident, so it's confirmed instead of just silently processing everything. */
@@ -873,12 +958,13 @@ export default function ImportPaymentsPage() {
                         <th>Horário</th>
                         <th>Status pgto.</th>
                         <th>Status</th>
+                        <th>Vincular</th>
                       </tr>
                     </thead>
                     <tbody>
                       {previewRows.length === 0 && rowFilter !== "all" && (
                         <tr>
-                          <td colSpan={9} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
+                          <td colSpan={10} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
                             Nenhuma linha nesta categoria.
                           </td>
                         </tr>
@@ -890,7 +976,7 @@ export default function ImportPaymentsPage() {
                               <td className="checkbox-cell">
                                 <input type="checkbox" disabled aria-label="Não disponível" />
                               </td>
-                              <td colSpan={7}>
+                              <td colSpan={8}>
                                 <div className="file-name">{item.fileName}</div>
                                 <div className="muted">{item.message}</div>
                               </td>
@@ -1015,6 +1101,15 @@ export default function ImportPaymentsPage() {
                                 <span className="badge neutral" title="A coluna mapeada como Data não pôde ser interpretada nesta linha">
                                   Data não reconhecida
                                 </span>
+                              )}
+                            </td>
+                            <td>
+                              {row.category === "not-found" && row.resolvedClientId !== null && (
+                                <EmployeePicker
+                                  clientId={row.resolvedClientId}
+                                  onSelect={(employee) => handleLinkEmployee(index, employee)}
+                                  placeholder="Vincular"
+                                />
                               )}
                             </td>
                           </tr>
