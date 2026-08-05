@@ -2,13 +2,13 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { Archive, Building2, CheckCircle2, FolderOpen, Search, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import Avatar from "../components/Avatar";
 import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
 import PdfViewerModal from "../components/PdfViewerModal";
 import { LIBRARY_PAGE_SIZE_OPTIONS, useLibraryFilters, type ReportMode } from "../contexts/FiltersContext";
 import { generateReportZip, revealInFileManager } from "../lib/api";
-import { colorForName, initials } from "../lib/avatar";
 import { listClients, listCompanies, listImports, type ClientRow, type CompanyRow } from "../lib/db";
 import {
   fileNameFromPath,
@@ -18,7 +18,7 @@ import {
   formatTimestampForFileName,
   sanitizeFileName,
 } from "../lib/format";
-import { matchesSelectedStatuses, PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
+import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
 import type { ReportZipEntry, StoredImport } from "../lib/types";
 
 /**
@@ -92,6 +92,7 @@ export default function LibraryPage() {
   } = useLibraryFilters();
 
   const [imports, setImports] = useState<StoredImport[]>([]);
+  const [total, setTotal] = useState(0);
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -102,14 +103,38 @@ export default function LibraryPage() {
   const [generatedZipPath, setGeneratedZipPath] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([listImports(), listCompanies(), listClients()])
-      .then(([importsRows, companyRows, clientRows]) => {
-        setImports(importsRows);
-        setCompanies(companyRows);
-        setClients(clientRows);
-      })
-      .finally(() => setLoading(false));
+    Promise.all([listCompanies(), listClients()]).then(([companyRows, clientRows]) => {
+      setCompanies(companyRows);
+      setClients(clientRows);
+    });
   }, []);
+
+  // The table itself — filtered and paginated in SQL, not in memory.
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    listImports({
+      search,
+      companyIds: Array.from(selectedCompanyIds, Number),
+      clientIds: Array.from(selectedClientIds, Number),
+      periodStart,
+      periodEnd,
+      statuses: Array.from(selectedStatuses),
+      page,
+      pageSize,
+    })
+      .then(({ rows, total: rowTotal }) => {
+        if (cancelled) return;
+        setImports(rows);
+        setTotal(rowTotal);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [search, selectedCompanyIds, selectedClientIds, periodStart, periodEnd, selectedStatuses, page, pageSize]);
 
   // `listClients` has one row per (client, company) link — scope to the
   // chosen empresas (if any), then dedupe down to one option per client.
@@ -174,25 +199,7 @@ export default function LibraryPage() {
     setPage(0);
   }
 
-  const filteredImports = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return imports.filter((imp) => {
-      if (selectedCompanyIds.size > 0 && !selectedCompanyIds.has(String(imp.companyId))) return false;
-      if (selectedClientIds.size > 0 && !selectedClientIds.has(String(imp.clientId))) return false;
-      if (query && !imp.employeeName.toLowerCase().includes(query)) {
-        return false;
-      }
-      if (imp.periodEnd < periodStart || imp.periodStart > periodEnd) return false;
-      if (!matchesSelectedStatuses(imp, selectedStatuses)) return false;
-      return true;
-    });
-  }, [imports, search, selectedCompanyIds, selectedClientIds, periodStart, periodEnd, selectedStatuses]);
-
-  const pageCount = Math.max(1, Math.ceil(filteredImports.length / pageSize));
-  const pageItems = useMemo(
-    () => filteredImports.slice(page * pageSize, page * pageSize + pageSize),
-    [filteredImports, page, pageSize],
-  );
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
   const hasFilters = Boolean(
     search ||
@@ -209,14 +216,25 @@ export default function LibraryPage() {
     }
   }
 
+  // Zip generation needs every matching import, not just the current page
+  // — a dedicated unpaginated fetch (same filters) rather than reusing
+  // `imports`, which now only ever holds one page's worth.
   async function handleGenerateZip() {
-    const entries = buildZipEntries(filteredImports, mode);
-    if (entries.length === 0) return;
-
     setError(null);
     setGeneratedZipPath(null);
     setBusy(true);
     try {
+      const { rows: allMatching } = await listImports({
+        search,
+        companyIds: Array.from(selectedCompanyIds, Number),
+        clientIds: Array.from(selectedClientIds, Number),
+        periodStart,
+        periodEnd,
+        statuses: Array.from(selectedStatuses),
+      });
+      const entries = buildZipEntries(allMatching, mode);
+      if (entries.length === 0) return;
+
       const destPath = await save({
         defaultPath: `relatorio-${formatTimestampForFileName()}.zip`,
         filters: [{ name: "ZIP", extensions: ["zip"] }],
@@ -243,7 +261,7 @@ export default function LibraryPage() {
 
       {error && <div className="error-box">{error}</div>}
 
-      {imports.length > 0 && (
+      {!(total === 0 && !hasFilters) && (
         <div className="card">
           <div className="field-row" style={{ marginBottom: 0 }}>
             <div className="field" style={{ flex: "2 1 240px" }}>
@@ -349,7 +367,7 @@ export default function LibraryPage() {
               type="button"
               style={{ marginLeft: "auto" }}
               onClick={handleGenerateZip}
-              disabled={busy || filteredImports.length === 0}
+              disabled={busy || total === 0}
             >
               <Archive size={15} style={{ marginRight: "0.4rem" }} />
               {busy ? "Gerando..." : "Gerar zip"}
@@ -382,18 +400,18 @@ export default function LibraryPage() {
       )}
 
       <div className="card table-card">
-        {loading && <p className="muted" style={{ padding: "1.4rem" }}>Carregando...</p>}
-        {!loading && imports.length === 0 && (
+        {loading && imports.length === 0 && <p className="muted" style={{ padding: "1.4rem" }}>Carregando...</p>}
+        {!loading && total === 0 && !hasFilters && (
           <p className="muted" style={{ padding: "1.4rem" }}>
             Nenhum importe ainda. <Link to="/import/timesheet">Comece importando um PDF</Link>.
           </p>
         )}
-        {!loading && imports.length > 0 && filteredImports.length === 0 && (
+        {!loading && total === 0 && hasFilters && (
           <p className="muted" style={{ padding: "1.4rem" }}>
-            {hasFilters ? "Nenhum colaborador encontrado para esse filtro." : "Nenhum registro."}
+            Nenhum colaborador encontrado para esse filtro.
           </p>
         )}
-        {filteredImports.length > 0 && (
+        {total > 0 && (
           <>
             <div className="table-scroll">
             <table>
@@ -407,13 +425,11 @@ export default function LibraryPage() {
                 </tr>
               </thead>
               <tbody>
-                {pageItems.map((imp) => (
+                {imports.map((imp) => (
                   <tr key={imp.importId}>
                     <td>
                       <div className="person-cell">
-                        <span className="avatar" style={{ background: colorForName(imp.employeeName) }}>
-                          {initials(imp.employeeName)}
-                        </span>
+                        <Avatar name={imp.employeeName} />
                         <Link to={`/employee/${imp.importId}`}>{imp.employeeName}</Link>
                       </div>
                     </td>
@@ -443,9 +459,9 @@ export default function LibraryPage() {
               pageCount={pageCount}
               onPageChange={setPage}
               rangeLabel={`Mostrando ${page * pageSize + 1} a ${Math.min(
-                filteredImports.length,
+                total,
                 page * pageSize + pageSize,
-              )} de ${filteredImports.length} registros`}
+              )} de ${total} registros`}
               pageSize={pageSize}
               pageSizeOptions={LIBRARY_PAGE_SIZE_OPTIONS}
               onPageSizeChange={(size) => {

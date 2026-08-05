@@ -17,10 +17,10 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import Avatar from "../components/Avatar";
 import Pagination from "../components/Pagination";
 import PdfViewerModal from "../components/PdfViewerModal";
 import { hashFiles, listProviders, parseImport, pickPdfFiles } from "../lib/api";
-import { colorForName, initials } from "../lib/avatar";
 import {
   findConflicts,
   listClients,
@@ -77,6 +77,7 @@ export default function ImportTimesheetPage() {
   const [previewPage, setPreviewPage] = useState(0);
   const [previewPageSize, setPreviewPageSize] = useState(PREVIEW_PAGE_SIZE_OPTIONS[0]);
   const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
+  const [recentFilesTotal, setRecentFilesTotal] = useState(0);
   const [historySearch, setHistorySearch] = useState("");
   const [historyPage, setHistoryPage] = useState(0);
   const [historyPageSize, setHistoryPageSize] = useState(HISTORY_PAGE_SIZE_OPTIONS[0]);
@@ -92,8 +93,12 @@ export default function ImportTimesheetPage() {
       if (list.length > 0) setProvider(list[0].id);
     });
     listClients().then(setClients);
-    refreshRecentFiles();
   }, []);
+
+  // History panel — filtered and paginated in SQL, not in memory.
+  useEffect(() => {
+    refreshRecentFiles();
+  }, [historySearch, historyPage, historyPageSize]);
 
   useEffect(() => {
     const unlisten = getCurrentWebview().onDragDropEvent((event) => {
@@ -139,7 +144,12 @@ export default function ImportTimesheetPage() {
   }, [paths]);
 
   function refreshRecentFiles() {
-    listImportFiles("timesheet").then(setRecentFiles);
+    listImportFiles({ importType: "timesheet", search: historySearch, page: historyPage, pageSize: historyPageSize }).then(
+      ({ rows, total }) => {
+        setRecentFiles(rows);
+        setRecentFilesTotal(total);
+      },
+    );
   }
 
   function addPaths(newPaths: string[]) {
@@ -281,25 +291,7 @@ export default function ImportTimesheetPage() {
 
   const allSelected = sheets.length > 0 && sheets.every((_, i) => selectedSheets.has(i));
 
-  const filteredRecentFiles = useMemo(() => {
-    const query = historySearch.trim().toLowerCase();
-    if (!query) return recentFiles;
-    return recentFiles.filter((f) => f.fileName.toLowerCase().includes(query));
-  }, [recentFiles, historySearch]);
-
-  useEffect(() => {
-    setHistoryPage(0);
-  }, [historySearch]);
-
-  const historyPageCount = Math.max(1, Math.ceil(filteredRecentFiles.length / historyPageSize));
-  const historyPageItems = useMemo(
-    () =>
-      filteredRecentFiles.slice(
-        historyPage * historyPageSize,
-        historyPage * historyPageSize + historyPageSize,
-      ),
-    [filteredRecentFiles, historyPage, historyPageSize],
-  );
+  const historyPageCount = Math.max(1, Math.ceil(recentFilesTotal / historyPageSize));
 
   async function handleParse() {
     if (!selectedClient) return;
@@ -702,12 +694,7 @@ export default function ImportTimesheetPage() {
                     </td>
                     <td>
                       <div className="person-cell">
-                        <span
-                          className="avatar"
-                          style={{ background: colorForName(row.sheet.employee.name) }}
-                        >
-                          {initials(row.sheet.employee.name)}
-                        </span>
+                        <Avatar name={row.sheet.employee.name} />
                         {row.sheet.employee.name}
                       </div>
                     </td>
@@ -775,7 +762,7 @@ export default function ImportTimesheetPage() {
         <div className="card">
           <h3 style={{ marginTop: 0 }}>Histórico de importações</h3>
 
-          {recentFiles.length > 0 && (
+          {!(recentFilesTotal === 0 && !historySearch.trim()) && (
             <div className="field" style={{ marginBottom: "0.8rem" }}>
               <div style={{ position: "relative" }}>
                 <Search
@@ -791,7 +778,10 @@ export default function ImportTimesheetPage() {
                 <input
                   type="text"
                   value={historySearch}
-                  onChange={(e) => setHistorySearch(e.target.value)}
+                  onChange={(e) => {
+                    setHistorySearch(e.target.value);
+                    setHistoryPage(0);
+                  }}
                   placeholder="Buscar por nome do arquivo..."
                   style={{ width: "100%", paddingLeft: "2rem" }}
                 />
@@ -799,14 +789,16 @@ export default function ImportTimesheetPage() {
             </div>
           )}
 
-          {recentFiles.length === 0 && <p className="muted">Nenhum arquivo importado ainda.</p>}
-          {recentFiles.length > 0 && filteredRecentFiles.length === 0 && (
+          {recentFilesTotal === 0 && !historySearch.trim() && (
+            <p className="muted">Nenhum arquivo importado ainda.</p>
+          )}
+          {recentFilesTotal === 0 && historySearch.trim() && (
             <p className="muted">Nenhum arquivo encontrado.</p>
           )}
 
-          {filteredRecentFiles.length > 0 && (
+          {recentFilesTotal > 0 && (
             <div className="file-list">
-              {historyPageItems.map((f) => {
+              {recentFiles.map((f) => {
                 const badge = STATUS_BADGE[f.status];
                 const BadgeIcon = badge.icon;
                 return (
@@ -850,15 +842,15 @@ export default function ImportTimesheetPage() {
             </div>
           )}
 
-          {filteredRecentFiles.length > HISTORY_PAGE_SIZE_OPTIONS[0] && (
+          {recentFilesTotal > HISTORY_PAGE_SIZE_OPTIONS[0] && (
             <Pagination
               page={historyPage}
               pageCount={historyPageCount}
               onPageChange={setHistoryPage}
               rangeLabel={`Mostrando ${historyPage * historyPageSize + 1} a ${Math.min(
-                filteredRecentFiles.length,
+                recentFilesTotal,
                 historyPage * historyPageSize + historyPageSize,
-              )} de ${filteredRecentFiles.length}`}
+              )} de ${recentFilesTotal}`}
               pageSize={historyPageSize}
               pageSizeOptions={HISTORY_PAGE_SIZE_OPTIONS}
               onPageSizeChange={(size) => {

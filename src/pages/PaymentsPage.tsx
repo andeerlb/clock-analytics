@@ -1,10 +1,10 @@
 import { Building2, Search, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import Avatar from "../components/Avatar";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
 import { listClients, listCompanies, listPaymentShiftSummaries, type ClientRow, type CompanyRow } from "../lib/db";
-import { colorForName, initials } from "../lib/avatar";
 import type { PaymentShiftStatus, PaymentShiftSummaryRow } from "../lib/types";
 
 const STATUS_OPTIONS: MultiSelectOption<PaymentShiftStatus>[] = [
@@ -23,6 +23,7 @@ function formatCompetencia(competencia: string): string {
 
 export default function PaymentsPage() {
   const [summaries, setSummaries] = useState<PaymentShiftSummaryRow[]>([]);
+  const [total, setTotal] = useState(0);
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,14 +40,38 @@ export default function PaymentsPage() {
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
 
   useEffect(() => {
-    Promise.all([listPaymentShiftSummaries(), listCompanies(), listClients()])
-      .then(([summaryRows, companyRows, clientRows]) => {
-        setSummaries(summaryRows);
-        setCompanies(companyRows);
-        setClients(clientRows);
-      })
-      .finally(() => setLoading(false));
+    Promise.all([listCompanies(), listClients()]).then(([companyRows, clientRows]) => {
+      setCompanies(companyRows);
+      setClients(clientRows);
+    });
   }, []);
+
+  // The table itself — filtered and paginated in SQL, not in memory.
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    listPaymentShiftSummaries({
+      search,
+      companyIds: Array.from(selectedCompanyIds, Number),
+      clientIds: Array.from(selectedClientIds, Number),
+      competenciaStart: competenciaStart || undefined,
+      competenciaEnd: competenciaEnd || undefined,
+      statuses: Array.from(selectedStatuses),
+      page,
+      pageSize,
+    })
+      .then(({ rows, total: rowTotal }) => {
+        if (cancelled) return;
+        setSummaries(rows);
+        setTotal(rowTotal);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [search, selectedCompanyIds, selectedClientIds, competenciaStart, competenciaEnd, selectedStatuses, page, pageSize]);
 
   const clientOptions = useMemo(() => {
     const scoped =
@@ -81,30 +106,15 @@ export default function PaymentsPage() {
     setPage(0);
   }
 
-  const filteredSummaries = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return summaries.filter((s) => {
-      if (query && !s.employeeName.toLowerCase().includes(query)) return false;
-      if (selectedCompanyIds.size > 0 && !selectedCompanyIds.has(String(s.companyId))) return false;
-      if (selectedClientIds.size > 0 && !selectedClientIds.has(String(s.clientId))) return false;
-      if (competenciaStart && s.competencia < competenciaStart) return false;
-      if (competenciaEnd && s.competencia > competenciaEnd) return false;
-      if (selectedStatuses.size < STATUS_OPTIONS.length) {
-        const matches =
-          (selectedStatuses.has("pendente") && s.pendente > 0) ||
-          (selectedStatuses.has("erro") && s.erro > 0) ||
-          (selectedStatuses.has("pago") && s.pago > 0);
-        if (!matches) return false;
-      }
-      return true;
-    });
-  }, [summaries, search, selectedCompanyIds, selectedClientIds, competenciaStart, competenciaEnd, selectedStatuses]);
-
-  const pageCount = Math.max(1, Math.ceil(filteredSummaries.length / pageSize));
-  const pageItems = useMemo(
-    () => filteredSummaries.slice(page * pageSize, page * pageSize + pageSize),
-    [filteredSummaries, page, pageSize],
+  const hasFilters = Boolean(
+    search.trim() ||
+      selectedCompanyIds.size > 0 ||
+      selectedClientIds.size > 0 ||
+      competenciaStart ||
+      competenciaEnd ||
+      selectedStatuses.size < STATUS_OPTIONS.length,
   );
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
   return (
     <div>
@@ -145,11 +155,11 @@ export default function PaymentsPage() {
               selected={selectedCompanyIds}
               onToggle={toggleCompany}
               onSelectAll={() => {
-                setSelectedCompanyIds(new Set());
+                setSelectedCompanyIds(new Set(companies.map((c) => String(c.id))));
                 setPage(0);
               }}
               onSelectNone={() => {
-                setSelectedCompanyIds(new Set(companies.map((c) => String(c.id))));
+                setSelectedCompanyIds(new Set());
                 setPage(0);
               }}
               icon={Building2}
@@ -164,11 +174,11 @@ export default function PaymentsPage() {
               selected={selectedClientIds}
               onToggle={toggleClient}
               onSelectAll={() => {
-                setSelectedClientIds(new Set());
+                setSelectedClientIds(new Set(clientOptions.map((c) => String(c.id))));
                 setPage(0);
               }}
               onSelectNone={() => {
-                setSelectedClientIds(new Set(clientOptions.map((c) => String(c.id))));
+                setSelectedClientIds(new Set());
                 setPage(0);
               }}
               icon={Users}
@@ -222,18 +232,18 @@ export default function PaymentsPage() {
       </div>
 
       <div className="card table-card">
-        {loading && <p className="muted" style={{ padding: "1.4rem" }}>Carregando...</p>}
-        {!loading && summaries.length === 0 && (
+        {loading && summaries.length === 0 && <p className="muted" style={{ padding: "1.4rem" }}>Carregando...</p>}
+        {!loading && total === 0 && !hasFilters && (
           <p className="muted" style={{ padding: "1.4rem" }}>
             Nenhum pagamento importado ainda.
           </p>
         )}
-        {!loading && summaries.length > 0 && filteredSummaries.length === 0 && (
+        {!loading && total === 0 && hasFilters && (
           <p className="muted" style={{ padding: "1.4rem" }}>
             Nenhum resultado para os filtros selecionados.
           </p>
         )}
-        {filteredSummaries.length > 0 && (
+        {total > 0 && (
           <>
             <div className="table-scroll">
               <table>
@@ -248,13 +258,11 @@ export default function PaymentsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {pageItems.map((s) => (
+                  {summaries.map((s) => (
                     <tr key={`${s.employeeId}-${s.competencia}`}>
                       <td>
                         <div className="person-cell">
-                          <span className="avatar" style={{ background: colorForName(s.employeeName) }}>
-                            {initials(s.employeeName)}
-                          </span>
+                          <Avatar name={s.employeeName} />
                           <Link to={`/payments/${s.employeeId}/${s.competencia}`}>{s.employeeName}</Link>
                         </div>
                       </td>
@@ -275,15 +283,15 @@ export default function PaymentsPage() {
               </table>
             </div>
 
-            {filteredSummaries.length > PAGE_SIZE_OPTIONS[0] && (
+            {total > PAGE_SIZE_OPTIONS[0] && (
               <Pagination
                 page={page}
                 pageCount={pageCount}
                 onPageChange={setPage}
                 rangeLabel={`Mostrando ${page * pageSize + 1} a ${Math.min(
-                  filteredSummaries.length,
+                  total,
                   page * pageSize + pageSize,
-                )} de ${filteredSummaries.length}`}
+                )} de ${total}`}
                 pageSize={pageSize}
                 pageSizeOptions={PAGE_SIZE_OPTIONS}
                 onPageSizeChange={(size) => {

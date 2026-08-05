@@ -1,6 +1,7 @@
 import Database from "@tauri-apps/plugin-sql";
 import { overtimeMinutesForDay, sumIntervalMinutes } from "./analysis";
 import { normalizeCnpj, normalizeCpf } from "./format";
+import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "./periodStatus";
 import type {
   ConflictInfo,
   DuplicateFileInfo,
@@ -8,6 +9,7 @@ import type {
   ImportFileRow,
   ImportStatus,
   ImportType,
+  PagedResult,
   ParsedTimesheet,
   PaymentFileKind,
   PaymentTargetField,
@@ -18,6 +20,7 @@ import type {
   PaymentTemplateRule,
   PaymentTemplateRuleKind,
   PaymentShiftRow,
+  PaymentShiftStatus,
   PaymentShiftSummaryRow,
   StoredDayRecord,
   StoredImport,
@@ -30,6 +33,18 @@ let dbPromise: Promise<Database> | null = null;
 function getDb(): Promise<Database> {
   if (!dbPromise) dbPromise = Database.load(DB_URL);
   return dbPromise;
+}
+
+/**
+ * Appends a `column IN ($n, $n+1, ...)` fragment (and its values) built off
+ * the current length of `params` — `null` when `values` is empty, since an
+ * empty IN(...) isn't valid SQL and the caller means "no filter" anyway.
+ */
+function inClause(column: string, values: (string | number)[], params: (string | number)[]): string | null {
+  if (values.length === 0) return null;
+  const placeholders = values.map((_, i) => `$${params.length + i + 1}`).join(", ");
+  params.push(...values);
+  return `${column} IN (${placeholders})`;
 }
 
 async function upsertEmployee(
@@ -534,23 +549,56 @@ export interface EmployeeRow {
   companyName: string;
 }
 
+export interface EmployeesGlobalQuery {
+  /** Substring match on name — case-insensitive only for ASCII (SQLite's `LOWER()` doesn't case-fold accents). */
+  search?: string;
+  companyIds?: number[];
+  clientIds?: number[];
+  page: number;
+  pageSize: number;
+}
+
 /**
  * Every employee, across every client — the Colaboradores cadastro list.
  * Not scoped to a single client up front (unlike the import flows) since
  * this is meant as a master directory; the clientName/companyName columns
  * disambiguate a CPF that happens to exist under more than one client.
+ * Filtered and paginated in SQL, not in memory — `total` is the count
+ * across all matching rows, before `page`/`pageSize` are applied.
  */
-export async function listEmployeesGlobal(): Promise<EmployeeRow[]> {
+export async function listEmployeesGlobal(query: EmployeesGlobalQuery): Promise<PagedResult<EmployeeRow>> {
   const db = await getDb();
-  return db.select<EmployeeRow[]>(`
-    SELECT e.id, e.name, e.cpf, e.matricula,
-           cl.id AS clientId, cl.name AS clientName,
-           c.id AS companyId, c.name AS companyName
-    FROM employees e
-    JOIN clients cl ON cl.id = e.client_id
-    JOIN companies c ON c.id = e.company_id
-    ORDER BY e.name
-  `);
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  const search = query.search?.trim();
+  if (search) {
+    params.push(search);
+    conditions.push(`LOWER(e.name) LIKE '%' || LOWER($${params.length}) || '%'`);
+  }
+  const companyClause = inClause("c.id", query.companyIds ?? [], params);
+  if (companyClause) conditions.push(companyClause);
+  const clientClause = inClause("cl.id", query.clientIds ?? [], params);
+  if (clientClause) conditions.push(clientClause);
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const from = `FROM employees e JOIN clients cl ON cl.id = e.client_id JOIN companies c ON c.id = e.company_id`;
+
+  const countRows = await db.select<{ count: number }[]>(`SELECT COUNT(*) AS count ${from} ${whereClause}`, params);
+  const total = countRows[0]?.count ?? 0;
+
+  const rows = await db.select<EmployeeRow[]>(
+    `SELECT e.id, e.name, e.cpf, e.matricula,
+            cl.id AS clientId, cl.name AS clientName,
+            c.id AS companyId, c.name AS companyName
+     ${from}
+     ${whereClause}
+     ORDER BY e.name
+     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, query.pageSize, query.page * query.pageSize],
+  );
+
+  return { rows, total };
 }
 
 /**
@@ -651,39 +699,125 @@ export async function updateEmployee(
   ]);
 }
 
-export async function listImports(): Promise<StoredImport[]> {
+const IMPORT_SELECT_COLUMNS = `
+  i.id AS importId,
+  i.provider AS provider,
+  i.employee_id AS employeeId,
+  e.name AS employeeName,
+  e.cpf AS employeeCpf,
+  c.id AS companyId,
+  c.name AS companyName,
+  cl.id AS clientId,
+  cl.name AS clientName,
+  i.period_start AS periodStart,
+  i.period_end AS periodEnd,
+  i.original_pdf_path AS originalPdfPath,
+  sf.original_pdf_path AS sourceOriginalPdfPath,
+  i.max_punches AS maxPunches,
+  i.total_worked_minutes AS totalWorkedMinutes,
+  i.overtime_minutes AS overtimeMinutes,
+  i.absence_minutes AS absenceMinutes,
+  i.late_minutes AS lateMinutes,
+  i.regular_minutes AS regularMinutes,
+  i.interval_minutes AS intervalMinutes,
+  i.pending_count AS pendingCount,
+  i.imported_at AS importedAt
+`;
+
+const IMPORT_FROM_CLAUSE = `
+  FROM imports i
+  JOIN employees e ON e.id = i.employee_id
+  JOIN companies c ON c.id = e.company_id
+  LEFT JOIN clients cl ON cl.id = e.client_id
+  LEFT JOIN source_files sf ON sf.id = i.source_file_id
+`;
+
+/** Which raw `imports` column(s) each "Status no período" checkbox reads — must stay in sync with `PERIOD_STATUS_OPTIONS`' `matches` functions, which do the same test in JS on already-fetched rows. */
+const STATUS_SQL_CONDITIONS: Record<PeriodStatusId, string> = {
+  overtime: "i.overtime_minutes > 0",
+  absence: "i.absence_minutes > 0",
+  late: "i.late_minutes > 0",
+  regular: "i.regular_minutes > 0",
+  "no-punch": "i.total_worked_minutes = 0",
+  pending: "i.pending_count > 0",
+  interval: "i.interval_minutes > 0",
+};
+
+export async function getImportById(id: number): Promise<StoredImport | null> {
   const db = await getDb();
-  return db.select<StoredImport[]>(`
-    SELECT
-      i.id AS importId,
-      i.provider AS provider,
-      i.employee_id AS employeeId,
-      e.name AS employeeName,
-      e.cpf AS employeeCpf,
-      c.id AS companyId,
-      c.name AS companyName,
-      cl.id AS clientId,
-      cl.name AS clientName,
-      i.period_start AS periodStart,
-      i.period_end AS periodEnd,
-      i.original_pdf_path AS originalPdfPath,
-      sf.original_pdf_path AS sourceOriginalPdfPath,
-      i.max_punches AS maxPunches,
-      i.total_worked_minutes AS totalWorkedMinutes,
-      i.overtime_minutes AS overtimeMinutes,
-      i.absence_minutes AS absenceMinutes,
-      i.late_minutes AS lateMinutes,
-      i.regular_minutes AS regularMinutes,
-      i.interval_minutes AS intervalMinutes,
-      i.pending_count AS pendingCount,
-      i.imported_at AS importedAt
-    FROM imports i
-    JOIN employees e ON e.id = i.employee_id
-    JOIN companies c ON c.id = e.company_id
-    LEFT JOIN clients cl ON cl.id = e.client_id
-    LEFT JOIN source_files sf ON sf.id = i.source_file_id
-    ORDER BY i.imported_at DESC
-  `);
+  const rows = await db.select<StoredImport[]>(
+    `SELECT ${IMPORT_SELECT_COLUMNS} ${IMPORT_FROM_CLAUSE} WHERE i.id = $1`,
+    [id],
+  );
+  return rows[0] ?? null;
+}
+
+export interface ListImportsQuery {
+  /** Substring match on employee name — case-insensitive only for ASCII (SQLite's `LOWER()` doesn't case-fold accents). */
+  search?: string;
+  companyIds?: number[];
+  clientIds?: number[];
+  periodStart: string;
+  periodEnd: string;
+  statuses: PeriodStatusId[];
+  /** Omit both to get every matching row, unpaginated — used for bulk export, where every match is needed, not just the current page. */
+  page?: number;
+  pageSize?: number;
+}
+
+/**
+ * The Cartão Ponto library, filtered and paginated in SQL, not in memory.
+ * An empty `statuses` matches nothing (same as the in-memory
+ * `matchesSelectedStatuses` did for an empty selected set) — short-circuits
+ * before querying, since an always-false SQL condition would just be
+ * spelling out the same thing more expensively.
+ */
+export async function listImports(query: ListImportsQuery): Promise<PagedResult<StoredImport>> {
+  if (query.statuses.length === 0) return { rows: [], total: 0 };
+
+  const db = await getDb();
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  const search = query.search?.trim();
+  if (search) {
+    params.push(search);
+    conditions.push(`LOWER(e.name) LIKE '%' || LOWER($${params.length}) || '%'`);
+  }
+  const companyClause = inClause("c.id", query.companyIds ?? [], params);
+  if (companyClause) conditions.push(companyClause);
+  const clientClause = inClause("cl.id", query.clientIds ?? [], params);
+  if (clientClause) conditions.push(clientClause);
+
+  params.push(query.periodStart, query.periodEnd);
+  conditions.push(`i.period_end >= $${params.length - 1} AND i.period_start <= $${params.length}`);
+
+  if (query.statuses.length < PERIOD_STATUS_OPTIONS.length) {
+    conditions.push(`(${query.statuses.map((s) => STATUS_SQL_CONDITIONS[s]).join(" OR ")})`);
+  }
+
+  const whereClause = `WHERE ${conditions.join(" AND ")}`;
+
+  const countRows = await db.select<{ count: number }[]>(
+    `SELECT COUNT(*) AS count ${IMPORT_FROM_CLAUSE} ${whereClause}`,
+    params,
+  );
+  const total = countRows[0]?.count ?? 0;
+
+  const paginate = query.page !== undefined && query.pageSize !== undefined;
+  const limitClause = paginate ? `LIMIT $${params.length + 1} OFFSET $${params.length + 2}` : "";
+  const limitParams = paginate ? [query.pageSize!, query.page! * query.pageSize!] : [];
+
+  const rows = await db.select<StoredImport[]>(
+    `SELECT ${IMPORT_SELECT_COLUMNS}
+     ${IMPORT_FROM_CLAUSE}
+     ${whereClause}
+     ORDER BY i.imported_at DESC
+     ${limitClause}`,
+    [...params, ...limitParams],
+  );
+
+  return { rows, total };
 }
 
 interface DayRecordFilters {
@@ -906,10 +1040,38 @@ export async function findConflicts(
   return conflicts;
 }
 
-/** The import history for one import flow (timesheet or payment), most recent first. */
-export async function listImportFiles(importType: ImportType): Promise<ImportFileRow[]> {
+export interface ImportFilesQuery {
+  importType: ImportType;
+  /** Substring match on file name — case-insensitive only for ASCII (SQLite's `LOWER()` doesn't case-fold accents). */
+  search?: string;
+  page: number;
+  pageSize: number;
+}
+
+/**
+ * The import history for one import flow (timesheet or payment), most
+ * recent first — filtered and paginated in SQL, not in memory.
+ */
+export async function listImportFiles(query: ImportFilesQuery): Promise<PagedResult<ImportFileRow>> {
   const db = await getDb();
-  return db.select<ImportFileRow[]>(
+  const conditions = ["import_type = $1"];
+  const params: (string | number)[] = [query.importType];
+
+  const search = query.search?.trim();
+  if (search) {
+    params.push(search);
+    conditions.push(`LOWER(file_name) LIKE '%' || LOWER($${params.length}) || '%'`);
+  }
+
+  const whereClause = `WHERE ${conditions.join(" AND ")}`;
+
+  const countRows = await db.select<{ count: number }[]>(
+    `SELECT COUNT(*) AS count FROM source_files ${whereClause}`,
+    params,
+  );
+  const total = countRows[0]?.count ?? 0;
+
+  const rows = await db.select<ImportFileRow[]>(
     `SELECT
       id,
       file_name AS fileName,
@@ -923,10 +1085,13 @@ export async function listImportFiles(importType: ImportType): Promise<ImportFil
       imported_at AS importedAt,
       saved_at AS savedAt
     FROM source_files
-    WHERE import_type = $1
-    ORDER BY imported_at DESC`,
-    [importType],
+    ${whereClause}
+    ORDER BY imported_at DESC
+    LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, query.pageSize, query.page * query.pageSize],
   );
+
+  return { rows, total };
 }
 
 /**
@@ -1305,11 +1470,81 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
   }
 }
 
-/** One row per (colaborador, competência) — the Pagamentos list. */
-export async function listPaymentShiftSummaries(): Promise<PaymentShiftSummaryRow[]> {
+/** Which aggregated column each "Status" checkbox reads — a group matches a status once at least one of its shifts has it. */
+const PAYMENT_STATUS_HAVING_CONDITIONS: Record<PaymentShiftStatus, string> = {
+  pendente: "SUM(CASE WHEN ps.status = 'pendente' THEN 1 ELSE 0 END) > 0",
+  erro: "SUM(CASE WHEN ps.status = 'erro' THEN 1 ELSE 0 END) > 0",
+  pago: "SUM(CASE WHEN ps.status = 'pago' THEN 1 ELSE 0 END) > 0",
+};
+
+export interface ListPaymentShiftSummariesQuery {
+  /** Substring match on employee name — case-insensitive only for ASCII (SQLite's `LOWER()` doesn't case-fold accents). */
+  search?: string;
+  companyIds?: number[];
+  clientIds?: number[];
+  /** "YYYY-MM", inclusive on both ends — either can be omitted to leave that side open. */
+  competenciaStart?: string;
+  competenciaEnd?: string;
+  statuses: PaymentShiftStatus[];
+  page: number;
+  pageSize: number;
+}
+
+/**
+ * One row per (colaborador, competência) — the Pagamentos list. Filtered
+ * and paginated in SQL: the row-level filters (search/empresa/cliente/
+ * competência) go in WHERE, before the GROUP BY; the status filter reads
+ * the aggregated SUMs, so it has to go in HAVING instead. An empty
+ * `statuses` matches nothing (same as the in-memory version's behavior for
+ * an empty selected set) and short-circuits before querying.
+ */
+export async function listPaymentShiftSummaries(
+  query: ListPaymentShiftSummariesQuery,
+): Promise<PagedResult<PaymentShiftSummaryRow>> {
+  if (query.statuses.length === 0) return { rows: [], total: 0 };
+
   const db = await getDb();
-  return db.select<PaymentShiftSummaryRow[]>(`
-    SELECT
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  const search = query.search?.trim();
+  if (search) {
+    params.push(search);
+    conditions.push(`LOWER(e.name) LIKE '%' || LOWER($${params.length}) || '%'`);
+  }
+  const companyClause = inClause("c.id", query.companyIds ?? [], params);
+  if (companyClause) conditions.push(companyClause);
+  const clientClause = inClause("cl.id", query.clientIds ?? [], params);
+  if (clientClause) conditions.push(clientClause);
+  if (query.competenciaStart) {
+    params.push(query.competenciaStart);
+    conditions.push(`strftime('%Y-%m', ps.work_date) >= $${params.length}`);
+  }
+  if (query.competenciaEnd) {
+    params.push(query.competenciaEnd);
+    conditions.push(`strftime('%Y-%m', ps.work_date) <= $${params.length}`);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const havingClause =
+    query.statuses.length < 3
+      ? `HAVING (${query.statuses.map((s) => PAYMENT_STATUS_HAVING_CONDITIONS[s]).join(" OR ")})`
+      : "";
+  const from = `FROM payment_shifts ps
+    JOIN employees e ON e.id = ps.employee_id
+    JOIN clients cl ON cl.id = e.client_id
+    JOIN companies c ON c.id = e.company_id`;
+
+  const countRows = await db.select<{ count: number }[]>(
+    `SELECT COUNT(*) AS count FROM (
+       SELECT e.id ${from} ${whereClause} GROUP BY e.id, strftime('%Y-%m', ps.work_date) ${havingClause}
+     ) t`,
+    params,
+  );
+  const total = countRows[0]?.count ?? 0;
+
+  const rows = await db.select<PaymentShiftSummaryRow[]>(
+    `SELECT
       e.id AS employeeId, e.name AS employeeName,
       cl.id AS clientId, cl.name AS clientName,
       c.id AS companyId, c.name AS companyName,
@@ -1318,13 +1553,16 @@ export async function listPaymentShiftSummaries(): Promise<PaymentShiftSummaryRo
       SUM(CASE WHEN ps.status = 'pendente' THEN 1 ELSE 0 END) AS pendente,
       SUM(CASE WHEN ps.status = 'erro' THEN 1 ELSE 0 END) AS erro,
       SUM(CASE WHEN ps.status = 'pago' THEN 1 ELSE 0 END) AS pago
-    FROM payment_shifts ps
-    JOIN employees e ON e.id = ps.employee_id
-    JOIN clients cl ON cl.id = e.client_id
-    JOIN companies c ON c.id = e.company_id
+    ${from}
+    ${whereClause}
     GROUP BY e.id, competencia
+    ${havingClause}
     ORDER BY competencia DESC, e.name
-  `);
+    LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, query.pageSize, query.page * query.pageSize],
+  );
+
+  return { rows, total };
 }
 
 /** Every shift for one colaborador in one competência ("YYYY-MM") — the Pagamentos detail. */

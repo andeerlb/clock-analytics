@@ -5,7 +5,7 @@ import BackButton from "../components/BackButton";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import PdfViewerModal from "../components/PdfViewerModal";
 import { formatMinutes, isWeekend, overtimeMinutesForDay, sumIntervalMinutes } from "../lib/analysis";
-import { listImports, listStoredDayRecords } from "../lib/db";
+import { getImportById, listStoredDayRecords } from "../lib/db";
 import { formatDate, formatDateCompact, formatDateTime } from "../lib/format";
 import type { StoredDayRecord, StoredImport } from "../lib/types";
 
@@ -135,7 +135,7 @@ export default function EmployeeDetailPage() {
     setLoading(true);
     Promise.all([
       listStoredDayRecords({ importId: id }),
-      listImports().then((imports) => imports.find((i) => i.importId === id) ?? null),
+      getImportById(id),
     ])
       .then(([dayRows, imp]) => {
         setDays(dayRows);

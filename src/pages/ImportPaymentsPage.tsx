@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
 import DateRangePicker from "../components/DateRangePicker";
 import Pagination from "../components/Pagination";
@@ -23,7 +24,6 @@ import {
   pickPaymentFiles,
   type AppliedPaymentRow,
 } from "../lib/api";
-import { colorForName, initials } from "../lib/avatar";
 import {
   findDuplicatePaymentShifts,
   findEmployeeByAttempts,
@@ -118,6 +118,7 @@ export default function ImportPaymentsPage() {
   const [periodEnd, setPeriodEnd] = useState("");
   const [confirmFullImport, setConfirmFullImport] = useState(false);
   const [rowFilter, setRowFilter] = useState<RowFilter>("all");
+  const [nameSearch, setNameSearch] = useState("");
 
   const [paths, setPaths] = useState<string[]>([]);
   const [fileHashes, setFileHashes] = useState<Map<string, { hash: string; fileName: string }>>(
@@ -130,6 +131,7 @@ export default function ImportPaymentsPage() {
   const [previewPageSize, setPreviewPageSize] = useState(PREVIEW_PAGE_SIZE_OPTIONS[0]);
 
   const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
+  const [recentFilesTotal, setRecentFilesTotal] = useState(0);
   const [historySearch, setHistorySearch] = useState("");
   const [historyPage, setHistoryPage] = useState(0);
   const [historyPageSize, setHistoryPageSize] = useState(HISTORY_PAGE_SIZE_OPTIONS[0]);
@@ -140,11 +142,20 @@ export default function ImportPaymentsPage() {
 
   useEffect(() => {
     listPaymentTemplates().then(setTemplates);
-    refreshRecentFiles();
   }, []);
 
+  // History panel — filtered and paginated in SQL, not in memory.
+  useEffect(() => {
+    refreshRecentFiles();
+  }, [historySearch, historyPage, historyPageSize]);
+
   function refreshRecentFiles() {
-    listImportFiles("payment").then(setRecentFiles);
+    listImportFiles({ importType: "payment", search: historySearch, page: historyPage, pageSize: historyPageSize }).then(
+      ({ rows, total }) => {
+        setRecentFiles(rows);
+        setRecentFilesTotal(total);
+      },
+    );
   }
 
   // Hash newly picked files (no page-count/duplicate check like timesheets
@@ -195,6 +206,7 @@ export default function ImportPaymentsPage() {
     setSelectedRows(new Set());
     setPreviewPage(0);
     setRowFilter("all");
+    setNameSearch("");
   }
 
   function reset() {
@@ -220,25 +232,27 @@ export default function ImportPaymentsPage() {
   // increments for every row regardless of match, since it's the absolute
   // position `selectedRows`/`shiftRows` key off of, not a display index.
   const previewRows = useMemo(() => {
+    const query = nameSearch.trim().toLowerCase();
     const out: DisplayRow[] = [];
     let idx = 0;
     for (const result of fileResults) {
       if (result.error) {
-        if (rowFilter === "all" || rowFilter === "error") {
+        if (!query && (rowFilter === "all" || rowFilter === "error")) {
           out.push({ kind: "error", fileName: result.fileName, message: result.error });
         }
         continue;
       }
       for (const row of result.rows) {
-        const matches =
+        const matchesFilter =
           rowFilter === "all" ||
           (rowFilter === "selected" ? selectedRows.has(idx) : rowFilter === row.category);
-        if (matches) out.push({ kind: "shift", index: idx, row });
+        const matchesName = !query || (row.employee?.name ?? row.nameRaw).toLowerCase().includes(query);
+        if (matchesFilter && matchesName) out.push({ kind: "shift", index: idx, row });
         idx++;
       }
     }
     return out;
-  }, [fileResults, rowFilter, selectedRows]);
+  }, [fileResults, rowFilter, selectedRows, nameSearch]);
 
   const categoryCounts = useMemo(() => {
     const counts: Record<RowCategory, number> = {
@@ -287,22 +301,7 @@ export default function ImportPaymentsPage() {
     }
   }
 
-  const filteredRecentFiles = useMemo(() => {
-    const query = historySearch.trim().toLowerCase();
-    if (!query) return recentFiles;
-    return recentFiles.filter((f) => f.fileName.toLowerCase().includes(query));
-  }, [recentFiles, historySearch]);
-
-  useEffect(() => {
-    setHistoryPage(0);
-  }, [historySearch]);
-
-  const historyPageCount = Math.max(1, Math.ceil(filteredRecentFiles.length / historyPageSize));
-  const historyPageItems = useMemo(
-    () =>
-      filteredRecentFiles.slice(historyPage * historyPageSize, historyPage * historyPageSize + historyPageSize),
-    [filteredRecentFiles, historyPage, historyPageSize],
-  );
+  const historyPageCount = Math.max(1, Math.ceil(recentFilesTotal / historyPageSize));
 
   async function handleProcess() {
     if (!selectedTemplate) return;
@@ -423,6 +422,7 @@ export default function ImportPaymentsPage() {
       setSelectedRows(defaultSelected);
       setPreviewPage(0);
       setRowFilter("all");
+      setNameSearch("");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -730,6 +730,28 @@ export default function ImportPaymentsPage() {
                       </button>
                     )}
                   </div>
+                  <div style={{ position: "relative", flexShrink: 0 }}>
+                    <Search
+                      size={14}
+                      style={{
+                        position: "absolute",
+                        left: "0.65rem",
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                        color: "var(--text-muted)",
+                      }}
+                    />
+                    <input
+                      type="text"
+                      value={nameSearch}
+                      onChange={(e) => {
+                        setNameSearch(e.target.value);
+                        setPreviewPage(0);
+                      }}
+                      placeholder="Buscar por nome..."
+                      style={{ paddingLeft: "2rem", width: "13rem" }}
+                    />
+                  </div>
                 </div>
 
                 <div className="table-scroll">
@@ -803,9 +825,7 @@ export default function ImportPaymentsPage() {
                             <td>
                               {row.employee ? (
                                 <div className="person-cell">
-                                  <span className="avatar" style={{ background: colorForName(row.employee.name) }}>
-                                    {initials(row.employee.name)}
-                                  </span>
+                                  <Avatar name={row.employee.name} />
                                   {row.employee.name}
                                 </div>
                               ) : (
@@ -912,7 +932,7 @@ export default function ImportPaymentsPage() {
           <div className="card">
             <h3 style={{ marginTop: 0 }}>Histórico de importações</h3>
 
-            {recentFiles.length > 0 && (
+            {!(recentFilesTotal === 0 && !historySearch.trim()) && (
               <div className="field" style={{ marginBottom: "0.8rem" }}>
                 <div style={{ position: "relative" }}>
                   <Search
@@ -928,7 +948,10 @@ export default function ImportPaymentsPage() {
                   <input
                     type="text"
                     value={historySearch}
-                    onChange={(e) => setHistorySearch(e.target.value)}
+                    onChange={(e) => {
+                      setHistorySearch(e.target.value);
+                      setHistoryPage(0);
+                    }}
                     placeholder="Buscar por nome do arquivo..."
                     style={{ width: "100%", paddingLeft: "2rem" }}
                   />
@@ -936,14 +959,16 @@ export default function ImportPaymentsPage() {
               </div>
             )}
 
-            {recentFiles.length === 0 && <p className="muted">Nenhum arquivo importado ainda.</p>}
-            {recentFiles.length > 0 && filteredRecentFiles.length === 0 && (
+            {recentFilesTotal === 0 && !historySearch.trim() && (
+              <p className="muted">Nenhum arquivo importado ainda.</p>
+            )}
+            {recentFilesTotal === 0 && historySearch.trim() && (
               <p className="muted">Nenhum arquivo encontrado.</p>
             )}
 
-            {filteredRecentFiles.length > 0 && (
+            {recentFilesTotal > 0 && (
               <div className="file-list">
-                {historyPageItems.map((f) => {
+                {recentFiles.map((f) => {
                   const badge = STATUS_BADGE[f.status];
                   const BadgeIcon = badge.icon;
                   return (
@@ -976,15 +1001,15 @@ export default function ImportPaymentsPage() {
               </div>
             )}
 
-            {filteredRecentFiles.length > HISTORY_PAGE_SIZE_OPTIONS[0] && (
+            {recentFilesTotal > HISTORY_PAGE_SIZE_OPTIONS[0] && (
               <Pagination
                 page={historyPage}
                 pageCount={historyPageCount}
                 onPageChange={setHistoryPage}
                 rangeLabel={`Mostrando ${historyPage * historyPageSize + 1} a ${Math.min(
-                  filteredRecentFiles.length,
+                  recentFilesTotal,
                   historyPage * historyPageSize + historyPageSize,
-                )} de ${filteredRecentFiles.length}`}
+                )} de ${recentFilesTotal}`}
                 pageSize={historyPageSize}
                 pageSizeOptions={HISTORY_PAGE_SIZE_OPTIONS}
                 onPageSizeChange={(size) => {

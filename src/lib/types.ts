@@ -1,3 +1,9 @@
+/** A page of `rows` out of `total` matching rows — `total` is pre-filter/pagination, for computing page count. */
+export interface PagedResult<T> {
+  rows: T[];
+  total: number;
+}
+
 export interface Company {
   name: string;
   cnpj: string;
