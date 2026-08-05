@@ -982,7 +982,6 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
   const rows = await db.select<Omit<PaymentTemplateRow, "groups" | "rules">[]>(
     `SELECT pt.id, pt.name, pt.file_kind AS fileKind, pt.delimiter,
             pt.date_format AS dateFormat,
-            pt.sample_file_path AS sampleFilePath, pt.sample_file_name AS sampleFileName,
             pt.created_at AS createdAt, pt.updated_at AS updatedAt
      FROM payment_templates pt
      WHERE pt.id = $1`,
@@ -1055,8 +1054,6 @@ export interface PaymentTemplateInput {
   fileKind: PaymentFileKind;
   delimiter: string | null;
   dateFormat: string;
-  sampleFilePath: string;
-  sampleFileName: string;
   groups: PaymentTemplateGroup[];
   rules: PaymentTemplateRuleInput[];
 }
@@ -1133,17 +1130,9 @@ async function deleteTemplateRules(db: Database, templateId: number): Promise<vo
 export async function createPaymentTemplate(input: PaymentTemplateInput): Promise<number> {
   const db = await getDb();
   const result = await db.execute(
-    `INSERT INTO payment_templates
-       (name, file_kind, delimiter, date_format, sample_file_path, sample_file_name)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [
-      input.name,
-      input.fileKind,
-      input.delimiter,
-      input.dateFormat,
-      input.sampleFilePath,
-      input.sampleFileName,
-    ],
+    `INSERT INTO payment_templates (name, file_kind, delimiter, date_format)
+     VALUES ($1, $2, $3, $4)`,
+    [input.name, input.fileKind, input.delimiter, input.dateFormat],
   );
   const templateId = result.lastInsertId as number;
   await insertTemplateGroups(db, templateId, input.groups);
@@ -1155,18 +1144,9 @@ export async function updatePaymentTemplate(id: number, input: PaymentTemplateIn
   const db = await getDb();
   await db.execute(
     `UPDATE payment_templates SET
-       name = $1, file_kind = $2, delimiter = $3, date_format = $4,
-       sample_file_path = $5, sample_file_name = $6, updated_at = datetime('now')
-     WHERE id = $7`,
-    [
-      input.name,
-      input.fileKind,
-      input.delimiter,
-      input.dateFormat,
-      input.sampleFilePath,
-      input.sampleFileName,
-      id,
-    ],
+       name = $1, file_kind = $2, delimiter = $3, date_format = $4, updated_at = datetime('now')
+     WHERE id = $5`,
+    [input.name, input.fileKind, input.delimiter, input.dateFormat, id],
   );
   await deleteTemplateGroups(db, id);
   await insertTemplateGroups(db, id, input.groups);
@@ -1174,22 +1154,12 @@ export async function updatePaymentTemplate(id: number, input: PaymentTemplateIn
   await insertTemplateRules(db, id, input.rules);
 }
 
-/**
- * Deletes the template and its groups/rules (and their sheets/field
- * mappings); returns its `sample_file_path` so the caller can best-effort
- * delete the copied file too (via the existing generic `deletePaths()`
- * Rust command) — this function only touches the SQL side.
- */
-export async function deletePaymentTemplate(id: number): Promise<string> {
+/** Deletes the template and its groups/rules (and their sheets/field mappings). */
+export async function deletePaymentTemplate(id: number): Promise<void> {
   const db = await getDb();
-  const rows = await db.select<{ sampleFilePath: string }[]>(
-    "SELECT sample_file_path AS sampleFilePath FROM payment_templates WHERE id = $1",
-    [id],
-  );
   await deleteTemplateGroups(db, id);
   await deleteTemplateRules(db, id);
   await db.execute("DELETE FROM payment_templates WHERE id = $1", [id]);
-  return rows[0]?.sampleFilePath ?? "";
 }
 
 /**

@@ -2,7 +2,6 @@ import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import BackButton from "../components/BackButton";
 import PaymentTemplateWizard from "../components/PaymentTemplateWizard";
-import { deletePaths } from "../lib/api";
 import { deletePaymentTemplate, getPaymentTemplate, listPaymentTemplates } from "../lib/db";
 import { formatDateTime } from "../lib/format";
 import type { PaymentTemplateListRow, PaymentTemplateRow } from "../lib/types";
@@ -41,8 +40,7 @@ export default function PaymentTemplatesPage() {
   async function handleDeleteTemplate(id: number) {
     setError(null);
     try {
-      const samplePath = await deletePaymentTemplate(id);
-      if (samplePath) await deletePaths([samplePath]).catch(() => {});
+      await deletePaymentTemplate(id);
       setConfirmDeleteId(null);
       refreshTemplates();
     } catch (e) {

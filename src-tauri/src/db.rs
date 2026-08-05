@@ -136,5 +136,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0022_payment_shift_schedule_minutes.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 23,
+            description: "drop payment_templates.sample_file_path/sample_file_name — no longer persisted, only used transiently while building the mapping",
+            sql: include_str!("../migrations/0023_payment_template_drop_sample_file.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

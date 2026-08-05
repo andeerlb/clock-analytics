@@ -1,9 +1,7 @@
 use calamine::{open_workbook_auto, DataType, Reader};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
-use uuid::Uuid;
 
 /// Extension-based dispatch — csv is read as delimited text; anything else
 /// (xlsx/xls/ods) is handed to calamine, which auto-detects the exact
@@ -117,23 +115,6 @@ pub fn preview(
         .map(|row| row.iter().map(|cell| cell.to_string()).collect())
         .collect();
     Ok(SpreadsheetPreview { rows, delimiter: None })
-}
-
-/// Copies the sample file a template was built from into
-/// `<appdata>/payment_templates/`, named by a fresh uuid (keeping the
-/// original extension) — mirrors how `parse_import` populates `imports/`.
-/// Called only on save, not during wizard preview steps, so abandoned
-/// wizards never leave orphaned copies behind.
-pub fn copy_sample(data_dir: &Path, source_path: &str) -> Result<String, String> {
-    let templates_dir = data_dir.join("payment_templates");
-    fs::create_dir_all(&templates_dir).map_err(|e| e.to_string())?;
-    let ext = Path::new(source_path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("dat");
-    let dest = templates_dir.join(format!("{}.{ext}", Uuid::new_v4()));
-    fs::copy(source_path, &dest).map_err(|e| e.to_string())?;
-    Ok(dest.to_string_lossy().to_string())
 }
 
 /// One payment template group's own slice of the config needed to read

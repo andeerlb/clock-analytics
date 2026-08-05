@@ -272,8 +272,6 @@ export interface PaymentTemplateRule {
 export interface PaymentTemplateRow extends PaymentTemplateListRow {
   delimiter: string | null;
   dateFormat: string;
-  sampleFilePath: string;
-  sampleFileName: string;
   groups: PaymentTemplateGroup[];
   rules: PaymentTemplateRule[];
   createdAt: string;

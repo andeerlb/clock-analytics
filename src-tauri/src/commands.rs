@@ -325,15 +325,6 @@ pub fn preview_spreadsheet(
     spreadsheet::preview(&path, sheet.as_deref(), delimiter.as_deref(), max_rows)
 }
 
-/// Copies the sample file a payment template was built from into this
-/// app's own data dir, so "Editar" can reopen the wizard later without
-/// depending on the originally picked path still existing.
-#[tauri::command]
-pub fn copy_payment_sample(app: AppHandle, source_path: String) -> Result<String, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    spreadsheet::copy_sample(&data_dir, &source_path)
-}
-
 /// Reads every row of a real (not sample) payment file according to a
 /// saved template's column mapping — the actual import-execution step,
 /// as opposed to `preview_spreadsheet`'s capped preview used while

@@ -31,7 +31,6 @@ pub fn run() {
             commands::copy_pdf_to,
             commands::list_spreadsheet_sheets,
             commands::preview_spreadsheet,
-            commands::copy_payment_sample,
             commands::apply_payment_template,
             commands::hash_payment_file,
             commands::generate_report_zip,

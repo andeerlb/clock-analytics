@@ -103,11 +103,6 @@ export function previewSpreadsheet(
   return invoke("preview_spreadsheet", { path, sheet, delimiter, maxRows });
 }
 
-/** Copies a payment template's sample file into the app's own data folder. */
-export function copyPaymentSample(sourcePath: string): Promise<string> {
-  return invoke("copy_payment_sample", { sourcePath });
-}
-
 /** The bit of a `PaymentTemplateGroup` (see types.ts) actually needed to read rows — id/headerLabel don't matter here. */
 export interface PaymentTemplateGroupSpec {
   sheetNames: string[];

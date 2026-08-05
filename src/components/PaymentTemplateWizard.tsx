@@ -1,12 +1,6 @@
 import { CheckSquare, ChevronLeft, ChevronRight, Eye, FolderOpen, Plus, Square, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import {
-  copyPaymentSample,
-  deletePaths,
-  listSpreadsheetSheets,
-  pickPaymentFile,
-  previewSpreadsheet,
-} from "../lib/api";
+import { listSpreadsheetSheets, pickPaymentFile, previewSpreadsheet } from "../lib/api";
 import {
   createPaymentTemplate,
   listClients,
@@ -30,7 +24,20 @@ import {
   type PaymentTemplateRuleKind,
 } from "../lib/types";
 
-const STEP_LABELS = ["Arquivo", "Mapeamento", "Detalhes"];
+/**
+ * A file is only ever used transiently, to help build the mapping — it's
+ * never persisted (see the payment_templates.sample_file_* migration this
+ * replaced). Creating a template always starts from a real file, so it
+ * always has all three steps; editing an already-saved template works
+ * directly off the saved configuration, with no file involved at all, so
+ * the "Arquivo" step doesn't apply there.
+ */
+type WizardStep = "file" | "mapping" | "details";
+const STEP_LABEL_TEXT: Record<WizardStep, string> = {
+  file: "Arquivo",
+  mapping: "Mapeamento",
+  details: "Detalhes",
+};
 
 /** Stand-in group key for csv, which has no sheets to key groups off of — there's always exactly one implicit group. */
 const CSV_GROUP_KEY = "__csv__";
@@ -82,13 +89,18 @@ export default function PaymentTemplateWizard({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [step, setStep] = useState(0);
+  const [stepIndex, setStepIndex] = useState(0);
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [clientsAll, setClientsAll] = useState<ClientRow[]>([]);
 
+  // `filePath !== null` doubles as "a real file is backing this session" —
+  // always true partway through creating a new template (the "Arquivo"
+  // step requires one before you can advance), always false while editing
+  // an existing one (there's no "Arquivo" step there at all, see
+  // `WizardStep`), so it's a reliable switch between the live grid and the
+  // abstract, file-less column editor in the "Mapeamento" step below.
   const [filePath, setFilePath] = useState<string | null>(null);
   const [fileKind, setFileKind] = useState<PaymentFileKind | null>(null);
-  const [isNewFile, setIsNewFile] = useState(true);
   const [sheets, setSheets] = useState<string[]>([]);
   const [activeSheet, setActiveSheet] = useState<string | null>(null);
   const [includedSheets, setIncludedSheets] = useState<Set<string>>(new Set());
@@ -103,6 +115,16 @@ export default function PaymentTemplateWizard({
   // not by a fixed row number picked here.
   const [sheetGroupOf, setSheetGroupOf] = useState<Record<string, string>>({});
   const [groupMapping, setGroupMapping] = useState<Record<string, Record<number, PaymentTargetField>>>({});
+  // Cosmetic header hint per mapped column — captured from the live grid
+  // when a file is present, or carried straight over from the saved
+  // template's `headerLabel` when editing without one. Never used for
+  // matching, only to help a human recognize which column is which.
+  const [groupFieldLabels, setGroupFieldLabels] = useState<Record<string, Record<number, string | null>>>({});
+  // How many blank columns past the last already-mapped one are revealed in
+  // the file-less grid (editing mode) — lets you map a brand new column by
+  // picking a field for it, same interaction as the live grid's header
+  // select, just without real data underneath. Reset per active group.
+  const [extraColumns, setExtraColumns] = useState(0);
 
   const [name, setName] = useState("");
   const [dateFormat, setDateFormat] = useState("DD/MM/YYYY");
@@ -112,6 +134,10 @@ export default function PaymentTemplateWizard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const isEditing = target !== null && target !== "new";
+  const steps: WizardStep[] = isEditing ? ["mapping", "details"] : ["file", "mapping", "details"];
+  const currentStep = steps[stepIndex];
+
   useEffect(() => {
     listCompanies().then(setCompanies);
     listClients().then(setClientsAll);
@@ -119,14 +145,13 @@ export default function PaymentTemplateWizard({
 
   useEffect(() => {
     if (target === null) return;
-    setStep(0);
+    setStepIndex(0);
     setError(null);
     setBusy(false);
 
     if (target === "new") {
       setFilePath(null);
       setFileKind(null);
-      setIsNewFile(true);
       setSheets([]);
       setActiveSheet(null);
       setIncludedSheets(new Set());
@@ -134,15 +159,17 @@ export default function PaymentTemplateWizard({
       setRows([]);
       setSheetGroupOf({});
       setGroupMapping({});
+      setGroupFieldLabels({});
+      setExtraColumns(0);
       setName("");
       setDateFormat("DD/MM/YYYY");
       setRules([]);
       return;
     }
 
-    setFilePath(target.sampleFilePath);
+    setFilePath(null);
     setFileKind(target.fileKind);
-    setIsNewFile(false);
+    setDelimiter(target.delimiter);
     setName(target.name);
     setDateFormat(target.dateFormat);
     setRules(
@@ -155,7 +182,7 @@ export default function PaymentTemplateWizard({
         clientId: r.clientId,
       })),
     );
-    loadFileForEdit(target);
+    hydrateFromTemplate(target);
   }, [target]);
 
   useEffect(() => {
@@ -173,51 +200,40 @@ export default function PaymentTemplateWizard({
     return sheetGroupOf[sheetName] ?? sheetName;
   }
 
-  async function loadFileForEdit(t: PaymentTemplateRow) {
-    setLoadingPreview(true);
-    setError(null);
-    try {
-      const sheetNames = await listSpreadsheetSheets(t.sampleFilePath);
-      setSheets(sheetNames);
+  /** Rebuilds the wizard's grouping/mapping state straight from a saved template — no file, no I/O. */
+  function hydrateFromTemplate(t: PaymentTemplateRow) {
+    const newSheetGroupOf: Record<string, string> = {};
+    const newGroupMapping: Record<string, Record<number, PaymentTargetField>> = {};
+    const newGroupFieldLabels: Record<string, Record<number, string | null>> = {};
+    const sheetNames: string[] = [];
 
-      const newSheetGroupOf: Record<string, string> = {};
-      const newGroupMapping: Record<string, Record<number, PaymentTargetField>> = {};
-      const included = new Set<string>();
-
-      for (const group of t.groups) {
-        const repKey = group.sheetNames[0] ?? CSV_GROUP_KEY;
-        const m: Record<number, PaymentTargetField> = {};
-        for (const fm of group.fieldMappings) {
-          const index = letterToIndex(fm.columnLetter);
-          if (index !== null) m[index] = fm.targetField;
-        }
-        newGroupMapping[repKey] = m;
-        // Only sheets the saved template actually included are pre-checked
-        // — anything new in the workbook since it was created starts
-        // unchecked, same as a brand new template would.
-        for (const s of group.sheetNames) {
-          if (sheetNames.includes(s)) {
-            newSheetGroupOf[s] = repKey;
-            included.add(s);
-          }
+    for (const group of t.groups) {
+      const repKey = group.sheetNames[0] ?? CSV_GROUP_KEY;
+      const m: Record<number, PaymentTargetField> = {};
+      const labels: Record<number, string | null> = {};
+      for (const fm of group.fieldMappings) {
+        const index = letterToIndex(fm.columnLetter);
+        if (index !== null) {
+          m[index] = fm.targetField;
+          labels[index] = fm.headerLabel;
         }
       }
-
-      setSheetGroupOf(newSheetGroupOf);
-      setGroupMapping(newGroupMapping);
-      setIncludedSheets(included);
-
-      const firstGroupSheet = t.groups[0]?.sheetNames.find((s) => sheetNames.includes(s));
-      const sheet = firstGroupSheet ?? sheetNames[0] ?? null;
-      setActiveSheet(sheet);
-      const preview = await previewSpreadsheet(t.sampleFilePath, sheet, t.delimiter, 50);
-      setRows(preview.rows);
-      setDelimiter(t.delimiter ?? preview.delimiter);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoadingPreview(false);
+      newGroupMapping[repKey] = m;
+      newGroupFieldLabels[repKey] = labels;
+      for (const s of group.sheetNames) {
+        newSheetGroupOf[s] = repKey;
+        sheetNames.push(s);
+      }
     }
+
+    setSheets(sheetNames);
+    setSheetGroupOf(newSheetGroupOf);
+    setGroupMapping(newGroupMapping);
+    setGroupFieldLabels(newGroupFieldLabels);
+    setIncludedSheets(new Set(sheetNames));
+    setActiveSheet(sheetNames[0] ?? null);
+    setRows([]);
+    setExtraColumns(0);
   }
 
   async function loadFile(path: string) {
@@ -234,6 +250,8 @@ export default function PaymentTemplateWizard({
       setIncludedSheets(new Set(sheetNames));
       setSheetGroupOf({});
       setGroupMapping({});
+      setGroupFieldLabels({});
+      setExtraColumns(0);
       const preview = await previewSpreadsheet(path, firstSheet, null, 50);
       setRows(preview.rows);
       setDelimiter(preview.delimiter);
@@ -264,17 +282,17 @@ export default function PaymentTemplateWizard({
     if (!path) return;
     setFilePath(path);
     setFileKind(fileKindFromPath(path));
-    setIsNewFile(true);
     await loadFile(path);
   }
 
-  // Just switches which sheet's raw grid is being looked at — the mapping
-  // is derived from whichever group that sheet belongs to, so revisiting
-  // an already-configured sheet shows its real config instead of
-  // resetting it.
+  // Just switches which sheet's config is being looked at — the mapping is
+  // derived from whichever group that sheet belongs to, so revisiting an
+  // already-configured sheet shows its real config instead of resetting
+  // it.
   function handleSheetClick(sheetName: string) {
     if (sheetName === activeSheet) return;
     setActiveSheet(sheetName);
+    setExtraColumns(0);
     refetchRows(sheetName, delimiter);
   }
 
@@ -302,6 +320,7 @@ export default function PaymentTemplateWizard({
       // anyone else still resolving to the same key stays put.
       setSheetGroupOf((prev) => ({ ...prev, [otherSheet]: otherSheet }));
       setGroupMapping((prev) => ({ ...prev, [otherSheet]: {} }));
+      setGroupFieldLabels((prev) => ({ ...prev, [otherSheet]: {} }));
       return;
     }
 
@@ -323,10 +342,11 @@ export default function PaymentTemplateWizard({
     // Column boundaries just shifted, so whatever mapping was set for the
     // csv's one implicit group no longer means anything.
     setGroupMapping((prev) => ({ ...prev, [CSV_GROUP_KEY]: {} }));
+    setGroupFieldLabels((prev) => ({ ...prev, [CSV_GROUP_KEY]: {} }));
     refetchRows(activeSheet, newDelimiter);
   }
 
-  function setColumnMapping(colIndex: number, field: PaymentTargetField | "") {
+  function setColumnMapping(colIndex: number, field: PaymentTargetField | "", headerLabel?: string | null) {
     const key = groupKeyOf(activeSheet);
     setGroupMapping((prev) => {
       const current = prev[key] ?? {};
@@ -339,6 +359,16 @@ export default function PaymentTemplateWizard({
           if (idx !== colIndex && next[idx] === field) delete next[idx];
         }
         next[colIndex] = field;
+      }
+      return { ...prev, [key]: next };
+    });
+    setGroupFieldLabels((prev) => {
+      const current = prev[key] ?? {};
+      const next = { ...current };
+      if (!field) {
+        delete next[colIndex];
+      } else if (headerLabel !== undefined) {
+        next[colIndex] = headerLabel;
       }
       return { ...prev, [key]: next };
     });
@@ -401,6 +431,14 @@ export default function PaymentTemplateWizard({
   const firstRowHint = rows[0] ?? [];
   const sampleRows = rows.slice(0, SAMPLE_ROW_COUNT);
 
+  // Same grid, no live data: the file-less editing mode only knows about
+  // already-mapped columns, plus however many blank ones `extraColumns`
+  // has revealed past the last mapped one — picking a field for a blank
+  // one is how a new column gets mapped, exactly like clicking a live
+  // grid's header select.
+  const mappedMaxIndex = Math.max(-1, ...Object.keys(mapping).map(Number));
+  const noFileColumns = Array.from({ length: mappedMaxIndex + 1 + extraColumns }, (_, i) => i);
+
   // Every group among the sheets actually being imported — csv always has
   // just the one implicit group.
   const includedGroupKeys =
@@ -439,42 +477,32 @@ export default function PaymentTemplateWizard({
   });
 
   const canAdvance =
-    step === 0
+    currentStep === "file"
       ? filePath !== null
-      : step === 1
+      : currentStep === "mapping"
         ? (sheets.length === 0 || includedSheets.size > 0) &&
           includedGroupKeys.length > 0 &&
           includedGroupKeys.every(isGroupMappingValid)
         : false;
 
   async function handleSave() {
-    if (!filePath || !fileKind || !name.trim()) return;
+    if (!fileKind || !name.trim()) return;
     setBusy(true);
     setError(null);
     try {
       const editing = target !== null && target !== "new" ? target : null;
-      let sampleFilePath = editing?.sampleFilePath ?? "";
-      let sampleFileName = editing?.sampleFileName ?? "";
-      const oldSamplePath = editing?.sampleFilePath ?? null;
-
-      if (isNewFile) {
-        sampleFilePath = await copyPaymentSample(filePath);
-        sampleFileName = fileNameFromPath(filePath);
-      }
 
       const groups: PaymentTemplateGroup[] = includedGroupKeys.map((key) => {
         const sheetNames =
           fileKind === "csv" ? [] : sheets.filter((s) => includedSheets.has(s) && groupKeyOf(s) === key);
         const m = groupMapping[key] ?? {};
+        const labels = groupFieldLabels[key] ?? {};
         const fieldMappings = Object.entries(m).map(([indexStr, targetField]) => {
           const index = Number(indexStr);
           return {
             columnLetter: columnLetter(index),
             targetField,
-            // Only the group currently in view has its raw grid cached —
-            // header labels for the others are purely cosmetic (never
-            // used for matching), so it's fine to leave them blank.
-            headerLabel: key === activeGroupKey ? firstRowHint[index] ?? null : null,
+            headerLabel: labels[index] ?? null,
           };
         });
         return { sheetNames, fieldMappings };
@@ -497,8 +525,6 @@ export default function PaymentTemplateWizard({
         fileKind,
         delimiter: fileKind === "csv" ? delimiter : null,
         dateFormat,
-        sampleFilePath,
-        sampleFileName,
         groups,
         rules: ruleInputs,
       };
@@ -507,10 +533,6 @@ export default function PaymentTemplateWizard({
         await updatePaymentTemplate(editing.id, input);
       } else {
         await createPaymentTemplate(input);
-      }
-
-      if (isNewFile && oldSamplePath) {
-        await deletePaths([oldSamplePath]).catch(() => {});
       }
 
       onSaved();
@@ -541,16 +563,18 @@ export default function PaymentTemplateWizard({
                 <label htmlFor={`merge-${s}`} style={{ fontSize: "0.85rem", cursor: "pointer" }}>
                   {s}
                 </label>
-                <button
-                  type="button"
-                  className="ghost"
-                  style={{ padding: "0.1rem 0.3rem" }}
-                  onClick={() => handleSheetClick(s)}
-                  title={`Visualizar "${s}"`}
-                  aria-label={`Visualizar "${s}"`}
-                >
-                  <Eye size={12} />
-                </button>
+                {filePath && (
+                  <button
+                    type="button"
+                    className="ghost"
+                    style={{ padding: "0.1rem 0.3rem" }}
+                    onClick={() => handleSheetClick(s)}
+                    title={`Visualizar "${s}"`}
+                    aria-label={`Visualizar "${s}"`}
+                  >
+                    <Eye size={12} />
+                  </button>
+                )}
               </span>
             ))}
         </div>
@@ -559,8 +583,6 @@ export default function PaymentTemplateWizard({
   }
 
   if (!target) return null;
-
-  const isEditing = target !== "new";
 
   return (
     <div
@@ -594,9 +616,9 @@ export default function PaymentTemplateWizard({
       </div>
 
       <div className="wizard-steps" onClick={(e) => e.stopPropagation()}>
-        {STEP_LABELS.map((label, i) => (
-          <span key={label} className={`wizard-step${i === step ? " active" : i < step ? " done" : ""}`}>
-            {i + 1}. {label}
+        {steps.map((s, i) => (
+          <span key={s} className={`wizard-step${i === stepIndex ? " active" : i < stepIndex ? " done" : ""}`}>
+            {i + 1}. {STEP_LABEL_TEXT[s]}
           </span>
         ))}
       </div>
@@ -607,14 +629,12 @@ export default function PaymentTemplateWizard({
       >
         {error && <div className="error-box" style={{ marginBottom: "1rem" }}>{error}</div>}
 
-        {step === 0 && (
+        {currentStep === "file" && (
           <div className="card" style={{ maxWidth: "32rem" }}>
             <div className="field">
               <label>Arquivo de exemplo</label>
               {filePath ? (
-                <p className="muted" style={{ margin: "0.4rem 0" }}>
-                  {isNewFile ? fileNameFromPath(filePath) : target !== "new" ? target.sampleFileName : ""}
-                </p>
+                <p className="muted" style={{ margin: "0.4rem 0" }}>{fileNameFromPath(filePath)}</p>
               ) : (
                 <p className="muted" style={{ margin: "0.4rem 0" }}>Nenhum arquivo selecionado.</p>
               )}
@@ -622,12 +642,15 @@ export default function PaymentTemplateWizard({
                 <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
                 {filePath ? "Trocar arquivo" : "Selecionar arquivo"}
               </button>
-              <p className="field-hint">Formatos aceitos: CSV, XLSX, XLS ou ODS.</p>
+              <p className="field-hint">
+                Formatos aceitos: CSV, XLSX, XLS ou ODS. Usado só para montar o mapeamento agora —
+                não é guardado. Depois de salvo, o template só armazena a configuração de colunas.
+              </p>
             </div>
           </div>
         )}
 
-        {step === 1 && (
+        {currentStep === "mapping" && (
           <div>
             {fileKind === "csv" && (
               <div className="field" style={{ maxWidth: "16rem", marginBottom: "0.9rem" }}>
@@ -687,26 +710,25 @@ export default function PaymentTemplateWizard({
                 })}
               </div>
             )}
-            {loadingPreview && <p className="muted">Carregando...</p>}
-            {!loadingPreview && rows.length === 0 && <p className="muted">Nenhuma linha encontrada.</p>}
-            {!loadingPreview && rows.length > 0 && (
+
+            {!filePath ? (
               <div className={`spreadsheet-grid-scroll${sheets.length > 1 ? " attached-to-tabs" : ""}`}>
                 <table className="spreadsheet-grid">
                   <thead>
                     <tr>
                       <th className="corner">#</th>
-                      {columns.map((c) => {
+                      {noFileColumns.map((c) => {
                         const field = mapping[c];
+                        const label = groupFieldLabels[activeGroupKey]?.[c];
                         return (
                           <th key={c} className={`mapping-header${field ? " is-mapped" : ""}`}>
                             <span className="header-label">
-                              {columnLetter(c)} — {firstRowHint[c] || "(vazio)"}
+                              {columnLetter(c)}
+                              {label ? ` — ${label}` : ""}
                             </span>
                             <select
                               value={field ?? ""}
-                              onChange={(e) =>
-                                setColumnMapping(c, e.target.value as PaymentTargetField | "")
-                              }
+                              onChange={(e) => setColumnMapping(c, e.target.value as PaymentTargetField | "")}
                             >
                               <option value="">Ignorar</option>
                               {PAYMENT_TARGET_FIELDS.map((f) => (
@@ -718,26 +740,88 @@ export default function PaymentTemplateWizard({
                           </th>
                         );
                       })}
+                      <th className="corner">
+                        <button
+                          type="button"
+                          className="ghost"
+                          style={{ padding: "0.2rem" }}
+                          onClick={() => setExtraColumns((n) => n + 1)}
+                          title="Adicionar coluna"
+                          aria-label="Adicionar coluna"
+                        >
+                          <Plus size={14} />
+                        </button>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {sampleRows.map((row, i) => (
-                      <tr key={i}>
-                        <td className="row-gutter">{i + 1}</td>
-                        {columns.map((c) => (
-                          <td key={c}>{row[c] ?? ""}</td>
-                        ))}
-                      </tr>
-                    ))}
+                    <tr>
+                      <td className="row-gutter muted" colSpan={noFileColumns.length + 2} style={{ fontStyle: "italic" }}>
+                        Editando a configuração já salva — sem dados de exemplo.
+                      </td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
+            ) : (
+              <>
+                {loadingPreview && <p className="muted">Carregando...</p>}
+                {!loadingPreview && rows.length === 0 && <p className="muted">Nenhuma linha encontrada.</p>}
+                {!loadingPreview && rows.length > 0 && (
+                  <div className={`spreadsheet-grid-scroll${sheets.length > 1 ? " attached-to-tabs" : ""}`}>
+                    <table className="spreadsheet-grid">
+                      <thead>
+                        <tr>
+                          <th className="corner">#</th>
+                          {columns.map((c) => {
+                            const field = mapping[c];
+                            return (
+                              <th key={c} className={`mapping-header${field ? " is-mapped" : ""}`}>
+                                <span className="header-label">
+                                  {columnLetter(c)} — {firstRowHint[c] || "(vazio)"}
+                                </span>
+                                <select
+                                  value={field ?? ""}
+                                  onChange={(e) =>
+                                    setColumnMapping(
+                                      c,
+                                      e.target.value as PaymentTargetField | "",
+                                      firstRowHint[c] ?? null,
+                                    )
+                                  }
+                                >
+                                  <option value="">Ignorar</option>
+                                  {PAYMENT_TARGET_FIELDS.map((f) => (
+                                    <option key={f} value={f}>
+                                      {PAYMENT_TARGET_FIELD_LABELS[f]}
+                                    </option>
+                                  ))}
+                                </select>
+                              </th>
+                            );
+                          })}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sampleRows.map((row, i) => (
+                          <tr key={i}>
+                            <td className="row-gutter">{i + 1}</td>
+                            {columns.map((c) => (
+                              <td key={c}>{row[c] ?? ""}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
             )}
             {renderMergeChecklist()}
           </div>
         )}
 
-        {step === 2 && (
+        {currentStep === "details" && (
           <div>
             <div className="card" style={{ maxWidth: "36rem" }}>
               <div className="field" style={{ marginBottom: "1rem" }}>
@@ -943,14 +1027,14 @@ export default function PaymentTemplateWizard({
         <button
           type="button"
           className="outline"
-          onClick={() => setStep((s) => s - 1)}
-          disabled={step === 0 || busy}
+          onClick={() => setStepIndex((s) => s - 1)}
+          disabled={stepIndex === 0 || busy}
         >
           <ChevronLeft size={15} style={{ marginRight: "0.3rem" }} />
           Voltar
         </button>
-        {step < STEP_LABELS.length - 1 ? (
-          <button type="button" onClick={() => setStep((s) => s + 1)} disabled={!canAdvance || busy}>
+        {stepIndex < steps.length - 1 ? (
+          <button type="button" onClick={() => setStepIndex((s) => s + 1)} disabled={!canAdvance || busy}>
             Avançar
             <ChevronRight size={15} style={{ marginLeft: "0.3rem" }} />
           </button>
