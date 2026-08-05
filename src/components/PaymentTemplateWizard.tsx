@@ -1,24 +1,34 @@
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
-  ArrowRight,
+  CheckCircle2,
   CheckSquare,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
   Filter,
+  FileText,
   FolderOpen,
-  GitBranch,
   Info,
   ListOrdered,
   Pencil,
   Plus,
+  RefreshCw,
   Route,
   Square,
+  Table2,
   Trash2,
+  UploadCloud,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { listSpreadsheetSheets, pickPaymentFile, previewSpreadsheet } from "../lib/api";
+import {
+  addRecentPaymentFile,
+  listRecentPaymentFiles,
+  listSpreadsheetSheets,
+  pickPaymentFile,
+  previewSpreadsheet,
+} from "../lib/api";
 import {
   createPaymentTemplate,
   listClients,
@@ -162,6 +172,9 @@ export default function PaymentTemplateWizard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [recentFiles, setRecentFiles] = useState<string[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+
   const isEditing = target !== null && target !== "new";
   const steps: WizardStep[] = isEditing ? ["mapping", "details"] : ["file", "mapping", "details"];
   const currentStep = steps[stepIndex];
@@ -223,6 +236,41 @@ export default function PaymentTemplateWizard({
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [target, onClose]);
+
+  useEffect(() => {
+    if (!target) return;
+    listRecentPaymentFiles().then(setRecentFiles);
+  }, [target]);
+
+  // OS-level drag-and-drop for the Arquivo step — Tauri intercepts this at
+  // the whole-webview level (not a DOM dragover/drop target), so it's only
+  // acted on while the wizard is open and actually on that step.
+  useEffect(() => {
+    if (!target || currentStep !== "file") return;
+    let unlisten: (() => void) | undefined;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "drop") {
+          setDragOver(false);
+          const path = event.payload.paths[0];
+          if (!path) return;
+          const ext = path.split(".").pop()?.toLowerCase();
+          if (!ext || !["csv", "xlsx", "xls", "ods"].includes(ext)) {
+            setError("Formato de arquivo não suportado. Use CSV, XLSX, XLS ou ODS.");
+            return;
+          }
+          selectFile(path);
+        } else if (event.payload.type === "enter" || event.payload.type === "over") {
+          setDragOver(true);
+        } else {
+          setDragOver(false);
+        }
+      })
+      .then((fn) => {
+        unlisten = fn;
+      });
+    return () => unlisten?.();
+  }, [target, currentStep]);
 
   /** Which group a sheet's mapping should be read from — csv always has exactly one, implicit group. */
   function groupKeyOf(sheetName: string | null): string {
@@ -306,13 +354,22 @@ export default function PaymentTemplateWizard({
     }
   }
 
-  async function handlePickFile() {
+  /** Common path for picking via dialog, dropping, or clicking a recent file — always the same load + recent-list bookkeeping. */
+  async function selectFile(path: string) {
     setError(null);
-    const path = await pickPaymentFile();
-    if (!path) return;
     setFilePath(path);
     setFileKind(fileKindFromPath(path));
     await loadFile(path);
+    addRecentPaymentFile(path)
+      .then(() => listRecentPaymentFiles())
+      .then(setRecentFiles)
+      .catch(() => {});
+  }
+
+  async function handlePickFile() {
+    const path = await pickPaymentFile();
+    if (!path) return;
+    await selectFile(path);
   }
 
   // Just switches which sheet's config is being looked at — the mapping is
@@ -669,23 +726,95 @@ export default function PaymentTemplateWizard({
         {error && <div className="error-box" style={{ marginBottom: "1rem" }}>{error}</div>}
 
         {currentStep === "file" && (
-          <div className="card" style={{ maxWidth: "32rem" }}>
-            <div className="field">
-              <label>Arquivo de exemplo</label>
-              {filePath ? (
-                <p className="muted" style={{ margin: "0.4rem 0" }}>{fileNameFromPath(filePath)}</p>
-              ) : (
-                <p className="muted" style={{ margin: "0.4rem 0" }}>Nenhum arquivo selecionado.</p>
+          <div className="details-layout">
+            <div className="details-main">
+              <div>
+                <h2 className="file-step-title">Importar arquivo fonte</h2>
+                <p className="glass-panel-desc" style={{ marginBottom: 0 }}>
+                  Selecione um arquivo para servir de base para o mapeamento deste template.
+                </p>
+              </div>
+
+              {filePath && (
+                <div className="glass-panel file-status-card">
+                  <div className="file-status-icon">
+                    <CheckCircle2 size={26} />
+                  </div>
+                  <div className="file-status-info">
+                    <p className="file-status-label">Arquivo carregado</p>
+                    <div className="file-status-name">
+                      <Table2 size={16} />
+                      {fileNameFromPath(filePath)}
+                    </div>
+                  </div>
+                  <button type="button" className="glow-button" onClick={handlePickFile}>
+                    <RefreshCw size={14} />
+                    Trocar arquivo
+                  </button>
+                </div>
               )}
-              <button type="button" className="secondary" onClick={handlePickFile}>
-                <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-                {filePath ? "Trocar arquivo" : "Selecionar arquivo"}
-              </button>
-              <p className="field-hint">
-                Formatos aceitos: CSV, XLSX, XLS ou ODS. Usado só para montar o mapeamento agora —
-                não é guardado. Depois de salvo, o template só armazena a configuração de colunas.
-              </p>
+
+              <div
+                className={`file-dropzone${dragOver ? " drag-over" : ""}`}
+                onClick={handlePickFile}
+                role="button"
+                tabIndex={0}
+              >
+                <div className="file-dropzone-icon">
+                  <UploadCloud size={28} />
+                </div>
+                <h3>Arraste e solte um arquivo aqui</h3>
+                <p className="glass-panel-desc">
+                  Ou clique para navegar. O arquivo será usado só para montar o mapeamento agora —
+                  não é guardado; depois de salvo, o template só armazena a configuração de
+                  colunas.
+                </p>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handlePickFile();
+                  }}
+                >
+                  <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
+                  Selecionar arquivo
+                </button>
+              </div>
             </div>
+
+            <aside className="details-sidebar">
+              <div className="glass-panel">
+                <h4 className="glass-panel-heading">
+                  <Info size={16} />
+                  Guia de preparação
+                </h4>
+                <p className="glass-panel-desc">Formatos suportados:</p>
+                <div className="file-format-pills">
+                  {["CSV", "XLSX", "XLS", "ODS"].map((f) => (
+                    <span key={f} className="file-format-pill">
+                      .{f}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {recentFiles.length > 0 && (
+                <div className="glass-panel">
+                  <h4 className="glass-panel-heading" style={{ fontSize: "0.85rem" }}>
+                    Arquivos recentes
+                  </h4>
+                  <div className="recent-files-list">
+                    {recentFiles.map((p) => (
+                      <button key={p} type="button" className="recent-file-item" onClick={() => selectFile(p)}>
+                        <FileText size={16} />
+                        <span className="recent-file-name">{fileNameFromPath(p)}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </aside>
           </div>
         )}
 
@@ -979,10 +1108,10 @@ export default function PaymentTemplateWizard({
                 </p>
 
                 {identifierAttempts.map((attempt, i) => (
-                  <div key={i} className="identifier-attempt-row">
-                    {i > 0 && <div className="identifier-attempt-connector" />}
+                  <div key={i} className="chain-row">
+                    {i > 0 && <div className="chain-connector" />}
                     <div className="logic-card identifier-attempt">
-                      <div className={`identifier-attempt-num${i === 0 ? " first" : ""}`}>{i + 1}</div>
+                      <div className={`chain-num${i === 0 ? " first" : ""}`}>{i + 1}</div>
                       <div className="identifier-attempt-fields">
                         {IDENTIFIER_FIELDS.map((f) => (
                           <label
@@ -1067,11 +1196,13 @@ export default function PaymentTemplateWizard({
 
                 <div className="rule-list">
                   {rules.map((rule, i) => (
-                    <div key={i} className={`logic-card rule-card${rule.kind === "else" ? " rule-card-else" : ""}`}>
-                      <div className="rule-card-icon">
-                        {rule.kind === "else" ? <GitBranch size={18} /> : <ArrowRight size={18} />}
-                      </div>
-                      <div className="rule-card-grid">
+                    <div key={i} className="chain-row">
+                      {i > 0 && <div className="chain-connector" />}
+                      <div
+                        className={`logic-card rule-card${rule.kind === "else" ? " rule-card-else" : ""}`}
+                      >
+                        <div className={`chain-num${i === 0 ? " first" : ""}`}>{i + 1}</div>
+                        <div className="rule-card-grid">
                         {rule.kind === "condition" ? (
                           <>
                             <div className="field-code">
@@ -1163,6 +1294,7 @@ export default function PaymentTemplateWizard({
                           >
                             <Trash2 size={14} />
                           </button>
+                        </div>
                         </div>
                       </div>
                     </div>

@@ -160,3 +160,13 @@ export function checkPopplerStatus(): Promise<PopplerStatus> {
 export function setPopplerDir(dir: string | null): Promise<PopplerStatus> {
   return invoke("set_poppler_dir", { dir });
 }
+
+/** Recently-picked payment template sample file paths, newest first — dead paths already filtered out. */
+export function listRecentPaymentFiles(): Promise<string[]> {
+  return invoke("list_recent_payment_files");
+}
+
+/** Records `path` as the most recently picked payment sample file. */
+export function addRecentPaymentFile(path: string): Promise<void> {
+  return invoke("add_recent_payment_file", { path });
+}

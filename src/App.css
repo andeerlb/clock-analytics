@@ -334,6 +334,16 @@ button.secondary {
 button.secondary:hover {
   background: var(--surface-bright);
 }
+/* Destructive confirm actions — e.g. ConfirmModal's delete button. */
+button.danger {
+  background: var(--error-container);
+  border-color: var(--error-container);
+  color: var(--danger);
+  box-shadow: none;
+}
+button.danger:hover {
+  filter: brightness(1.2);
+}
 /* Transparent by default, filled only on hover — for a de-emphasized
    action sitting next to a primary one (e.g. "Cancelar" beside "Salvar"). */
 button.outline {
@@ -1388,17 +1398,21 @@ tr.row-error:hover {
   opacity: 1;
 }
 
-/* Prioridade de identificação — a connected vertical sequence, so it
-   reads as "tries step 1, then 2, ..." rather than an unordered list. */
-.identifier-attempt-row {
+/* Shared "chain" sequence — a numbered circle per step, connected by a
+   glowing line, the first one permanently lit. Both Prioridade de
+   identificação's tentativas and Regras de roteamento's rules are the
+   same underlying shape (an ordered list of conditions, first match
+   wins), so they share this exact same visual instead of two different
+   ones — makes the parallel between them obvious at a glance. */
+.chain-row {
   position: relative;
 }
 
-.identifier-attempt-row + .identifier-attempt-row {
+.chain-row + .chain-row {
   margin-top: 16px;
 }
 
-.identifier-attempt-connector {
+.chain-connector {
   position: absolute;
   left: 19px;
   top: -16px;
@@ -1407,13 +1421,7 @@ tr.row-error:hover {
   background: linear-gradient(to bottom, var(--border), var(--mapper-glow));
 }
 
-.identifier-attempt {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.identifier-attempt-num {
+.chain-num {
   display: flex;
   flex-shrink: 0;
   align-items: center;
@@ -1428,10 +1436,16 @@ tr.row-error:hover {
   font-size: 13px;
 }
 
-.identifier-attempt-num.first {
+.chain-num.first {
   border-color: var(--mapper-glow);
   color: var(--mapper-glow);
   box-shadow: 0 0 10px rgba(var(--mapper-glow-rgb), 0.3);
+}
+
+.identifier-attempt {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .identifier-attempt-fields {
@@ -1481,6 +1495,10 @@ tr.row-error:hover {
   gap: 16px;
 }
 
+.rule-card .chain-num {
+  margin-top: 22px;
+}
+
 .rule-card-else {
   border-style: dashed;
   opacity: 0.8;
@@ -1488,18 +1506,6 @@ tr.row-error:hover {
 
 .rule-card-else:hover {
   opacity: 1;
-}
-
-.rule-card-icon {
-  display: flex;
-  align-items: center;
-  padding-top: 26px;
-  color: var(--mapper-glow);
-  flex-shrink: 0;
-}
-
-.rule-card-else .rule-card-icon {
-  color: var(--outline);
 }
 
 .rule-card-grid {
@@ -1544,4 +1550,165 @@ tr.row-error:hover {
   border-color: rgba(var(--mapper-glow-rgb), 0.8);
   background: rgba(var(--mapper-glow-rgb), 0.1);
   box-shadow: 0 0 10px rgba(var(--mapper-glow-rgb), 0.2);
+}
+
+/* Arquivo step — staged-file status card, drop zone, and the sidebar's
+   format guide + recent-files shortcut list. Reuses .details-layout/
+   .details-main/.details-sidebar for the two-column shell (same shape as
+   Detalhes, just main on the left instead of the sidebar). */
+.file-step-title {
+  margin: 0 0 8px;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.file-status-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-left: 4px solid var(--mapper-glow);
+}
+
+.file-status-icon {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  background: rgba(var(--mapper-glow-rgb), 0.15);
+  color: var(--mapper-glow);
+}
+
+.file-status-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-status-label {
+  margin: 0 0 4px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--mapper-glow);
+}
+
+.file-status-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-status-name svg {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.file-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 48px 24px;
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  background: rgba(23, 31, 51, 0.3);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.file-dropzone:hover,
+.file-dropzone.drag-over {
+  border-color: var(--mapper-glow);
+  background: rgba(var(--mapper-glow-rgb), 0.05);
+}
+
+.file-dropzone-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--surface-variant);
+  color: var(--mapper-glow);
+}
+
+.file-dropzone h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.file-dropzone .glass-panel-desc {
+  max-width: 26rem;
+  margin-bottom: 0;
+}
+
+.file-format-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.file-format-pill {
+  padding: 3px 8px;
+  border-radius: 2px;
+  background: var(--surface-variant);
+  color: var(--text-muted);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+}
+
+.recent-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.recent-file-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.recent-file-item:hover {
+  background: var(--surface-variant);
+  border-color: var(--border-soft);
+  color: var(--text);
+}
+
+.recent-file-item svg {
+  flex-shrink: 0;
+  color: var(--outline);
+}
+
+.recent-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
 }

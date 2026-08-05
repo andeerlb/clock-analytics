@@ -40,6 +40,8 @@ pub fn run() {
             commands::backup_app_data,
             commands::check_poppler_status,
             commands::set_poppler_dir,
+            commands::list_recent_payment_files,
+            commands::add_recent_payment_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

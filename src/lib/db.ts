@@ -1164,9 +1164,15 @@ export async function updatePaymentTemplate(id: number, input: PaymentTemplateIn
   await insertTemplateRules(db, id, input.rules);
 }
 
-/** Deletes the template and its groups/rules (and their sheets/field mappings). */
+/**
+ * Deletes the template and its groups/rules (and their sheets/field
+ * mappings). Any `payment_shifts` already imported with this template
+ * keep existing — they're real payment data, not template config — just
+ * lose the (nullable, purely informational) back-reference to it.
+ */
 export async function deletePaymentTemplate(id: number): Promise<void> {
   const db = await getDb();
+  await db.execute("UPDATE payment_shifts SET template_id = NULL WHERE template_id = $1", [id]);
   await deleteTemplateGroups(db, id);
   await deleteTemplateRules(db, id);
   await db.execute("DELETE FROM payment_templates WHERE id = $1", [id]);

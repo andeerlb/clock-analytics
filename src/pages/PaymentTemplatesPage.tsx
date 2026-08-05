@@ -1,6 +1,7 @@
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import BackButton from "../components/BackButton";
+import ConfirmModal from "../components/ConfirmModal";
 import PaymentTemplateWizard from "../components/PaymentTemplateWizard";
 import { deletePaymentTemplate, getPaymentTemplate, listPaymentTemplates } from "../lib/db";
 import { formatDateTime } from "../lib/format";
@@ -16,7 +17,8 @@ const FILE_KIND_LABELS: Record<string, string> = {
 export default function PaymentTemplatesPage() {
   const [templates, setTemplates] = useState<PaymentTemplateListRow[]>([]);
   const [wizardTarget, setWizardTarget] = useState<PaymentTemplateRow | "new" | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<PaymentTemplateListRow | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -37,14 +39,18 @@ export default function PaymentTemplatesPage() {
     }
   }
 
-  async function handleDeleteTemplate(id: number) {
+  async function handleDeleteTemplate() {
+    if (!confirmDeleteTarget) return;
     setError(null);
+    setBusy(true);
     try {
-      await deletePaymentTemplate(id);
-      setConfirmDeleteId(null);
+      await deletePaymentTemplate(confirmDeleteTarget.id);
+      setConfirmDeleteTarget(null);
       refreshTemplates();
     } catch (e) {
       setError(String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -89,52 +95,28 @@ export default function PaymentTemplatesPage() {
                     <td>{FILE_KIND_LABELS[t.fileKind] ?? t.fileKind}</td>
                     <td>{formatDateTime(t.updatedAt)}</td>
                     <td>
-                      {confirmDeleteId === t.id ? (
-                        <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                          <span style={{ color: "var(--danger)", fontSize: "0.82rem" }}>
-                            Confirmar exclusão?
-                          </span>
-                          <button
-                            type="button"
-                            className="ghost"
-                            style={{ padding: "0.3rem 0.6rem", fontSize: "0.8rem", color: "var(--danger)" }}
-                            onClick={() => handleDeleteTemplate(t.id)}
-                          >
-                            Excluir
-                          </button>
-                          <button
-                            type="button"
-                            className="ghost"
-                            style={{ padding: "0.3rem 0.6rem", fontSize: "0.8rem" }}
-                            onClick={() => setConfirmDeleteId(null)}
-                          >
-                            Cancelar
-                          </button>
-                        </span>
-                      ) : (
-                        <span style={{ display: "flex", gap: "0.3rem" }}>
-                          <button
-                            type="button"
-                            className="ghost"
-                            style={{ padding: "0.3rem" }}
-                            onClick={() => handleEditTemplate(t.id)}
-                            aria-label="Editar"
-                            title="Editar"
-                          >
-                            <Pencil size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            className="ghost"
-                            style={{ padding: "0.3rem" }}
-                            onClick={() => setConfirmDeleteId(t.id)}
-                            aria-label="Excluir"
-                            title="Excluir"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </span>
-                      )}
+                      <span style={{ display: "flex", gap: "0.3rem" }}>
+                        <button
+                          type="button"
+                          className="ghost"
+                          style={{ padding: "0.3rem" }}
+                          onClick={() => handleEditTemplate(t.id)}
+                          aria-label="Editar"
+                          title="Editar"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          style={{ padding: "0.3rem" }}
+                          onClick={() => setConfirmDeleteTarget(t)}
+                          aria-label="Excluir"
+                          title="Excluir"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </span>
                     </td>
                   </tr>
                 ))}
@@ -152,6 +134,17 @@ export default function PaymentTemplatesPage() {
           refreshTemplates();
         }}
       />
+
+      {confirmDeleteTarget && (
+        <ConfirmModal
+          title="Excluir template"
+          message={`Tem certeza que deseja excluir "${confirmDeleteTarget.name}"? Turnos já importados com este template continuam guardados, só deixam de referenciá-lo.`}
+          confirmLabel={busy ? "Excluindo..." : "Excluir"}
+          confirmDisabled={busy}
+          onConfirm={handleDeleteTemplate}
+          onCancel={() => setConfirmDeleteTarget(null)}
+        />
+      )}
     </div>
   );
 }

@@ -462,3 +462,32 @@ pub fn set_poppler_dir(app: AppHandle, dir: Option<String>) -> Result<PopplerSta
     settings::save(&data_dir, &current)?;
     Ok(poppler_status(current.poppler_dir))
 }
+
+const MAX_RECENT_PAYMENT_FILES: usize = 5;
+
+/// Recently-picked payment template sample file paths, newest first — a
+/// quick-pick shortcut on the wizard's Arquivo step. Paths that no longer
+/// exist on disk are filtered out here rather than shown as dead entries
+/// (not written back; a future `add_recent_payment_file` call naturally
+/// prunes the list further).
+#[tauri::command]
+pub fn list_recent_payment_files(app: AppHandle) -> Result<Vec<String>, String> {
+    let settings = load_settings(&app)?;
+    Ok(settings
+        .recent_payment_files
+        .into_iter()
+        .filter(|p| Path::new(p).exists())
+        .collect())
+}
+
+/// Records `path` as the most recently picked payment sample file, moving
+/// it to the front if already present and capping the list.
+#[tauri::command]
+pub fn add_recent_payment_file(app: AppHandle, path: String) -> Result<(), String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let mut settings = settings::load(&data_dir);
+    settings.recent_payment_files.retain(|p| p != &path);
+    settings.recent_payment_files.insert(0, path);
+    settings.recent_payment_files.truncate(MAX_RECENT_PAYMENT_FILES);
+    settings::save(&data_dir, &settings)
+}

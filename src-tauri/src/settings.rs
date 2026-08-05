@@ -12,6 +12,14 @@ pub struct AppSettings {
     /// Configurações when auto-detection (see `crate::poppler::resolve`)
     /// doesn't find them — e.g. a non-Homebrew install.
     pub poppler_dir: Option<String>,
+
+    /// Last few sample file paths picked in the payment template wizard's
+    /// "Arquivo" step — a quick "pick this again" shortcut. Only the path
+    /// is kept, not the file itself (the wizard never persists that).
+    /// Newest first. `#[serde(default)]` so existing settings.json files
+    /// from before this field existed still parse.
+    #[serde(default)]
+    pub recent_payment_files: Vec<String>,
 }
 
 fn settings_path(data_dir: &Path) -> PathBuf {
