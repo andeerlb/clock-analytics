@@ -760,6 +760,7 @@ export default function ImportPaymentsPage() {
                             aria-label="Selecionar todos"
                           />
                         </th>
+                        <th>Linha</th>
                         <th>Colaborador</th>
                         <th>Local</th>
                         <th>Data</th>
@@ -771,7 +772,7 @@ export default function ImportPaymentsPage() {
                     <tbody>
                       {previewRows.length === 0 && rowFilter !== "all" && (
                         <tr>
-                          <td colSpan={7} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
+                          <td colSpan={8} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
                             Nenhuma linha nesta categoria.
                           </td>
                         </tr>
@@ -783,7 +784,7 @@ export default function ImportPaymentsPage() {
                               <td className="checkbox-cell">
                                 <input type="checkbox" disabled aria-label="Não disponível" />
                               </td>
-                              <td colSpan={5}>
+                              <td colSpan={6}>
                                 <div className="file-name">{item.fileName}</div>
                                 <div className="muted">{item.message}</div>
                               </td>
@@ -809,6 +810,10 @@ export default function ImportPaymentsPage() {
                                 disabled={!canSelect}
                                 aria-label={`Selecionar linha ${row.rowNumber}`}
                               />
+                            </td>
+                            <td>
+                              {row.rowNumber}
+                              {row.sheetName && <div className="muted" style={{ fontSize: "0.78rem" }}>{row.sheetName}</div>}
                             </td>
                             <td>
                               {row.employee ? (
