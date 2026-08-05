@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import ConfirmModal from "../components/ConfirmModal";
+import DateRangePicker from "../components/DateRangePicker";
 import Pagination from "../components/Pagination";
 import {
   applyPaymentTemplate,
@@ -80,6 +82,8 @@ interface PaymentFileResult {
   rows: PaymentPreviewRow[];
   /** How many physical rows in this file weren't real data — no valid date in the mapped "data" column, so presumed to be a title/header/footer row. */
   skippedCount: number;
+  /** How many otherwise-valid rows fell outside the optional período filter. */
+  outOfPeriodCount: number;
   error: string | null;
 }
 
@@ -96,6 +100,13 @@ export default function ImportPaymentsPage() {
   const [templates, setTemplates] = useState<PaymentTemplateListRow[]>([]);
   const [templateId, setTemplateId] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState<PaymentTemplateRow | null>(null);
+
+  // Optional — filters rows by the template's mapped "data" column. Left
+  // empty, processing goes through the whole file (with confirmation, see
+  // handleProcessClick).
+  const [periodStart, setPeriodStart] = useState("");
+  const [periodEnd, setPeriodEnd] = useState("");
+  const [confirmFullImport, setConfirmFullImport] = useState(false);
 
   const [paths, setPaths] = useState<string[]>([]);
   const [fileHashes, setFileHashes] = useState<Map<string, { hash: string; fileName: string }>>(
@@ -211,6 +222,7 @@ export default function ImportPaymentsPage() {
   const errorCount = fileResults.filter((r) => r.error).length;
   const duplicateCount = shiftRows.filter((r) => r.isDuplicate).length;
   const skippedCount = fileResults.reduce((sum, r) => sum + r.skippedCount, 0);
+  const outOfPeriodCount = fileResults.reduce((sum, r) => sum + r.outOfPeriodCount, 0);
 
   const previewPageCount = Math.max(1, Math.ceil(previewRows.length / previewPageSize));
   const previewPageItems = useMemo(
@@ -279,6 +291,7 @@ export default function ImportPaymentsPage() {
 
           const rows: PaymentPreviewRow[] = [];
           let skippedCount = 0;
+          let outOfPeriodCount = 0;
           for (const applied_row of applied) {
             // No fixed header row anymore — a physical row is only "real
             // data" if its mapped "data" column actually parses as a
@@ -290,6 +303,15 @@ export default function ImportPaymentsPage() {
               : null;
             if (!workDate) {
               skippedCount++;
+              continue;
+            }
+
+            // Optional período filter, same "data" column/formato já
+            // usados acima — rows outside it are excluded but counted
+            // separately from skippedCount (those had no valid date at
+            // all; these did, just outside the chosen range).
+            if ((periodStart && workDate < periodStart) || (periodEnd && workDate > periodEnd)) {
+              outOfPeriodCount++;
               continue;
             }
 
@@ -326,9 +348,9 @@ export default function ImportPaymentsPage() {
               unresolvedRoute: !route,
             });
           }
-          results.push({ fileHash, fileName, rows, skippedCount, error: null });
+          results.push({ fileHash, fileName, rows, skippedCount, outOfPeriodCount, error: null });
         } catch (e) {
-          results.push({ fileHash, fileName, rows: [], skippedCount: 0, error: String(e) });
+          results.push({ fileHash, fileName, rows: [], skippedCount: 0, outOfPeriodCount: 0, error: String(e) });
         }
       }
 
@@ -354,6 +376,15 @@ export default function ImportPaymentsPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  /** No período set means "the whole file" — that's easy to do by accident, so it's confirmed instead of just silently processing everything. */
+  function handleProcessClick() {
+    if (!periodStart && !periodEnd) {
+      setConfirmFullImport(true);
+      return;
+    }
+    handleProcess();
   }
 
   async function handleSave() {
@@ -468,6 +499,22 @@ export default function ImportPaymentsPage() {
               )}
             </div>
 
+            <div className="field" style={{ maxWidth: "24rem", marginBottom: "1.2rem" }}>
+              <label>Período (opcional)</label>
+              <DateRangePicker
+                startValue={periodStart}
+                endValue={periodEnd}
+                onChange={(start, end) => {
+                  setPeriodStart(start);
+                  setPeriodEnd(end);
+                }}
+              />
+              <p className="field-hint">
+                Filtra pela coluna de data do template. Deixe em branco para processar o relatório
+                inteiro.
+              </p>
+            </div>
+
             <div className="field">
               <label>Arquivos de pagamento</label>
               <div className="dropzone">
@@ -518,7 +565,7 @@ export default function ImportPaymentsPage() {
               <button
                 type="button"
                 disabled={paths.length === 0 || !templateId || busy}
-                onClick={handleProcess}
+                onClick={handleProcessClick}
               >
                 {busy ? "Processando..." : `Processar ${paths.length || ""} arquivo(s)`}
               </button>
@@ -561,6 +608,11 @@ export default function ImportPaymentsPage() {
                     {skippedCount > 0 && (
                       <span className="count-chip" title="Linhas sem uma data válida na coluna mapeada — presumidas título, cabeçalho ou rodapé">
                         {skippedCount} linha(s) ignorada(s)
+                      </span>
+                    )}
+                    {outOfPeriodCount > 0 && (
+                      <span className="count-chip" title="Linhas com data válida, mas fora do período selecionado">
+                        {outOfPeriodCount} fora do período
                       </span>
                     )}
                     {duplicateCount > 0 && <span className="count-chip">{duplicateCount} possível(is) duplicata(s)</span>}
@@ -811,6 +863,20 @@ export default function ImportPaymentsPage() {
           </div>
         </div>
       </div>
+
+      {confirmFullImport && (
+        <ConfirmModal
+          title="Processar sem filtro de período"
+          message="Nenhum período foi selecionado — isso vai processar o relatório inteiro, sem limitar por data. Deseja continuar?"
+          confirmLabel="Processar arquivo inteiro"
+          danger={false}
+          onConfirm={() => {
+            setConfirmFullImport(false);
+            handleProcess();
+          }}
+          onCancel={() => setConfirmFullImport(false)}
+        />
+      )}
     </div>
   );
 }

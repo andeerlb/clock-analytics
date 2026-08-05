@@ -1384,9 +1384,13 @@ export async function clearAllData(options: ClearDataOptions = {}): Promise<void
   await db.execute("DELETE FROM day_records");
   await db.execute("DELETE FROM imports");
   await db.execute("DELETE FROM import_files");
+  // Payment shifts are import history too (one row per imported work
+  // shift), same category as day_records/punches — always cleared, and
+  // before source_files/employees since it references both.
+  await db.execute("DELETE FROM payment_shifts");
   await db.execute("DELETE FROM source_files");
 
-  const clearedTables = ["punches", "day_records", "imports", "import_files", "source_files"];
+  const clearedTables = ["punches", "day_records", "imports", "import_files", "payment_shifts", "source_files"];
 
   if (!keepEmployees) {
     await db.execute("DELETE FROM employees");
