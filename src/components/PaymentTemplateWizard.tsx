@@ -17,6 +17,7 @@ import {
   Route,
   Square,
   Table2,
+  Tag,
   Trash2,
   UploadCloud,
   X,
@@ -38,22 +39,27 @@ import {
   type CompanyRow,
   type PaymentTemplateInput,
   type PaymentTemplateRuleInput,
+  type PaymentTemplateStatusRuleInput,
 } from "../lib/db";
 import { columnLetter, fileNameFromPath } from "../lib/format";
 import {
   DEFAULT_IDENTIFIER_PRIORITY,
   IDENTIFIER_FIELD_PRECEDENCE,
+  PAYMENT_SHIFT_STATUS_LABELS,
   PAYMENT_TARGET_FIELDS,
   PAYMENT_TARGET_FIELD_LABELS,
   REQUIRED_PAYMENT_FIELDS,
   type IdentifierAttempt,
   type IdentifierField,
   type PaymentFileKind,
+  type PaymentShiftStatus,
   type PaymentTargetField,
   type PaymentTemplateGroup,
   type PaymentTemplateRow,
   type PaymentTemplateRuleKind,
 } from "../lib/types";
+
+const PAYMENT_SHIFT_STATUSES: PaymentShiftStatus[] = ["pendente", "erro", "pago"];
 
 const IDENTIFIER_FIELDS: IdentifierField[] = ["cpf", "matricula", "nome"];
 
@@ -100,6 +106,28 @@ interface WizardRule {
 
 function isRuleValid(r: WizardRule): boolean {
   if (!r.companyId || !r.clientId) return false;
+  if (r.kind === "else") return true;
+  return r.valuesText.split(",").map((v) => v.trim()).filter(Boolean).length > 0;
+}
+
+/**
+ * The wizard's editable draft of one step in a template's optional
+ * if/else-if/else status chain — see `PaymentStatusRule` in types.ts for
+ * the saved shape. "Um pra um": a single `status`, always set (there's no
+ * empty option among the three), instead of the routing chain's
+ * company+client pair.
+ */
+interface WizardStatusRule {
+  kind: PaymentTemplateRuleKind;
+  field: PaymentTargetField;
+  /** Raw comma-separated input; ignored when `kind === "else"`. */
+  valuesText: string;
+  /** Ignored when `kind === "else"`. */
+  caseInsensitive: boolean;
+  status: PaymentShiftStatus;
+}
+
+function isStatusRuleValid(r: WizardStatusRule): boolean {
   if (r.kind === "else") return true;
   return r.valuesText.split(",").map((v) => v.trim()).filter(Boolean).length > 0;
 }
@@ -166,6 +194,7 @@ export default function PaymentTemplateWizard({
   const [name, setName] = useState("");
   const [dateFormat, setDateFormat] = useState("DD/MM/YYYY");
   const [rules, setRules] = useState<WizardRule[]>([]);
+  const [statusRules, setStatusRules] = useState<WizardStatusRule[]>([]);
   const [identifierAttempts, setIdentifierAttempts] = useState<IdentifierAttempt[]>(DEFAULT_IDENTIFIER_PRIORITY);
 
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -205,6 +234,7 @@ export default function PaymentTemplateWizard({
       setName("");
       setDateFormat("DD/MM/YYYY");
       setRules([]);
+      setStatusRules([]);
       setIdentifierAttempts(DEFAULT_IDENTIFIER_PRIORITY.map((a) => ({ ...a, fields: [...a.fields] })));
       return;
     }
@@ -222,6 +252,15 @@ export default function PaymentTemplateWizard({
         caseInsensitive: r.caseInsensitive,
         companyId: r.companyId,
         clientId: r.clientId,
+      })),
+    );
+    setStatusRules(
+      target.statusRules.map((r) => ({
+        kind: r.kind,
+        field: r.field ?? PAYMENT_TARGET_FIELDS[0],
+        valuesText: r.values.join(", "),
+        caseInsensitive: r.caseInsensitive,
+        status: r.status,
       })),
     );
     setIdentifierAttempts(target.identifierPriority.map((a) => ({ ...a, fields: [...a.fields] })));
@@ -519,6 +558,39 @@ export default function PaymentTemplateWizard({
     setRules((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }
 
+  const hasStatusElseRule = statusRules.some((r) => r.kind === "else");
+
+  /** Same "always right before senão" placement as `addConditionRule`. */
+  function addStatusConditionRule() {
+    const newRule: WizardStatusRule = {
+      kind: "condition",
+      field: PAYMENT_TARGET_FIELDS[0],
+      valuesText: "",
+      caseInsensitive: true,
+      status: "pendente",
+    };
+    setStatusRules((prev) => {
+      const elseIndex = prev.findIndex((r) => r.kind === "else");
+      if (elseIndex === -1) return [...prev, newRule];
+      return [...prev.slice(0, elseIndex), newRule, ...prev.slice(elseIndex)];
+    });
+  }
+
+  function addStatusElseRule() {
+    setStatusRules((prev) => [
+      ...prev,
+      { kind: "else", field: PAYMENT_TARGET_FIELDS[0], valuesText: "", caseInsensitive: true, status: "pendente" },
+    ]);
+  }
+
+  function removeStatusRule(index: number) {
+    setStatusRules((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function updateStatusRule(index: number, patch: Partial<WizardStatusRule>) {
+    setStatusRules((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  }
+
   function addIdentifierAttempt() {
     setIdentifierAttempts((prev) => [...prev, { fields: [], caseInsensitive: true }]);
   }
@@ -663,6 +735,17 @@ export default function PaymentTemplateWizard({
         clientId: r.clientId!,
       }));
 
+      const statusRuleInputs: PaymentTemplateStatusRuleInput[] = statusRules.map((r) => ({
+        kind: r.kind,
+        field: r.kind === "condition" ? r.field : null,
+        values:
+          r.kind === "condition"
+            ? r.valuesText.split(",").map((v) => v.trim()).filter(Boolean)
+            : [],
+        caseInsensitive: r.caseInsensitive,
+        status: r.status,
+      }));
+
       const input: PaymentTemplateInput = {
         name: name.trim(),
         fileKind,
@@ -671,6 +754,7 @@ export default function PaymentTemplateWizard({
         identifierPriority: identifierAttempts,
         groups,
         rules: ruleInputs,
+        statusRules: statusRuleInputs,
       };
 
       if (editing) {
@@ -1338,6 +1422,126 @@ export default function PaymentTemplateWizard({
                   )}
                 </div>
               </section>
+
+              <section className="glass-panel">
+                <h3 className="glass-panel-heading">
+                  <Tag size={18} />
+                  Regras de status
+                </h3>
+                <p className="glass-panel-desc">
+                  Decide, linha a linha, o status inicial do turno a partir do valor de um campo
+                  já mapeado (ex.: uma coluna "Status" da planilha) — avaliadas em ordem, a
+                  primeira que bater vence. Opcional: sem nenhuma regra, ou se nenhuma bater, o
+                  turno entra como "Pendente".
+                </p>
+
+                <div className="rule-list">
+                  {statusRules.map((rule, i) => (
+                    <div key={i} className="chain-row">
+                      {i > 0 && <div className="chain-connector" />}
+                      <div
+                        className={`logic-card rule-card${rule.kind === "else" ? " rule-card-else" : ""}`}
+                      >
+                        <div className={`chain-num${i === 0 ? " first" : ""}`}>{i + 1}</div>
+                        <div className="status-rule-card-grid">
+                          {rule.kind === "condition" ? (
+                            <>
+                              <div className="field-code">
+                                <label>Se [Campo]</label>
+                                <select
+                                  className="glass-input"
+                                  value={rule.field}
+                                  onChange={(e) =>
+                                    updateStatusRule(i, { field: e.target.value as PaymentTargetField })
+                                  }
+                                >
+                                  {PAYMENT_TARGET_FIELDS.map((f) => (
+                                    <option key={f} value={f}>
+                                      {PAYMENT_TARGET_FIELD_LABELS[f]}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="field-code">
+                                <label>== [Valores possíveis]</label>
+                                <input
+                                  className="glass-input"
+                                  type="text"
+                                  value={rule.valuesText}
+                                  onChange={(e) => updateStatusRule(i, { valuesText: e.target.value })}
+                                  placeholder="Ex.: PAGO, QUITADO"
+                                />
+                                <label className="field-code-checkbox">
+                                  <input
+                                    type="checkbox"
+                                    checked={rule.caseInsensitive}
+                                    onChange={(e) =>
+                                      updateStatusRule(i, { caseInsensitive: e.target.checked })
+                                    }
+                                  />
+                                  Ignorar maiúsculas/minúsculas
+                                </label>
+                              </div>
+                            </>
+                          ) : (
+                            <span className="rule-card-else-label">
+                              SENÃO — se nenhuma regra acima bater, usa esta
+                            </span>
+                          )}
+                          <div className="field-code consequence">
+                            <label>Então [Status]</label>
+                            <select
+                              className="glass-input"
+                              value={rule.status}
+                              onChange={(e) =>
+                                updateStatusRule(i, { status: e.target.value as PaymentShiftStatus })
+                              }
+                            >
+                              {PAYMENT_SHIFT_STATUSES.map((s) => (
+                                <option key={s} value={s}>
+                                  {PAYMENT_SHIFT_STATUS_LABELS[s]}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="rule-card-delete">
+                            <button
+                              type="button"
+                              className="ghost"
+                              style={{ padding: "0.4rem" }}
+                              onClick={() => removeStatusRule(i)}
+                              aria-label="Remover regra"
+                              title="Remover regra"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {statusRules.length === 0 && (
+                  <p className="field-hint" style={{ marginTop: "0.6rem" }}>
+                    Nenhuma regra cadastrada — sem regras, todo turno importado entra como
+                    "Pendente".
+                  </p>
+                )}
+
+                <div style={{ display: "flex", gap: "0.6rem", marginTop: "1rem" }}>
+                  <button type="button" className="glow-button" onClick={addStatusConditionRule}>
+                    <Plus size={14} />
+                    Adicionar regra
+                  </button>
+                  {!hasStatusElseRule && (
+                    <button type="button" className="glow-button" onClick={addStatusElseRule}>
+                      <Plus size={14} />
+                      Adicionar "senão"
+                    </button>
+                  )}
+                </div>
+              </section>
             </div>
           </div>
         )}
@@ -1376,6 +1580,7 @@ export default function PaymentTemplateWizard({
               !name.trim() ||
               rules.length === 0 ||
               rules.some((r) => !isRuleValid(r)) ||
+              statusRules.some((r) => !isStatusRuleValid(r)) ||
               !isIdentifierPriorityValid
             }
           >

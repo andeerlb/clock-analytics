@@ -191,7 +191,8 @@ export type PaymentTargetField =
   | "data"
   | "funcao"
   | "horario"
-  | "observacao";
+  | "observacao"
+  | "status";
 
 export const PAYMENT_TARGET_FIELDS: PaymentTargetField[] = [
   "cpf",
@@ -202,6 +203,7 @@ export const PAYMENT_TARGET_FIELDS: PaymentTargetField[] = [
   "funcao",
   "horario",
   "observacao",
+  "status",
 ];
 
 /** Highest to lowest precedence — see the `PaymentTargetField` doc comment. */
@@ -243,6 +245,7 @@ export const PAYMENT_TARGET_FIELD_LABELS: Record<PaymentTargetField, string> = {
   funcao: "Função",
   horario: "Horário",
   observacao: "Observação",
+  status: "Status",
 };
 
 export interface PaymentTemplateFieldMapping {
@@ -298,22 +301,47 @@ export interface PaymentTemplateRule {
   clientName: string;
 }
 
-/** Full shape of a payment import template, including its sheet groups and routing rules. */
+/**
+ * One step of a template's if/else-if/else status chain — see
+ * `resolvePaymentStatus` in `format.ts`. Same evaluation as
+ * `PaymentTemplateRule` (routing), but "um pra um": the consequence is a
+ * single `status` instead of company_id/client_id. Unlike routing rules,
+ * this chain is entirely optional — a template with none of these leaves
+ * every imported shift `pendente`, same as before this existed.
+ */
+export interface PaymentStatusRule {
+  kind: PaymentTemplateRuleKind;
+  field: PaymentTargetField | null;
+  values: string[];
+  /** Whether matching `values` against a row's field folds case — ignored when `kind === "else"`. */
+  caseInsensitive: boolean;
+  status: PaymentShiftStatus;
+}
+
+/** Full shape of a payment import template, including its sheet groups and routing/status rules. */
 export interface PaymentTemplateRow extends PaymentTemplateListRow {
   delimiter: string | null;
   dateFormat: string;
   groups: PaymentTemplateGroup[];
   rules: PaymentTemplateRule[];
+  statusRules: PaymentStatusRule[];
   identifierPriority: IdentifierAttempt[];
   createdAt: string;
 }
 
 /**
- * A payment shift's own lifecycle — always starts `pendente` on import.
- * `valor` and the transition to `pago` (or `erro`) belong to a later
- * "processar pagamento" step, not to import.
+ * A payment shift's own lifecycle — starts `pendente` on import unless the
+ * template's status rules (see `PaymentStatusRule`) resolve something
+ * else. `valor` and any further transition to `pago` (or `erro`) belong to
+ * a later "processar pagamento" step, not to import.
  */
 export type PaymentShiftStatus = "pendente" | "erro" | "pago";
+
+export const PAYMENT_SHIFT_STATUS_LABELS: Record<PaymentShiftStatus, string> = {
+  pendente: "Pendente",
+  erro: "Erro",
+  pago: "Pago",
+};
 
 /** One imported work shift row, joined with its employee/client/company for display. */
 export interface PaymentShiftRow {

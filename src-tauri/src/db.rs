@@ -154,5 +154,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0025_payment_template_identifier_case.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 26,
+            description: "add payment_template_status_rules — an optional if/else-if/else chain deciding a shift's initial status from a mapped field's value",
+            sql: include_str!("../migrations/0026_payment_template_status_rules.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

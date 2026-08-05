@@ -43,18 +43,28 @@ import {
   parseDateWithFormat,
   parseScheduleToMinutes,
   resolvePaymentRoute,
+  resolvePaymentStatus,
 } from "../lib/format";
-import type {
-  ImportFileRow,
-  ImportStatus,
-  PaymentTemplateListRow,
-  PaymentTemplateRow,
+import {
+  PAYMENT_SHIFT_STATUS_LABELS,
+  type ImportFileRow,
+  type ImportStatus,
+  type PaymentShiftStatus,
+  type PaymentTemplateListRow,
+  type PaymentTemplateRow,
 } from "../lib/types";
 
 const STATUS_BADGE: Record<ImportStatus, { className: string; label: string; icon: typeof CheckCircle2 }> = {
   success: { className: "badge ok", label: "Sucesso", icon: CheckCircle2 },
   warning: { className: "badge overwrite", label: "Com alertas", icon: AlertTriangle },
   error: { className: "badge file-error", label: "Falha", icon: AlertCircle },
+};
+
+/** Which badge color reflects the shift's resolved payment status — see `resolvePaymentStatus`. */
+const PAYMENT_STATUS_BADGE_CLASS: Record<PaymentShiftStatus, string> = {
+  pendente: "badge neutral",
+  erro: "badge file-error",
+  pago: "badge ok",
 };
 
 /**
@@ -87,6 +97,8 @@ interface PaymentPreviewRow {
   isDuplicate: boolean;
   /** No rule in the template's routing chain matched this row's field value — `employee` is always `null` when this is `true` (the lookup never runs without a resolved client). */
   unresolvedRoute: boolean;
+  /** Resolved from the template's status rules, falling back to `"pendente"` when none match (or none are configured) — see `resolvePaymentStatus`. */
+  paymentStatus: PaymentShiftStatus;
   category: RowCategory;
 }
 
@@ -346,6 +358,8 @@ export default function ImportPaymentsPage() {
               scheduleEndMinutes: parsedSchedule?.endMinutes ?? null,
               note: applied_row.fields.observacao || null,
               workDateRaw,
+              paymentStatus:
+                resolvePaymentStatus(selectedTemplate.statusRules, applied_row.fields) ?? "pendente",
             };
 
             // No fixed header row anymore — a physical row is only "real
@@ -477,6 +491,7 @@ export default function ImportPaymentsPage() {
           scheduleStartMinutes: row.scheduleStartMinutes,
           scheduleEndMinutes: row.scheduleEndMinutes,
           note: row.note,
+          status: row.paymentStatus,
         });
         savedFileHashes.add(fileHash);
       }
@@ -773,13 +788,14 @@ export default function ImportPaymentsPage() {
                         <th>Data</th>
                         <th>Função</th>
                         <th>Horário</th>
+                        <th>Status pgto.</th>
                         <th>Status</th>
                       </tr>
                     </thead>
                     <tbody>
                       {previewRows.length === 0 && rowFilter !== "all" && (
                         <tr>
-                          <td colSpan={8} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
+                          <td colSpan={9} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
                             Nenhuma linha nesta categoria.
                           </td>
                         </tr>
@@ -791,7 +807,7 @@ export default function ImportPaymentsPage() {
                               <td className="checkbox-cell">
                                 <input type="checkbox" disabled aria-label="Não disponível" />
                               </td>
-                              <td colSpan={6}>
+                              <td colSpan={7}>
                                 <div className="file-name">{item.fileName}</div>
                                 <div className="muted">{item.message}</div>
                               </td>
@@ -853,6 +869,11 @@ export default function ImportPaymentsPage() {
                                   {row.scheduleRaw || "—"}
                                 </span>
                               )}
+                            </td>
+                            <td>
+                              <span className={PAYMENT_STATUS_BADGE_CLASS[row.paymentStatus]}>
+                                {PAYMENT_SHIFT_STATUS_LABELS[row.paymentStatus]}
+                              </span>
                             </td>
                             <td>
                               {row.category === "valid" && (

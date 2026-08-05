@@ -22,6 +22,7 @@ import type {
   PaymentShiftRow,
   PaymentShiftStatus,
   PaymentShiftSummaryRow,
+  PaymentStatusRule,
   StoredDayRecord,
   StoredImport,
 } from "./types";
@@ -1205,11 +1206,33 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
     caseInsensitive: Boolean(r.caseInsensitive),
   }));
 
+  const statusRuleRows = await db.select<
+    {
+      kind: PaymentTemplateRuleKind;
+      field: PaymentTargetField | null;
+      valuesJson: string | null;
+      caseInsensitive: number;
+      status: PaymentShiftStatus;
+    }[]
+  >(
+    `SELECT kind, field, values_json AS valuesJson, case_insensitive AS caseInsensitive, status
+     FROM payment_template_status_rules
+     WHERE template_id = $1
+     ORDER BY id`,
+    [id],
+  );
+  const statusRules: PaymentStatusRule[] = statusRuleRows.map((r) => ({
+    ...r,
+    values: r.valuesJson ? JSON.parse(r.valuesJson) : [],
+    caseInsensitive: Boolean(r.caseInsensitive),
+  }));
+
   return {
     ...rows[0],
     identifierPriority: JSON.parse(rows[0].identifierPriority) as IdentifierAttempt[],
     groups,
     rules,
+    statusRules,
   };
 }
 
@@ -1222,6 +1245,14 @@ export interface PaymentTemplateRuleInput {
   clientId: number;
 }
 
+export interface PaymentTemplateStatusRuleInput {
+  kind: PaymentTemplateRuleKind;
+  field: PaymentTargetField | null;
+  values: string[];
+  caseInsensitive: boolean;
+  status: PaymentShiftStatus;
+}
+
 export interface PaymentTemplateInput {
   name: string;
   fileKind: PaymentFileKind;
@@ -1230,6 +1261,7 @@ export interface PaymentTemplateInput {
   identifierPriority: IdentifierAttempt[];
   groups: PaymentTemplateGroup[];
   rules: PaymentTemplateRuleInput[];
+  statusRules: PaymentTemplateStatusRuleInput[];
 }
 
 async function insertTemplateGroups(
@@ -1301,6 +1333,33 @@ async function deleteTemplateRules(db: Database, templateId: number): Promise<vo
   await db.execute("DELETE FROM payment_template_rules WHERE template_id = $1", [templateId]);
 }
 
+/** Inserted in array order — same evaluation-by-insertion-order convention as `insertTemplateRules`, see `resolvePaymentStatus`. */
+async function insertTemplateStatusRules(
+  db: Database,
+  templateId: number,
+  rules: PaymentTemplateStatusRuleInput[],
+): Promise<void> {
+  for (const rule of rules) {
+    await db.execute(
+      `INSERT INTO payment_template_status_rules
+         (template_id, kind, field, values_json, case_insensitive, status)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        templateId,
+        rule.kind,
+        rule.kind === "condition" ? rule.field : null,
+        rule.kind === "condition" ? JSON.stringify(rule.values) : null,
+        rule.caseInsensitive ? 1 : 0,
+        rule.status,
+      ],
+    );
+  }
+}
+
+async function deleteTemplateStatusRules(db: Database, templateId: number): Promise<void> {
+  await db.execute("DELETE FROM payment_template_status_rules WHERE template_id = $1", [templateId]);
+}
+
 export async function createPaymentTemplate(input: PaymentTemplateInput): Promise<number> {
   const db = await getDb();
   const result = await db.execute(
@@ -1311,6 +1370,7 @@ export async function createPaymentTemplate(input: PaymentTemplateInput): Promis
   const templateId = result.lastInsertId as number;
   await insertTemplateGroups(db, templateId, input.groups);
   await insertTemplateRules(db, templateId, input.rules);
+  await insertTemplateStatusRules(db, templateId, input.statusRules);
   return templateId;
 }
 
@@ -1327,6 +1387,8 @@ export async function updatePaymentTemplate(id: number, input: PaymentTemplateIn
   await insertTemplateGroups(db, id, input.groups);
   await deleteTemplateRules(db, id);
   await insertTemplateRules(db, id, input.rules);
+  await deleteTemplateStatusRules(db, id);
+  await insertTemplateStatusRules(db, id, input.statusRules);
 }
 
 /**
@@ -1340,6 +1402,7 @@ export async function deletePaymentTemplate(id: number): Promise<void> {
   await db.execute("UPDATE payment_shifts SET template_id = NULL WHERE template_id = $1", [id]);
   await deleteTemplateGroups(db, id);
   await deleteTemplateRules(db, id);
+  await deleteTemplateStatusRules(db, id);
   await db.execute("DELETE FROM payment_templates WHERE id = $1", [id]);
 }
 
@@ -1444,9 +1507,11 @@ export interface PaymentShiftInput {
   scheduleStartMinutes: number | null;
   scheduleEndMinutes: number | null;
   note: string | null;
+  /** Resolved from the template's status rules (see `resolvePaymentStatus`), falling back to `"pendente"` when none match — not always `"pendente"` anymore. */
+  status: PaymentShiftStatus;
 }
 
-/** Bulk-inserts shifts — every row always starts `pendente`; valor/pago happen in a later step. */
+/** Bulk-inserts shifts — `valor` and any further `pago` transition still happen in a later step. */
 export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void> {
   const db = await getDb();
   for (const r of rows) {
@@ -1454,7 +1519,7 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
       `INSERT INTO payment_shifts
          (employee_id, template_id, source_file_id, local, work_date, role,
           schedule_start_minutes, schedule_end_minutes, note, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pendente')`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
         r.employeeId,
         r.templateId,
@@ -1465,6 +1530,7 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
         r.scheduleStartMinutes,
         r.scheduleEndMinutes,
         r.note,
+        r.status,
       ],
     );
   }

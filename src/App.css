@@ -1332,7 +1332,8 @@ tr.row-error:hover {
   color: var(--mapper-lavender);
 }
 
-.rule-card-grid .field-code {
+.rule-card-grid .field-code,
+.status-rule-card-grid .field-code {
   margin-bottom: 0;
 }
 
@@ -1529,6 +1530,15 @@ tr.row-error:hover {
 .rule-card-grid {
   display: grid;
   grid-template-columns: minmax(120px, 1fr) minmax(160px, 1.6fr) minmax(120px, 1fr) minmax(120px, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  flex: 1;
+}
+
+/* Same idea as .rule-card-grid, but the status chain's consequence is a single [Status] field instead of [Empresa] + [Cliente]. */
+.status-rule-card-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(160px, 1.6fr) minmax(120px, 1fr) auto;
   gap: 12px;
   align-items: start;
   flex: 1;

@@ -1,3 +1,5 @@
+import type { PaymentShiftStatus } from "./types";
+
 /** Bytes -> "12.3 MB" — the Configurações storage indicator. */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -299,6 +301,36 @@ export function resolvePaymentRoute(
     if (rule.values.some((v) => fold(v.trim()) === normalized)) {
       return { companyId: rule.companyId, clientId: rule.clientId };
     }
+  }
+  return null;
+}
+
+/**
+ * Resolves a payment-import row's initial status, walking a template's
+ * if/else-if/else status chain the same way `resolvePaymentRoute` walks
+ * the routing one — first match wins, "um pra um" (one status per rule,
+ * not a company/client pair). `null` means no rule matched (including an
+ * empty chain, since this feature is optional) — the caller falls back to
+ * the default `"pendente"`, not a manual-resolution state like an
+ * unresolved route: an unmatched status is a normal, expected outcome.
+ */
+export function resolvePaymentStatus(
+  rules: {
+    kind: "condition" | "else";
+    field: string | null;
+    values: string[];
+    caseInsensitive: boolean;
+    status: PaymentShiftStatus;
+  }[],
+  fields: Record<string, string>,
+): PaymentShiftStatus | null {
+  for (const rule of rules) {
+    if (rule.kind === "else") return rule.status;
+    const raw = rule.field ? fields[rule.field] : undefined;
+    if (!raw) continue;
+    const fold = (s: string) => (rule.caseInsensitive ? s.toLowerCase() : s);
+    const normalized = fold(raw.trim());
+    if (rule.values.some((v) => fold(v.trim()) === normalized)) return rule.status;
   }
   return null;
 }
