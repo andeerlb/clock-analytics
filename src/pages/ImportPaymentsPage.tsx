@@ -582,6 +582,7 @@ export default function ImportPaymentsPage() {
       (r) =>
         r.category === "not-found" &&
         r.resolvedClientId === clicked.resolvedClientId &&
+        r.resolvedCompanyId === clicked.resolvedCompanyId &&
         r.nameRaw.trim().toLowerCase() === targetNameRaw,
     );
 
@@ -1172,13 +1173,16 @@ export default function ImportPaymentsPage() {
                               )}
                             </td>
                             <td>
-                              {row.category === "not-found" && row.resolvedClientId !== null && (
-                                <EmployeePicker
-                                  clientId={row.resolvedClientId}
-                                  onSelect={(employee) => handleLinkEmployee(index, employee)}
-                                  placeholder="Vincular"
-                                />
-                              )}
+                              {row.category === "not-found" &&
+                                row.resolvedClientId !== null &&
+                                row.resolvedCompanyId !== null && (
+                                  <EmployeePicker
+                                    clientId={row.resolvedClientId}
+                                    companyId={row.resolvedCompanyId}
+                                    onSelect={(employee) => handleLinkEmployee(index, employee)}
+                                    placeholder="Vincular"
+                                  />
+                                )}
                             </td>
                           </tr>
                         );

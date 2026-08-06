@@ -7,13 +7,20 @@ const PAGE_SIZE = 8;
 const POPOVER_WIDTH = 288; // 18rem at the default 16px root size
 
 /**
- * A single-colaborador combobox, scoped to one client — search box +
- * paginated results, backed directly by `listEmployeesGlobal` (already
- * filters/paginates in SQL). Unlike `MultiSelectDropdown`, this is a plain
- * search-and-pick, not a checklist: picking an option calls `onSelect` and
- * closes the popover, there's no persisted "selected" display here — the
- * caller re-renders whatever picked it into something else once resolved
- * (see the "colaborador não encontrado" preview row in ImportPaymentsPage).
+ * A single-colaborador combobox, scoped to one client **and** one company —
+ * search box + paginated results, backed directly by `listEmployeesGlobal`
+ * (already filters/paginates in SQL). Both are required, not just
+ * `clientId`: a cliente can be linked to more than one empresa, and the
+ * results here need to match whichever empresa the caller already resolved
+ * (e.g. a payment-import row's routing rule) — otherwise this could offer
+ * (and let you link to) a colaborador who actually belongs to a different
+ * empresa of that same cliente.
+ *
+ * Unlike `MultiSelectDropdown`, this is a plain search-and-pick, not a
+ * checklist: picking an option calls `onSelect` and closes the popover,
+ * there's no persisted "selected" display here — the caller re-renders
+ * whatever picked it into something else once resolved (see the
+ * "colaborador não encontrado" preview row in ImportPaymentsPage).
  *
  * The popover is portaled to `document.body` and positioned with `fixed`
  * coordinates computed from the trigger button — unlike `MultiSelectDropdown`/
@@ -23,11 +30,13 @@ const POPOVER_WIDTH = 288; // 18rem at the default 16px root size
  */
 export default function EmployeePicker({
   clientId,
+  companyId,
   onSelect,
   placeholder = "Vincular colaborador...",
   disabled = false,
 }: {
   clientId: number;
+  companyId: number;
   onSelect: (employee: EmployeeRow) => void;
   placeholder?: string;
   disabled?: boolean;
@@ -83,7 +92,7 @@ export default function EmployeePicker({
     if (!open) return;
     let cancelled = false;
     setLoading(true);
-    listEmployeesGlobal({ search, clientIds: [clientId], page, pageSize: PAGE_SIZE })
+    listEmployeesGlobal({ search, clientIds: [clientId], companyIds: [companyId], page, pageSize: PAGE_SIZE })
       .then(({ rows: r, total: t }) => {
         if (cancelled) return;
         setRows(r);
@@ -95,7 +104,7 @@ export default function EmployeePicker({
     return () => {
       cancelled = true;
     };
-  }, [open, search, clientId, page]);
+  }, [open, search, clientId, companyId, page]);
 
   function toggleOpen() {
     if (disabled) return;

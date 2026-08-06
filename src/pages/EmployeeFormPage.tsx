@@ -102,17 +102,22 @@ export default function EmployeeFormPage() {
   );
 
   useEffect(() => {
+    // `clients` hasn't loaded yet — `clientCompanies` is spuriously empty
+    // regardless of `clientId`, so there's nothing real to derive from it
+    // yet. Without this guard, this effect fired on first mount (before
+    // `listClients()` resolves), saw an empty `clientCompanies`, and wiped
+    // out a pre-filled `companyId` (from "Cadastrar colaborador") before it
+    // ever got a chance to be checked against the real list.
+    if (clients.length === 0) return;
     // Already a valid choice for this clientCompanies set — leave it alone.
-    // Covers both a still-fresh manual pick and a pre-filled `companyId`
-    // that only becomes checkable once `clients` finishes loading (this
-    // effect re-runs then too, since `clientCompanies` changes reference).
+    // Covers both a still-fresh manual pick and a pre-filled `companyId`.
     if (clientCompanies.some((c) => String(c.companyId) === companyId)) return;
     if (clientCompanies.length === 1) {
       setCompanyId(String(clientCompanies[0].companyId));
     } else {
       setCompanyId("");
     }
-  }, [clientCompanies]);
+  }, [clients, clientCompanies]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
