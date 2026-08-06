@@ -1675,13 +1675,16 @@ export async function listEmployeeAliases(employeeId: number): Promise<EmployeeA
 
 /**
  * Whether `alias` is already registered to some colaborador within
- * `clientId` — `null` when it's free. Scoped per client, same as CPF
- * uniqueness (the same alias text can be reused across different clients,
- * just not within one). Case-insensitive, same ASCII-only limitation
- * already accepted for name search elsewhere.
+ * `clientId` **and** `companyId` — `null` when it's free. Scoped per
+ * client+company, same as CPF uniqueness (the same alias text can be
+ * reused across different clients, or across different empresas of the
+ * same multi-empresa cliente, just not within the same client+company
+ * pair). Case-insensitive, same ASCII-only limitation already accepted for
+ * name search elsewhere.
  */
 export async function findEmployeeAliasOwner(
   clientId: number,
+  companyId: number,
   alias: string,
 ): Promise<{ id: number; name: string } | null> {
   const db = await getDb();
@@ -1689,8 +1692,8 @@ export async function findEmployeeAliasOwner(
     `SELECT e.id, e.name
      FROM employee_aliases ea
      JOIN employees e ON e.id = ea.employee_id
-     WHERE e.client_id = $1 AND lower(ea.alias) = lower($2)`,
-    [clientId, alias.trim()],
+     WHERE e.client_id = $1 AND e.company_id = $2 AND lower(ea.alias) = lower($3)`,
+    [clientId, companyId, alias.trim()],
   );
   return rows[0] ?? null;
 }
@@ -1707,13 +1710,13 @@ export async function addEmployeeAlias(employeeId: number, alias: string): Promi
   const trimmed = alias.trim();
   if (!trimmed) throw new Error("Nome não pode ser vazio.");
 
-  const employeeRows = await db.select<{ clientId: number }[]>(
-    "SELECT client_id AS clientId FROM employees WHERE id = $1",
+  const employeeRows = await db.select<{ clientId: number; companyId: number }[]>(
+    "SELECT client_id AS clientId, company_id AS companyId FROM employees WHERE id = $1",
     [employeeId],
   );
   if (employeeRows.length === 0) throw new Error("Colaborador não encontrado.");
 
-  const owner = await findEmployeeAliasOwner(employeeRows[0].clientId, trimmed);
+  const owner = await findEmployeeAliasOwner(employeeRows[0].clientId, employeeRows[0].companyId, trimmed);
   if (owner && owner.id !== employeeId) {
     throw new Error(`Esse nome já está vinculado a ${owner.name}.`);
   }
