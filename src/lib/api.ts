@@ -92,7 +92,7 @@ export function hashPaymentFile(path: string): Promise<PaymentFileHash> {
 export interface DownloadedPaymentFile {
   path: string;
   fileName: string;
-  fileKind: "xlsx" | "xls";
+  fileKind: "xlsx" | "xls" | "ods";
   etag: string | null;
   lastModified: string | null;
   contentLength: number | null;

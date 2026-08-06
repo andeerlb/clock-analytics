@@ -1,8 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { checkRemotePaymentFile, getRemoteFileCheckIntervalMinutes, setRemoteFileCheckIntervalMinutes } from "../lib/api";
-import { listUrlSourcedPaymentFiles, setUrlCheckDisabled } from "../lib/db";
+import {
+  listTrackedPaymentUrls,
+  logUrlCheckResult,
+  setUrlCheckDisabled as setUrlCheckDisabledDb,
+  setUrlCheckIntervalMinutes as setUrlCheckIntervalMinutesDb,
+  type TrackedPaymentUrl,
+  type UrlCheckResult,
+} from "../lib/db";
 
-/** A URL-sourced payment import this check found has changed remotely since it was last saved. */
+export type { TrackedPaymentUrl, UrlCheckResult };
+
+/** A URL-sourced payment import currently known to have changed remotely since it was last saved. */
 export interface RemoteUpdateFlag {
   sourceUrl: string;
   fileName: string;
@@ -11,64 +20,68 @@ export interface RemoteUpdateFlag {
   lastImportedAt: string;
 }
 
-/** One URL's check failing on the last cycle — surfaced instead of silently ignored, unlike the app's own update-checker. */
-export interface RemoteCheckFailure {
-  sourceUrl: string;
-  fileName: string;
-  message: string;
-}
-
 /**
  * Payroll files can change mid-day, and the app can stay open for hours (or
  * days) without the user ever revisiting Importar Pagamentos — a one-shot
  * check on that page's mount (like the app's own update-checker in
  * `Sidebar.tsx`) could go unnoticed indefinitely. Checked here instead, at
- * the app root (always mounted for the whole session, so the Sidebar can
- * show a hint regardless of which screen is open), on an interval short
- * enough to feel prompt but still trivially low-volume for a single HEAD
- * request per known URL — plus an immediate recheck when the window
- * regains focus, covering "left it open for days, just switched back"
- * without waiting for the next tick.
+ * the app root (always mounted for the whole session, so the Sidebar and
+ * the "Verificação automática" page can both reflect it regardless of
+ * which screen is open).
  *
- * The interval itself is user-editable in Configurações (default 5 min,
- * persisted server-side, minimum 1) — unlike the app's own update check,
- * which stays a fixed 30 minutes. `intervalMinutes` here starts at that
- * same default before the real persisted value loads, so polling begins
- * immediately instead of waiting on a round-trip.
+ * Each tracked URL can have its own check interval (`checkIntervalMinutes`
+ * on `TrackedPaymentUrl`, editable on the Verificação automática page),
+ * falling back to the global default (`intervalMinutes` here, editable on
+ * the same page, persisted server-side, minimum 1) when unset. Supporting
+ * that means the ticker itself runs on a fixed, fine-grained schedule
+ * (`TICK_INTERVAL_MS`) and, on every tick, computes — from real
+ * timestamps, not a tick count — which URLs are actually due
+ * (`now - lastCheckedAt >= effectiveInterval`); only those get checked.
+ * This is naturally robust to a throttled/suspended timer (e.g. the app
+ * minimized for a while): whenever a tick does fire, it just picks up
+ * everything that's overdue, however that happened. A `visibilitychange`
+ * listener triggers an extra tick on refocus for the same reason — not to
+ * force-check everything, just to reassess due-ness sooner than the next
+ * fixed tick would.
  */
+const TICK_INTERVAL_MS = 60_000;
 const DEFAULT_CHECK_INTERVAL_MINUTES = 5;
+
+function effectiveIntervalMs(t: TrackedPaymentUrl, globalMinutes: number): number {
+  return (t.checkIntervalMinutes ?? globalMinutes) * 60_000;
+}
 
 interface RemoteFileUpdatesContextValue {
   remoteUpdates: RemoteUpdateFlag[];
   dismissRemoteUpdate: (url: string) => void;
-  /** Turns the automatic check off for one URL — persisted (see `setUrlCheckDisabled`), unlike `dismissRemoteUpdate` which only hides the current banner. */
-  disableUrlCheck: (url: string) => Promise<void>;
+  setUrlCheckDisabled: (url: string, disabled: boolean) => Promise<void>;
+  setUrlIntervalMinutes: (url: string, minutes: number | null) => Promise<void>;
   refreshNow: () => void;
+  /** Global default (minutes) used by any tracked URL without its own override. */
   intervalMinutes: number;
   setIntervalMinutes: (minutes: number) => Promise<void>;
-  /** True while a check cycle is in flight — for a "Verificando..." indicator in Configurações. */
+  /** True while a check cycle is in flight — for a "Verificando..." indicator. */
   checking: boolean;
-  /** When the last check cycle finished (success or failure), ISO string. */
-  lastCheckedAt: string | null;
-  /** Per-URL failures from the last cycle — unlike a flagged update, these mean the check itself couldn't run (offline, server error, etc.), not that the file didn't change. */
-  lastErrors: RemoteCheckFailure[];
+  /** Every URL a payment file was ever downloaded from, with its full tracking state — feeds the Verificação automática page. */
+  trackedFiles: TrackedPaymentUrl[];
+  /** Soonest due time across active (non-disabled) tracked files, ISO string — for the Sidebar's live countdown. `null` when nothing is tracked. */
+  nextCheckAt: string | null;
 }
 
 const RemoteFileUpdatesContext = createContext<RemoteFileUpdatesContextValue | null>(null);
 
 export function RemoteFileUpdatesProvider({ children }: { children: ReactNode }) {
-  const [remoteUpdates, setRemoteUpdates] = useState<RemoteUpdateFlag[]>([]);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [intervalMinutes, setIntervalMinutesState] = useState(DEFAULT_CHECK_INTERVAL_MINUTES);
   const [checking, setChecking] = useState(false);
-  const [lastCheckedAt, setLastCheckedAt] = useState<string | null>(null);
-  const [lastErrors, setLastErrors] = useState<RemoteCheckFailure[]>([]);
-  // A dismissed URL that's genuinely still different keeps getting
-  // re-flagged by `check()` on every tick — filtered back out here so
-  // "Ignorar" stays dismissed until the user actually reimports (which
-  // logs a new source_files row with a fresh etag/hash, so future checks
-  // naturally stop matching `changed === true` against it).
+  const [trackedFiles, setTrackedFiles] = useState<TrackedPaymentUrl[]>([]);
+  const [nextCheckAt, setNextCheckAt] = useState<string | null>(null);
   const checkingRef = useRef(false);
+  // `tick` closes over `intervalMinutes` (for URLs without their own
+  // override) — kept in a ref too so a tick already in flight when the
+  // global default changes doesn't need to restart to see the new value.
+  const intervalMinutesRef = useRef(intervalMinutes);
+  intervalMinutesRef.current = intervalMinutes;
 
   useEffect(() => {
     getRemoteFileCheckIntervalMinutes()
@@ -76,78 +89,82 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
       .catch(() => {}); // stick with the default rather than block polling on this
   }, []);
 
-  const check = useCallback(async () => {
+  const tick = useCallback(async () => {
     if (checkingRef.current) return;
     checkingRef.current = true;
     setChecking(true);
     try {
-      const known = await listUrlSourcedPaymentFiles();
-      if (known.length === 0) {
-        setRemoteUpdates([]);
-        setLastErrors([]);
-        return;
-      }
-      const checks = await Promise.allSettled(
-        known.map((k) =>
-          checkRemotePaymentFile(k.sourceUrl, k.sourceEtag, k.sourceLastModified, k.sourceContentLength),
-        ),
-      );
-      const flagged: RemoteUpdateFlag[] = [];
-      const failures: RemoteCheckFailure[] = [];
-      checks.forEach((res, i) => {
-        if (res.status === "fulfilled") {
-          if (res.value.changed === true) {
-            flagged.push({
-              sourceUrl: known[i].sourceUrl,
-              fileName: known[i].fileName,
-              provider: known[i].provider,
-              lastImportedAt: known[i].importedAt,
-            });
-          }
-          // changed === false/null — nothing to report, same ambient
-          // treatment as the app's own update-checker.
-        } else {
-          failures.push({
-            sourceUrl: known[i].sourceUrl,
-            fileName: known[i].fileName,
-            message: String(res.reason instanceof Error ? res.reason.message : res.reason),
-          });
-        }
+      const tracked = await listTrackedPaymentUrls();
+      const globalMinutes = intervalMinutesRef.current;
+      const now = Date.now();
+      const due = tracked.filter((t) => {
+        if (t.checkDisabled) return false;
+        if (!t.lastCheckedAt) return true;
+        return now - new Date(t.lastCheckedAt).getTime() >= effectiveIntervalMs(t, globalMinutes);
       });
-      setRemoteUpdates(flagged);
-      setLastErrors(failures);
-    } catch (e) {
-      setLastErrors([{ sourceUrl: "", fileName: "", message: String(e instanceof Error ? e.message : e) }]);
+
+      if (due.length > 0) {
+        const results = await Promise.allSettled(
+          due.map((t) => checkRemotePaymentFile(t.sourceUrl, t.sourceEtag, t.sourceLastModified, t.sourceContentLength)),
+        );
+        await Promise.all(
+          results.map((res, i) => {
+            const t = due[i];
+            if (res.status === "fulfilled") {
+              const result: UrlCheckResult =
+                res.value.changed === true ? "changed" : res.value.changed === false ? "unchanged" : "unknown";
+              return logUrlCheckResult(t.sourceUrl, t.fileName, result, null);
+            }
+            const message = String(res.reason instanceof Error ? res.reason.message : res.reason);
+            return logUrlCheckResult(t.sourceUrl, t.fileName, "error", message);
+          }),
+        );
+      }
+
+      // Re-read rather than patch in memory — URLs not due this tick keep
+      // exactly what the log already says about them, and the ones just
+      // checked come back with their brand new log entry, uniformly.
+      const refreshed = await listTrackedPaymentUrls();
+      setTrackedFiles(refreshed);
+
+      const nextTimes = refreshed
+        .filter((t) => !t.checkDisabled)
+        .map((t) => (t.lastCheckedAt ? new Date(t.lastCheckedAt).getTime() : now) + effectiveIntervalMs(t, globalMinutes));
+      setNextCheckAt(nextTimes.length > 0 ? new Date(Math.min(...nextTimes)).toISOString() : null);
+    } catch {
+      // silent — ambient, same treatment as the app's own update-checker;
+      // individual per-URL failures are already captured via logUrlCheckResult.
     } finally {
-      setLastCheckedAt(new Date().toISOString());
       setChecking(false);
       checkingRef.current = false;
     }
   }, []);
 
-  // Re-created whenever `intervalMinutes` changes — including right after
-  // `setIntervalMinutes` below saves a new value from Configurações, so a
-  // change takes effect immediately instead of needing an app restart.
   useEffect(() => {
-    check();
-    const interval = setInterval(check, intervalMinutes * 60 * 1000);
+    tick();
+    const interval = setInterval(tick, TICK_INTERVAL_MS);
     function onVisibilityChange() {
-      if (document.visibilityState === "visible") check();
+      if (document.visibilityState === "visible") tick();
     }
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [check, intervalMinutes]);
+  }, [tick]);
 
   function dismissRemoteUpdate(url: string) {
     setDismissed((prev) => new Set(prev).add(url));
   }
 
-  async function disableUrlCheck(url: string) {
-    await setUrlCheckDisabled(url, true);
-    setRemoteUpdates((prev) => prev.filter((u) => u.sourceUrl !== url));
+  async function setUrlCheckDisabled(url: string, disabled: boolean) {
+    await setUrlCheckDisabledDb(url, disabled);
+    setTrackedFiles((prev) => prev.map((t) => (t.sourceUrl === url ? { ...t, checkDisabled: disabled } : t)));
+  }
+
+  async function setUrlIntervalMinutes(url: string, minutes: number | null) {
+    await setUrlCheckIntervalMinutesDb(url, minutes);
+    setTrackedFiles((prev) => prev.map((t) => (t.sourceUrl === url ? { ...t, checkIntervalMinutes: minutes } : t)));
   }
 
   async function setIntervalMinutes(minutes: number) {
@@ -155,20 +172,23 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
     setIntervalMinutesState(saved);
   }
 
-  const visible = remoteUpdates.filter((u) => !dismissed.has(u.sourceUrl));
+  const remoteUpdates: RemoteUpdateFlag[] = trackedFiles
+    .filter((t) => !t.checkDisabled && t.lastResult === "changed" && !dismissed.has(t.sourceUrl))
+    .map((t) => ({ sourceUrl: t.sourceUrl, fileName: t.fileName, provider: t.provider, lastImportedAt: t.importedAt }));
 
   return (
     <RemoteFileUpdatesContext.Provider
       value={{
-        remoteUpdates: visible,
+        remoteUpdates,
         dismissRemoteUpdate,
-        disableUrlCheck,
-        refreshNow: check,
+        setUrlCheckDisabled,
+        setUrlIntervalMinutes,
+        refreshNow: tick,
         intervalMinutes,
         setIntervalMinutes,
         checking,
-        lastCheckedAt,
-        lastErrors,
+        trackedFiles,
+        nextCheckAt,
       }}
     >
       {children}

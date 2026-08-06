@@ -408,6 +408,12 @@ fn build_http_client(timeout: std::time::Duration) -> Result<reqwest::Client, St
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::limited(5))
         .user_agent(concat!("pontoscan/", env!("CARGO_PKG_VERSION")))
+        // OneDrive/SharePoint's anonymous-link "redemption" sets a cookie
+        // partway through its redirect chain and expects it back on the
+        // next hop — without this, an otherwise-public "anyone with the
+        // link" share dead-ends on Microsoft's login page instead of the
+        // file, even though no actual sign-in is required.
+        .cookie_store(true)
         .build()
         .map_err(|e| e.to_string())
 }
@@ -418,6 +424,24 @@ fn parse_http_url(url: &str) -> Result<reqwest::Url, String> {
         return Err("A URL deve começar com http:// ou https://.".to_string());
     }
     Ok(parsed)
+}
+
+/// A OneDrive/SharePoint "anyone with the link" share resolves to the
+/// Office Online HTML viewer (`Doc.aspx?action=default`) by default —
+/// `download=1` is Microsoft's own convention for making that same link
+/// stream the raw file bytes instead. Only touches known Microsoft
+/// file-sharing hosts, and only when the caller's URL doesn't already
+/// have it, so an arbitrary non-Microsoft URL (or one already tuned by
+/// hand) is never rewritten.
+fn normalize_office_share_url(url: &reqwest::Url) -> reqwest::Url {
+    let host = url.host_str().unwrap_or("");
+    let is_ms_share_host = host == "1drv.ms" || host == "onedrive.live.com" || host.ends_with(".sharepoint.com");
+    if !is_ms_share_host || url.query_pairs().any(|(k, _)| k == "download") {
+        return url.clone();
+    }
+    let mut normalized = url.clone();
+    normalized.query_pairs_mut().append_pair("download", "1");
+    normalized
 }
 
 fn header_str(headers: &reqwest::header::HeaderMap, name: reqwest::header::HeaderName) -> Option<String> {
@@ -460,26 +484,26 @@ pub struct DownloadedPaymentFile {
     /// Display name — from Content-Disposition or the URL, NOT the uuid on
     /// disk.
     pub file_name: String,
-    pub file_kind: String, // "xlsx" | "xls"
+    pub file_kind: String, // "xlsx" | "xls" | "ods"
     pub etag: Option<String>,
     pub last_modified: Option<String>,
     pub content_length: Option<i64>,
 }
 
 /// Downloads a payment spreadsheet from a plain/anonymous direct-download
-/// URL, validates it's really an xlsx/xls by magic bytes (never trusting
-/// the URL's extension or Content-Type — both are attacker/misconfig-
-/// controllable, e.g. a login-wall HTML response served with a 200), and
-/// writes it into `imports/` next to the timesheet-PDF flow's own copies —
-/// `payment_templates/` is dead code today (nothing ever creates that
-/// directory), and `imports/` already carries the size/clear/backup
-/// lifecycle this file needs for free (see `storage.rs`).
+/// URL, validates it's really an xlsx/xls/ods by magic bytes (never
+/// trusting the URL's extension or Content-Type — both are attacker/
+/// misconfig-controllable, e.g. a login-wall HTML response served with a
+/// 200), and writes it into `imports/` next to the timesheet-PDF flow's
+/// own copies — `payment_templates/` is dead code today (nothing ever
+/// creates that directory), and `imports/` already carries the
+/// size/clear/backup lifecycle this file needs for free (see `storage.rs`).
 #[tauri::command]
 pub async fn download_payment_file_from_url(
     app: AppHandle,
     url: String,
 ) -> Result<DownloadedPaymentFile, String> {
-    let parsed = parse_http_url(&url)?;
+    let parsed = normalize_office_share_url(&parse_http_url(&url)?);
     let client = build_http_client(OFFICE_DOWNLOAD_TIMEOUT)?;
 
     let response = client
@@ -506,10 +530,12 @@ pub async fn download_payment_file_from_url(
         "xlsx"
     } else if infer::doc::is_xls(&bytes) {
         "xls"
+    } else if infer::odf::is_ods(&bytes) {
+        "ods"
     } else {
         return Err(
-            "O link não retornou um arquivo do Microsoft Office (.xlsx/.xls) válido. Verifique \
-             se a URL exige login ou não é um link de download direto."
+            "O link não retornou um arquivo do Microsoft Office (.xlsx/.xls) ou OpenDocument \
+             (.ods) válido. Verifique se a URL exige login ou não é um link de download direto."
                 .to_string(),
         );
     };
@@ -565,7 +591,7 @@ pub async fn check_remote_payment_file(
     known_last_modified: Option<String>,
     known_content_length: Option<i64>,
 ) -> Result<RemoteChangeCheck, String> {
-    let parsed = parse_http_url(&url)?;
+    let parsed = normalize_office_share_url(&parse_http_url(&url)?);
     let client = build_http_client(OFFICE_HEAD_TIMEOUT)?;
 
     let response = client

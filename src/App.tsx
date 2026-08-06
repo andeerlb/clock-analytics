@@ -22,6 +22,7 @@ import EmployeesPage from "./pages/EmployeesPage";
 import PaymentDetailPage from "./pages/PaymentDetailPage";
 import PaymentsPage from "./pages/PaymentsPage";
 import PaymentTemplatesPage from "./pages/PaymentTemplatesPage";
+import RemoteUpdatesPage from "./pages/RemoteUpdatesPage";
 import SettingsPage from "./pages/SettingsPage";
 
 function App() {
@@ -68,6 +69,7 @@ function App() {
                 <Route path="/import/timesheet" element={<ImportTimesheetPage />} />
                 <Route path="/import/payments" element={<ImportPaymentsPage />} />
                 <Route path="/import/payments/templates" element={<PaymentTemplatesPage />} />
+                <Route path="/import/payments/remote-updates" element={<RemoteUpdatesPage />} />
                 <Route path="/import/employees" element={<ImportEmployeesPage />} />
                 <Route path="/import/employees/templates" element={<EmployeeTemplatesPage />} />
                 <Route path="/employee/:importId" element={<EmployeeDetailPage />} />

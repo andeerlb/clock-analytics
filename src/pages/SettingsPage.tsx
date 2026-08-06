@@ -9,7 +9,6 @@ import {
   Database,
   FileCheck2,
   FolderOpen,
-  Link2,
   RefreshCw,
   Sparkles,
   Trash2,
@@ -19,7 +18,6 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import GithubIcon from "../components/GithubIcon";
 import UpdateModal from "../components/UpdateModal";
-import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import {
   backupAppData,
   checkPopplerStatus,
@@ -29,16 +27,8 @@ import {
   openAppDataDir,
   setPopplerDir,
 } from "../lib/api";
-import {
-  clearAllData,
-  findRedundantOriginals,
-  listDisabledUrlChecks,
-  markOriginalsRemoved,
-  setUrlCheckDisabled,
-  vacuumDatabase,
-  type DisabledUrlCheck,
-} from "../lib/db";
-import { formatBytes, formatDateTime } from "../lib/format";
+import { clearAllData, findRedundantOriginals, markOriginalsRemoved, vacuumDatabase } from "../lib/db";
+import { formatBytes } from "../lib/format";
 import type { PopplerStatus, StorageUsage } from "../lib/types";
 import { checkForUpdate, REPO_URL } from "../lib/updateCheck";
 
@@ -69,52 +59,6 @@ export default function SettingsPage() {
   const [popplerDirInput, setPopplerDirInput] = useState("");
   const [popplerSaving, setPopplerSaving] = useState(false);
   const [popplerError, setPopplerError] = useState<string | null>(null);
-
-  const {
-    intervalMinutes: remoteCheckInterval,
-    setIntervalMinutes: saveRemoteCheckInterval,
-    checking: remoteChecking,
-    lastCheckedAt: remoteLastCheckedAt,
-    lastErrors: remoteCheckFailures,
-  } = useRemoteFileUpdates();
-  const [remoteCheckInput, setRemoteCheckInput] = useState(String(remoteCheckInterval));
-  const [remoteCheckSaving, setRemoteCheckSaving] = useState(false);
-  const [remoteCheckError, setRemoteCheckError] = useState<string | null>(null);
-  const [disabledUrlChecks, setDisabledUrlChecks] = useState<DisabledUrlCheck[]>([]);
-  const [reenablingUrl, setReenablingUrl] = useState<string | null>(null);
-
-  // Keeps the input in sync with the persisted value once it loads (the
-  // context starts at a provisional default before that round-trip
-  // resolves) — same "sync input from source of truth" need as
-  // `popplerDirInput` below, just via a prop-like context value instead of
-  // a local fetch.
-  useEffect(() => {
-    setRemoteCheckInput(String(remoteCheckInterval));
-  }, [remoteCheckInterval]);
-
-  useEffect(() => {
-    refreshDisabledUrlChecks();
-  }, []);
-
-  function refreshDisabledUrlChecks() {
-    listDisabledUrlChecks()
-      .then(setDisabledUrlChecks)
-      .catch(() => {});
-  }
-
-  async function handleReenableUrlCheck(sourceUrl: string) {
-    setReenablingUrl(sourceUrl);
-    try {
-      await setUrlCheckDisabled(sourceUrl, false);
-      setDisabledUrlChecks((prev) => prev.filter((u) => u.sourceUrl !== sourceUrl));
-    } catch (e) {
-      setRemoteCheckError(String(e));
-    } finally {
-      setReenablingUrl(null);
-    }
-  }
-
-  const remoteCheckIntervalValid = Number.isFinite(Number(remoteCheckInput)) && Number(remoteCheckInput) >= 1;
 
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
@@ -213,23 +157,6 @@ export default function SettingsPage() {
       setPopplerError(String(e));
     } finally {
       setPopplerSaving(false);
-    }
-  }
-
-  async function handleSaveRemoteCheckInterval() {
-    setRemoteCheckError(null);
-    const parsed = Number(remoteCheckInput);
-    if (!Number.isFinite(parsed) || parsed < 1) {
-      setRemoteCheckError("Informe um número inteiro de minutos, no mínimo 1.");
-      return;
-    }
-    setRemoteCheckSaving(true);
-    try {
-      await saveRemoteCheckInterval(Math.round(parsed));
-    } catch (e) {
-      setRemoteCheckError(String(e));
-    } finally {
-      setRemoteCheckSaving(false);
     }
   }
 
@@ -373,98 +300,6 @@ export default function SettingsPage() {
             {popplerSaving ? "Salvando..." : "Salvar e testar"}
           </button>
         </div>
-      </div>
-
-      <div className="card">
-        <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <Link2 size={18} />
-          Importação por URL
-        </h3>
-        <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
-          De quanto em quanto tempo verificar se um arquivo de pagamento importado por URL mudou no
-          servidor de origem, oferecendo reimportar quando isso acontece.
-        </p>
-
-        <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "0.4rem" }}>
-          {remoteChecking ? (
-            <>
-              <RefreshCw size={14} className="spin" />
-              Verificando agora...
-            </>
-          ) : remoteLastCheckedAt ? (
-            <>Última verificação: {formatDateTime(remoteLastCheckedAt)}</>
-          ) : (
-            "Ainda não verificado nesta sessão."
-          )}
-        </p>
-
-        {remoteCheckFailures.length > 0 && (
-          <div className="error-box">
-            Falha ao verificar {remoteCheckFailures.length === 1 ? "1 arquivo" : `${remoteCheckFailures.length} arquivos`}:
-            <ul style={{ margin: "0.4rem 0 0", paddingLeft: "1.2rem" }}>
-              {remoteCheckFailures.map((f) => (
-                <li key={f.sourceUrl || f.message}>
-                  {f.fileName ? <strong>{f.fileName}</strong> : null}
-                  {f.fileName ? " — " : ""}
-                  {f.message}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {remoteCheckError && <div className="error-box">{remoteCheckError}</div>}
-
-        <div className="field-row" style={{ alignItems: "flex-end" }}>
-          <div className="field" style={{ flex: "0 1 160px", marginBottom: 0 }}>
-            <label htmlFor="remote-check-interval">Intervalo (minutos)</label>
-            <input
-              id="remote-check-interval"
-              type="number"
-              min={1}
-              step={1}
-              value={remoteCheckInput}
-              onChange={(e) => setRemoteCheckInput(e.target.value)}
-            />
-          </div>
-          <button
-            type="button"
-            onClick={handleSaveRemoteCheckInterval}
-            disabled={remoteCheckSaving || !remoteCheckIntervalValid}
-          >
-            {remoteCheckSaving ? "Salvando..." : "Salvar"}
-          </button>
-        </div>
-
-        {disabledUrlChecks.length > 0 && (
-          <div style={{ marginTop: "1.2rem" }}>
-            <p className="muted" style={{ fontSize: "0.85rem", marginBottom: "0.5rem" }}>
-              Verificação automática desativada para:
-            </p>
-            <div className="file-list">
-              {disabledUrlChecks.map((u) => (
-                <div className="file-row" key={u.sourceUrl}>
-                  <div className="file-row-info">
-                    <div className="file-name">{u.fileName}</div>
-                    <div className="muted" style={{ fontSize: "0.75rem" }}>
-                      {u.sourceUrl}
-                    </div>
-                  </div>
-                  <div className="file-row-actions">
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={() => handleReenableUrlCheck(u.sourceUrl)}
-                      disabled={reenablingUrl === u.sourceUrl}
-                    >
-                      {reenablingUrl === u.sourceUrl ? "Reativando..." : "Reativar"}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       <div className="card">

@@ -212,6 +212,8 @@ export interface ImportFileRow {
   savedAt: string | null;
   /** Origin URL for a payment file downloaded via URL — null for local picks and timesheet PDFs. */
   sourceUrl: string | null;
+  /** Whether "Desativar verificação automática" was set for `sourceUrl` — meaningless when `sourceUrl` is null. */
+  checkDisabled: boolean;
 }
 
 export type PaymentFileKind = "csv" | "xlsx" | "xls" | "ods";

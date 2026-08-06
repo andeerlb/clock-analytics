@@ -1,11 +1,12 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Update } from "@tauri-apps/plugin-updater";
-import { Briefcase, Building2, Clock, FileUp, Settings, Users, Wallet } from "lucide-react";
+import { Briefcase, Building2, Clock, FileUp, RefreshCw, Settings, Users, Wallet } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import GithubIcon from "./GithubIcon";
 import UpdateModal from "./UpdateModal";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
+import { formatCountdown } from "../lib/format";
 import { checkForUpdate, REPO_URL } from "../lib/updateCheck";
 
 const NAV_ITEMS = [
@@ -24,7 +25,10 @@ function navLinkClass({ isActive }: { isActive: boolean }): string {
 export default function Sidebar() {
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
-  const { remoteUpdates } = useRemoteFileUpdates();
+  const { remoteUpdates, trackedFiles, nextCheckAt, checking } = useRemoteFileUpdates();
+  // Ticks once a second purely to redraw the countdown below — `nextCheckAt`
+  // itself only changes once per check cycle (every `TICK_INTERVAL_MS`).
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     checkForUpdate()
@@ -33,6 +37,15 @@ export default function Sidebar() {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const countdownLabel = nextCheckAt ? formatCountdown(new Date(nextCheckAt).getTime() - now) : null;
+  const hasCheckError = trackedFiles.some((t) => !t.checkDisabled && t.lastResult === "error");
+  const remoteDotColor = hasCheckError ? "var(--danger)" : remoteUpdates.length > 0 ? "var(--warning)" : null;
 
   return (
     <nav className="app-nav">
@@ -48,25 +61,35 @@ export default function Sidebar() {
           <NavLink key={to} to={to} end={end} className={navLinkClass}>
             <Icon size={18} />
             <span>{label}</span>
-            {to === "/import" && remoteUpdates.length > 0 && (
-              <span
-                style={{
-                  marginLeft: "auto",
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  background: "var(--warning)",
-                  flexShrink: 0,
-                }}
-                aria-label="Arquivo remoto atualizado — reimportação disponível"
-                title="Arquivo remoto atualizado — reimportação disponível"
-              />
-            )}
           </NavLink>
         ))}
       </div>
 
       <div className="app-nav-footer">
+        <NavLink to="/import/payments/remote-updates" className={navLinkClass}>
+          <RefreshCw size={18} className={checking ? "spin" : undefined} />
+          <span>Verificação automática</span>
+          {countdownLabel && (
+            <span className="muted" style={{ marginLeft: "auto", fontSize: "0.72rem", flexShrink: 0 }}>
+              {countdownLabel}
+            </span>
+          )}
+          {remoteDotColor && (
+            <span
+              style={{
+                marginLeft: countdownLabel ? "0.4rem" : "auto",
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                background: remoteDotColor,
+                flexShrink: 0,
+              }}
+              aria-label={hasCheckError ? "Falha na verificação automática" : "Arquivo remoto atualizado — reimportação disponível"}
+              title={hasCheckError ? "Falha na verificação automática" : "Arquivo remoto atualizado — reimportação disponível"}
+            />
+          )}
+        </NavLink>
+
         <button
           type="button"
           className="app-nav-link ghost"

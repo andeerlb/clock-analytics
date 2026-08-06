@@ -147,6 +147,15 @@ export function formatDateTime(sqliteDatetime: string): string {
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "long", timeStyle: "short" }).format(date);
 }
 
+/** "3m 12s" while there's a whole minute or more left, just "12s" under a minute, "agora" once due — shared by the Sidebar's live indicator and the Verificação automática page's per-file countdown. */
+export function formatCountdown(ms: number): string {
+  if (ms <= 0) return "agora";
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
 const MONTH_ABBR = [
   "jan",
   "fev",

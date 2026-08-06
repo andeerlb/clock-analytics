@@ -142,6 +142,8 @@ type ImportMode = "local" | "url";
 /** Where a downloaded (not locally-picked) `paths` entry came from, and the response headers captured at that download — recorded so a later reimport can compare against them (see `checkRemotePaymentFile`). */
 interface UrlProvenance {
   url: string;
+  /** The real display name from Content-Disposition/the URL — overrides the local uuid-named temp file's own basename, which is all `hashPaymentFile` below would otherwise have to go on. */
+  fileName: string;
   etag: string | null;
   lastModified: string | null;
   contentLength: number | null;
@@ -219,7 +221,7 @@ export default function ImportPaymentsPage() {
     restored?.urlSourceByPath ?? new Map(),
   );
   const [pendingAutoProcess, setPendingAutoProcess] = useState(false);
-  const { remoteUpdates, dismissRemoteUpdate, disableUrlCheck } = useRemoteFileUpdates();
+  const { remoteUpdates, dismissRemoteUpdate, setUrlCheckDisabled } = useRemoteFileUpdates();
 
   const [fileResults, setFileResults] = useState<PaymentFileResult[]>(restored?.fileResults ?? []);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(restored?.selectedRows ?? new Set());
@@ -266,12 +268,24 @@ export default function ImportPaymentsPage() {
     (async () => {
       const entries = await Promise.all(paths.map((p) => hashPaymentFile(p)));
       if (cancelled) return;
-      setFileHashes(new Map(entries.map((e) => [e.path, { hash: e.hash, fileName: e.fileName }])));
+      // A URL download's local copy lives under imports/ named by uuid —
+      // hashPaymentFile can only report that uuid-based basename as
+      // `fileName`, so the real name (from Content-Disposition/the URL)
+      // recorded at download time takes priority here, same as a locally
+      // picked file's own real basename would.
+      setFileHashes(
+        new Map(
+          entries.map((e) => [
+            e.path,
+            { hash: e.hash, fileName: urlSourceByPath.get(e.path)?.fileName ?? e.fileName },
+          ]),
+        ),
+      );
     })();
     return () => {
       cancelled = true;
     };
-  }, [paths]);
+  }, [paths, urlSourceByPath]);
 
   useEffect(() => {
     if (!templateId) {
@@ -368,6 +382,7 @@ export default function ImportPaymentsPage() {
         const next = new Map(prev);
         next.set(result.path, {
           url: targetUrl,
+          fileName: result.fileName,
           etag: result.etag,
           lastModified: result.lastModified,
           contentLength: result.contentLength,
@@ -886,7 +901,7 @@ export default function ImportPaymentsPage() {
               <button
                 type="button"
                 className="ghost"
-                onClick={() => disableUrlCheck(u.sourceUrl)}
+                onClick={() => setUrlCheckDisabled(u.sourceUrl, true)}
                 title="Não verificar mais este arquivo automaticamente (pode reativar em Configurações)"
               >
                 Desativar verificação automática
@@ -1007,8 +1022,9 @@ export default function ImportPaymentsPage() {
                 <>
                   <div className="warning-box">
                     <AlertTriangle size={14} style={{ verticalAlign: "-2px", marginRight: "0.4rem" }} />
-                    Apenas arquivos do Microsoft Office (.xlsx ou .xls) são suportados por URL. O link
-                    precisa ser de download direto e anônimo — não pode exigir login.
+                    Apenas arquivos do Microsoft Office (.xlsx, .xls) ou OpenDocument (.ods) são
+                    suportados por URL. O link precisa ser de download direto e anônimo — não pode
+                    exigir login.
                   </div>
                   <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.8rem" }}>
                     <input
@@ -1488,6 +1504,23 @@ export default function ImportPaymentsPage() {
                       <div className="file-row-info">
                         <div className="file-name" title={f.fileName}>
                           {f.fileName}
+                          {f.sourceUrl && (
+                            <Link2
+                              size={12}
+                              style={{ marginLeft: "0.4rem", opacity: f.checkDisabled ? 0.35 : 0.6, verticalAlign: "-1px" }}
+                              aria-label={
+                                f.checkDisabled
+                                  ? `Verificação automática desativada — ${f.sourceUrl}`
+                                  : `Verificação automática de atualização ativa — ${f.sourceUrl}`
+                              }
+                            >
+                              <title>
+                                {f.checkDisabled
+                                  ? `Verificação automática desativada — ${f.sourceUrl}`
+                                  : `Verificação automática de atualização ativa — ${f.sourceUrl}`}
+                              </title>
+                            </Link2>
+                          )}
                         </div>
                         <div className="file-meta">
                           {f.provider || "—"} · {formatDateTime(f.importedAt)}

@@ -1179,63 +1179,92 @@ export async function listImportFiles(query: ImportFilesQuery): Promise<PagedRes
   );
   const total = countRows[0]?.count ?? 0;
 
-  const rows = await db.select<ImportFileRow[]>(
+  const rawRows = await db.select<(Omit<ImportFileRow, "checkDisabled"> & { checkDisabled: number })[]>(
     `SELECT
-      id,
-      file_name AS fileName,
-      file_hash AS fileHash,
-      provider,
-      import_type AS importType,
-      status,
-      error_message AS errorMessage,
-      original_pdf_path AS originalPdfPath,
-      page_count AS pageCount,
-      imported_at AS importedAt,
-      saved_at AS savedAt,
-      source_url AS sourceUrl
-    FROM source_files
+      sf.id,
+      sf.file_name AS fileName,
+      sf.file_hash AS fileHash,
+      sf.provider,
+      sf.import_type AS importType,
+      sf.status,
+      sf.error_message AS errorMessage,
+      sf.original_pdf_path AS originalPdfPath,
+      sf.page_count AS pageCount,
+      sf.imported_at AS importedAt,
+      sf.saved_at AS savedAt,
+      sf.source_url AS sourceUrl,
+      COALESCE(sus.check_disabled, 0) AS checkDisabled
+    FROM source_files sf
+    LEFT JOIN source_url_settings sus ON sus.source_url = sf.source_url
     ${whereClause}
-    ORDER BY imported_at DESC
+    ORDER BY sf.imported_at DESC
     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
     [...params, query.pageSize, query.page * query.pageSize],
   );
+  const rows: ImportFileRow[] = rawRows.map((r) => ({ ...r, checkDisabled: Boolean(r.checkDisabled) }));
 
   return { rows, total };
 }
 
-export interface UrlSourcedPaymentFile {
-  id: number;
+export type UrlCheckResult = "changed" | "unchanged" | "unknown" | "error";
+
+export interface TrackedPaymentUrl {
   sourceUrl: string;
+  fileName: string;
+  provider: string;
+  /** Most recent import from this URL. */
+  importedAt: string;
   sourceEtag: string | null;
   sourceLastModified: string | null;
   sourceContentLength: number | null;
-  fileName: string;
-  provider: string;
-  importedAt: string;
+  checkDisabled: boolean;
+  /** Per-URL override (minutes) — null means "inherit the global default". */
+  checkIntervalMinutes: number | null;
+  /** From the most recent `source_url_check_log` entry for this URL, if any. */
+  lastCheckedAt: string | null;
+  lastResult: UrlCheckResult | null;
+  lastErrorMessage: string | null;
 }
 
 /**
- * The latest known state of each distinct URL a payment file was ever
- * downloaded from — one row per source_url (a URL whose content changed
- * and got reimported has more than one source_files row; only the newest
- * counts) — excluding any URL the user turned off via "Desativar
- * verificação automática" (see `setUrlCheckDisabled`). Feeds the
- * "check for remote updates" pass in `RemoteFileUpdatesContext`.
+ * Every distinct URL a payment file was ever downloaded from, with its
+ * full tracking state — one row per source_url (a URL whose content
+ * changed and got reimported has more than one source_files row; only the
+ * newest counts), regardless of enabled/disabled, so the Verificação
+ * automática page can show and manage everything (not just what's
+ * currently active). `RemoteFileUpdatesContext`'s scheduler is the one
+ * that filters to `!checkDisabled` before deciding what's due.
  */
-export async function listUrlSourcedPaymentFiles(): Promise<UrlSourcedPaymentFile[]> {
+export async function listTrackedPaymentUrls(): Promise<TrackedPaymentUrl[]> {
   const db = await getDb();
-  return db.select<UrlSourcedPaymentFile[]>(
-    `SELECT id, source_url AS sourceUrl, source_etag AS sourceEtag,
-            source_last_modified AS sourceLastModified, source_content_length AS sourceContentLength,
-            file_name AS fileName, provider, imported_at AS importedAt
+  const rawRows = await db.select<(Omit<TrackedPaymentUrl, "checkDisabled"> & { checkDisabled: number })[]>(
+    `SELECT
+       sf.source_url AS sourceUrl,
+       sf.file_name AS fileName,
+       sf.provider,
+       sf.imported_at AS importedAt,
+       sf.source_etag AS sourceEtag,
+       sf.source_last_modified AS sourceLastModified,
+       sf.source_content_length AS sourceContentLength,
+       COALESCE(sus.check_disabled, 0) AS checkDisabled,
+       sus.check_interval_minutes AS checkIntervalMinutes,
+       log.checked_at AS lastCheckedAt,
+       log.result AS lastResult,
+       log.message AS lastErrorMessage
      FROM (
        SELECT *, ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY imported_at DESC) AS rn
        FROM source_files
        WHERE import_type = 'payment' AND source_url IS NOT NULL
-     )
-     WHERE rn = 1
-       AND source_url NOT IN (SELECT source_url FROM source_url_settings WHERE check_disabled = 1)`,
+     ) sf
+     LEFT JOIN source_url_settings sus ON sus.source_url = sf.source_url
+     LEFT JOIN (
+       SELECT *, ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY checked_at DESC) AS rn
+       FROM source_url_check_log
+     ) log ON log.source_url = sf.source_url AND log.rn = 1
+     WHERE sf.rn = 1
+     ORDER BY sf.imported_at DESC`,
   );
+  return rawRows.map((r) => ({ ...r, checkDisabled: Boolean(r.checkDisabled) }));
 }
 
 /**
@@ -1257,26 +1286,83 @@ export async function setUrlCheckDisabled(sourceUrl: string, disabled: boolean):
   );
 }
 
-export interface DisabledUrlCheck {
-  sourceUrl: string;
-  fileName: string;
+/** `minutes: null` clears the override, falling back to the global interval. */
+export async function setUrlCheckIntervalMinutes(sourceUrl: string, minutes: number | null): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO source_url_settings (source_url, check_interval_minutes, updated_at)
+     VALUES ($1, $2, datetime('now'))
+     ON CONFLICT(source_url) DO UPDATE SET
+       check_interval_minutes = excluded.check_interval_minutes,
+       updated_at = excluded.updated_at`,
+    [sourceUrl, minutes],
+  );
 }
 
-/** URLs with the automatic check turned off — lets Configurações offer a way back ("Reativar"). */
-export async function listDisabledUrlChecks(): Promise<DisabledUrlCheck[]> {
+const MAX_CHECK_LOG_ENTRIES_PER_URL = 200;
+
+/** Records one check attempt and prunes older entries for that URL beyond the last 200, so the log stays bounded regardless of how short the check interval is. */
+export async function logUrlCheckResult(
+  sourceUrl: string,
+  fileName: string,
+  result: UrlCheckResult,
+  message: string | null,
+): Promise<void> {
   const db = await getDb();
-  return db.select<DisabledUrlCheck[]>(
-    `SELECT s.source_url AS sourceUrl, f.file_name AS fileName
-     FROM source_url_settings s
-     JOIN (
-       SELECT source_url, file_name,
-              ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY imported_at DESC) AS rn
-       FROM source_files
-       WHERE import_type = 'payment' AND source_url IS NOT NULL
-     ) f ON f.source_url = s.source_url AND f.rn = 1
-     WHERE s.check_disabled = 1
-     ORDER BY s.updated_at DESC`,
+  await db.execute(
+    `INSERT INTO source_url_check_log (source_url, file_name, result, message) VALUES ($1, $2, $3, $4)`,
+    [sourceUrl, fileName, result, message],
   );
+  await db.execute(
+    `DELETE FROM source_url_check_log
+     WHERE source_url = $1
+       AND id NOT IN (
+         SELECT id FROM source_url_check_log WHERE source_url = $1 ORDER BY checked_at DESC LIMIT $2
+       )`,
+    [sourceUrl, MAX_CHECK_LOG_ENTRIES_PER_URL],
+  );
+}
+
+export interface UrlCheckLogEntry {
+  id: number;
+  sourceUrl: string;
+  fileName: string;
+  checkedAt: string;
+  result: UrlCheckResult;
+  message: string | null;
+}
+
+/** Full check history, most recent first — optionally scoped to one URL — for the Verificação automática page. */
+export async function listUrlCheckLog(query: {
+  sourceUrl?: string;
+  page: number;
+  pageSize: number;
+}): Promise<PagedResult<UrlCheckLogEntry>> {
+  const db = await getDb();
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+  if (query.sourceUrl) {
+    params.push(query.sourceUrl);
+    conditions.push(`source_url = $${params.length}`);
+  }
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const countRows = await db.select<{ count: number }[]>(
+    `SELECT COUNT(*) AS count FROM source_url_check_log ${whereClause}`,
+    params,
+  );
+  const total = countRows[0]?.count ?? 0;
+
+  const rows = await db.select<UrlCheckLogEntry[]>(
+    `SELECT id, source_url AS sourceUrl, file_name AS fileName, checked_at AS checkedAt, result, message
+     FROM source_url_check_log
+     ${whereClause}
+     ORDER BY checked_at DESC
+     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, query.pageSize, query.page * query.pageSize],
+  );
+
+  return { rows, total };
 }
 
 /**

@@ -226,5 +226,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0037_source_url_settings.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 38,
+            description: "add per-URL check interval override and source_url_check_log — full history of the automatic remote-change check, for the Verificação automática page",
+            sql: include_str!("../migrations/0038_source_url_check_tracking.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
