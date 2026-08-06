@@ -214,7 +214,6 @@ export type PaymentTargetField =
   | "data"
   | "funcao"
   | "horario"
-  | "observacao"
   | "status";
 
 export const PAYMENT_TARGET_FIELDS: PaymentTargetField[] = [
@@ -225,7 +224,6 @@ export const PAYMENT_TARGET_FIELDS: PaymentTargetField[] = [
   "data",
   "funcao",
   "horario",
-  "observacao",
   "status",
 ];
 
@@ -267,7 +265,6 @@ export const PAYMENT_TARGET_FIELD_LABELS: Record<PaymentTargetField, string> = {
   data: "Data",
   funcao: "Função",
   horario: "Horário",
-  observacao: "Observação",
   status: "Status",
 };
 
@@ -453,7 +450,6 @@ export interface PaymentShiftRow {
   role: string;
   scheduleStartMinutes: number | null;
   scheduleEndMinutes: number | null;
-  note: string | null;
   status: PaymentShiftStatus;
   errorMessage: string | null;
   amount: number | null;

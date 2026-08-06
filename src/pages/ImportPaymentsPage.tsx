@@ -107,7 +107,6 @@ interface PaymentPreviewRow {
   scheduleRaw: string;
   scheduleStartMinutes: number | null;
   scheduleEndMinutes: number | null;
-  note: string | null;
   /** `null` when the mapped "data" column didn't parse (category "skipped") — shown as `workDateRaw` instead. */
   workDate: string | null;
   /** Raw "data" column text, for display when `workDate` is null. */
@@ -162,9 +161,9 @@ type DisplayRow =
 /** Identifies "the same shift" for dedup purposes (within-batch and against payment_shifts) — every column that matters, status excluded — see `findDuplicatePaymentShifts`. */
 function shiftDedupKey(
   employeeId: number,
-  r: Pick<PaymentPreviewRow, "workDate" | "local" | "role" | "scheduleStartMinutes" | "scheduleEndMinutes" | "note">,
+  r: Pick<PaymentPreviewRow, "workDate" | "local" | "role" | "scheduleStartMinutes" | "scheduleEndMinutes">,
 ): string {
-  return JSON.stringify([employeeId, r.workDate, r.local, r.role, r.scheduleStartMinutes, r.scheduleEndMinutes, r.note]);
+  return JSON.stringify([employeeId, r.workDate, r.local, r.role, r.scheduleStartMinutes, r.scheduleEndMinutes]);
 }
 
 const PREVIEW_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
@@ -433,7 +432,6 @@ export default function ImportPaymentsPage() {
               scheduleRaw,
               scheduleStartMinutes: parsedSchedule?.startMinutes ?? null,
               scheduleEndMinutes: parsedSchedule?.endMinutes ?? null,
-              note: applied_row.fields.observacao || null,
               workDateRaw,
               paymentStatus:
                 resolvePaymentStatus(selectedTemplate.statusRules, applied_row.fields) ?? "pendente",
@@ -525,7 +523,6 @@ export default function ImportPaymentsPage() {
           role: r.role,
           scheduleStartMinutes: r.scheduleStartMinutes,
           scheduleEndMinutes: r.scheduleEndMinutes,
-          note: r.note,
         })),
       );
       dupIndices.forEach((i) => {
@@ -610,7 +607,6 @@ export default function ImportPaymentsPage() {
           role: r.role,
           scheduleStartMinutes: r.scheduleStartMinutes,
           scheduleEndMinutes: r.scheduleEndMinutes,
-          note: r.note,
         })),
       );
       dupIndices.forEach((i) => {
@@ -707,7 +703,6 @@ export default function ImportPaymentsPage() {
           role: row.role,
           scheduleStartMinutes: row.scheduleStartMinutes,
           scheduleEndMinutes: row.scheduleEndMinutes,
-          note: row.note,
           status: row.paymentStatus,
           extraData: Object.keys(row.extraFields).length > 0 ? row.extraFields : null,
         });

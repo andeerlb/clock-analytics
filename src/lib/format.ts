@@ -50,6 +50,13 @@ export function formatDateCompact(isoDate: string): string {
   return Number(y) === currentYear ? `${d}/${m}` : `${d}/${m}/${y}`;
 }
 
+/** "2026-01-22" -> "22/Jan/2026" */
+export function formatDateAbbrev(isoDate: string): string {
+  const [y, m, d] = isoDate.split("-");
+  const month = MONTH_ABBR[Number(m) - 1];
+  return `${d}/${month.charAt(0).toUpperCase()}${month.slice(1)}/${y}`;
+}
+
 /**
  * Makes a string safe to use as a file or folder name across Linux/macOS/
  * Windows — strips path separators and the handful of characters Windows

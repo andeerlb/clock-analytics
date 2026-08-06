@@ -263,18 +263,62 @@ fn copy_into_imports_dir(source_path: &str, imports_dir: &Path) -> Result<String
     Ok(dest.to_string_lossy().to_string())
 }
 
-/// Opens the OS file manager on the folder containing `path` — "abrir no
-/// explorador de arquivos". There's no cross-platform "reveal and select
-/// this exact file" primitive in the opener plugin, so this opens the
-/// parent folder instead.
-#[tauri::command]
-pub fn reveal_in_file_manager(app: AppHandle, path: String) -> Result<(), String> {
-    let parent = Path::new(&path)
+/// Opens the OS file manager with `path` itself selected/highlighted, not
+/// just its containing folder — the opener plugin has no cross-platform
+/// "reveal and select" primitive, so each OS gets its own real mechanism:
+/// Explorer's `/select,`, Finder's `open -R`, and on Linux the freedesktop
+/// `org.freedesktop.FileManager1.ShowItems` D-Bus method (honored by
+/// Nautilus/Nemo and a few others). Anything that fails to actually select
+/// the file falls back to just opening the parent folder, same as before.
+#[cfg(target_os = "windows")]
+fn reveal_path(_app: &AppHandle, path: &str) -> Result<(), String> {
+    std::process::Command::new("explorer")
+        .arg(format!("/select,{path}"))
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn reveal_path(_app: &AppHandle, path: &str) -> Result<(), String> {
+    std::process::Command::new("open")
+        .args(["-R", path])
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn reveal_path(app: &AppHandle, path: &str) -> Result<(), String> {
+    let uri = format!("file://{path}");
+    let selected = std::process::Command::new("dbus-send")
+        .args([
+            "--session",
+            "--dest=org.freedesktop.FileManager1",
+            "--type=method_call",
+            "/org/freedesktop/FileManager1",
+            "org.freedesktop.FileManager1.ShowItems",
+            &format!("array:string:{uri}"),
+            "string:",
+        ])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if selected {
+        return Ok(());
+    }
+
+    let parent = Path::new(path)
         .parent()
         .ok_or_else(|| "Arquivo sem diretório pai.".to_string())?;
     app.opener()
         .open_path(parent.to_string_lossy().to_string(), None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn reveal_in_file_manager(app: AppHandle, path: String) -> Result<(), String> {
+    reveal_path(&app, &path)
 }
 
 /// Opens the app's whole data folder (DB + `imports/`) in the OS file
@@ -403,6 +447,14 @@ pub fn backup_app_data(
 ) -> Result<(), String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     storage::backup(&data_dir, &dest_zip_path, include_db, include_files)
+}
+
+/// Writes arbitrary bytes to `path` — used for the Pagamentos "Gerar PDF"
+/// export (built client-side, this just puts the resulting bytes on disk
+/// at wherever the save dialog pointed).
+#[tauri::command]
+pub fn write_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    std::fs::write(&path, data).map_err(|e| e.to_string())
 }
 
 fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {

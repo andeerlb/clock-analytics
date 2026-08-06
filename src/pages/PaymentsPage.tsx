@@ -1,12 +1,15 @@
-import { Building2, Moon, Search, Users } from "lucide-react";
+import { Building2, CheckCircle2, Eye, FileDown, FolderOpen, Moon, Search, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
+import PdfViewerModal from "../components/PdfViewerModal";
 import { PAYMENTS_PAGE_SIZE_OPTIONS, usePaymentsFilters } from "../contexts/FiltersContext";
+import { revealInFileManager } from "../lib/api";
 import { listClients, listCompanies, listPaymentShiftSummaries, type ClientRow, type CompanyRow } from "../lib/db";
+import { generatePaymentsReportPdf, type PaymentsReportResult } from "../lib/paymentsReport";
 import type { PaymentShiftStatus, PaymentShiftSummaryRow, ShiftPeriod } from "../lib/types";
 import type { PaymentDetailNavState } from "./PaymentDetailPage";
 
@@ -54,6 +57,11 @@ export default function PaymentsPage() {
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [generatingPdf, setGeneratingPdf] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const [revealingPdf, setRevealingPdf] = useState(false);
+  const [generatedReport, setGeneratedReport] = useState<PaymentsReportResult | null>(null);
+  const [viewerPath, setViewerPath] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([listCompanies(), listClients()]).then(([companyRows, clientRows]) => {
@@ -140,6 +148,47 @@ export default function PaymentsPage() {
     setPage(0);
   }
 
+  /** Every turno matching the current filters, not just the visible page — see `generatePaymentsReportPdf`. */
+  async function handleGeneratePdf() {
+    setPdfError(null);
+    setGeneratedReport(null);
+    setGeneratingPdf(true);
+    try {
+      const result = await generatePaymentsReportPdf({
+        search,
+        companyIds: Array.from(selectedCompanyIds, Number),
+        clientIds: Array.from(selectedClientIds, Number),
+        periodStart: periodStart || undefined,
+        periodEnd: periodEnd || undefined,
+        statuses: Array.from(selectedStatuses),
+        shiftPeriods: Array.from(selectedShiftPeriods),
+      });
+      if (result.rowCount === 0) {
+        setPdfError("Nenhum turno para os filtros selecionados.");
+      } else if (result.path) {
+        // `path === null` with rows > 0 means the user cancelled the save
+        // dialog — nothing to show, same as LibraryPage's "Gerar zip".
+        setGeneratedReport(result);
+      }
+    } catch (e) {
+      setPdfError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setGeneratingPdf(false);
+    }
+  }
+
+  async function handleRevealPdf() {
+    if (!generatedReport?.path) return;
+    setRevealingPdf(true);
+    try {
+      await revealInFileManager(generatedReport.path);
+    } catch (e) {
+      setPdfError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setRevealingPdf(false);
+    }
+  }
+
   const hasFilters = Boolean(
     search.trim() ||
       selectedCompanyIds.size > 0 ||
@@ -169,6 +218,7 @@ export default function PaymentsPage() {
         Turnos importados, agrupados por colaborador e competência. Clique num colaborador para
         ver os turnos individuais daquele mês.
       </p>
+      {pdfError && <div className="error-box">{pdfError}</div>}
 
       <div className="card">
         <div className="field-row" style={{ marginBottom: 0, alignItems: "flex-end" }}>
@@ -279,6 +329,48 @@ export default function PaymentsPage() {
             />
           </div>
         </div>
+
+        <div className="field-row" style={{ marginTop: "1rem", marginBottom: 0 }}>
+          <button
+            type="button"
+            style={{ marginLeft: "auto" }}
+            onClick={handleGeneratePdf}
+            disabled={generatingPdf}
+            title="Considera os filtros acima"
+          >
+            <FileDown size={15} style={{ marginRight: "0.4rem" }} />
+            {generatingPdf ? "Gerando..." : "Gerar PDF"}
+          </button>
+        </div>
+
+        {generatedReport && generatedReport.path && (
+          <div
+            className="success-box"
+            style={{
+              marginTop: "1rem",
+              marginBottom: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "1rem",
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <CheckCircle2 size={16} />
+              PDF gerado com sucesso: {generatedReport.title} ({generatedReport.rowCount} turno(s))
+            </span>
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              <button type="button" className="outline" onClick={() => setViewerPath(generatedReport.path)}>
+                <Eye size={15} style={{ marginRight: "0.4rem" }} />
+                Abrir PDF
+              </button>
+              <button type="button" className="outline" onClick={handleRevealPdf} disabled={revealingPdf}>
+                <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
+                Abrir no explorador
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="card table-card">
@@ -355,6 +447,13 @@ export default function PaymentsPage() {
           </>
         )}
       </div>
+
+      <PdfViewerModal
+        path={viewerPath}
+        title={generatedReport?.title}
+        allowDownload={false}
+        onClose={() => setViewerPath(null)}
+      />
     </div>
   );
 }

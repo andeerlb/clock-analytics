@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, Clock3, History, Moon, RotateCcw, Sun } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock3, History, Info, Moon, RotateCcw, Sun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
@@ -245,7 +245,7 @@ export default function PaymentDetailPage() {
                   <th>Horário</th>
                   <th>Horas trabalhadas</th>
                   <th>Valor</th>
-                  <th>Observação</th>
+                  <th>Extras</th>
                   <th>Status</th>
                   <th>Importado em</th>
                   <th>Ações</th>
@@ -284,20 +284,20 @@ export default function PaymentDetailPage() {
                           : "—"}
                       </td>
                       <td>{value !== null ? formatCurrencyBRL(value) : "—"}</td>
-                      <td className="muted">
-                        {s.note ?? "—"}
-                        {s.extraData && Object.keys(s.extraData).length > 0 && (
-                          <div style={{ marginTop: "0.25rem" }}>
-                            <button
-                              type="button"
-                              className="ghost"
-                              style={{ padding: "0.1rem 0.4rem", fontSize: "0.72rem" }}
-                              onClick={() => setViewingExtraData(s.extraData)}
-                              title="Ver colunas não mapeadas lidas do arquivo"
-                            >
-                              +{Object.keys(s.extraData).length} coluna(s)
-                            </button>
-                          </div>
+                      <td>
+                        {s.extraData && Object.keys(s.extraData).length > 0 ? (
+                          <button
+                            type="button"
+                            className="badge neutral"
+                            style={{ border: "none", cursor: "pointer" }}
+                            onClick={() => setViewingExtraData(s.extraData)}
+                            title="Ver colunas não mapeadas lidas do arquivo"
+                          >
+                            <Info size={12} />
+                            {Object.keys(s.extraData).length}
+                          </button>
+                        ) : (
+                          <span className="muted">—</span>
                         )}
                       </td>
                       <td>

@@ -1809,7 +1809,6 @@ export async function findDuplicatePaymentShifts(
     role: string;
     scheduleStartMinutes: number | null;
     scheduleEndMinutes: number | null;
-    note: string | null;
   }[],
 ): Promise<Set<number>> {
   const db = await getDb();
@@ -1820,9 +1819,8 @@ export async function findDuplicatePaymentShifts(
       `SELECT id FROM payment_shifts
        WHERE employee_id = $1 AND work_date = $2 AND local = $3 AND role = $4
          AND IFNULL(schedule_start_minutes, -1) = IFNULL($5, -1)
-         AND IFNULL(schedule_end_minutes, -1) = IFNULL($6, -1)
-         AND IFNULL(note, '') = IFNULL($7, '')`,
-      [r.employeeId, r.workDate, r.local, r.role, r.scheduleStartMinutes, r.scheduleEndMinutes, r.note],
+         AND IFNULL(schedule_end_minutes, -1) = IFNULL($6, -1)`,
+      [r.employeeId, r.workDate, r.local, r.role, r.scheduleStartMinutes, r.scheduleEndMinutes],
     );
     if (existing.length > 0) duplicates.add(i);
   }
@@ -1838,7 +1836,6 @@ export interface PaymentShiftInput {
   role: string;
   scheduleStartMinutes: number | null;
   scheduleEndMinutes: number | null;
-  note: string | null;
   /** Resolved from the template's status rules (see `resolvePaymentStatus`), falling back to `"pendente"` when none match — not always `"pendente"` anymore. */
   status: PaymentShiftStatus;
   /** Every non-blank column the template left unmapped on this row (see `AppliedPaymentRow.extraFields`) — `null` when there was nothing left unmapped. */
@@ -1852,8 +1849,8 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
     await db.execute(
       `INSERT INTO payment_shifts
          (employee_id, template_id, source_file_id, local, work_date, role,
-          schedule_start_minutes, schedule_end_minutes, note, status, extra_data)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          schedule_start_minutes, schedule_end_minutes, status, extra_data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
         r.employeeId,
         r.templateId,
@@ -1863,7 +1860,6 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
         r.role,
         r.scheduleStartMinutes,
         r.scheduleEndMinutes,
-        r.note,
         r.status,
         r.extraData ? JSON.stringify(r.extraData) : null,
       ],
@@ -2073,11 +2069,90 @@ export async function listPaymentShiftSummaries(
   return { rows, total };
 }
 
+export interface PaymentShiftReportRow {
+  employeeName: string;
+  companyId: number;
+  workDate: string;
+  local: string;
+  role: string;
+  scheduleStartMinutes: number | null;
+  scheduleEndMinutes: number | null;
+  status: PaymentShiftStatus;
+  amount: number | null;
+  /** Computed in SQL via the company's own configured rule, same as `shiftPeriodSql` powers for the list's Diurno/Noturno filter — `null` when there's no schedule to classify. */
+  shiftPeriod: ShiftPeriod | null;
+}
+
+/**
+ * Every *current* shift matching the Pagamentos list's filters, flat (no
+ * grouping/pagination) — the data behind "Gerar PDF". Same WHERE-condition
+ * shape as `listPaymentShiftSummaries` for search/empresa/cliente/período,
+ * but status and diurno/noturno are per-row `WHERE` conditions here instead
+ * of aggregated `HAVING` ones, since there's no `GROUP BY` to aggregate
+ * through.
+ */
+export async function listPaymentShiftsForReport(
+  query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
+): Promise<PaymentShiftReportRow[]> {
+  if (query.statuses.length === 0 || query.shiftPeriods.length === 0) return [];
+
+  const db = await getDb();
+  const conditions: string[] = [HEAD_SHIFT_CONDITION];
+  const params: (string | number)[] = [];
+
+  const search = query.search?.trim();
+  if (search) {
+    params.push(search);
+    conditions.push(`LOWER(e.name) LIKE '%' || LOWER($${params.length}) || '%'`);
+  }
+  const companyClause = inClause("c.id", query.companyIds ?? [], params);
+  if (companyClause) conditions.push(companyClause);
+  const clientClause = inClause("cl.id", query.clientIds ?? [], params);
+  if (clientClause) conditions.push(clientClause);
+  if (query.periodStart) {
+    params.push(query.periodStart);
+    conditions.push(`ps.work_date >= $${params.length}`);
+  }
+  if (query.periodEnd) {
+    params.push(query.periodEnd);
+    conditions.push(`ps.work_date <= $${params.length}`);
+  }
+  if (query.statuses.length < 3) {
+    const placeholders = query.statuses.map((s) => {
+      params.push(s);
+      return `$${params.length}`;
+    });
+    conditions.push(`ps.status IN (${placeholders.join(", ")})`);
+  }
+
+  const { hasSchedule, isNoturno } = shiftPeriodSql();
+  if (query.shiftPeriods.length < 2) {
+    conditions.push(
+      query.shiftPeriods[0] === "noturno" ? `(${hasSchedule} AND ${isNoturno})` : `(${hasSchedule} AND NOT ${isNoturno})`,
+    );
+  }
+  const shiftPeriodExpr = `(CASE WHEN NOT ${hasSchedule} THEN NULL WHEN ${isNoturno} THEN 'noturno' ELSE 'diurno' END)`;
+
+  return db.select<PaymentShiftReportRow[]>(
+    `SELECT e.name AS employeeName, c.id AS companyId,
+            ps.work_date AS workDate, ps.local, ps.role,
+            ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
+            ps.status, ps.amount, ${shiftPeriodExpr} AS shiftPeriod
+     FROM payment_shifts ps
+     JOIN employees e ON e.id = ps.employee_id
+     JOIN clients cl ON cl.id = e.client_id
+     JOIN companies c ON c.id = e.company_id
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY ps.work_date, e.name`,
+    params,
+  );
+}
+
 const PAYMENT_SHIFT_SELECT_COLUMNS = `
   ps.id, ps.employee_id AS employeeId, e.name AS employeeName,
   ps.local, ps.work_date AS workDate, ps.role,
   ps.schedule_start_minutes AS scheduleStartMinutes,
-  ps.schedule_end_minutes AS scheduleEndMinutes, ps.note,
+  ps.schedule_end_minutes AS scheduleEndMinutes,
   ps.status, ps.error_message AS errorMessage, ps.amount, ps.imported_at AS importedAt,
   ps.previous_shift_id AS previousShiftId, ps.extra_data AS extraData
 `;
@@ -2135,7 +2210,6 @@ interface PaymentShiftCoreFields {
   role: string;
   scheduleStartMinutes: number | null;
   scheduleEndMinutes: number | null;
-  note: string | null;
   /** Raw JSON string as stored (or NULL) — passed straight through into the new row, not re-parsed, since a status transition never changes what was in the original file. */
   extraData: string | null;
 }
@@ -2145,7 +2219,7 @@ async function readPaymentShiftCoreFields(db: Database, shiftId: number): Promis
   const rows = await db.select<PaymentShiftCoreFields[]>(
     `SELECT employee_id AS employeeId, template_id AS templateId, source_file_id AS sourceFileId,
             local, work_date AS workDate, role,
-            schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes, note,
+            schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes,
             extra_data AS extraData
      FROM payment_shifts WHERE id = $1`,
     [shiftId],
@@ -2168,8 +2242,8 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
   const result = await db.execute(
     `INSERT INTO payment_shifts
        (employee_id, template_id, source_file_id, local, work_date, role,
-        schedule_start_minutes, schedule_end_minutes, note, status, amount, previous_shift_id, extra_data)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pago', $10, $11, $12)`,
+        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pago', $9, $10, $11)`,
     [
       s.employeeId,
       s.templateId,
@@ -2179,7 +2253,6 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
       s.role,
       s.scheduleStartMinutes,
       s.scheduleEndMinutes,
-      s.note,
       amount,
       shiftId,
       s.extraData,
@@ -2203,8 +2276,8 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
   const result = await db.execute(
     `INSERT INTO payment_shifts
        (employee_id, template_id, source_file_id, local, work_date, role,
-        schedule_start_minutes, schedule_end_minutes, note, status, amount, previous_shift_id, extra_data)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pendente', NULL, $10, $11)`,
+        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pendente', NULL, $9, $10)`,
     [
       s.employeeId,
       s.templateId,
@@ -2214,7 +2287,6 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
       s.role,
       s.scheduleStartMinutes,
       s.scheduleEndMinutes,
-      s.note,
       shiftId,
       s.extraData,
     ],

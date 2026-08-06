@@ -159,6 +159,11 @@ export function backupAppData(destZipPath: string, includeDb: boolean, includeFi
   return invoke("backup_app_data", { destZipPath, includeDb, includeFiles });
 }
 
+/** Writes arbitrary bytes to `path` — a caller that already has a concrete destination (e.g. from a save dialog). */
+export function writeBinaryFile(path: string, data: Uint8Array): Promise<void> {
+  return invoke("write_binary_file", { path, data: Array.from(data) });
+}
+
 /** Whether pdfinfo/pdftotext/pdfseparate/pdfunite were found — checked at startup and on Configurações. */
 export function checkPopplerStatus(): Promise<PopplerStatus> {
   return invoke("check_poppler_status");

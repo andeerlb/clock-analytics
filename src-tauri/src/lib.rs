@@ -38,6 +38,7 @@ pub fn run() {
             commands::delete_paths,
             commands::clear_imports_dir,
             commands::backup_app_data,
+            commands::write_binary_file,
             commands::check_poppler_status,
             commands::set_poppler_dir,
             commands::list_recent_payment_files,
