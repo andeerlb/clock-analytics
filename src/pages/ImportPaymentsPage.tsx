@@ -224,8 +224,7 @@ export default function ImportPaymentsPage() {
   // Off by default — tracking is opt-in per save, not an automatic side
   // effect of importing by URL (see trackUrlForAutoReimport's doc comment).
   const [trackAutoUpdates, setTrackAutoUpdates] = useState(false);
-  const { remoteUpdates, dismissRemoteUpdate, setUrlCheckDisabled, setUrlReimportSettings, trackUrl, trackedFiles } =
-    useRemoteFileUpdates();
+  const { remoteUpdates, dismissRemoteUpdate, setUrlCheckDisabled, trackUrl, trackedFiles } = useRemoteFileUpdates();
 
   const [fileResults, setFileResults] = useState<PaymentFileResult[]>(restored?.fileResults ?? []);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(restored?.selectedRows ?? new Set());
@@ -429,36 +428,22 @@ export default function ImportPaymentsPage() {
    * would require the user to do manually.
    */
   async function handleReimportFromUrl(flag: RemoteUpdateFlag) {
-    dismissRemoteUpdate(flag.sourceUrl);
+    dismissRemoteUpdate(flag.configId);
     reset();
     setImportMode("url");
-    // Replays the Período filters captured from this URL's last successful
-    // save (or set by hand on the Verificação automática page) — "the
-    // filters used when it was saved" apply automatically here, not just
-    // whatever happened to be left in these fields already.
-    setPeriodStart(flag.reimportPeriodStart ?? "");
-    setPeriodEnd(flag.reimportPeriodEnd ?? "");
+    // Replays this specific reimport config's Período — already resolved
+    // (a relative one as of right now, not a stale cached date) by the
+    // context when it built this flag.
+    setPeriodStart(flag.resolvedPeriodStart ?? "");
+    setPeriodEnd(flag.resolvedPeriodEnd ?? "");
 
-    // The saved template id is authoritative when present — falls back to
-    // matching by name (for tracked files saved before this id existed, or
-    // if that exact template was since deleted) before giving up entirely.
     let fullTemplate = null;
-    if (flag.reimportTemplateId !== null) {
-      try {
-        fullTemplate = await getPaymentTemplate(flag.reimportTemplateId);
-      } catch {
-        fullTemplate = null;
-      }
-    }
-    if (!fullTemplate) {
-      const match = templates.find((t) => t.name === flag.provider);
-      if (match) fullTemplate = await getPaymentTemplate(match.id);
-    }
-    if (!fullTemplate) {
-      // Template deleted/renamed since the original import, and no name
-      // match either — leave the URL filled in and let the user pick a
-      // template themselves, same as a fresh URL import ("Baixar arquivo"
-      // already requires one).
+    try {
+      fullTemplate = await getPaymentTemplate(flag.templateId);
+    } catch {
+      // The config's template was deleted since it was created — leave the
+      // URL filled in and let the user pick a template themselves, same as
+      // a fresh URL import ("Baixar arquivo" already requires one).
       setUrlInput(flag.sourceUrl);
       return;
     }
@@ -881,25 +866,24 @@ export default function ImportPaymentsPage() {
         await markSourceFileSaved(fileHash);
       }
 
-      // Whatever template + Período were in effect for this save become
-      // what an automatic reimport (triggered later by a detected remote
-      // change) replays — captured per URL actually involved in this save,
-      // not just once for the whole batch, since a mixed local+URL save
-      // could otherwise attribute them to a URL that wasn't even part of it.
-      // A URL already opted into tracking keeps getting refreshed
-      // regardless of the checkbox below (it's already tracked — this just
-      // keeps its replay settings accurate); a URL that ISN'T tracked yet
-      // only becomes tracked if "Rastrear atualizações automaticamente" is
-      // checked — tracking is never created as a side effect on its own.
-      const savedUrls = new Set(
-        fileResults.map((r) => urlSourceByPath.get(r.path)?.url).filter((u): u is string => Boolean(u)),
-      );
-      for (const url of savedUrls) {
-        const alreadyTracked = trackedFiles.some((t) => t.sourceUrl === url);
-        if (alreadyTracked) {
-          await setUrlReimportSettings(url, selectedTemplate.id, periodStart || null, periodEnd || null);
-        } else if (trackAutoUpdates) {
-          await trackUrl(url, selectedTemplate.id, periodStart || null, periodEnd || null);
+      // A URL not yet tracked becomes tracked — with its first reimport
+      // config, from what this save just used — only if "Rastrear
+      // atualizações automaticamente" is checked; tracking is never
+      // created as a side effect on its own. A URL that's ALREADY tracked
+      // is left alone here: its reimport configs (there may be several)
+      // are only ever added/edited explicitly on the Verificação
+      // automática page, never implicitly overwritten by an ad-hoc manual
+      // save — there'd be no unambiguous way to pick which of several
+      // configs a plain save should update.
+      if (trackAutoUpdates) {
+        const savedUrls = new Set(
+          fileResults.map((r) => urlSourceByPath.get(r.path)?.url).filter((u): u is string => Boolean(u)),
+        );
+        for (const url of savedUrls) {
+          const alreadyTracked = trackedFiles.some((t) => t.sourceUrl === url);
+          if (!alreadyTracked) {
+            await trackUrl(url, selectedTemplate.id, periodStart || null, periodEnd || null);
+          }
         }
       }
 
@@ -941,13 +925,13 @@ export default function ImportPaymentsPage() {
         .map((u) => (
           <div
             className="warning-box"
-            key={u.sourceUrl}
+            key={u.configId}
             style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem" }}
           >
             <span>
               <AlertTriangle size={15} style={{ verticalAlign: "-2px", marginRight: "0.4rem" }} />
               O arquivo remoto de <strong>{u.fileName}</strong> (importado em {formatDateTime(u.lastImportedAt)})
-              parece ter sido atualizado.
+              parece ter sido atualizado — configuração <strong>{u.configLabel}</strong>.
             </span>
             <div style={{ display: "flex", gap: "0.5rem", flexShrink: 0 }}>
               <button
@@ -958,7 +942,7 @@ export default function ImportPaymentsPage() {
               >
                 Desativar verificação automática
               </button>
-              <button type="button" className="outline" onClick={() => dismissRemoteUpdate(u.sourceUrl)}>
+              <button type="button" className="outline" onClick={() => dismissRemoteUpdate(u.configId)}>
                 Ignorar
               </button>
               <button type="button" onClick={() => handleReimportFromUrl(u)}>

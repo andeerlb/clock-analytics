@@ -1,29 +1,39 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { checkRemotePaymentFile, getRemoteFileCheckIntervalMinutes, setRemoteFileCheckIntervalMinutes } from "../lib/api";
 import {
+  createReimportConfig as createReimportConfigDb,
+  deleteReimportConfig as deleteReimportConfigDb,
+  listReimportConfigs,
   listTrackedPaymentUrls,
   logUrlCheckResult,
   setUrlCheckDisabled as setUrlCheckDisabledDb,
   setUrlCheckIntervalMinutes as setUrlCheckIntervalMinutesDb,
-  setUrlReimportSettings as setUrlReimportSettingsDb,
-  trackUrlForAutoReimport as trackUrlForAutoReimportDb,
+  trackUrlForAutoReimport,
+  updateReimportConfig as updateReimportConfigDb,
+  type ReimportConfig,
+  type ReimportConfigInput,
   type TrackedPaymentUrl,
   type UrlCheckResult,
 } from "../lib/db";
+import { resolveReimportConfigLabel, resolveReimportPeriod } from "../lib/format";
 
-export type { TrackedPaymentUrl, UrlCheckResult };
+export type { ReimportConfig, ReimportConfigInput, ReimportDateMode, TrackedPaymentUrl, UrlCheckResult } from "../lib/db";
 
-/** A URL-sourced payment import currently known to have changed remotely since it was last saved. */
+/**
+ * One reimport config, for one tracked URL, currently known to be out of
+ * date — each config a tracked URL has flags independently (a URL with
+ * two configs and a detected change produces two of these, not one).
+ */
 export interface RemoteUpdateFlag {
+  configId: number;
   sourceUrl: string;
   fileName: string;
-  /** The template's name at last import (`source_files.provider`) — used as a fallback when `reimportTemplateId` is unset or points at a since-deleted template. */
-  provider: string;
+  configLabel: string;
+  templateId: number;
   lastImportedAt: string;
-  /** What an automatic reimport replays — see `TrackedPaymentUrl.reimportTemplateId`/`reimportPeriodStart`/`reimportPeriodEnd`. */
-  reimportTemplateId: number | null;
-  reimportPeriodStart: string | null;
-  reimportPeriodEnd: string | null;
+  /** Already resolved — for a relative-Período config this is always "as of right now", never a stale cached date. */
+  resolvedPeriodStart: string | null;
+  resolvedPeriodEnd: string | null;
 }
 
 /**
@@ -49,6 +59,12 @@ export interface RemoteUpdateFlag {
  * listener triggers an extra tick on refocus for the same reason — not to
  * force-check everything, just to reassess due-ness sooner than the next
  * fixed tick would.
+ *
+ * The check itself is still one per URL (there's only one remote file to
+ * ask about) — what's one-to-many is what happens once a change is found:
+ * a URL's `reimportConfigs` (each its own template + Período, fixed or
+ * relative to today) each independently turn into their own entry in
+ * `remoteUpdates`.
  */
 const TICK_INTERVAL_MS = 60_000;
 const DEFAULT_CHECK_INTERVAL_MINUTES = 5;
@@ -59,30 +75,24 @@ function effectiveIntervalMs(t: TrackedPaymentUrl, globalMinutes: number): numbe
 
 interface RemoteFileUpdatesContextValue {
   remoteUpdates: RemoteUpdateFlag[];
-  dismissRemoteUpdate: (url: string) => void;
+  dismissRemoteUpdate: (configId: number) => void;
   setUrlCheckDisabled: (url: string, disabled: boolean) => Promise<void>;
   setUrlIntervalMinutes: (url: string, minutes: number | null) => Promise<void>;
-  setUrlReimportSettings: (
-    url: string,
-    templateId: number | null,
-    periodStart: string | null,
-    periodEnd: string | null,
-  ) => Promise<void>;
-  /** Opts a URL into automatic tracking for the first time (or re-opts back in) — see `trackUrlForAutoReimport`. */
-  trackUrl: (
-    url: string,
-    templateId: number | null,
-    periodStart: string | null,
-    periodEnd: string | null,
-  ) => Promise<void>;
+  /** Opts a URL into automatic tracking for the first time — creates its first reimport config from what this save used. */
+  trackUrl: (url: string, templateId: number, periodStart: string | null, periodEnd: string | null) => Promise<void>;
+  addReimportConfig: (input: ReimportConfigInput) => Promise<void>;
+  updateReimportConfig: (id: number, input: Omit<ReimportConfigInput, "sourceUrl" | "templateId">) => Promise<void>;
+  deleteReimportConfig: (id: number) => Promise<void>;
   refreshNow: () => void;
   /** Global default (minutes) used by any tracked URL without its own override. */
   intervalMinutes: number;
   setIntervalMinutes: (minutes: number) => Promise<void>;
   /** True while a check cycle is in flight — for a "Verificando..." indicator. */
   checking: boolean;
-  /** Every URL a payment file was ever downloaded from, with its full tracking state — feeds the Verificação automática page. */
+  /** Every URL explicitly opted into tracking, with its full tracking state — feeds the Verificação automática page. */
   trackedFiles: TrackedPaymentUrl[];
+  /** Every reimport config for every tracked URL — feeds the Verificação automática page (filter by `sourceUrl` per file). */
+  reimportConfigs: ReimportConfig[];
   /** Soonest due time across active (non-disabled) tracked files, ISO string — for the Sidebar's live countdown. `null` when nothing is tracked. */
   nextCheckAt: string | null;
 }
@@ -90,10 +100,11 @@ interface RemoteFileUpdatesContextValue {
 const RemoteFileUpdatesContext = createContext<RemoteFileUpdatesContextValue | null>(null);
 
 export function RemoteFileUpdatesProvider({ children }: { children: ReactNode }) {
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [dismissed, setDismissed] = useState<Set<number>>(new Set());
   const [intervalMinutes, setIntervalMinutesState] = useState(DEFAULT_CHECK_INTERVAL_MINUTES);
   const [checking, setChecking] = useState(false);
   const [trackedFiles, setTrackedFiles] = useState<TrackedPaymentUrl[]>([]);
+  const [reimportConfigs, setReimportConfigs] = useState<ReimportConfig[]>([]);
   const [nextCheckAt, setNextCheckAt] = useState<string | null>(null);
   const checkingRef = useRef(false);
   // `tick` closes over `intervalMinutes` (for URLs without their own
@@ -106,6 +117,13 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
     getRemoteFileCheckIntervalMinutes()
       .then(setIntervalMinutesState)
       .catch(() => {}); // stick with the default rather than block polling on this
+  }, []);
+
+  const refreshTrackedState = useCallback(async () => {
+    const [refreshedFiles, refreshedConfigs] = await Promise.all([listTrackedPaymentUrls(), listReimportConfigs()]);
+    setTrackedFiles(refreshedFiles);
+    setReimportConfigs(refreshedConfigs);
+    return refreshedFiles;
   }, []);
 
   const tick = useCallback(async () => {
@@ -143,8 +161,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
       // Re-read rather than patch in memory — URLs not due this tick keep
       // exactly what the log already says about them, and the ones just
       // checked come back with their brand new log entry, uniformly.
-      const refreshed = await listTrackedPaymentUrls();
-      setTrackedFiles(refreshed);
+      const refreshed = await refreshTrackedState();
 
       const nextTimes = refreshed
         .filter((t) => !t.checkDisabled)
@@ -157,7 +174,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
       setChecking(false);
       checkingRef.current = false;
     }
-  }, []);
+  }, [refreshTrackedState]);
 
   useEffect(() => {
     tick();
@@ -172,8 +189,8 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
     };
   }, [tick]);
 
-  function dismissRemoteUpdate(url: string) {
-    setDismissed((prev) => new Set(prev).add(url));
+  function dismissRemoteUpdate(configId: number) {
+    setDismissed((prev) => new Set(prev).add(configId));
   }
 
   async function setUrlCheckDisabled(url: string, disabled: boolean) {
@@ -186,33 +203,27 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
     setTrackedFiles((prev) => prev.map((t) => (t.sourceUrl === url ? { ...t, checkIntervalMinutes: minutes } : t)));
   }
 
-  async function setUrlReimportSettings(
-    url: string,
-    templateId: number | null,
-    periodStart: string | null,
-    periodEnd: string | null,
-  ) {
-    await setUrlReimportSettingsDb(url, templateId, periodStart, periodEnd);
-    setTrackedFiles((prev) =>
-      prev.map((t) =>
-        t.sourceUrl === url
-          ? { ...t, reimportTemplateId: templateId, reimportPeriodStart: periodStart, reimportPeriodEnd: periodEnd }
-          : t,
-      ),
-    );
+  async function trackUrl(url: string, templateId: number, periodStart: string | null, periodEnd: string | null) {
+    await trackUrlForAutoReimport(url, templateId, periodStart, periodEnd);
+    // A fresh entry, not a patch to an existing one — re-fetch rather than
+    // try to hand-construct the rest of TrackedPaymentUrl's/ReimportConfig's
+    // shape client-side. The next tick (≤1min) fills in nextCheckAt.
+    await refreshTrackedState();
   }
 
-  async function trackUrl(
-    url: string,
-    templateId: number | null,
-    periodStart: string | null,
-    periodEnd: string | null,
-  ) {
-    await trackUrlForAutoReimportDb(url, templateId, periodStart, periodEnd);
-    // A fresh entry, not a patch to an existing one — re-fetch rather than
-    // try to hand-construct the rest of TrackedPaymentUrl's shape (lastCheckedAt,
-    // lastResult, etc.) client-side. The next tick (≤1min) fills in nextCheckAt.
-    setTrackedFiles(await listTrackedPaymentUrls());
+  async function addReimportConfig(input: ReimportConfigInput) {
+    await createReimportConfigDb(input);
+    await refreshTrackedState();
+  }
+
+  async function updateReimportConfig(id: number, input: Omit<ReimportConfigInput, "sourceUrl" | "templateId">) {
+    await updateReimportConfigDb(id, input);
+    setReimportConfigs((prev) => prev.map((c) => (c.id === id ? { ...c, ...input } : c)));
+  }
+
+  async function deleteReimportConfig(id: number) {
+    await deleteReimportConfigDb(id);
+    setReimportConfigs((prev) => prev.filter((c) => c.id !== id));
   }
 
   async function setIntervalMinutes(minutes: number) {
@@ -220,17 +231,25 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
     setIntervalMinutesState(saved);
   }
 
-  const remoteUpdates: RemoteUpdateFlag[] = trackedFiles
-    .filter((t) => !t.checkDisabled && t.lastResult === "changed" && !dismissed.has(t.sourceUrl))
-    .map((t) => ({
-      sourceUrl: t.sourceUrl,
-      fileName: t.fileName,
-      provider: t.provider,
-      lastImportedAt: t.importedAt,
-      reimportTemplateId: t.reimportTemplateId,
-      reimportPeriodStart: t.reimportPeriodStart,
-      reimportPeriodEnd: t.reimportPeriodEnd,
-    }));
+  const changedUrls = new Set(
+    trackedFiles.filter((t) => !t.checkDisabled && t.lastResult === "changed").map((t) => t.sourceUrl),
+  );
+  const remoteUpdates: RemoteUpdateFlag[] = reimportConfigs
+    .filter((c) => changedUrls.has(c.sourceUrl) && !dismissed.has(c.id))
+    .map((c) => {
+      const t = trackedFiles.find((f) => f.sourceUrl === c.sourceUrl);
+      const { start, end } = resolveReimportPeriod(c);
+      return {
+        configId: c.id,
+        sourceUrl: c.sourceUrl,
+        fileName: t?.fileName ?? c.sourceUrl,
+        configLabel: resolveReimportConfigLabel(c),
+        templateId: c.templateId,
+        lastImportedAt: t?.importedAt ?? "",
+        resolvedPeriodStart: start,
+        resolvedPeriodEnd: end,
+      };
+    });
 
   return (
     <RemoteFileUpdatesContext.Provider
@@ -239,13 +258,16 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
         dismissRemoteUpdate,
         setUrlCheckDisabled,
         setUrlIntervalMinutes,
-        setUrlReimportSettings,
         trackUrl,
+        addReimportConfig,
+        updateReimportConfig,
+        deleteReimportConfig,
         refreshNow: tick,
         intervalMinutes,
         setIntervalMinutes,
         checking,
         trackedFiles,
+        reimportConfigs,
         nextCheckAt,
       }}
     >

@@ -250,5 +250,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0041_source_url_tracking_enabled.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 42,
+            description: "add source_url_reimport_configs — a tracked URL can have multiple independent reimport recipes (template + fixed or relative Período), each flagging its own reimport opportunity",
+            sql: include_str!("../migrations/0042_source_url_reimport_configs.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

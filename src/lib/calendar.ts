@@ -42,3 +42,10 @@ export function addMonthsIso(iso: string, months: number): string {
   d.setUTCMonth(d.getUTCMonth() + months);
   return toIso(d);
 }
+
+/** `iso` shifted by `days` (negative to go back), as an ISO date — used to resolve a relative reimport Período ("hoje - N dias") against the current date. */
+export function addDaysIso(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return toIso(d);
+}

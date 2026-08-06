@@ -1224,11 +1224,6 @@ export interface TrackedPaymentUrl {
   lastCheckedAt: string | null;
   lastResult: UrlCheckResult | null;
   lastErrorMessage: string | null;
-  /** The Período filters in effect the last time a save succeeded for this URL (or a manual override from the Verificação automática page) — replayed on an automatic reimport. `null` means "todo o relatório". */
-  reimportPeriodStart: string | null;
-  reimportPeriodEnd: string | null;
-  /** The template to apply on an automatic reimport — `null` falls back to matching `provider` (the template's name at last import) against the currently registered templates. */
-  reimportTemplateId: number | null;
 }
 
 /**
@@ -1256,10 +1251,7 @@ export async function listTrackedPaymentUrls(): Promise<TrackedPaymentUrl[]> {
        sus.check_interval_minutes AS checkIntervalMinutes,
        log.checked_at AS lastCheckedAt,
        log.result AS lastResult,
-       log.message AS lastErrorMessage,
-       sus.reimport_period_start AS reimportPeriodStart,
-       sus.reimport_period_end AS reimportPeriodEnd,
-       sus.reimport_template_id AS reimportTemplateId
+       log.message AS lastErrorMessage
      FROM (
        SELECT *, ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY imported_at DESC) AS rn
        FROM source_files
@@ -1308,63 +1300,134 @@ export async function setUrlCheckIntervalMinutes(sourceUrl: string, minutes: num
   );
 }
 
+export type ReimportDateMode = "fixed" | "relative";
+
+export interface ReimportConfig {
+  id: number;
+  sourceUrl: string;
+  /** Empty means "no custom label" — the UI falls back to a generated one (see `resolveReimportConfigLabel` in `lib/format.ts`). */
+  label: string;
+  templateId: number;
+  /** Joined from `payment_templates` — `null` means that template was since deleted. */
+  templateName: string | null;
+  dateMode: ReimportDateMode;
+  /** Used when `dateMode === "fixed"`; `null` means "todo o relatório". */
+  periodStart: string | null;
+  periodEnd: string | null;
+  /** Used when `dateMode === "relative"` — days before today, resolved fresh at use time (see `resolveReimportPeriod`). */
+  startOffsetDays: number | null;
+  endOffsetDays: number | null;
+}
+
 /**
- * Everything an automatic reimport needs to run hands-off up to the final
- * "Salvar": which template to apply and which Período to filter by.
- * Captured together right after a successful save (see
- * `ImportPaymentsPage.handleSave`) — same moment, same trigger — or set by
- * hand on the Verificação automática page. `templateId: null` falls back
- * to matching the template by name at reimport time; `null` for either
- * Período bound means "todo o relatório".
+ * Every reimport recipe for every tracked URL, loaded all at once (mirrors
+ * `listTrackedPaymentUrls`) — grouped by `sourceUrl` by the caller. A URL
+ * can have zero, one, or several: each one independently flags its own
+ * reimport opportunity when that URL's remote content changes (see
+ * `RemoteFileUpdatesContext`).
  */
-export async function setUrlReimportSettings(
-  sourceUrl: string,
-  templateId: number | null,
-  periodStart: string | null,
-  periodEnd: string | null,
+export async function listReimportConfigs(): Promise<ReimportConfig[]> {
+  const db = await getDb();
+  return db.select<ReimportConfig[]>(
+    `SELECT
+       c.id, c.source_url AS sourceUrl, c.label,
+       c.template_id AS templateId, pt.name AS templateName,
+       c.date_mode AS dateMode,
+       c.period_start AS periodStart, c.period_end AS periodEnd,
+       c.start_offset_days AS startOffsetDays, c.end_offset_days AS endOffsetDays
+     FROM source_url_reimport_configs c
+     LEFT JOIN payment_templates pt ON pt.id = c.template_id
+     ORDER BY c.created_at`,
+  );
+}
+
+export interface ReimportConfigInput {
+  sourceUrl: string;
+  label: string;
+  templateId: number;
+  dateMode: ReimportDateMode;
+  periodStart: string | null;
+  periodEnd: string | null;
+  startOffsetDays: number | null;
+  endOffsetDays: number | null;
+}
+
+export async function createReimportConfig(input: ReimportConfigInput): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute(
+    `INSERT INTO source_url_reimport_configs
+       (source_url, label, template_id, date_mode, period_start, period_end, start_offset_days, end_offset_days)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      input.sourceUrl,
+      input.label,
+      input.templateId,
+      input.dateMode,
+      input.periodStart,
+      input.periodEnd,
+      input.startOffsetDays,
+      input.endOffsetDays,
+    ],
+  );
+  return result.lastInsertId as number;
+}
+
+/** Template is deliberately not editable here — see the Verificação automática page's own comment on why (changing it on an existing config risks silently reinterpreting the column mapping). Delete and recreate instead. */
+export async function updateReimportConfig(
+  id: number,
+  input: Omit<ReimportConfigInput, "sourceUrl" | "templateId">,
 ): Promise<void> {
   const db = await getDb();
   await db.execute(
-    `INSERT INTO source_url_settings
-       (source_url, reimport_template_id, reimport_period_start, reimport_period_end, updated_at)
-     VALUES ($1, $2, $3, $4, datetime('now'))
-     ON CONFLICT(source_url) DO UPDATE SET
-       reimport_template_id = excluded.reimport_template_id,
-       reimport_period_start = excluded.reimport_period_start,
-       reimport_period_end = excluded.reimport_period_end,
-       updated_at = excluded.updated_at`,
-    [sourceUrl, templateId, periodStart, periodEnd],
+    `UPDATE source_url_reimport_configs SET
+       label = $2, date_mode = $3, period_start = $4, period_end = $5,
+       start_offset_days = $6, end_offset_days = $7, updated_at = datetime('now')
+     WHERE id = $1`,
+    [id, input.label, input.dateMode, input.periodStart, input.periodEnd, input.startOffsetDays, input.endOffsetDays],
   );
+}
+
+export async function deleteReimportConfig(id: number): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM source_url_reimport_configs WHERE id = $1", [id]);
 }
 
 /**
  * The one place `tracking_enabled` ever turns on — called from
  * `ImportPaymentsPage.handleSave` only when the user checked "Rastrear
- * atualizações automaticamente" for this save. Everything else that
- * touches `source_url_settings` (`setUrlCheckDisabled`,
- * `setUrlCheckIntervalMinutes`, `setUrlReimportSettings`) only ever
- * operates on a URL that's already opted in, so none of them need to (or
- * should) set this column themselves.
+ * atualizações automaticamente" for this save, which also creates that
+ * URL's first reimport config (fixed Período, from what was just used).
+ * Everything else that touches `source_url_settings`
+ * (`setUrlCheckDisabled`, `setUrlCheckIntervalMinutes`) only ever operates
+ * on a URL that's already opted in, so neither needs to (or should) set
+ * this column itself. Further configs are added by hand on the
+ * Verificação automática page (`createReimportConfig`), not through here.
  */
 export async function trackUrlForAutoReimport(
   sourceUrl: string,
-  templateId: number | null,
+  templateId: number,
   periodStart: string | null,
   periodEnd: string | null,
 ): Promise<void> {
   const db = await getDb();
   await db.execute(
-    `INSERT INTO source_url_settings
-       (source_url, tracking_enabled, reimport_template_id, reimport_period_start, reimport_period_end, updated_at)
-     VALUES ($1, 1, $2, $3, $4, datetime('now'))
+    `INSERT INTO source_url_settings (source_url, tracking_enabled, updated_at)
+     VALUES ($1, 1, datetime('now'))
      ON CONFLICT(source_url) DO UPDATE SET
        tracking_enabled = 1,
-       reimport_template_id = excluded.reimport_template_id,
-       reimport_period_start = excluded.reimport_period_start,
-       reimport_period_end = excluded.reimport_period_end,
        updated_at = excluded.updated_at`,
-    [sourceUrl, templateId, periodStart, periodEnd],
+    [sourceUrl],
   );
+  await createReimportConfig({
+    sourceUrl,
+    label: "",
+    templateId,
+    dateMode: "fixed",
+    periodStart,
+    periodEnd,
+    startOffsetDays: null,
+    endOffsetDays: null,
+  });
 }
 
 const MAX_CHECK_LOG_ENTRIES_PER_URL = 200;

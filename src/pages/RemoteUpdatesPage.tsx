@@ -5,16 +5,23 @@ import {
   FileText,
   HelpCircle,
   Link2,
+  Plus,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import DateRangePicker from "../components/DateRangePicker";
 import Pagination from "../components/Pagination";
-import { useRemoteFileUpdates, type TrackedPaymentUrl } from "../contexts/RemoteFileUpdatesContext";
+import {
+  useRemoteFileUpdates,
+  type ReimportConfig,
+  type ReimportDateMode,
+  type TrackedPaymentUrl,
+} from "../contexts/RemoteFileUpdatesContext";
 import { listPaymentTemplates, listUrlCheckLog, type UrlCheckLogEntry, type UrlCheckResult } from "../lib/db";
-import { formatCountdown, formatDateTime } from "../lib/format";
+import { formatCountdown, formatDateTime, formatDayShort, resolveReimportConfigLabel, resolveReimportPeriod } from "../lib/format";
 import type { PaymentTemplateListRow } from "../lib/types";
 
 const RESULT_BADGE: Record<UrlCheckResult, { className: string; label: string; icon: typeof CheckCircle2 }> = {
@@ -26,16 +33,67 @@ const RESULT_BADGE: Record<UrlCheckResult, { className: string; label: string; i
 
 const LOG_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
+interface ConfigDraft {
+  label: string;
+  dateMode: ReimportDateMode;
+  start: string;
+  end: string;
+  startOffset: string;
+  endOffset: string;
+}
+
+function draftFromConfig(c: ReimportConfig): ConfigDraft {
+  return {
+    label: c.label,
+    dateMode: c.dateMode,
+    start: c.periodStart ?? "",
+    end: c.periodEnd ?? "",
+    startOffset: c.startOffsetDays !== null ? String(c.startOffsetDays) : "",
+    endOffset: c.endOffsetDays !== null ? String(c.endOffsetDays) : "",
+  };
+}
+
+/** Resolves a draft's Período the same way a saved config's would, for a live "vai usar: X → Y" preview while editing. */
+function resolveDraftPeriod(draft: ConfigDraft): { start: string | null; end: string | null } {
+  return resolveReimportPeriod({
+    dateMode: draft.dateMode,
+    periodStart: draft.start || null,
+    periodEnd: draft.end || null,
+    startOffsetDays: draft.startOffset === "" ? null : Number(draft.startOffset),
+    endOffsetDays: draft.endOffset === "" ? null : Number(draft.endOffset),
+  });
+}
+
+function formatResolvedPreview(resolved: { start: string | null; end: string | null }): string {
+  if (!resolved.start && !resolved.end) return "todo o relatório";
+  const start = resolved.start ? formatDayShort(resolved.start) : "início";
+  const end = resolved.end ? formatDayShort(resolved.end) : "fim";
+  return `${start} → ${end}`;
+}
+
+const BLANK_NEW_CONFIG: ConfigDraft & { templateId: string } = {
+  label: "",
+  templateId: "",
+  dateMode: "fixed",
+  start: "",
+  end: "",
+  startOffset: "",
+  endOffset: "",
+};
+
 export default function RemoteUpdatesPage() {
   const {
     remoteUpdates,
     dismissRemoteUpdate,
     trackedFiles,
+    reimportConfigs,
     intervalMinutes,
     setIntervalMinutes,
     setUrlIntervalMinutes,
     setUrlCheckDisabled,
-    setUrlReimportSettings,
+    addReimportConfig,
+    updateReimportConfig,
+    deleteReimportConfig,
     checking,
   } = useRemoteFileUpdates();
 
@@ -79,8 +137,9 @@ export default function RemoteUpdatesPage() {
     }
   }
 
-  // Per-file interval overrides are edited as drafts (not written on every
-  // keystroke) — empty draft = "usar padrão global" (clears the override).
+  // Per-file check-interval overrides — same "edit locally, apply on
+  // Salvar" recipe as everything else on this page; empty draft = "usar
+  // padrão global" (clears the override).
   const [intervalDrafts, setIntervalDrafts] = useState<Map<string, string>>(new Map());
   const [savingUrl, setSavingUrl] = useState<string | null>(null);
   const [togglingUrl, setTogglingUrl] = useState<string | null>(null);
@@ -114,42 +173,110 @@ export default function RemoteUpdatesPage() {
     }
   }
 
-  // Período is the only thing edited here — Template is read-only on this
-  // page, deliberately: it's whatever template the last successful save
-  // actually used (captured automatically, see ImportPaymentsPage's
-  // handleSave), and changing it here without redoing the column mapping
-  // review would risk a silent mismatch on the next automatic reimport.
-  // Same "edit locally, apply on Salvar" recipe as the interval draft
-  // above — both bounds blank means "todo o relatório".
-  const [periodDrafts, setPeriodDrafts] = useState<Map<string, { start: string; end: string }>>(new Map());
-  const [savingReimportUrl, setSavingReimportUrl] = useState<string | null>(null);
-
-  function periodDraftFor(t: TrackedPaymentUrl): { start: string; end: string } {
-    return periodDrafts.get(t.sourceUrl) ?? { start: t.reimportPeriodStart ?? "", end: t.reimportPeriodEnd ?? "" };
-  }
-
-  async function handleSaveReimportSettings(t: TrackedPaymentUrl) {
-    const { start, end } = periodDraftFor(t);
-    setSavingReimportUrl(t.sourceUrl);
-    try {
-      // Template id is passed through unchanged — this page never edits it.
-      await setUrlReimportSettings(t.sourceUrl, t.reimportTemplateId, start || null, end || null);
-      setPeriodDrafts((prev) => {
-        const next = new Map(prev);
-        next.delete(t.sourceUrl);
-        return next;
-      });
-    } finally {
-      setSavingReimportUrl(null);
-    }
-  }
-
   async function handleToggleDisabled(t: TrackedPaymentUrl) {
     setTogglingUrl(t.sourceUrl);
     try {
       await setUrlCheckDisabled(t.sourceUrl, !t.checkDisabled);
     } finally {
       setTogglingUrl(null);
+    }
+  }
+
+  // Reimport config drafts — label/date-mode/dates are editable per config;
+  // template is fixed at creation (see the field's own note below) and
+  // never part of this draft.
+  const [configDrafts, setConfigDrafts] = useState<Map<number, ConfigDraft>>(new Map());
+  const [savingConfigId, setSavingConfigId] = useState<number | null>(null);
+  const [deletingConfigId, setDeletingConfigId] = useState<number | null>(null);
+
+  function configDraftFor(c: ReimportConfig): ConfigDraft {
+    return configDrafts.get(c.id) ?? draftFromConfig(c);
+  }
+
+  function patchConfigDraft(c: ReimportConfig, patch: Partial<ConfigDraft>) {
+    setConfigDrafts((prev) => {
+      const current = prev.get(c.id) ?? draftFromConfig(c);
+      return new Map(prev).set(c.id, { ...current, ...patch });
+    });
+  }
+
+  async function handleSaveConfig(c: ReimportConfig) {
+    const draft = configDraftFor(c);
+    setSavingConfigId(c.id);
+    try {
+      await updateReimportConfig(c.id, {
+        label: draft.label,
+        dateMode: draft.dateMode,
+        periodStart: draft.dateMode === "fixed" ? draft.start || null : null,
+        periodEnd: draft.dateMode === "fixed" ? draft.end || null : null,
+        startOffsetDays: draft.dateMode === "relative" ? (draft.startOffset === "" ? null : Number(draft.startOffset)) : null,
+        endOffsetDays: draft.dateMode === "relative" ? (draft.endOffset === "" ? null : Number(draft.endOffset)) : null,
+      });
+      setConfigDrafts((prev) => {
+        const next = new Map(prev);
+        next.delete(c.id);
+        return next;
+      });
+    } finally {
+      setSavingConfigId(null);
+    }
+  }
+
+  async function handleDeleteConfig(id: number) {
+    setDeletingConfigId(id);
+    try {
+      await deleteReimportConfig(id);
+    } finally {
+      setDeletingConfigId(null);
+    }
+  }
+
+  // "Adicionar configuração" — one open form at a time, across all files.
+  const [addingConfigForUrl, setAddingConfigForUrl] = useState<string | null>(null);
+  const [newConfigDraft, setNewConfigDraft] = useState(BLANK_NEW_CONFIG);
+  const [addingConfigSaving, setAddingConfigSaving] = useState(false);
+  const [addingConfigError, setAddingConfigError] = useState<string | null>(null);
+
+  function openAddConfig(sourceUrl: string) {
+    setAddingConfigForUrl(sourceUrl);
+    setNewConfigDraft(BLANK_NEW_CONFIG);
+    setAddingConfigError(null);
+  }
+
+  async function handleCreateConfig() {
+    if (!addingConfigForUrl) return;
+    if (!newConfigDraft.templateId) {
+      setAddingConfigError("Selecione um template.");
+      return;
+    }
+    setAddingConfigSaving(true);
+    setAddingConfigError(null);
+    try {
+      await addReimportConfig({
+        sourceUrl: addingConfigForUrl,
+        label: newConfigDraft.label,
+        templateId: Number(newConfigDraft.templateId),
+        dateMode: newConfigDraft.dateMode,
+        periodStart: newConfigDraft.dateMode === "fixed" ? newConfigDraft.start || null : null,
+        periodEnd: newConfigDraft.dateMode === "fixed" ? newConfigDraft.end || null : null,
+        startOffsetDays:
+          newConfigDraft.dateMode === "relative"
+            ? newConfigDraft.startOffset === ""
+              ? null
+              : Number(newConfigDraft.startOffset)
+            : null,
+        endOffsetDays:
+          newConfigDraft.dateMode === "relative"
+            ? newConfigDraft.endOffset === ""
+              ? null
+              : Number(newConfigDraft.endOffset)
+            : null,
+      });
+      setAddingConfigForUrl(null);
+    } catch (e) {
+      setAddingConfigError(String(e));
+    } finally {
+      setAddingConfigSaving(false);
     }
   }
 
@@ -185,9 +312,10 @@ export default function RemoteUpdatesPage() {
       </div>
       <p className="page-subtitle">
         Arquivos de pagamento importados por URL são verificados periodicamente — quando o
-        conteúdo remoto muda, você é avisado com a opção de reimportar. Aqui dá pra configurar o
-        intervalo (global ou por arquivo), ver o histórico completo e ligar/desligar a verificação
-        de cada um.
+        conteúdo remoto muda, cada configuração de reimportação do arquivo avisa a você
+        separadamente, com a opção de reimportar. Aqui dá pra configurar o intervalo (global ou por
+        arquivo), gerenciar as configurações de reimportação, ver o histórico completo e
+        ligar/desligar a verificação de cada arquivo.
       </p>
 
       <div className="card">
@@ -234,11 +362,8 @@ export default function RemoteUpdatesPage() {
               const dueAt = t.lastCheckedAt
                 ? new Date(t.lastCheckedAt).getTime() + effectiveMinutes * 60_000
                 : now;
-              const period = periodDraftFor(t);
-              const reimportTemplateName =
-                t.reimportTemplateId !== null ? templates.find((tpl) => tpl.id === t.reimportTemplateId)?.name ?? null : null;
-              const reimportTemplateMissing = t.reimportTemplateId !== null && reimportTemplateName === null;
-              const update = remoteUpdates.find((u) => u.sourceUrl === t.sourceUrl);
+              const updatesForFile = remoteUpdates.filter((u) => u.sourceUrl === t.sourceUrl);
+              const configsForFile = reimportConfigs.filter((c) => c.sourceUrl === t.sourceUrl);
               return (
                 <div
                   key={t.sourceUrl}
@@ -276,8 +401,9 @@ export default function RemoteUpdatesPage() {
                     </div>
                   )}
 
-                  {update && (
+                  {updatesForFile.map((u) => (
                     <div
+                      key={u.configId}
                       className="warning-box"
                       style={{
                         display: "flex",
@@ -290,10 +416,10 @@ export default function RemoteUpdatesPage() {
                     >
                       <span>
                         <AlertTriangle size={15} style={{ verticalAlign: "-2px", marginRight: "0.4rem" }} />
-                        Mudou no servidor de origem desde a última importação ({formatDateTime(update.lastImportedAt)}).
+                        Mudou no servidor de origem — configuração <strong>{u.configLabel}</strong>.
                       </span>
                       <div style={{ display: "flex", gap: "0.5rem", flexShrink: 0 }}>
-                        <button type="button" className="outline" onClick={() => dismissRemoteUpdate(update.sourceUrl)}>
+                        <button type="button" className="outline" onClick={() => dismissRemoteUpdate(u.configId)}>
                           Ignorar
                         </button>
                         <Link to="/import/payments">
@@ -301,7 +427,7 @@ export default function RemoteUpdatesPage() {
                         </Link>
                       </div>
                     </div>
-                  )}
+                  ))}
 
                   <div className="field-row" style={{ marginTop: "0.8rem", marginBottom: 0, alignItems: "flex-end" }}>
                     <div className="field" style={{ flex: "0 1 140px", marginBottom: 0 }}>
@@ -340,44 +466,225 @@ export default function RemoteUpdatesPage() {
                   </div>
 
                   <p className="muted" style={{ fontSize: "0.78rem", margin: "0.8rem 0 0.3rem" }}>
-                    O que a reimportação automática usa quando esse arquivo mudar:
+                    Configurações de reimportação — cada uma avisa separadamente quando o arquivo
+                    mudar:
                   </p>
-                  <div className="field-row" style={{ marginBottom: 0, alignItems: "flex-end" }}>
-                    <div className="field" style={{ flex: "1 1 200px", marginBottom: 0 }}>
-                      <label>Template</label>
-                      <p className="muted" style={{ margin: 0 }} title="Definido automaticamente ao salvar uma importação — não é editável aqui">
-                        {reimportTemplateName ? (
-                          reimportTemplateName
-                        ) : reimportTemplateMissing ? (
-                          <>
-                            Template salvo não existe mais — vai detectar pelo nome: <em>{t.provider || "—"}</em>
-                          </>
+
+                  {configsForFile.length === 0 && (
+                    <p className="muted" style={{ fontSize: "0.82rem" }}>
+                      Nenhuma configuração ainda — adicione uma pra habilitar a reimportação
+                      automática deste arquivo.
+                    </p>
+                  )}
+
+                  {configsForFile.map((c) => {
+                    const draft = configDraftFor(c);
+                    const preview = formatResolvedPreview(resolveDraftPeriod(draft));
+                    return (
+                      <div
+                        key={c.id}
+                        style={{
+                          border: "1px solid var(--border-soft)",
+                          borderRadius: 8,
+                          padding: "0.6rem 0.7rem",
+                          marginTop: "0.5rem",
+                        }}
+                      >
+                        <div className="field-row" style={{ marginBottom: 0, alignItems: "flex-end" }}>
+                          <div className="field" style={{ flex: "1 1 160px", marginBottom: 0 }}>
+                            <label>Rótulo</label>
+                            <input
+                              type="text"
+                              value={draft.label}
+                              placeholder={resolveReimportConfigLabel(c)}
+                              onChange={(e) => patchConfigDraft(c, { label: e.target.value })}
+                            />
+                          </div>
+                          <div className="field" style={{ flex: "0 1 160px", marginBottom: 0 }}>
+                            <label>Template</label>
+                            <p
+                              className="muted"
+                              style={{ margin: 0 }}
+                              title="Definido ao criar a configuração — pra trocar, remova e crie de novo"
+                            >
+                              {c.templateName ?? "Template removido"}
+                            </p>
+                          </div>
+                          <div className="field" style={{ flex: "0 1 140px", marginBottom: 0 }}>
+                            <label>Modo</label>
+                            <select
+                              value={draft.dateMode}
+                              onChange={(e) => patchConfigDraft(c, { dateMode: e.target.value as ReimportDateMode })}
+                            >
+                              <option value="fixed">Fixo</option>
+                              <option value="relative">Relativo a hoje</option>
+                            </select>
+                          </div>
+                          {draft.dateMode === "fixed" ? (
+                            <div className="field" style={{ marginBottom: 0 }}>
+                              <label>Período</label>
+                              <DateRangePicker
+                                startValue={draft.start}
+                                endValue={draft.end}
+                                onChange={(start, end) => patchConfigDraft(c, { start, end })}
+                              />
+                            </div>
+                          ) : (
+                            <>
+                              <div className="field" style={{ flex: "0 1 130px", marginBottom: 0 }}>
+                                <label>Início (dias atrás)</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step={1}
+                                  value={draft.startOffset}
+                                  onChange={(e) => patchConfigDraft(c, { startOffset: e.target.value })}
+                                />
+                              </div>
+                              <div className="field" style={{ flex: "0 1 130px", marginBottom: 0 }}>
+                                <label>Fim (dias atrás)</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step={1}
+                                  value={draft.endOffset}
+                                  onChange={(e) => patchConfigDraft(c, { endOffset: e.target.value })}
+                                />
+                              </div>
+                            </>
+                          )}
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => handleSaveConfig(c)}
+                            disabled={savingConfigId === c.id}
+                          >
+                            {savingConfigId === c.id ? "Salvando..." : "Salvar"}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost"
+                            style={{ marginLeft: "auto", color: "var(--danger)" }}
+                            onClick={() => handleDeleteConfig(c.id)}
+                            disabled={deletingConfigId === c.id}
+                            aria-label="Remover configuração"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                        {draft.dateMode === "relative" && (
+                          <p className="muted" style={{ fontSize: "0.75rem", margin: "0.4rem 0 0" }}>
+                            Vai usar: {preview}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {addingConfigForUrl === t.sourceUrl ? (
+                    <div
+                      style={{
+                        border: "1px dashed var(--border)",
+                        borderRadius: 8,
+                        padding: "0.6rem 0.7rem",
+                        marginTop: "0.5rem",
+                      }}
+                    >
+                      {addingConfigError && <div className="error-box" style={{ marginBottom: "0.6rem" }}>{addingConfigError}</div>}
+                      <div className="field-row" style={{ marginBottom: 0, alignItems: "flex-end" }}>
+                        <div className="field" style={{ flex: "1 1 160px", marginBottom: 0 }}>
+                          <label>Rótulo (opcional)</label>
+                          <input
+                            type="text"
+                            value={newConfigDraft.label}
+                            onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, label: e.target.value }))}
+                          />
+                        </div>
+                        <div className="field" style={{ flex: "0 1 180px", marginBottom: 0 }}>
+                          <label>Template</label>
+                          <select
+                            value={newConfigDraft.templateId}
+                            onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, templateId: e.target.value }))}
+                          >
+                            <option value="">Selecione</option>
+                            {templates.map((tpl) => (
+                              <option key={tpl.id} value={tpl.id}>
+                                {tpl.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="field" style={{ flex: "0 1 140px", marginBottom: 0 }}>
+                          <label>Modo</label>
+                          <select
+                            value={newConfigDraft.dateMode}
+                            onChange={(e) =>
+                              setNewConfigDraft((prev) => ({ ...prev, dateMode: e.target.value as ReimportDateMode }))
+                            }
+                          >
+                            <option value="fixed">Fixo</option>
+                            <option value="relative">Relativo a hoje</option>
+                          </select>
+                        </div>
+                        {newConfigDraft.dateMode === "fixed" ? (
+                          <div className="field" style={{ marginBottom: 0 }}>
+                            <label>Período</label>
+                            <DateRangePicker
+                              startValue={newConfigDraft.start}
+                              endValue={newConfigDraft.end}
+                              onChange={(start, end) => setNewConfigDraft((prev) => ({ ...prev, start, end }))}
+                            />
+                          </div>
                         ) : (
                           <>
-                            Detecta pelo nome: <em>{t.provider || "—"}</em>
+                            <div className="field" style={{ flex: "0 1 130px", marginBottom: 0 }}>
+                              <label>Início (dias atrás)</label>
+                              <input
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={newConfigDraft.startOffset}
+                                onChange={(e) =>
+                                  setNewConfigDraft((prev) => ({ ...prev, startOffset: e.target.value }))
+                                }
+                              />
+                            </div>
+                            <div className="field" style={{ flex: "0 1 130px", marginBottom: 0 }}>
+                              <label>Fim (dias atrás)</label>
+                              <input
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={newConfigDraft.endOffset}
+                                onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, endOffset: e.target.value }))}
+                              />
+                            </div>
                           </>
                         )}
-                      </p>
+                        <button type="button" onClick={handleCreateConfig} disabled={addingConfigSaving}>
+                          {addingConfigSaving ? "Adicionando..." : "Adicionar"}
+                        </button>
+                        <button type="button" className="ghost" onClick={() => setAddingConfigForUrl(null)}>
+                          Cancelar
+                        </button>
+                      </div>
+                      {newConfigDraft.dateMode === "relative" && (
+                        <p className="muted" style={{ fontSize: "0.75rem", margin: "0.4rem 0 0" }}>
+                          Vai usar: {formatResolvedPreview(resolveDraftPeriod(newConfigDraft))}
+                        </p>
+                      )}
                     </div>
-                    <div className="field" style={{ marginBottom: 0 }}>
-                      <label>Período</label>
-                      <DateRangePicker
-                        startValue={period.start}
-                        endValue={period.end}
-                        onChange={(start, end) =>
-                          setPeriodDrafts((prev) => new Map(prev).set(t.sourceUrl, { start, end }))
-                        }
-                      />
-                    </div>
+                  ) : (
                     <button
                       type="button"
                       className="ghost"
-                      onClick={() => handleSaveReimportSettings(t)}
-                      disabled={savingReimportUrl === t.sourceUrl}
+                      style={{ marginTop: "0.5rem" }}
+                      onClick={() => openAddConfig(t.sourceUrl)}
                     >
-                      {savingReimportUrl === t.sourceUrl ? "Salvando..." : "Salvar"}
+                      <Plus size={14} style={{ marginRight: "0.3rem" }} />
+                      Adicionar configuração
                     </button>
-                  </div>
+                  )}
                 </div>
               );
             })}

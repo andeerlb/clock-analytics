@@ -1,3 +1,4 @@
+import { addDaysIso, todayUtc, toIso } from "./calendar";
 import type { NightShiftRule, PaymentShiftStatus, PaymentValueRuleOperator, ShiftPeriod } from "./types";
 
 /** 120 -> "R$ 120,00" */
@@ -154,6 +155,47 @@ export function formatCountdown(ms: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
+/**
+ * A reimport config's actual Período, right now — fixed configs just
+ * return their stored bounds; relative ones resolve fresh against today
+ * ("início = hoje - N dias"), so the same config gives a different range
+ * every day instead of a stale one computed once and stored. Shared by
+ * `RemoteFileUpdatesContext` (deciding what an automatic reimport should
+ * use) and the Verificação automática page (previewing "vai usar: X → Y").
+ */
+export function resolveReimportPeriod(config: {
+  dateMode: "fixed" | "relative";
+  periodStart: string | null;
+  periodEnd: string | null;
+  startOffsetDays: number | null;
+  endOffsetDays: number | null;
+}): { start: string | null; end: string | null } {
+  if (config.dateMode === "fixed") return { start: config.periodStart, end: config.periodEnd };
+  const today = toIso(todayUtc());
+  return {
+    start: config.startOffsetDays !== null ? addDaysIso(today, -config.startOffsetDays) : null,
+    end: config.endOffsetDays !== null ? addDaysIso(today, -config.endOffsetDays) : null,
+  };
+}
+
+/** A human label for a reimport config that was never given a custom one — recognizes the common relative shapes, falls back to a generic description otherwise. */
+export function resolveReimportConfigLabel(config: {
+  label: string;
+  dateMode: "fixed" | "relative";
+  startOffsetDays: number | null;
+  endOffsetDays: number | null;
+}): string {
+  if (config.label.trim()) return config.label;
+  if (config.dateMode !== "relative") return "Período fixo";
+  const { startOffsetDays: start, endOffsetDays: end } = config;
+  if (start === 0 && end === 0) return "Hoje";
+  if (start === 1 && end === 1) return "Ontem";
+  if (start === 1 && end === 0) return "Hoje e ontem";
+  if (start !== null && end === 0) return `Últimos ${start} dias`;
+  if (start !== null && end !== null) return `${start} a ${end} dias atrás`;
+  return "Personalizado";
 }
 
 const MONTH_ABBR = [
