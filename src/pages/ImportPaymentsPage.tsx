@@ -219,7 +219,7 @@ export default function ImportPaymentsPage() {
     restored?.urlSourceByPath ?? new Map(),
   );
   const [pendingAutoProcess, setPendingAutoProcess] = useState(false);
-  const { remoteUpdates, dismissRemoteUpdate } = useRemoteFileUpdates();
+  const { remoteUpdates, dismissRemoteUpdate, disableUrlCheck } = useRemoteFileUpdates();
 
   const [fileResults, setFileResults] = useState<PaymentFileResult[]>(restored?.fileResults ?? []);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(restored?.selectedRows ?? new Set());
@@ -883,6 +883,14 @@ export default function ImportPaymentsPage() {
               parece ter sido atualizado.
             </span>
             <div style={{ display: "flex", gap: "0.5rem", flexShrink: 0 }}>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => disableUrlCheck(u.sourceUrl)}
+                title="Não verificar mais este arquivo automaticamente (pode reativar em Configurações)"
+              >
+                Desativar verificação automática
+              </button>
               <button type="button" className="outline" onClick={() => dismissRemoteUpdate(u.sourceUrl)}>
                 Ignorar
               </button>

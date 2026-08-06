@@ -220,5 +220,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0036_source_file_url.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 37,
+            description: "add source_url_settings — per-URL opt-out of the automatic remote-change check",
+            sql: include_str!("../migrations/0037_source_url_settings.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

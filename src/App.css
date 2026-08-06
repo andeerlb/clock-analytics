@@ -1809,3 +1809,15 @@ tr.row-error:hover {
   white-space: nowrap;
   font-size: 13px;
 }
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin {
+  animation: spin 1s linear infinite;
+}

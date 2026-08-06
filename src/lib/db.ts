@@ -1218,8 +1218,9 @@ export interface UrlSourcedPaymentFile {
  * The latest known state of each distinct URL a payment file was ever
  * downloaded from — one row per source_url (a URL whose content changed
  * and got reimported has more than one source_files row; only the newest
- * counts). Feeds the "check for remote updates" pass on
- * ImportPaymentsPage's mount.
+ * counts) — excluding any URL the user turned off via "Desativar
+ * verificação automática" (see `setUrlCheckDisabled`). Feeds the
+ * "check for remote updates" pass in `RemoteFileUpdatesContext`.
  */
 export async function listUrlSourcedPaymentFiles(): Promise<UrlSourcedPaymentFile[]> {
   const db = await getDb();
@@ -1232,7 +1233,49 @@ export async function listUrlSourcedPaymentFiles(): Promise<UrlSourcedPaymentFil
        FROM source_files
        WHERE import_type = 'payment' AND source_url IS NOT NULL
      )
-     WHERE rn = 1`,
+     WHERE rn = 1
+       AND source_url NOT IN (SELECT source_url FROM source_url_settings WHERE check_disabled = 1)`,
+  );
+}
+
+/**
+ * Turns the periodic remote-change check on/off for one source URL — a
+ * user who doesn't want to be bothered about a particular file anymore,
+ * without giving up on URL-sourced imports altogether. Persisted per URL
+ * (not per source_files row) so it survives that URL's content changing
+ * and being reimported under a new row/hash.
+ */
+export async function setUrlCheckDisabled(sourceUrl: string, disabled: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO source_url_settings (source_url, check_disabled, updated_at)
+     VALUES ($1, $2, datetime('now'))
+     ON CONFLICT(source_url) DO UPDATE SET
+       check_disabled = excluded.check_disabled,
+       updated_at = excluded.updated_at`,
+    [sourceUrl, disabled ? 1 : 0],
+  );
+}
+
+export interface DisabledUrlCheck {
+  sourceUrl: string;
+  fileName: string;
+}
+
+/** URLs with the automatic check turned off — lets Configurações offer a way back ("Reativar"). */
+export async function listDisabledUrlChecks(): Promise<DisabledUrlCheck[]> {
+  const db = await getDb();
+  return db.select<DisabledUrlCheck[]>(
+    `SELECT s.source_url AS sourceUrl, f.file_name AS fileName
+     FROM source_url_settings s
+     JOIN (
+       SELECT source_url, file_name,
+              ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY imported_at DESC) AS rn
+       FROM source_files
+       WHERE import_type = 'payment' AND source_url IS NOT NULL
+     ) f ON f.source_url = s.source_url AND f.rn = 1
+     WHERE s.check_disabled = 1
+     ORDER BY s.updated_at DESC`,
   );
 }
 
