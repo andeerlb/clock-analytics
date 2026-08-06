@@ -710,12 +710,16 @@ export async function createEmployeeManual(
     throw new Error("Esse cliente não está vinculado à empresa selecionada.");
   }
 
+  // Scoped by both client and company — scoping only by client (the old
+  // behavior) would reject a CPF that's actually free for this empresa just
+  // because it's already used under a *different* empresa of the same
+  // (multi-empresa) cliente, which `UNIQUE(company_id, cpf)` allows.
   const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM employees WHERE client_id = $1 AND cpf = $2",
-    [clientId, normalizedCpf],
+    "SELECT id FROM employees WHERE client_id = $1 AND company_id = $2 AND cpf = $3",
+    [clientId, companyId, normalizedCpf],
   );
   if (existing.length > 0) {
-    throw new Error("Já existe um colaborador com esse CPF para esse cliente.");
+    throw new Error("Já existe um colaborador com esse CPF para essa empresa e cliente.");
   }
 
   const result = await db.execute(
@@ -758,18 +762,19 @@ export async function updateEmployee(
     throw new Error("CPF deve ter 11 dígitos.");
   }
 
-  const current = await db.select<{ clientId: number }[]>(
-    "SELECT client_id AS clientId FROM employees WHERE id = $1",
+  const current = await db.select<{ clientId: number; companyId: number }[]>(
+    "SELECT client_id AS clientId, company_id AS companyId FROM employees WHERE id = $1",
     [id],
   );
   if (current.length === 0) throw new Error("Colaborador não encontrado.");
 
+  // Scoped by both client and company, same reasoning as `createEmployeeManual`.
   const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM employees WHERE client_id = $1 AND cpf = $2 AND id != $3",
-    [current[0].clientId, normalizedCpf, id],
+    "SELECT id FROM employees WHERE client_id = $1 AND company_id = $2 AND cpf = $3 AND id != $4",
+    [current[0].clientId, current[0].companyId, normalizedCpf, id],
   );
   if (existing.length > 0) {
-    throw new Error("Já existe um colaborador com esse CPF para esse cliente.");
+    throw new Error("Já existe um colaborador com esse CPF para essa empresa e cliente.");
   }
 
   await db.execute("UPDATE employees SET name = $1, cpf = $2, matricula = $3 WHERE id = $4", [
@@ -1062,12 +1067,18 @@ export async function findDuplicateFiles(
 
 /**
  * Looks for an existing import of the same employee at the same client
- * whose period overlaps the given range — the "you already imported this
- * person for this period" check, independent of which file it came from.
+ * **and empresa** whose period overlaps the given range — the "you already
+ * imported this person for this period" check, independent of which file it
+ * came from. Scoped by both, not just client, for the same reason as
+ * `upsertEmployee`: a cliente linked to more than one empresa can have a
+ * separate employee record (and separate imports) per empresa, sharing the
+ * same CPF — scoping only by client would flag a false conflict against the
+ * *other* empresa's import.
  */
 export async function findConflictingImport(
   employeeCpf: string,
   clientId: number,
+  companyId: number,
   periodStart: string,
   periodEnd: string,
 ): Promise<{ importId: number; periodStart: string; periodEnd: string; importedAt: string } | null> {
@@ -1080,24 +1091,25 @@ export async function findConflictingImport(
            i.imported_at AS importedAt
     FROM imports i
     JOIN employees e ON e.id = i.employee_id
-    WHERE e.cpf = $1 AND e.client_id = $2
-      AND i.period_start <= $4 AND i.period_end >= $3
+    WHERE e.cpf = $1 AND e.client_id = $2 AND e.company_id = $3
+      AND i.period_start <= $5 AND i.period_end >= $4
     ORDER BY i.imported_at DESC
     LIMIT 1
     `,
-    [employeeCpf, clientId, periodStart, periodEnd],
+    [employeeCpf, clientId, companyId, periodStart, periodEnd],
   );
   return rows[0] ?? null;
 }
 
 /**
  * Checks a batch of freshly-parsed sheets against existing imports for
- * period overlaps — under `clientId`, the client the user selected for
- * this whole batch (not whatever each sheet's own parsed company says).
+ * period overlaps — under `clientId`/`companyId`, the pair the user selected
+ * for this whole batch (not whatever each sheet's own parsed company says).
  */
 export async function findConflicts(
   sheets: ParsedTimesheet[],
   clientId: number,
+  companyId: number,
 ): Promise<ConflictInfo[]> {
   const conflicts: ConflictInfo[] = [];
   for (let i = 0; i < sheets.length; i++) {
@@ -1105,6 +1117,7 @@ export async function findConflicts(
     const existing = await findConflictingImport(
       sheet.employee.cpf,
       clientId,
+      companyId,
       sheet.period.start,
       sheet.period.end,
     );

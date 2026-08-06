@@ -294,13 +294,13 @@ export default function ImportTimesheetPage() {
   const historyPageCount = Math.max(1, Math.ceil(recentFilesTotal / historyPageSize));
 
   async function handleParse() {
-    if (!selectedClient) return;
+    if (!selectedClient || !companyId) return;
     setError(null);
     setBusy(true);
     try {
       const results = await parseImport(provider, eligiblePaths);
       const allSheets = results.flatMap((r) => r.sheets);
-      const foundConflicts = await findConflicts(allSheets, selectedClient.id);
+      const foundConflicts = await findConflicts(allSheets, selectedClient.id, Number(companyId));
       const selectedCnpj = normalizeCnpj(selectedClient.cnpj);
       // Rows with a conflict, or whose own CNPJ doesn't match the client
       // selected for this batch, start unselected — both are opt-in.
