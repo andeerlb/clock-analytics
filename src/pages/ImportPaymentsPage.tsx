@@ -221,7 +221,11 @@ export default function ImportPaymentsPage() {
     restored?.urlSourceByPath ?? new Map(),
   );
   const [pendingAutoProcess, setPendingAutoProcess] = useState(false);
-  const { remoteUpdates, dismissRemoteUpdate, setUrlCheckDisabled } = useRemoteFileUpdates();
+  // Off by default — tracking is opt-in per save, not an automatic side
+  // effect of importing by URL (see trackUrlForAutoReimport's doc comment).
+  const [trackAutoUpdates, setTrackAutoUpdates] = useState(false);
+  const { remoteUpdates, dismissRemoteUpdate, setUrlCheckDisabled, setUrlReimportSettings, trackUrl, trackedFiles } =
+    useRemoteFileUpdates();
 
   const [fileResults, setFileResults] = useState<PaymentFileResult[]>(restored?.fileResults ?? []);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(restored?.selectedRows ?? new Set());
@@ -322,6 +326,7 @@ export default function ImportPaymentsPage() {
   function reset() {
     setPaths([]);
     setUrlSourceByPath(new Map());
+    setTrackAutoUpdates(false);
     cancelPreview();
     setError(null);
   }
@@ -399,15 +404,19 @@ export default function ImportPaymentsPage() {
     }
   }
 
-  // setPaths/setTemplateId from handleReimportFromUrl are async — calling
-  // handleProcessClick() synchronously right after would still see the
-  // stale `paths`/`selectedTemplate`. This waits for both to actually land
-  // (fileHashes catches up to paths once its own effect finishes) before
-  // firing the process step exactly once.
+  // setPaths/setTemplateId/setPeriodStart/setPeriodEnd from
+  // handleReimportFromUrl are async — calling handleProcess() synchronously
+  // right after would still see stale state. This waits for paths and
+  // template to actually land (fileHashes catches up to paths once its own
+  // effect finishes) before firing the process step exactly once. Calls
+  // handleProcess() directly, not handleProcessClick() — an automatic
+  // reimport replays Período filters that were already confirmed once (at
+  // the save they were captured from), so re-asking "processar o arquivo
+  // inteiro?" here would just be re-litigating a choice already made.
   useEffect(() => {
     if (pendingAutoProcess && selectedTemplate && paths.length > 0 && fileHashes.size === paths.length) {
       setPendingAutoProcess(false);
-      handleProcessClick();
+      handleProcess();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingAutoProcess, selectedTemplate, paths, fileHashes]);
@@ -423,16 +432,37 @@ export default function ImportPaymentsPage() {
     dismissRemoteUpdate(flag.sourceUrl);
     reset();
     setImportMode("url");
-    const match = templates.find((t) => t.name === flag.provider);
-    if (!match) {
-      // Template renamed/deleted since the original import — leave the URL
-      // filled in and let the user pick a template themselves, same as a
-      // fresh URL import (the "Baixar arquivo" button already requires one).
+    // Replays the Período filters captured from this URL's last successful
+    // save (or set by hand on the Verificação automática page) — "the
+    // filters used when it was saved" apply automatically here, not just
+    // whatever happened to be left in these fields already.
+    setPeriodStart(flag.reimportPeriodStart ?? "");
+    setPeriodEnd(flag.reimportPeriodEnd ?? "");
+
+    // The saved template id is authoritative when present — falls back to
+    // matching by name (for tracked files saved before this id existed, or
+    // if that exact template was since deleted) before giving up entirely.
+    let fullTemplate = null;
+    if (flag.reimportTemplateId !== null) {
+      try {
+        fullTemplate = await getPaymentTemplate(flag.reimportTemplateId);
+      } catch {
+        fullTemplate = null;
+      }
+    }
+    if (!fullTemplate) {
+      const match = templates.find((t) => t.name === flag.provider);
+      if (match) fullTemplate = await getPaymentTemplate(match.id);
+    }
+    if (!fullTemplate) {
+      // Template deleted/renamed since the original import, and no name
+      // match either — leave the URL filled in and let the user pick a
+      // template themselves, same as a fresh URL import ("Baixar arquivo"
+      // already requires one).
       setUrlInput(flag.sourceUrl);
       return;
     }
-    setTemplateId(String(match.id));
-    const fullTemplate = await getPaymentTemplate(match.id);
+    setTemplateId(String(fullTemplate.id));
     await handleDownloadFromUrl(flag.sourceUrl, true, fullTemplate);
   }
 
@@ -851,6 +881,28 @@ export default function ImportPaymentsPage() {
         await markSourceFileSaved(fileHash);
       }
 
+      // Whatever template + Período were in effect for this save become
+      // what an automatic reimport (triggered later by a detected remote
+      // change) replays — captured per URL actually involved in this save,
+      // not just once for the whole batch, since a mixed local+URL save
+      // could otherwise attribute them to a URL that wasn't even part of it.
+      // A URL already opted into tracking keeps getting refreshed
+      // regardless of the checkbox below (it's already tracked — this just
+      // keeps its replay settings accurate); a URL that ISN'T tracked yet
+      // only becomes tracked if "Rastrear atualizações automaticamente" is
+      // checked — tracking is never created as a side effect on its own.
+      const savedUrls = new Set(
+        fileResults.map((r) => urlSourceByPath.get(r.path)?.url).filter((u): u is string => Boolean(u)),
+      );
+      for (const url of savedUrls) {
+        const alreadyTracked = trackedFiles.some((t) => t.sourceUrl === url);
+        if (alreadyTracked) {
+          await setUrlReimportSettings(url, selectedTemplate.id, periodStart || null, periodEnd || null);
+        } else if (trackAutoUpdates) {
+          await trackUrl(url, selectedTemplate.id, periodStart || null, periodEnd || null);
+        }
+      }
+
       refreshRecentFiles();
       reset();
       setSuccessMessage(
@@ -1045,6 +1097,31 @@ export default function ImportPaymentsPage() {
                       {urlDownloading ? "Baixando..." : "Baixar arquivo"}
                     </button>
                   </div>
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "0.5rem",
+                      marginTop: "0.8rem",
+                      fontSize: "0.85rem",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={trackAutoUpdates}
+                      onChange={(e) => setTrackAutoUpdates(e.target.checked)}
+                      style={{ marginTop: "0.2rem" }}
+                    />
+                    <span>
+                      Rastrear atualizações automaticamente
+                      <span className="muted" style={{ display: "block", fontSize: "0.78rem" }}>
+                        Verifica periodicamente se o arquivo mudou no servidor de origem e avisa
+                        (com a opção de reimportar) quando isso acontece — pode ser gerenciado
+                        depois em "Verificação automática". Só se aplica ao salvar; sem isso, este
+                        arquivo não fica sendo monitorado.
+                      </span>
+                    </span>
+                  </label>
                 </>
               )}
 

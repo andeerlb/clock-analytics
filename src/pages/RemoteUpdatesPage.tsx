@@ -10,10 +10,12 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import BackButton from "../components/BackButton";
+import DateRangePicker from "../components/DateRangePicker";
 import Pagination from "../components/Pagination";
 import { useRemoteFileUpdates, type TrackedPaymentUrl } from "../contexts/RemoteFileUpdatesContext";
-import { listUrlCheckLog, type UrlCheckLogEntry, type UrlCheckResult } from "../lib/db";
+import { listPaymentTemplates, listUrlCheckLog, type UrlCheckLogEntry, type UrlCheckResult } from "../lib/db";
 import { formatCountdown, formatDateTime } from "../lib/format";
+import type { PaymentTemplateListRow } from "../lib/types";
 
 const RESULT_BADGE: Record<UrlCheckResult, { className: string; label: string; icon: typeof CheckCircle2 }> = {
   changed: { className: "badge warn", label: "Mudou", icon: AlertTriangle },
@@ -33,6 +35,7 @@ export default function RemoteUpdatesPage() {
     setIntervalMinutes,
     setUrlIntervalMinutes,
     setUrlCheckDisabled,
+    setUrlReimportSettings,
     checking,
   } = useRemoteFileUpdates();
 
@@ -42,6 +45,11 @@ export default function RemoteUpdatesPage() {
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
+  }, []);
+
+  const [templates, setTemplates] = useState<PaymentTemplateListRow[]>([]);
+  useEffect(() => {
+    listPaymentTemplates().then(setTemplates);
   }, []);
 
   const [intervalInput, setIntervalInput] = useState(String(intervalMinutes));
@@ -106,6 +114,36 @@ export default function RemoteUpdatesPage() {
     }
   }
 
+  // Período is the only thing edited here — Template is read-only on this
+  // page, deliberately: it's whatever template the last successful save
+  // actually used (captured automatically, see ImportPaymentsPage's
+  // handleSave), and changing it here without redoing the column mapping
+  // review would risk a silent mismatch on the next automatic reimport.
+  // Same "edit locally, apply on Salvar" recipe as the interval draft
+  // above — both bounds blank means "todo o relatório".
+  const [periodDrafts, setPeriodDrafts] = useState<Map<string, { start: string; end: string }>>(new Map());
+  const [savingReimportUrl, setSavingReimportUrl] = useState<string | null>(null);
+
+  function periodDraftFor(t: TrackedPaymentUrl): { start: string; end: string } {
+    return periodDrafts.get(t.sourceUrl) ?? { start: t.reimportPeriodStart ?? "", end: t.reimportPeriodEnd ?? "" };
+  }
+
+  async function handleSaveReimportSettings(t: TrackedPaymentUrl) {
+    const { start, end } = periodDraftFor(t);
+    setSavingReimportUrl(t.sourceUrl);
+    try {
+      // Template id is passed through unchanged — this page never edits it.
+      await setUrlReimportSettings(t.sourceUrl, t.reimportTemplateId, start || null, end || null);
+      setPeriodDrafts((prev) => {
+        const next = new Map(prev);
+        next.delete(t.sourceUrl);
+        return next;
+      });
+    } finally {
+      setSavingReimportUrl(null);
+    }
+  }
+
   async function handleToggleDisabled(t: TrackedPaymentUrl) {
     setTogglingUrl(t.sourceUrl);
     try {
@@ -152,33 +190,6 @@ export default function RemoteUpdatesPage() {
         de cada um.
       </p>
 
-      {remoteUpdates.length > 0 && (
-        <div className="card">
-          <h3 style={{ marginTop: 0 }}>Atualizações disponíveis</h3>
-          {remoteUpdates.map((u) => (
-            <div
-              className="warning-box"
-              key={u.sourceUrl}
-              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem" }}
-            >
-              <span>
-                <AlertTriangle size={15} style={{ verticalAlign: "-2px", marginRight: "0.4rem" }} />
-                <strong>{u.fileName}</strong> mudou no servidor de origem desde a última
-                importação ({formatDateTime(u.lastImportedAt)}).
-              </span>
-              <div style={{ display: "flex", gap: "0.5rem", flexShrink: 0 }}>
-                <button type="button" className="outline" onClick={() => dismissRemoteUpdate(u.sourceUrl)}>
-                  Ignorar
-                </button>
-                <Link to="/import/payments">
-                  <button type="button">Ir para Importar Pagamentos</button>
-                </Link>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
       <div className="card">
         <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
           <RefreshCw size={18} className={checking ? "spin" : undefined} />
@@ -215,7 +226,7 @@ export default function RemoteUpdatesPage() {
           <p className="muted">Nenhum arquivo importado por URL ainda.</p>
         )}
         {trackedFiles.length > 0 && (
-          <div className="file-list">
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.7rem", marginTop: "1rem" }}>
             {trackedFiles.map((t) => {
               const badge = t.lastResult ? RESULT_BADGE[t.lastResult] : null;
               const BadgeIcon = badge?.icon;
@@ -223,50 +234,91 @@ export default function RemoteUpdatesPage() {
               const dueAt = t.lastCheckedAt
                 ? new Date(t.lastCheckedAt).getTime() + effectiveMinutes * 60_000
                 : now;
+              const period = periodDraftFor(t);
+              const reimportTemplateName =
+                t.reimportTemplateId !== null ? templates.find((tpl) => tpl.id === t.reimportTemplateId)?.name ?? null : null;
+              const reimportTemplateMissing = t.reimportTemplateId !== null && reimportTemplateName === null;
+              const update = remoteUpdates.find((u) => u.sourceUrl === t.sourceUrl);
               return (
-                <div className="file-row" key={t.sourceUrl}>
-                  <div className="file-row-icon">
-                    <FileText size={18} />
-                  </div>
-                  <div className="file-row-info">
-                    <div className="file-name" title={t.sourceUrl}>
-                      {t.fileName}
-                      <Link2 size={12} style={{ marginLeft: "0.4rem", opacity: 0.5, verticalAlign: "-1px" }} />
-                    </div>
-                    <div className="file-meta">
-                      {t.provider || "—"} ·{" "}
-                      {t.lastCheckedAt ? `Última verificação: ${formatDateTime(t.lastCheckedAt)}` : "Nunca verificado"}
-                      {!t.checkDisabled && (
-                        <> · Próxima em {formatCountdown(dueAt - now)}</>
+                <div
+                  key={t.sourceUrl}
+                  style={{
+                    border: "1px solid var(--border)",
+                    borderRadius: 10,
+                    padding: "0.8rem 1rem",
+                    background: "var(--card-bg)",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
+                    <FileText size={16} style={{ color: "var(--accent)", flexShrink: 0 }} />
+                    <span style={{ fontWeight: 600, fontSize: "0.92rem" }}>{t.fileName}</span>
+                    <Link2 size={12} style={{ opacity: 0.5 }} aria-label={t.sourceUrl}>
+                      <title>{t.sourceUrl}</title>
+                    </Link2>
+                    <div style={{ marginLeft: "auto", display: "flex", gap: "0.5rem" }}>
+                      {badge && BadgeIcon && !t.checkDisabled && (
+                        <span className={badge.className}>
+                          <BadgeIcon size={13} />
+                          {badge.label}
+                        </span>
                       )}
+                      {t.checkDisabled && <span className="badge neutral">Desativado</span>}
                     </div>
-                    {t.lastResult === "error" && t.lastErrorMessage && (
-                      <div className="muted" style={{ fontSize: "0.75rem", marginTop: "0.15rem" }}>
-                        {t.lastErrorMessage}
-                      </div>
-                    )}
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                    {badge && BadgeIcon && !t.checkDisabled && (
-                      <span className={badge.className}>
-                        <BadgeIcon size={13} />
-                        {badge.label}
+                  <div className="muted" style={{ fontSize: "0.8rem", marginTop: "0.2rem" }}>
+                    {t.provider || "—"} ·{" "}
+                    {t.lastCheckedAt ? `Última verificação: ${formatDateTime(t.lastCheckedAt)}` : "Nunca verificado"}
+                    {!t.checkDisabled && <> · Próxima em {formatCountdown(dueAt - now)}</>}
+                  </div>
+                  {t.lastResult === "error" && t.lastErrorMessage && (
+                    <div className="muted" style={{ fontSize: "0.75rem", marginTop: "0.15rem" }}>
+                      {t.lastErrorMessage}
+                    </div>
+                  )}
+
+                  {update && (
+                    <div
+                      className="warning-box"
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: "1rem",
+                        marginTop: "0.8rem",
+                        marginBottom: 0,
+                      }}
+                    >
+                      <span>
+                        <AlertTriangle size={15} style={{ verticalAlign: "-2px", marginRight: "0.4rem" }} />
+                        Mudou no servidor de origem desde a última importação ({formatDateTime(update.lastImportedAt)}).
                       </span>
-                    )}
-                    {t.checkDisabled && <span className="badge neutral">Desativado</span>}
-                    <input
-                      type="number"
-                      min={1}
-                      step={1}
-                      placeholder={String(intervalMinutes)}
-                      value={draftFor(t)}
-                      onChange={(e) =>
-                        setIntervalDrafts((prev) => new Map(prev).set(t.sourceUrl, e.target.value))
-                      }
-                      title="Intervalo próprio, em minutos — deixe em branco para usar o padrão global"
-                      style={{ width: "4.5rem" }}
-                      disabled={t.checkDisabled}
-                    />
+                      <div style={{ display: "flex", gap: "0.5rem", flexShrink: 0 }}>
+                        <button type="button" className="outline" onClick={() => dismissRemoteUpdate(update.sourceUrl)}>
+                          Ignorar
+                        </button>
+                        <Link to="/import/payments">
+                          <button type="button">Ir para Importar Pagamentos</button>
+                        </Link>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="field-row" style={{ marginTop: "0.8rem", marginBottom: 0, alignItems: "flex-end" }}>
+                    <div className="field" style={{ flex: "0 1 140px", marginBottom: 0 }}>
+                      <label>Intervalo (min)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        placeholder={String(intervalMinutes)}
+                        value={draftFor(t)}
+                        onChange={(e) =>
+                          setIntervalDrafts((prev) => new Map(prev).set(t.sourceUrl, e.target.value))
+                        }
+                        title="Deixe em branco para usar o padrão global"
+                        disabled={t.checkDisabled}
+                      />
+                    </div>
                     <button
                       type="button"
                       className="ghost"
@@ -275,13 +327,55 @@ export default function RemoteUpdatesPage() {
                     >
                       {savingUrl === t.sourceUrl ? "Salvando..." : "Salvar"}
                     </button>
+
                     <button
                       type="button"
                       className="ghost"
+                      style={{ marginLeft: "auto" }}
                       onClick={() => handleToggleDisabled(t)}
                       disabled={togglingUrl === t.sourceUrl}
                     >
                       {togglingUrl === t.sourceUrl ? "..." : t.checkDisabled ? "Reativar" : "Desativar"}
+                    </button>
+                  </div>
+
+                  <p className="muted" style={{ fontSize: "0.78rem", margin: "0.8rem 0 0.3rem" }}>
+                    O que a reimportação automática usa quando esse arquivo mudar:
+                  </p>
+                  <div className="field-row" style={{ marginBottom: 0, alignItems: "flex-end" }}>
+                    <div className="field" style={{ flex: "1 1 200px", marginBottom: 0 }}>
+                      <label>Template</label>
+                      <p className="muted" style={{ margin: 0 }} title="Definido automaticamente ao salvar uma importação — não é editável aqui">
+                        {reimportTemplateName ? (
+                          reimportTemplateName
+                        ) : reimportTemplateMissing ? (
+                          <>
+                            Template salvo não existe mais — vai detectar pelo nome: <em>{t.provider || "—"}</em>
+                          </>
+                        ) : (
+                          <>
+                            Detecta pelo nome: <em>{t.provider || "—"}</em>
+                          </>
+                        )}
+                      </p>
+                    </div>
+                    <div className="field" style={{ marginBottom: 0 }}>
+                      <label>Período</label>
+                      <DateRangePicker
+                        startValue={period.start}
+                        endValue={period.end}
+                        onChange={(start, end) =>
+                          setPeriodDrafts((prev) => new Map(prev).set(t.sourceUrl, { start, end }))
+                        }
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => handleSaveReimportSettings(t)}
+                      disabled={savingReimportUrl === t.sourceUrl}
+                    >
+                      {savingReimportUrl === t.sourceUrl ? "Salvando..." : "Salvar"}
                     </button>
                   </div>
                 </div>

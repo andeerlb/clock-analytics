@@ -232,5 +232,23 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0038_source_url_check_tracking.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 39,
+            description: "add source_url_settings.reimport_period_start/end — the Período filters to replay automatically on a detected-change reimport",
+            sql: include_str!("../migrations/0039_source_url_reimport_filters.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 40,
+            description: "add source_url_settings.reimport_template_id — which template to apply on an automatic reimport",
+            sql: include_str!("../migrations/0040_source_url_reimport_template.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 41,
+            description: "add source_url_settings.tracking_enabled — explicit opt-in gate, replacing the old implicit 'any URL-sourced save is tracked' behavior",
+            sql: include_str!("../migrations/0041_source_url_tracking_enabled.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -1224,16 +1224,22 @@ export interface TrackedPaymentUrl {
   lastCheckedAt: string | null;
   lastResult: UrlCheckResult | null;
   lastErrorMessage: string | null;
+  /** The Período filters in effect the last time a save succeeded for this URL (or a manual override from the Verificação automática page) — replayed on an automatic reimport. `null` means "todo o relatório". */
+  reimportPeriodStart: string | null;
+  reimportPeriodEnd: string | null;
+  /** The template to apply on an automatic reimport — `null` falls back to matching `provider` (the template's name at last import) against the currently registered templates. */
+  reimportTemplateId: number | null;
 }
 
 /**
- * Every distinct URL a payment file was ever downloaded from, with its
- * full tracking state — one row per source_url (a URL whose content
- * changed and got reimported has more than one source_files row; only the
- * newest counts), regardless of enabled/disabled, so the Verificação
- * automática page can show and manage everything (not just what's
- * currently active). `RemoteFileUpdatesContext`'s scheduler is the one
- * that filters to `!checkDisabled` before deciding what's due.
+ * Every URL explicitly opted into automatic tracking (`tracking_enabled`,
+ * set via the "Rastrear atualizações automaticamente" checkbox at import
+ * time — NOT every URL a payment file was ever downloaded from; a URL
+ * import with that box left unchecked never shows up here at all), with
+ * its full tracking state. Includes disabled ones (`checkDisabled: true`)
+ * so the Verificação automática page can still show and re-enable them —
+ * `RemoteFileUpdatesContext`'s scheduler is the one that filters those out
+ * before deciding what's due.
  */
 export async function listTrackedPaymentUrls(): Promise<TrackedPaymentUrl[]> {
   const db = await getDb();
@@ -1250,7 +1256,10 @@ export async function listTrackedPaymentUrls(): Promise<TrackedPaymentUrl[]> {
        sus.check_interval_minutes AS checkIntervalMinutes,
        log.checked_at AS lastCheckedAt,
        log.result AS lastResult,
-       log.message AS lastErrorMessage
+       log.message AS lastErrorMessage,
+       sus.reimport_period_start AS reimportPeriodStart,
+       sus.reimport_period_end AS reimportPeriodEnd,
+       sus.reimport_template_id AS reimportTemplateId
      FROM (
        SELECT *, ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY imported_at DESC) AS rn
        FROM source_files
@@ -1261,7 +1270,7 @@ export async function listTrackedPaymentUrls(): Promise<TrackedPaymentUrl[]> {
        SELECT *, ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY checked_at DESC) AS rn
        FROM source_url_check_log
      ) log ON log.source_url = sf.source_url AND log.rn = 1
-     WHERE sf.rn = 1
+     WHERE sf.rn = 1 AND COALESCE(sus.tracking_enabled, 0) = 1
      ORDER BY sf.imported_at DESC`,
   );
   return rawRows.map((r) => ({ ...r, checkDisabled: Boolean(r.checkDisabled) }));
@@ -1296,6 +1305,65 @@ export async function setUrlCheckIntervalMinutes(sourceUrl: string, minutes: num
        check_interval_minutes = excluded.check_interval_minutes,
        updated_at = excluded.updated_at`,
     [sourceUrl, minutes],
+  );
+}
+
+/**
+ * Everything an automatic reimport needs to run hands-off up to the final
+ * "Salvar": which template to apply and which Período to filter by.
+ * Captured together right after a successful save (see
+ * `ImportPaymentsPage.handleSave`) — same moment, same trigger — or set by
+ * hand on the Verificação automática page. `templateId: null` falls back
+ * to matching the template by name at reimport time; `null` for either
+ * Período bound means "todo o relatório".
+ */
+export async function setUrlReimportSettings(
+  sourceUrl: string,
+  templateId: number | null,
+  periodStart: string | null,
+  periodEnd: string | null,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO source_url_settings
+       (source_url, reimport_template_id, reimport_period_start, reimport_period_end, updated_at)
+     VALUES ($1, $2, $3, $4, datetime('now'))
+     ON CONFLICT(source_url) DO UPDATE SET
+       reimport_template_id = excluded.reimport_template_id,
+       reimport_period_start = excluded.reimport_period_start,
+       reimport_period_end = excluded.reimport_period_end,
+       updated_at = excluded.updated_at`,
+    [sourceUrl, templateId, periodStart, periodEnd],
+  );
+}
+
+/**
+ * The one place `tracking_enabled` ever turns on — called from
+ * `ImportPaymentsPage.handleSave` only when the user checked "Rastrear
+ * atualizações automaticamente" for this save. Everything else that
+ * touches `source_url_settings` (`setUrlCheckDisabled`,
+ * `setUrlCheckIntervalMinutes`, `setUrlReimportSettings`) only ever
+ * operates on a URL that's already opted in, so none of them need to (or
+ * should) set this column themselves.
+ */
+export async function trackUrlForAutoReimport(
+  sourceUrl: string,
+  templateId: number | null,
+  periodStart: string | null,
+  periodEnd: string | null,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO source_url_settings
+       (source_url, tracking_enabled, reimport_template_id, reimport_period_start, reimport_period_end, updated_at)
+     VALUES ($1, 1, $2, $3, $4, datetime('now'))
+     ON CONFLICT(source_url) DO UPDATE SET
+       tracking_enabled = 1,
+       reimport_template_id = excluded.reimport_template_id,
+       reimport_period_start = excluded.reimport_period_start,
+       reimport_period_end = excluded.reimport_period_end,
+       updated_at = excluded.updated_at`,
+    [sourceUrl, templateId, periodStart, periodEnd],
   );
 }
 
