@@ -117,7 +117,7 @@ export async function generatePaymentsReportPdf(
   doc.setFontSize(9);
   doc.setTextColor(120);
   doc.text(
-    `Gerado em ${new Intl.DateTimeFormat("pt-BR", { dateStyle: "long", timeStyle: "short" }).format(new Date())} — ${rows.length} turno(s)`,
+    `Gerado em ${new Intl.DateTimeFormat("pt-BR", { dateStyle: "long", timeStyle: "short" }).format(new Date())}`,
     CONTENT_X,
     21,
   );
@@ -128,6 +128,10 @@ export async function generatePaymentsReportPdf(
     head: [["Local", "Data", "Função", "Qtd/h", "Horário", "Valor", "Nome", "Status"]],
     body,
     foot: [["", "", "Total", formatMinutesAsTime(totalMinutes), "", formatCurrencyBRL(totalValue), "", ""]],
+    // Total is a sum over every row in the report, not just the ones on a
+    // given page — showing it on every page would misleadingly look like a
+    // per-page subtotal, so it only prints once, after the last row.
+    showFoot: "lastPage",
     styles: { fontSize: 8, cellPadding: CELL_PADDING },
     headStyles: { fillColor: [45, 52, 73] },
     footStyles: { fillColor: [230, 230, 230], textColor: 20, fontStyle: "bold" },
