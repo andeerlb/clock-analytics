@@ -474,7 +474,7 @@ export default function ImportPaymentsPage() {
             const matricula = applied_row.fields.matricula || null;
             const nome = applied_row.fields.nome || null;
             const employee = route
-              ? await findEmployeeByAttempts(route.clientId, selectedTemplate.identifierPriority, {
+              ? await findEmployeeByAttempts(route.clientId, route.companyId, selectedTemplate.identifierPriority, {
                   cpf,
                   matricula,
                   nome,

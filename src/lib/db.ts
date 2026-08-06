@@ -70,12 +70,17 @@ async function upsertEmployee(
   // `findEmployeeByAttempts`'s digits-only comparison would then silently
   // never match again.
   const normalizedCpf = normalizeCpf(cpf);
-  // Scoped to the client, not the broader company — a CPF is unique to the
-  // specific legal entity (client) it worked for, and a company can have
-  // several of those.
+  // Scoped to *both* client and company, not just the client — a cliente
+  // can be linked to more than one empresa (`client_companies`), and
+  // `UNIQUE(company_id, cpf)` on `employees` deliberately allows the same
+  // CPF to exist once per empresa of that same cliente (e.g. someone
+  // contracted through two different empresas for the same cliente).
+  // Scoping only by client would find (and silently rename) the wrong
+  // empresa's employee record whenever both exist — the same bug already
+  // fixed in `findEmployeeByAttempts`.
   const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM employees WHERE client_id = $1 AND cpf = $2",
-    [clientId, normalizedCpf],
+    "SELECT id FROM employees WHERE client_id = $1 AND company_id = $2 AND cpf = $3",
+    [clientId, companyId, normalizedCpf],
   );
   if (existing.length > 0) {
     await db.execute("UPDATE employees SET name = $1 WHERE id = $2", [name, existing[0].id]);
@@ -1710,15 +1715,24 @@ export async function removeEmployeeAlias(aliasId: number): Promise<void> {
 }
 
 /**
- * Resolves a payment row's employee within `clientId` by walking a
- * template's `identifierPriority` — every field in one "tentativa" must
- * match the *same* employee together (an AND); tentativas are tried in
- * order and the first one that finds an employee wins (an OR across
- * tentativas). A tentativa is skipped outright if any of its fields has no
- * raw value for this row — there's nothing to match on.
+ * Resolves a payment row's employee within `clientId` **and** `companyId`
+ * by walking a template's `identifierPriority` — every field in one
+ * "tentativa" must match the *same* employee together (an AND); tentativas
+ * are tried in order and the first one that finds an employee wins (an OR
+ * across tentativas). A tentativa is skipped outright if any of its fields
+ * has no raw value for this row — there's nothing to match on.
+ *
+ * Both `clientId` and `companyId` are required, not just `clientId`: a
+ * cliente can be linked to more than one empresa (`client_companies`), and
+ * an employee's own `company_id` records which one they actually belong
+ * to — scoping only by client would match an employee registered under a
+ * *different* empresa of the same cliente (e.g. a routing rule's "senão"
+ * pointing at the same cliente as a condition rule, but a different
+ * empresa), silently misrouting the shift to that other empresa.
  */
 export async function findEmployeeByAttempts(
   clientId: number,
+  companyId: number,
   attempts: IdentifierAttempt[],
   values: { cpf: string | null; matricula: string | null; nome: string | null },
 ): Promise<EmployeeRow | null> {
@@ -1729,12 +1743,12 @@ export async function findEmployeeByAttempts(
     FROM employees e
     JOIN clients cl ON cl.id = e.client_id
     JOIN companies c ON c.id = e.company_id
-    WHERE e.client_id = $1`;
+    WHERE e.client_id = $1 AND e.company_id = $2`;
 
   for (const attempt of attempts) {
     if (attempt.fields.length === 0) continue;
     const conditions: string[] = [];
-    const params: (string | number)[] = [clientId];
+    const params: (string | number)[] = [clientId, companyId];
     let skip = false;
 
     for (const field of attempt.fields) {

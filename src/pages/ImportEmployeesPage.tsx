@@ -356,7 +356,7 @@ export default function ImportEmployeesPage() {
               continue;
             }
 
-            const match = await findEmployeeByAttempts(selectedClient.id, selectedTemplate.identifierPriority, {
+            const match = await findEmployeeByAttempts(selectedClient.id, Number(companyId), selectedTemplate.identifierPriority, {
               cpf: cpfRaw,
               matricula: matriculaRaw || null,
               nome: nameRaw || null,
