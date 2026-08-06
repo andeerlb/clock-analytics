@@ -8,6 +8,7 @@ import DateRangePicker from "../components/DateRangePicker";
 import EditShiftValueModal from "../components/EditShiftValueModal";
 import ExtraColumnsModal from "../components/ExtraColumnsModal";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
+import ScheduleTimeFilterDropdown from "../components/ScheduleTimeFilterDropdown";
 import ShiftHistoryModal from "../components/ShiftHistoryModal";
 import {
   editPaymentShiftValue,
@@ -29,7 +30,7 @@ import {
   resolvePaymentValue,
   shiftDurationMinutes,
 } from "../lib/format";
-import type { PaymentShiftRow, PaymentShiftStatus } from "../lib/types";
+import type { PaymentShiftRow, PaymentShiftStatus, ScheduleTimeFilter, ShiftPeriod } from "../lib/types";
 
 const STATUS_OPTIONS: MultiSelectOption<PaymentShiftStatus>[] = [
   { id: "pendente", label: "Pendente" },
@@ -37,9 +38,16 @@ const STATUS_OPTIONS: MultiSelectOption<PaymentShiftStatus>[] = [
   { id: "pago", label: "Pago" },
 ];
 
+const SHIFT_PERIOD_OPTIONS: MultiSelectOption<ShiftPeriod>[] = [
+  { id: "diurno", label: "Diurno" },
+  { id: "noturno", label: "Noturno" },
+];
+
 /** What the Pagamentos list's `<Link state={...}>` hands off — the filters active there when the user clicked into this colaborador/competência, used as this page's own initial filter state (not kept in sync afterwards). */
 export interface PaymentDetailNavState {
   statuses: PaymentShiftStatus[];
+  shiftPeriods: ShiftPeriod[];
+  scheduleTimeFilter: ScheduleTimeFilter | null;
   periodStart: string;
   periodEnd: string;
 }
@@ -71,6 +79,12 @@ export default function PaymentDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedStatuses, setSelectedStatuses] = useState<Set<PaymentShiftStatus>>(
     () => new Set(navState?.statuses ?? STATUS_OPTIONS.map((o) => o.id)),
+  );
+  const [selectedShiftPeriods, setSelectedShiftPeriods] = useState<Set<ShiftPeriod>>(
+    () => new Set(navState?.shiftPeriods ?? SHIFT_PERIOD_OPTIONS.map((o) => o.id)),
+  );
+  const [scheduleTimeFilter, setScheduleTimeFilter] = useState<ScheduleTimeFilter | null>(
+    navState?.scheduleTimeFilter ?? null,
   );
   const [periodStart, setPeriodStart] = useState(navState?.periodStart ?? "");
   const [periodEnd, setPeriodEnd] = useState(navState?.periodEnd ?? "");
@@ -153,6 +167,15 @@ export default function PaymentDetailPage() {
     });
   }
 
+  function toggleShiftPeriod(period: ShiftPeriod) {
+    setSelectedShiftPeriods((prev) => {
+      const next = new Set(prev);
+      if (next.has(period)) next.delete(period);
+      else next.add(period);
+      return next;
+    });
+  }
+
   /** `null` when there's no company loaded yet, no schedule on this shift, or the company's night times don't parse. */
   function shiftPeriod(s: PaymentShiftRow): "diurno" | "noturno" | null {
     if (!company || s.scheduleStartMinutes === null || s.scheduleEndMinutes === null) return null;
@@ -177,15 +200,33 @@ export default function PaymentDetailPage() {
     return resolvePaymentValue(company.valueRules, duration);
   }
 
+  /** Same rule as `scheduleTimeConditionSql` in db.ts: a shift with no parsed horário never matches. */
+  function matchesScheduleTime(s: PaymentShiftRow, filter: ScheduleTimeFilter): boolean {
+    const referenceMinutes = parseTimeToMinutes(filter.time);
+    if (referenceMinutes === null) return true;
+    const field = filter.rule.startsWith("start") ? s.scheduleStartMinutes : s.scheduleEndMinutes;
+    if (field === null) return false;
+    return filter.rule.endsWith("before") ? field < referenceMinutes : field > referenceMinutes;
+  }
+
   const visibleShifts = useMemo(
     () =>
       shifts.filter((s) => {
         if (selectedStatuses.size === 0 || !selectedStatuses.has(s.status)) return false;
         if (periodStart && s.workDate < periodStart) return false;
         if (periodEnd && s.workDate > periodEnd) return false;
+        // Only filter by Diurno/Noturno once it's narrowed below "both" — a
+        // shift whose period can't be classified (no schedule, or company
+        // night-rule missing) is excluded whenever it is, same as the SQL
+        // HAVING clause the list screen filters with.
+        if (selectedShiftPeriods.size < SHIFT_PERIOD_OPTIONS.length) {
+          const period = shiftPeriod(s);
+          if (period === null || !selectedShiftPeriods.has(period)) return false;
+        }
+        if (scheduleTimeFilter && !matchesScheduleTime(s, scheduleTimeFilter)) return false;
         return true;
       }),
-    [shifts, selectedStatuses, periodStart, periodEnd],
+    [shifts, selectedStatuses, selectedShiftPeriods, scheduleTimeFilter, periodStart, periodEnd, company],
   );
 
   if (loading) {
@@ -229,6 +270,17 @@ export default function PaymentDetailPage() {
                 setPeriodStart(start);
                 setPeriodEnd(end);
               }}
+            />
+            <ScheduleTimeFilterDropdown value={scheduleTimeFilter} onChange={setScheduleTimeFilter} />
+            <MultiSelectDropdown
+              options={SHIFT_PERIOD_OPTIONS}
+              selected={selectedShiftPeriods}
+              onToggle={toggleShiftPeriod}
+              onSelectAll={() => setSelectedShiftPeriods(new Set(SHIFT_PERIOD_OPTIONS.map((o) => o.id)))}
+              onSelectNone={() => setSelectedShiftPeriods(new Set())}
+              icon={Moon}
+              allLabel="Diurno e noturno"
+              noneLabel="Nenhum"
             />
             <MultiSelectDropdown
               options={STATUS_OPTIONS}

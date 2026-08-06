@@ -207,11 +207,13 @@ export default function PaymentsPage() {
   );
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
-  // Handed to the detail page via `<Link state={...}>` so its own Status
-  // filter starts matching whatever was active here, instead of always
-  // resetting to "todos" — see `PaymentDetailNavState`.
+  // Handed to the detail page via `<Link state={...}>` so its own Status,
+  // Diurno/Noturno, and Horário filters start matching whatever was active
+  // here, instead of always resetting to "todos" — see `PaymentDetailNavState`.
   const detailNavState: PaymentDetailNavState = {
     statuses: Array.from(selectedStatuses),
+    shiftPeriods: Array.from(selectedShiftPeriods),
+    scheduleTimeFilter,
     periodStart,
     periodEnd,
   };
@@ -299,22 +301,8 @@ export default function PaymentsPage() {
             />
           </div>
           <div className="field">
-            <label>Status</label>
-            <MultiSelectDropdown
-              options={STATUS_OPTIONS}
-              selected={selectedStatuses}
-              onToggle={toggleStatus}
-              onSelectAll={() => {
-                setSelectedStatuses(new Set(STATUS_OPTIONS.map((o) => o.id)));
-                setPage(0);
-              }}
-              onSelectNone={() => {
-                setSelectedStatuses(new Set());
-                setPage(0);
-              }}
-              allLabel="Todos os status"
-              noneLabel="Nenhum status"
-            />
+            <label>Horário</label>
+            <ScheduleTimeFilterDropdown value={scheduleTimeFilter} onChange={setScheduleTimeFilter} />
           </div>
           <div className="field">
             <label>Diurno/Noturno</label>
@@ -336,8 +324,22 @@ export default function PaymentsPage() {
             />
           </div>
           <div className="field">
-            <label>Horário</label>
-            <ScheduleTimeFilterDropdown value={scheduleTimeFilter} onChange={setScheduleTimeFilter} />
+            <label>Status</label>
+            <MultiSelectDropdown
+              options={STATUS_OPTIONS}
+              selected={selectedStatuses}
+              onToggle={toggleStatus}
+              onSelectAll={() => {
+                setSelectedStatuses(new Set(STATUS_OPTIONS.map((o) => o.id)));
+                setPage(0);
+              }}
+              onSelectNone={() => {
+                setSelectedStatuses(new Set());
+                setPage(0);
+              }}
+              allLabel="Todos os status"
+              noneLabel="Nenhum status"
+            />
           </div>
         </div>
 
