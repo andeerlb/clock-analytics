@@ -744,26 +744,6 @@ pub fn set_poppler_dir(app: AppHandle, dir: Option<String>) -> Result<PopplerSta
     Ok(poppler_status(current.poppler_dir))
 }
 
-/// How often (minutes) Importar Pagamentos re-checks URL-sourced payment
-/// files for a remote change — user-editable in Configurações, unlike the
-/// app's own (fixed 30-minute) update check.
-#[tauri::command]
-pub fn get_remote_file_check_interval_minutes(app: AppHandle) -> Result<u32, String> {
-    Ok(load_settings(&app)?.remote_file_check_interval_minutes)
-}
-
-/// Clamped to a minimum of 1 — a 0-minute interval would mean either "off"
-/// (ambiguous) or a tight request loop against whatever server hosts the
-/// file, neither of which is intended here.
-#[tauri::command]
-pub fn set_remote_file_check_interval_minutes(app: AppHandle, minutes: u32) -> Result<u32, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let mut current = settings::load(&data_dir);
-    current.remote_file_check_interval_minutes = minutes.max(1);
-    settings::save(&data_dir, &current)?;
-    Ok(current.remote_file_check_interval_minutes)
-}
-
 const MAX_RECENT_PAYMENT_FILES: usize = 5;
 
 /// Recently-picked payment template sample file paths, newest first — a

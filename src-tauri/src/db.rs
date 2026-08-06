@@ -262,5 +262,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0043_reimport_config_check_settings.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 44,
+            description: "backfill NULL source_url_reimport_configs.check_interval_minutes to 5 — the per-config interval is now mandatory, the global default setting is going away",
+            sql: include_str!("../migrations/0044_reimport_config_interval_required.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

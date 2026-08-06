@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { checkRemotePaymentFile, getRemoteFileCheckIntervalMinutes, setRemoteFileCheckIntervalMinutes } from "../lib/api";
+import { checkRemotePaymentFile } from "../lib/api";
 import {
   createReimportConfig as createReimportConfigDb,
   deleteReimportConfig as deleteReimportConfigDb,
@@ -44,29 +44,27 @@ export interface RemoteUpdateFlag {
  * the "Verificação automática" page can both reflect it regardless of
  * which screen is open).
  *
- * Each reimport config has its own check interval and its own on/off
- * switch (`ReimportConfig.checkIntervalMinutes`/`checkDisabled`, editable
- * on the Verificação automática page), falling back to the global default
- * (`intervalMinutes` here, persisted server-side, minimum 1) when unset.
- * The actual HTTP check, though, is still made once per URL — there's only
- * one remote file to ask about, however many configs are watching it — so
- * every tick: (1) figure out which URLs have at least one non-disabled,
- * due config; (2) check each of those URLs exactly once; (3) a "changed"
- * result then applies to every non-disabled config for that URL, not just
- * the one(s) that happened to trigger the check. This is naturally robust
- * to a throttled/suspended timer (e.g. the app minimized for a while):
- * due-ness is computed from real timestamps every tick, not a tick count,
- * so a late tick just picks up everything overdue however that happened. A
- * `visibilitychange` listener triggers an extra tick on refocus for the
- * same reason.
+ * Each reimport config has its own mandatory check interval and its own
+ * on/off switch (`ReimportConfig.checkIntervalMinutes`/`checkDisabled`,
+ * editable on the Verificação automática page) — there's no global default
+ * to fall back to. The actual HTTP check, though, is still made once per
+ * URL — there's only one remote file to ask about, however many configs
+ * are watching it — so every tick: (1) figure out which URLs have at least
+ * one non-disabled, due config; (2) check each of those URLs exactly once;
+ * (3) a "changed" result then applies to every non-disabled config for
+ * that URL, not just the one(s) that happened to trigger the check. This
+ * is naturally robust to a throttled/suspended timer (e.g. the app
+ * minimized for a while): due-ness is computed from real timestamps every
+ * tick, not a tick count, so a late tick just picks up everything overdue
+ * however that happened. A `visibilitychange` listener triggers an extra
+ * tick on refocus for the same reason.
  */
 const TICK_INTERVAL_MS = 60_000;
-const DEFAULT_CHECK_INTERVAL_MINUTES = 5;
 
-function isConfigDue(config: ReimportConfig, urlLastCheckedAt: string | null | undefined, globalMinutes: number, now: number): boolean {
+function isConfigDue(config: ReimportConfig, urlLastCheckedAt: string | null | undefined, now: number): boolean {
   if (config.checkDisabled) return false;
   if (!urlLastCheckedAt) return true;
-  const effectiveMs = (config.checkIntervalMinutes ?? globalMinutes) * 60_000;
+  const effectiveMs = config.checkIntervalMinutes * 60_000;
   return now - parseSqliteDateTime(urlLastCheckedAt).getTime() >= effectiveMs;
 }
 
@@ -80,11 +78,14 @@ interface RemoteFileUpdatesContextValue {
   setConfigCheckDisabled: (id: number, disabled: boolean) => Promise<void>;
   deleteReimportConfig: (id: number) => Promise<void>;
   refreshNow: () => void;
-  /** Global default (minutes) used by any config without its own override. */
-  intervalMinutes: number;
-  setIntervalMinutes: (minutes: number) => Promise<void>;
-  /** True while a check cycle is in flight — for a "Verificando..." indicator. */
+  /** True while at least one URL check is in flight — for a "Verificando..." indicator. */
   checking: boolean;
+  /** URLs with an HTTP check actually in flight right now (not just "due") — the precise "em progresso" state, per URL, for the Verificação automática page's per-config rows. */
+  checkingUrls: Set<string>;
+  /** Forces an immediate check of one URL, bypassing every config's schedule — the per-config "Forçar verificação" button. A no-op if that URL is already being checked. */
+  forceCheckUrl: (sourceUrl: string) => Promise<void>;
+  /** Forces an immediate check of every tracked URL, bypassing schedules — the global "Forçar verificação de todas" button. */
+  forceCheckAll: () => Promise<void>;
   /** Every URL explicitly opted into tracking, with its shared check state — feeds the Verificação automática page. */
   trackedFiles: TrackedPaymentUrl[];
   /** Every reimport config for every tracked URL — feeds the Verificação automática page (filter by `sourceUrl` per file) and the Sidebar's status indicator. */
@@ -95,22 +96,16 @@ const RemoteFileUpdatesContext = createContext<RemoteFileUpdatesContextValue | n
 
 export function RemoteFileUpdatesProvider({ children }: { children: ReactNode }) {
   const [dismissed, setDismissed] = useState<Set<number>>(new Set());
-  const [intervalMinutes, setIntervalMinutesState] = useState(DEFAULT_CHECK_INTERVAL_MINUTES);
-  const [checking, setChecking] = useState(false);
   const [trackedFiles, setTrackedFiles] = useState<TrackedPaymentUrl[]>([]);
   const [reimportConfigs, setReimportConfigs] = useState<ReimportConfig[]>([]);
-  const checkingRef = useRef(false);
-  // `tick` closes over `intervalMinutes` (for configs without their own
-  // override) — kept in a ref too so a tick already in flight when the
-  // global default changes doesn't need to restart to see the new value.
-  const intervalMinutesRef = useRef(intervalMinutes);
-  intervalMinutesRef.current = intervalMinutes;
-
-  useEffect(() => {
-    getRemoteFileCheckIntervalMinutes()
-      .then(setIntervalMinutesState)
-      .catch(() => {}); // stick with the default rather than block polling on this
-  }, []);
+  // URLs with an HTTP check actually in flight — a Set (not one global
+  // boolean) so a forced check of a single URL and the regular scheduled
+  // tick can report precise per-URL "em progresso" state instead of a
+  // page-wide flag that's ambiguous about which file it refers to. Kept in
+  // a ref too, so overlapping calls (a force-click landing mid-tick) can
+  // see what's already in flight without waiting on a state update.
+  const [checkingUrls, setCheckingUrlsState] = useState<Set<string>>(new Set());
+  const checkingUrlsRef = useRef<Set<string>>(new Set());
 
   const refreshTrackedState = useCallback(async () => {
     const [refreshedFiles, refreshedConfigs] = await Promise.all([listTrackedPaymentUrls(), listReimportConfigs()]);
@@ -119,28 +114,27 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
     return { files: refreshedFiles, configs: refreshedConfigs };
   }, []);
 
-  const tick = useCallback(async () => {
-    if (checkingRef.current) return;
-    checkingRef.current = true;
-    setChecking(true);
-    try {
-      const [tracked, configs] = await Promise.all([listTrackedPaymentUrls(), listReimportConfigs()]);
-      const globalMinutes = intervalMinutesRef.current;
-      const now = Date.now();
-      const lastCheckedByUrl = new Map(tracked.map((t) => [t.sourceUrl, t.lastCheckedAt]));
-
-      const dueUrls = new Set(
-        configs.filter((c) => isConfigDue(c, lastCheckedByUrl.get(c.sourceUrl), globalMinutes, now)).map((c) => c.sourceUrl),
-      );
-      const dueTracked = tracked.filter((t) => dueUrls.has(t.sourceUrl));
-
-      if (dueTracked.length > 0) {
+  /**
+   * Checks exactly the URLs in `targets`, unconditionally — due-ness is
+   * decided by the caller (`tick` for the schedule, `forceCheckUrl`/
+   * `forceCheckAll` for a manual override). Skips any URL already being
+   * checked (via `checkingUrlsRef`, read synchronously so two overlapping
+   * calls — e.g. a force-click landing mid-tick — never double-check the
+   * same URL), so it's safe to call from more than one place at once.
+   */
+  const runChecks = useCallback(
+    async (targets: TrackedPaymentUrl[]) => {
+      const fresh = targets.filter((t) => !checkingUrlsRef.current.has(t.sourceUrl));
+      if (fresh.length === 0) return;
+      fresh.forEach((t) => checkingUrlsRef.current.add(t.sourceUrl));
+      setCheckingUrlsState(new Set(checkingUrlsRef.current));
+      try {
         const results = await Promise.allSettled(
-          dueTracked.map((t) => checkRemotePaymentFile(t.sourceUrl, t.sourceEtag, t.sourceLastModified, t.sourceContentLength)),
+          fresh.map((t) => checkRemotePaymentFile(t.sourceUrl, t.sourceEtag, t.sourceLastModified, t.sourceContentLength)),
         );
         await Promise.all(
           results.map((res, i) => {
-            const t = dueTracked[i];
+            const t = fresh[i];
             if (res.status === "fulfilled") {
               const result: UrlCheckResult =
                 res.value.changed === true ? "changed" : res.value.changed === false ? "unchanged" : "unknown";
@@ -150,20 +144,50 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
             return logUrlCheckResult(t.sourceUrl, t.fileName, "error", message);
           }),
         );
+      } finally {
+        fresh.forEach((t) => checkingUrlsRef.current.delete(t.sourceUrl));
+        setCheckingUrlsState(new Set(checkingUrlsRef.current));
+        // Re-read rather than patch in memory — the checked URLs come back
+        // with their brand new log entry, uniformly with everything else.
+        await refreshTrackedState();
       }
+    },
+    [refreshTrackedState],
+  );
 
-      // Re-read rather than patch in memory — URLs not due this tick keep
-      // exactly what the log already says about them, and the ones just
-      // checked come back with their brand new log entry, uniformly.
-      await refreshTrackedState();
+  const tick = useCallback(async () => {
+    try {
+      const [tracked, configs] = await Promise.all([listTrackedPaymentUrls(), listReimportConfigs()]);
+      const now = Date.now();
+      const lastCheckedByUrl = new Map(tracked.map((t) => [t.sourceUrl, t.lastCheckedAt]));
+      // Keep the rest of the app current even on a tick that finds nothing
+      // due — cheap, since `tracked`/`configs` were just fetched anyway.
+      setTrackedFiles(tracked);
+      setReimportConfigs(configs);
+
+      const dueUrls = new Set(
+        configs.filter((c) => isConfigDue(c, lastCheckedByUrl.get(c.sourceUrl), now)).map((c) => c.sourceUrl),
+      );
+      const dueTracked = tracked.filter((t) => dueUrls.has(t.sourceUrl));
+      if (dueTracked.length > 0) await runChecks(dueTracked);
     } catch {
       // silent — ambient, same treatment as the app's own update-checker;
       // individual per-URL failures are already captured via logUrlCheckResult.
-    } finally {
-      setChecking(false);
-      checkingRef.current = false;
     }
-  }, [refreshTrackedState]);
+  }, [runChecks]);
+
+  const forceCheckUrl = useCallback(
+    async (sourceUrl: string) => {
+      const target = trackedFiles.find((t) => t.sourceUrl === sourceUrl);
+      if (!target) return;
+      await runChecks([target]);
+    },
+    [trackedFiles, runChecks],
+  );
+
+  const forceCheckAll = useCallback(async () => {
+    await runChecks(trackedFiles);
+  }, [trackedFiles, runChecks]);
 
   useEffect(() => {
     tick();
@@ -210,11 +234,6 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
     setReimportConfigs((prev) => prev.filter((c) => c.id !== id));
   }
 
-  async function setIntervalMinutes(minutes: number) {
-    const saved = await setRemoteFileCheckIntervalMinutes(minutes);
-    setIntervalMinutesState(saved);
-  }
-
   const changedUrls = new Set(trackedFiles.filter((t) => t.lastResult === "changed").map((t) => t.sourceUrl));
   const remoteUpdates: RemoteUpdateFlag[] = reimportConfigs
     .filter((c) => !c.checkDisabled && changedUrls.has(c.sourceUrl) && !dismissed.has(c.id))
@@ -244,9 +263,10 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
         setConfigCheckDisabled,
         deleteReimportConfig,
         refreshNow: tick,
-        intervalMinutes,
-        setIntervalMinutes,
-        checking,
+        checking: checkingUrls.size > 0,
+        checkingUrls,
+        forceCheckUrl,
+        forceCheckAll,
         trackedFiles,
         reimportConfigs,
       }}

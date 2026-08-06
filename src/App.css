@@ -120,11 +120,17 @@ h6 {
   flex-direction: column;
   gap: 1.5rem;
   /* Pinned to the viewport so it never scrolls away with tall page
-     content (e.g. a long import history) — only .app-content scrolls. */
+     content (e.g. a long import history) — only .app-content (and
+     .app-nav-links below, for a tall nav list) scrolls. Deliberately NOT
+     overflow-y here: setting either overflow axis to anything but
+     `visible` forces the other to compute as `auto` too (CSS overflow
+     interaction), which would clip absolutely-positioned popovers (e.g.
+     Verificação automática's hover card) trying to escape past the
+     sidebar's right edge instead of overlapping app-content like they're
+     meant to. */
   position: sticky;
   top: 0;
   height: 100vh;
-  overflow-y: auto;
 }
 
 .app-brand {
@@ -154,6 +160,9 @@ h6 {
   flex-direction: column;
   gap: 0.2rem;
   flex: 1;
+  /* Scrolls internally (not .app-nav as a whole) if the nav list ever
+     outgrows the sidebar's height — see the overflow note on .app-nav. */
+  overflow-y: auto;
 }
 
 .app-nav-link {
@@ -1820,4 +1829,19 @@ tr.row-error:hover {
 }
 .spin {
   animation: spin 1s linear infinite;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1.3);
+  }
+}
+.pulse-dot {
+  animation: pulse-dot 1.1s ease-in-out infinite;
 }

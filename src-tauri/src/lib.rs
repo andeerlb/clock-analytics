@@ -47,8 +47,6 @@ pub fn run() {
             commands::add_recent_payment_file,
             commands::download_payment_file_from_url,
             commands::check_remote_payment_file,
-            commands::get_remote_file_check_interval_minutes,
-            commands::set_remote_file_check_interval_minutes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

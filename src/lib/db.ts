@@ -1279,9 +1279,12 @@ export interface ReimportConfig {
   endOffsetDays: number | null;
   /** Whether THIS config currently counts toward "is this URL due for a check" — a URL with several configs still gets one shared HTTP check, but only when at least one non-disabled config asks for it. */
   checkDisabled: boolean;
-  /** This config's own check-interval override (minutes) — `null` inherits the global default. */
-  checkIntervalMinutes: number | null;
+  /** This config's own check interval, in minutes — mandatory, minimum 1 (see `DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES` for the UI's default when creating a new config). There's no global fallback anymore — every config always has its own value. */
+  checkIntervalMinutes: number;
 }
+
+/** Pre-filled in the "Adicionar configuração" form on the Verificação automática page — the user can change it, but a value is always required. */
+export const DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES = 5;
 
 /**
  * Every reimport recipe for every tracked URL, loaded all at once (mirrors
@@ -1316,7 +1319,7 @@ export interface ReimportConfigInput {
   periodEnd: string | null;
   startOffsetDays: number | null;
   endOffsetDays: number | null;
-  checkIntervalMinutes: number | null;
+  checkIntervalMinutes: number;
 }
 
 export async function createReimportConfig(input: ReimportConfigInput): Promise<number> {
@@ -1412,7 +1415,7 @@ export async function trackUrlForAutoReimport(
     periodEnd,
     startOffsetDays: null,
     endOffsetDays: null,
-    checkIntervalMinutes: null,
+    checkIntervalMinutes: DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES,
   });
 }
 

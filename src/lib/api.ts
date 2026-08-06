@@ -220,16 +220,6 @@ export function setPopplerDir(dir: string | null): Promise<PopplerStatus> {
   return invoke("set_poppler_dir", { dir });
 }
 
-/** How often (minutes) Importar Pagamentos re-checks a URL-sourced payment file for remote changes — user-editable in Configurações. */
-export function getRemoteFileCheckIntervalMinutes(): Promise<number> {
-  return invoke("get_remote_file_check_interval_minutes");
-}
-
-/** Saves the interval — clamped server-side to a minimum of 1 minute. Returns the saved (clamped) value. */
-export function setRemoteFileCheckIntervalMinutes(minutes: number): Promise<number> {
-  return invoke("set_remote_file_check_interval_minutes", { minutes });
-}
-
 /** Recently-picked payment template sample file paths, newest first — dead paths already filtered out. */
 export function listRecentPaymentFiles(): Promise<string[]> {
   return invoke("list_recent_payment_files");
