@@ -139,13 +139,25 @@ export function maskCpf(input: string): string {
   return out;
 }
 
+/**
+ * SQLite's `datetime('now')` produces "2026-08-03 20:55:52" — UTC, but with
+ * no "T"/timezone marker, so a plain `new Date(sqliteDatetime)` gets parsed
+ * as LOCAL time by most JS engines, silently shifting it by the browser's
+ * UTC offset. Anything doing arithmetic on a SQLite timestamp (not just
+ * displaying it) needs this, not a raw `new Date(...)` — a countdown built
+ * on the un-normalized value ends up off by the timezone offset (e.g. a
+ * "1 minuto" interval reads as ~3h away for a UTC-3 user).
+ */
+export function parseSqliteDateTime(sqliteDatetime: string): Date {
+  const iso = sqliteDatetime.includes("T") ? sqliteDatetime : `${sqliteDatetime.replace(" ", "T")}Z`;
+  return new Date(iso);
+}
+
 /** SQLite `datetime('now')` output ("2026-08-03 20:55:52", UTC) -> "3 de agosto de 2026 às 20:55" */
 export function formatDateTime(sqliteDatetime: string): string {
-  const iso = sqliteDatetime.includes("T")
-    ? sqliteDatetime
-    : `${sqliteDatetime.replace(" ", "T")}Z`;
-  const date = new Date(iso);
-  return new Intl.DateTimeFormat("pt-BR", { dateStyle: "long", timeStyle: "short" }).format(date);
+  return new Intl.DateTimeFormat("pt-BR", { dateStyle: "long", timeStyle: "short" }).format(
+    parseSqliteDateTime(sqliteDatetime),
+  );
 }
 
 /** "3m 12s" while there's a whole minute or more left, just "12s" under a minute, "agora" once due — shared by the Sidebar's live indicator and the Verificação automática page's per-file countdown. */

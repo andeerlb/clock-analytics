@@ -6,7 +6,6 @@ import { NavLink } from "react-router-dom";
 import GithubIcon from "./GithubIcon";
 import UpdateModal from "./UpdateModal";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
-import { formatCountdown } from "../lib/format";
 import { checkForUpdate, REPO_URL } from "../lib/updateCheck";
 
 const NAV_ITEMS = [
@@ -25,10 +24,7 @@ function navLinkClass({ isActive }: { isActive: boolean }): string {
 export default function Sidebar() {
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
-  const { remoteUpdates, trackedFiles, nextCheckAt, checking } = useRemoteFileUpdates();
-  // Ticks once a second purely to redraw the countdown below — `nextCheckAt`
-  // itself only changes once per check cycle (every `TICK_INTERVAL_MS`).
-  const [now, setNow] = useState(() => Date.now());
+  const { remoteUpdates, trackedFiles, reimportConfigs, checking } = useRemoteFileUpdates();
 
   useEffect(() => {
     checkForUpdate()
@@ -38,13 +34,15 @@ export default function Sidebar() {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const countdownLabel = nextCheckAt ? formatCountdown(new Date(nextCheckAt).getTime() - now) : null;
-  const hasCheckError = trackedFiles.some((t) => !t.checkDisabled && t.lastResult === "error");
+  // No single countdown makes sense anymore — a URL can have several
+  // reimport configs, each on its own schedule (see the Verificação
+  // automática page for those). This is just a status summary: whether
+  // anything's actively watching, and whether it found something.
+  const activeConfigUrls = new Set(reimportConfigs.filter((c) => !c.checkDisabled).map((c) => c.sourceUrl));
+  const hasActiveConfig = activeConfigUrls.size > 0;
+  const hasCheckError = trackedFiles.some((t) => activeConfigUrls.has(t.sourceUrl) && t.lastResult === "error");
+  const statusLabel =
+    remoteUpdates.length > 0 ? "Atualização encontrada" : hasActiveConfig ? "Configuradas, rodando" : "Nenhuma rodando";
   const remoteDotColor = hasCheckError ? "var(--danger)" : remoteUpdates.length > 0 ? "var(--warning)" : null;
 
   return (
@@ -69,15 +67,13 @@ export default function Sidebar() {
         <NavLink to="/import/payments/remote-updates" className={navLinkClass}>
           <RefreshCw size={18} className={checking ? "spin" : undefined} />
           <span>Verificação automática</span>
-          {countdownLabel && (
-            <span className="muted" style={{ marginLeft: "auto", fontSize: "0.72rem", flexShrink: 0 }}>
-              {countdownLabel}
-            </span>
-          )}
+          <span className="muted" style={{ marginLeft: "auto", fontSize: "0.72rem", flexShrink: 0 }}>
+            {statusLabel}
+          </span>
           {remoteDotColor && (
             <span
               style={{
-                marginLeft: countdownLabel ? "0.4rem" : "auto",
+                marginLeft: "0.4rem",
                 width: 8,
                 height: 8,
                 borderRadius: "50%",

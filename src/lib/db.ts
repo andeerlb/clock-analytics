@@ -1217,10 +1217,7 @@ export interface TrackedPaymentUrl {
   sourceEtag: string | null;
   sourceLastModified: string | null;
   sourceContentLength: number | null;
-  checkDisabled: boolean;
-  /** Per-URL override (minutes) — null means "inherit the global default". */
-  checkIntervalMinutes: number | null;
-  /** From the most recent `source_url_check_log` entry for this URL, if any. */
+  /** From the most recent `source_url_check_log` entry for this URL, if any — the actual HTTP check is still one per URL, however many reimport configs it has (see `ReimportConfig.checkDisabled`/`checkIntervalMinutes` for the per-config schedule that decides when that shared check runs). */
   lastCheckedAt: string | null;
   lastResult: UrlCheckResult | null;
   lastErrorMessage: string | null;
@@ -1231,14 +1228,12 @@ export interface TrackedPaymentUrl {
  * set via the "Rastrear atualizações automaticamente" checkbox at import
  * time — NOT every URL a payment file was ever downloaded from; a URL
  * import with that box left unchecked never shows up here at all), with
- * its full tracking state. Includes disabled ones (`checkDisabled: true`)
- * so the Verificação automática page can still show and re-enable them —
- * `RemoteFileUpdatesContext`'s scheduler is the one that filters those out
- * before deciding what's due.
+ * its shared check state. Per-config schedule/enabled state lives on
+ * `ReimportConfig` instead (see `listReimportConfigs`).
  */
 export async function listTrackedPaymentUrls(): Promise<TrackedPaymentUrl[]> {
   const db = await getDb();
-  const rawRows = await db.select<(Omit<TrackedPaymentUrl, "checkDisabled"> & { checkDisabled: number })[]>(
+  return db.select<TrackedPaymentUrl[]>(
     `SELECT
        sf.source_url AS sourceUrl,
        sf.file_name AS fileName,
@@ -1247,8 +1242,6 @@ export async function listTrackedPaymentUrls(): Promise<TrackedPaymentUrl[]> {
        sf.source_etag AS sourceEtag,
        sf.source_last_modified AS sourceLastModified,
        sf.source_content_length AS sourceContentLength,
-       COALESCE(sus.check_disabled, 0) AS checkDisabled,
-       sus.check_interval_minutes AS checkIntervalMinutes,
        log.checked_at AS lastCheckedAt,
        log.result AS lastResult,
        log.message AS lastErrorMessage
@@ -1264,39 +1257,6 @@ export async function listTrackedPaymentUrls(): Promise<TrackedPaymentUrl[]> {
      ) log ON log.source_url = sf.source_url AND log.rn = 1
      WHERE sf.rn = 1 AND COALESCE(sus.tracking_enabled, 0) = 1
      ORDER BY sf.imported_at DESC`,
-  );
-  return rawRows.map((r) => ({ ...r, checkDisabled: Boolean(r.checkDisabled) }));
-}
-
-/**
- * Turns the periodic remote-change check on/off for one source URL — a
- * user who doesn't want to be bothered about a particular file anymore,
- * without giving up on URL-sourced imports altogether. Persisted per URL
- * (not per source_files row) so it survives that URL's content changing
- * and being reimported under a new row/hash.
- */
-export async function setUrlCheckDisabled(sourceUrl: string, disabled: boolean): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `INSERT INTO source_url_settings (source_url, check_disabled, updated_at)
-     VALUES ($1, $2, datetime('now'))
-     ON CONFLICT(source_url) DO UPDATE SET
-       check_disabled = excluded.check_disabled,
-       updated_at = excluded.updated_at`,
-    [sourceUrl, disabled ? 1 : 0],
-  );
-}
-
-/** `minutes: null` clears the override, falling back to the global interval. */
-export async function setUrlCheckIntervalMinutes(sourceUrl: string, minutes: number | null): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `INSERT INTO source_url_settings (source_url, check_interval_minutes, updated_at)
-     VALUES ($1, $2, datetime('now'))
-     ON CONFLICT(source_url) DO UPDATE SET
-       check_interval_minutes = excluded.check_interval_minutes,
-       updated_at = excluded.updated_at`,
-    [sourceUrl, minutes],
   );
 }
 
@@ -1317,28 +1277,34 @@ export interface ReimportConfig {
   /** Used when `dateMode === "relative"` — days before today, resolved fresh at use time (see `resolveReimportPeriod`). */
   startOffsetDays: number | null;
   endOffsetDays: number | null;
+  /** Whether THIS config currently counts toward "is this URL due for a check" — a URL with several configs still gets one shared HTTP check, but only when at least one non-disabled config asks for it. */
+  checkDisabled: boolean;
+  /** This config's own check-interval override (minutes) — `null` inherits the global default. */
+  checkIntervalMinutes: number | null;
 }
 
 /**
  * Every reimport recipe for every tracked URL, loaded all at once (mirrors
  * `listTrackedPaymentUrls`) — grouped by `sourceUrl` by the caller. A URL
  * can have zero, one, or several: each one independently flags its own
- * reimport opportunity when that URL's remote content changes (see
- * `RemoteFileUpdatesContext`).
+ * reimport opportunity when that URL's remote content changes, and each
+ * one runs on its own check schedule (see `RemoteFileUpdatesContext`).
  */
 export async function listReimportConfigs(): Promise<ReimportConfig[]> {
   const db = await getDb();
-  return db.select<ReimportConfig[]>(
+  const rawRows = await db.select<(Omit<ReimportConfig, "checkDisabled"> & { checkDisabled: number })[]>(
     `SELECT
        c.id, c.source_url AS sourceUrl, c.label,
        c.template_id AS templateId, pt.name AS templateName,
        c.date_mode AS dateMode,
        c.period_start AS periodStart, c.period_end AS periodEnd,
-       c.start_offset_days AS startOffsetDays, c.end_offset_days AS endOffsetDays
+       c.start_offset_days AS startOffsetDays, c.end_offset_days AS endOffsetDays,
+       c.check_disabled AS checkDisabled, c.check_interval_minutes AS checkIntervalMinutes
      FROM source_url_reimport_configs c
      LEFT JOIN payment_templates pt ON pt.id = c.template_id
      ORDER BY c.created_at`,
   );
+  return rawRows.map((r) => ({ ...r, checkDisabled: Boolean(r.checkDisabled) }));
 }
 
 export interface ReimportConfigInput {
@@ -1350,14 +1316,15 @@ export interface ReimportConfigInput {
   periodEnd: string | null;
   startOffsetDays: number | null;
   endOffsetDays: number | null;
+  checkIntervalMinutes: number | null;
 }
 
 export async function createReimportConfig(input: ReimportConfigInput): Promise<number> {
   const db = await getDb();
   const result = await db.execute(
     `INSERT INTO source_url_reimport_configs
-       (source_url, label, template_id, date_mode, period_start, period_end, start_offset_days, end_offset_days)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       (source_url, label, template_id, date_mode, period_start, period_end, start_offset_days, end_offset_days, check_interval_minutes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
       input.sourceUrl,
       input.label,
@@ -1367,6 +1334,7 @@ export async function createReimportConfig(input: ReimportConfigInput): Promise<
       input.periodEnd,
       input.startOffsetDays,
       input.endOffsetDays,
+      input.checkIntervalMinutes,
     ],
   );
   return result.lastInsertId as number;
@@ -1381,9 +1349,28 @@ export async function updateReimportConfig(
   await db.execute(
     `UPDATE source_url_reimport_configs SET
        label = $2, date_mode = $3, period_start = $4, period_end = $5,
-       start_offset_days = $6, end_offset_days = $7, updated_at = datetime('now')
+       start_offset_days = $6, end_offset_days = $7, check_interval_minutes = $8,
+       updated_at = datetime('now')
      WHERE id = $1`,
-    [id, input.label, input.dateMode, input.periodStart, input.periodEnd, input.startOffsetDays, input.endOffsetDays],
+    [
+      id,
+      input.label,
+      input.dateMode,
+      input.periodStart,
+      input.periodEnd,
+      input.startOffsetDays,
+      input.endOffsetDays,
+      input.checkIntervalMinutes,
+    ],
+  );
+}
+
+/** Independent of `updateReimportConfig` — this is an immediate on/off toggle, not part of the edit-then-Salvar draft flow. */
+export async function setConfigCheckDisabled(id: number, disabled: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE source_url_reimport_configs SET check_disabled = $2, updated_at = datetime('now') WHERE id = $1",
+    [id, disabled ? 1 : 0],
   );
 }
 
@@ -1396,12 +1383,10 @@ export async function deleteReimportConfig(id: number): Promise<void> {
  * The one place `tracking_enabled` ever turns on — called from
  * `ImportPaymentsPage.handleSave` only when the user checked "Rastrear
  * atualizações automaticamente" for this save, which also creates that
- * URL's first reimport config (fixed Período, from what was just used).
- * Everything else that touches `source_url_settings`
- * (`setUrlCheckDisabled`, `setUrlCheckIntervalMinutes`) only ever operates
- * on a URL that's already opted in, so neither needs to (or should) set
- * this column itself. Further configs are added by hand on the
- * Verificação automática page (`createReimportConfig`), not through here.
+ * URL's first reimport config (fixed Período, from what was just used,
+ * checking enabled with no interval override). Further configs are added
+ * by hand on the Verificação automática page (`createReimportConfig`), not
+ * through here.
  */
 export async function trackUrlForAutoReimport(
   sourceUrl: string,
@@ -1427,6 +1412,7 @@ export async function trackUrlForAutoReimport(
     periodEnd,
     startOffsetDays: null,
     endOffsetDays: null,
+    checkIntervalMinutes: null,
   });
 }
 

@@ -256,5 +256,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0042_source_url_reimport_configs.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 43,
+            description: "move check_disabled/check_interval_minutes from source_url_settings (per URL) to source_url_reimport_configs (per config) — each reimport config now runs on its own schedule",
+            sql: include_str!("../migrations/0043_reimport_config_check_settings.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

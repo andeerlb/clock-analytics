@@ -21,7 +21,14 @@ import {
   type TrackedPaymentUrl,
 } from "../contexts/RemoteFileUpdatesContext";
 import { listPaymentTemplates, listUrlCheckLog, type UrlCheckLogEntry, type UrlCheckResult } from "../lib/db";
-import { formatCountdown, formatDateTime, formatDayShort, resolveReimportConfigLabel, resolveReimportPeriod } from "../lib/format";
+import {
+  formatCountdown,
+  formatDateTime,
+  formatDayShort,
+  parseSqliteDateTime,
+  resolveReimportConfigLabel,
+  resolveReimportPeriod,
+} from "../lib/format";
 import type { PaymentTemplateListRow } from "../lib/types";
 
 const RESULT_BADGE: Record<UrlCheckResult, { className: string; label: string; icon: typeof CheckCircle2 }> = {
@@ -40,6 +47,7 @@ interface ConfigDraft {
   end: string;
   startOffset: string;
   endOffset: string;
+  interval: string;
 }
 
 function draftFromConfig(c: ReimportConfig): ConfigDraft {
@@ -50,6 +58,7 @@ function draftFromConfig(c: ReimportConfig): ConfigDraft {
     end: c.periodEnd ?? "",
     startOffset: c.startOffsetDays !== null ? String(c.startOffsetDays) : "",
     endOffset: c.endOffsetDays !== null ? String(c.endOffsetDays) : "",
+    interval: c.checkIntervalMinutes !== null ? String(c.checkIntervalMinutes) : "",
   };
 }
 
@@ -71,6 +80,12 @@ function formatResolvedPreview(resolved: { start: string | null; end: string | n
   return `${start} → ${end}`;
 }
 
+function draftIntervalValid(interval: string): boolean {
+  if (interval.trim() === "") return true; // inherits the global default
+  const n = Number(interval);
+  return Number.isFinite(n) && n >= 1;
+}
+
 const BLANK_NEW_CONFIG: ConfigDraft & { templateId: string } = {
   label: "",
   templateId: "",
@@ -79,6 +94,7 @@ const BLANK_NEW_CONFIG: ConfigDraft & { templateId: string } = {
   end: "",
   startOffset: "",
   endOffset: "",
+  interval: "",
 };
 
 export default function RemoteUpdatesPage() {
@@ -89,16 +105,15 @@ export default function RemoteUpdatesPage() {
     reimportConfigs,
     intervalMinutes,
     setIntervalMinutes,
-    setUrlIntervalMinutes,
-    setUrlCheckDisabled,
     addReimportConfig,
     updateReimportConfig,
+    setConfigCheckDisabled,
     deleteReimportConfig,
     checking,
   } = useRemoteFileUpdates();
 
-  // Live "next check in Xm Ys" — same recipe as the Sidebar's, ticking
-  // once a second purely to redraw against `trackedFiles`' timestamps.
+  // Live "next check in Xm Ys" per config — ticks once a second purely to
+  // redraw against `trackedFiles`'/`reimportConfigs`' timestamps.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 1000);
@@ -137,56 +152,24 @@ export default function RemoteUpdatesPage() {
     }
   }
 
-  // Per-file check-interval overrides — same "edit locally, apply on
-  // Salvar" recipe as everything else on this page; empty draft = "usar
-  // padrão global" (clears the override).
-  const [intervalDrafts, setIntervalDrafts] = useState<Map<string, string>>(new Map());
-  const [savingUrl, setSavingUrl] = useState<string | null>(null);
-  const [togglingUrl, setTogglingUrl] = useState<string | null>(null);
+  const lastCheckedByUrl = useMemo(
+    () => new Map(trackedFiles.map((t) => [t.sourceUrl, t.lastCheckedAt])),
+    [trackedFiles],
+  );
 
-  function draftFor(t: TrackedPaymentUrl): string {
-    const draft = intervalDrafts.get(t.sourceUrl);
-    if (draft !== undefined) return draft;
-    return t.checkIntervalMinutes !== null ? String(t.checkIntervalMinutes) : "";
+  /** Same due-time math as the context's scheduler — mirrored here just for display. */
+  function nextCheckAtFor(c: ReimportConfig): number | null {
+    if (c.checkDisabled) return null;
+    const lastCheckedAt = lastCheckedByUrl.get(c.sourceUrl);
+    const effectiveMs = (c.checkIntervalMinutes ?? intervalMinutes) * 60_000;
+    return lastCheckedAt ? parseSqliteDateTime(lastCheckedAt).getTime() + effectiveMs : now;
   }
 
-  function draftValid(t: TrackedPaymentUrl): boolean {
-    const raw = draftFor(t).trim();
-    if (raw === "") return true; // clears the override
-    const n = Number(raw);
-    return Number.isFinite(n) && n >= 1;
-  }
-
-  async function handleSaveFileInterval(t: TrackedPaymentUrl) {
-    const raw = draftFor(t).trim();
-    const minutes = raw === "" ? null : Math.round(Number(raw));
-    setSavingUrl(t.sourceUrl);
-    try {
-      await setUrlIntervalMinutes(t.sourceUrl, minutes);
-      setIntervalDrafts((prev) => {
-        const next = new Map(prev);
-        next.delete(t.sourceUrl);
-        return next;
-      });
-    } finally {
-      setSavingUrl(null);
-    }
-  }
-
-  async function handleToggleDisabled(t: TrackedPaymentUrl) {
-    setTogglingUrl(t.sourceUrl);
-    try {
-      await setUrlCheckDisabled(t.sourceUrl, !t.checkDisabled);
-    } finally {
-      setTogglingUrl(null);
-    }
-  }
-
-  // Reimport config drafts — label/date-mode/dates are editable per config;
-  // template is fixed at creation (see the field's own note below) and
-  // never part of this draft.
+  // Reimport config drafts — everything but the template is editable per
+  // config; template is fixed at creation (see the field's own note below).
   const [configDrafts, setConfigDrafts] = useState<Map<number, ConfigDraft>>(new Map());
   const [savingConfigId, setSavingConfigId] = useState<number | null>(null);
+  const [togglingConfigId, setTogglingConfigId] = useState<number | null>(null);
   const [deletingConfigId, setDeletingConfigId] = useState<number | null>(null);
 
   function configDraftFor(c: ReimportConfig): ConfigDraft {
@@ -211,6 +194,7 @@ export default function RemoteUpdatesPage() {
         periodEnd: draft.dateMode === "fixed" ? draft.end || null : null,
         startOffsetDays: draft.dateMode === "relative" ? (draft.startOffset === "" ? null : Number(draft.startOffset)) : null,
         endOffsetDays: draft.dateMode === "relative" ? (draft.endOffset === "" ? null : Number(draft.endOffset)) : null,
+        checkIntervalMinutes: draft.interval.trim() === "" ? null : Math.round(Number(draft.interval)),
       });
       setConfigDrafts((prev) => {
         const next = new Map(prev);
@@ -219,6 +203,15 @@ export default function RemoteUpdatesPage() {
       });
     } finally {
       setSavingConfigId(null);
+    }
+  }
+
+  async function handleToggleConfig(c: ReimportConfig) {
+    setTogglingConfigId(c.id);
+    try {
+      await setConfigCheckDisabled(c.id, !c.checkDisabled);
+    } finally {
+      setTogglingConfigId(null);
     }
   }
 
@@ -271,6 +264,7 @@ export default function RemoteUpdatesPage() {
               ? null
               : Number(newConfigDraft.endOffset)
             : null,
+        checkIntervalMinutes: newConfigDraft.interval.trim() === "" ? null : Math.round(Number(newConfigDraft.interval)),
       });
       setAddingConfigForUrl(null);
     } catch (e) {
@@ -312,10 +306,9 @@ export default function RemoteUpdatesPage() {
       </div>
       <p className="page-subtitle">
         Arquivos de pagamento importados por URL são verificados periodicamente — quando o
-        conteúdo remoto muda, cada configuração de reimportação do arquivo avisa a você
-        separadamente, com a opção de reimportar. Aqui dá pra configurar o intervalo (global ou por
-        arquivo), gerenciar as configurações de reimportação, ver o histórico completo e
-        ligar/desligar a verificação de cada arquivo.
+        conteúdo remoto muda, cada configuração de reimportação do arquivo avisa separadamente,
+        com a opção de reimportar. Cada configuração roda no próprio intervalo e pode ser
+        ativada/desativada por conta. Aqui dá pra gerenciar tudo isso e ver o histórico completo.
       </p>
 
       <div className="card">
@@ -324,7 +317,7 @@ export default function RemoteUpdatesPage() {
           Intervalo padrão
         </h3>
         <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
-          Usado por qualquer arquivo sem intervalo próprio definido na lista abaixo.
+          Usado por qualquer configuração sem intervalo próprio definido abaixo.
           {checking && " Verificando agora..."}
         </p>
 
@@ -355,13 +348,7 @@ export default function RemoteUpdatesPage() {
         )}
         {trackedFiles.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: "0.7rem", marginTop: "1rem" }}>
-            {trackedFiles.map((t) => {
-              const badge = t.lastResult ? RESULT_BADGE[t.lastResult] : null;
-              const BadgeIcon = badge?.icon;
-              const effectiveMinutes = t.checkIntervalMinutes ?? intervalMinutes;
-              const dueAt = t.lastCheckedAt
-                ? new Date(t.lastCheckedAt).getTime() + effectiveMinutes * 60_000
-                : now;
+            {trackedFiles.map((t: TrackedPaymentUrl) => {
               const updatesForFile = remoteUpdates.filter((u) => u.sourceUrl === t.sourceUrl);
               const configsForFile = reimportConfigs.filter((c) => c.sourceUrl === t.sourceUrl);
               return (
@@ -380,20 +367,10 @@ export default function RemoteUpdatesPage() {
                     <Link2 size={12} style={{ opacity: 0.5 }} aria-label={t.sourceUrl}>
                       <title>{t.sourceUrl}</title>
                     </Link2>
-                    <div style={{ marginLeft: "auto", display: "flex", gap: "0.5rem" }}>
-                      {badge && BadgeIcon && !t.checkDisabled && (
-                        <span className={badge.className}>
-                          <BadgeIcon size={13} />
-                          {badge.label}
-                        </span>
-                      )}
-                      {t.checkDisabled && <span className="badge neutral">Desativado</span>}
-                    </div>
                   </div>
                   <div className="muted" style={{ fontSize: "0.8rem", marginTop: "0.2rem" }}>
                     {t.provider || "—"} ·{" "}
                     {t.lastCheckedAt ? `Última verificação: ${formatDateTime(t.lastCheckedAt)}` : "Nunca verificado"}
-                    {!t.checkDisabled && <> · Próxima em {formatCountdown(dueAt - now)}</>}
                   </div>
                   {t.lastResult === "error" && t.lastErrorMessage && (
                     <div className="muted" style={{ fontSize: "0.75rem", marginTop: "0.15rem" }}>
@@ -429,45 +406,8 @@ export default function RemoteUpdatesPage() {
                     </div>
                   ))}
 
-                  <div className="field-row" style={{ marginTop: "0.8rem", marginBottom: 0, alignItems: "flex-end" }}>
-                    <div className="field" style={{ flex: "0 1 140px", marginBottom: 0 }}>
-                      <label>Intervalo (min)</label>
-                      <input
-                        type="number"
-                        min={1}
-                        step={1}
-                        placeholder={String(intervalMinutes)}
-                        value={draftFor(t)}
-                        onChange={(e) =>
-                          setIntervalDrafts((prev) => new Map(prev).set(t.sourceUrl, e.target.value))
-                        }
-                        title="Deixe em branco para usar o padrão global"
-                        disabled={t.checkDisabled}
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={() => handleSaveFileInterval(t)}
-                      disabled={t.checkDisabled || savingUrl === t.sourceUrl || !draftValid(t)}
-                    >
-                      {savingUrl === t.sourceUrl ? "Salvando..." : "Salvar"}
-                    </button>
-
-                    <button
-                      type="button"
-                      className="ghost"
-                      style={{ marginLeft: "auto" }}
-                      onClick={() => handleToggleDisabled(t)}
-                      disabled={togglingUrl === t.sourceUrl}
-                    >
-                      {togglingUrl === t.sourceUrl ? "..." : t.checkDisabled ? "Reativar" : "Desativar"}
-                    </button>
-                  </div>
-
                   <p className="muted" style={{ fontSize: "0.78rem", margin: "0.8rem 0 0.3rem" }}>
-                    Configurações de reimportação — cada uma avisa separadamente quando o arquivo
-                    mudar:
+                    Configurações de reimportação — cada uma roda e avisa por conta própria:
                   </p>
 
                   {configsForFile.length === 0 && (
@@ -480,6 +420,7 @@ export default function RemoteUpdatesPage() {
                   {configsForFile.map((c) => {
                     const draft = configDraftFor(c);
                     const preview = formatResolvedPreview(resolveDraftPeriod(draft));
+                    const dueAt = nextCheckAtFor(c);
                     return (
                       <div
                         key={c.id}
@@ -490,6 +431,15 @@ export default function RemoteUpdatesPage() {
                           marginTop: "0.5rem",
                         }}
                       >
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem" }}>
+                          {c.checkDisabled ? (
+                            <span className="badge neutral">Desativada</span>
+                          ) : (
+                            <span className="muted" style={{ fontSize: "0.75rem" }}>
+                              Próxima verificação em {dueAt !== null ? formatCountdown(dueAt - now) : "—"}
+                            </span>
+                          )}
+                        </div>
                         <div className="field-row" style={{ marginBottom: 0, alignItems: "flex-end" }}>
                           <div className="field" style={{ flex: "1 1 160px", marginBottom: 0 }}>
                             <label>Rótulo</label>
@@ -500,7 +450,7 @@ export default function RemoteUpdatesPage() {
                               onChange={(e) => patchConfigDraft(c, { label: e.target.value })}
                             />
                           </div>
-                          <div className="field" style={{ flex: "0 1 160px", marginBottom: 0 }}>
+                          <div className="field" style={{ flex: "0 1 150px", marginBottom: 0 }}>
                             <label>Template</label>
                             <p
                               className="muted"
@@ -510,7 +460,7 @@ export default function RemoteUpdatesPage() {
                               {c.templateName ?? "Template removido"}
                             </p>
                           </div>
-                          <div className="field" style={{ flex: "0 1 140px", marginBottom: 0 }}>
+                          <div className="field" style={{ flex: "0 1 120px", marginBottom: 0 }}>
                             <label>Modo</label>
                             <select
                               value={draft.dateMode}
@@ -531,7 +481,7 @@ export default function RemoteUpdatesPage() {
                             </div>
                           ) : (
                             <>
-                              <div className="field" style={{ flex: "0 1 130px", marginBottom: 0 }}>
+                              <div className="field" style={{ flex: "0 1 110px", marginBottom: 0 }}>
                                 <label>Início (dias atrás)</label>
                                 <input
                                   type="number"
@@ -541,7 +491,7 @@ export default function RemoteUpdatesPage() {
                                   onChange={(e) => patchConfigDraft(c, { startOffset: e.target.value })}
                                 />
                               </div>
-                              <div className="field" style={{ flex: "0 1 130px", marginBottom: 0 }}>
+                              <div className="field" style={{ flex: "0 1 110px", marginBottom: 0 }}>
                                 <label>Fim (dias atrás)</label>
                                 <input
                                   type="number"
@@ -553,13 +503,33 @@ export default function RemoteUpdatesPage() {
                               </div>
                             </>
                           )}
+                          <div className="field" style={{ flex: "0 1 110px", marginBottom: 0 }}>
+                            <label>Intervalo (min)</label>
+                            <input
+                              type="number"
+                              min={1}
+                              step={1}
+                              placeholder={String(intervalMinutes)}
+                              value={draft.interval}
+                              onChange={(e) => patchConfigDraft(c, { interval: e.target.value })}
+                              title="Deixe em branco para usar o padrão global"
+                            />
+                          </div>
                           <button
                             type="button"
                             className="ghost"
                             onClick={() => handleSaveConfig(c)}
-                            disabled={savingConfigId === c.id}
+                            disabled={savingConfigId === c.id || !draftIntervalValid(draft.interval)}
                           >
                             {savingConfigId === c.id ? "Salvando..." : "Salvar"}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => handleToggleConfig(c)}
+                            disabled={togglingConfigId === c.id}
+                          >
+                            {togglingConfigId === c.id ? "..." : c.checkDisabled ? "Ativar" : "Desativar"}
                           </button>
                           <button
                             type="button"
@@ -600,7 +570,7 @@ export default function RemoteUpdatesPage() {
                             onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, label: e.target.value }))}
                           />
                         </div>
-                        <div className="field" style={{ flex: "0 1 180px", marginBottom: 0 }}>
+                        <div className="field" style={{ flex: "0 1 170px", marginBottom: 0 }}>
                           <label>Template</label>
                           <select
                             value={newConfigDraft.templateId}
@@ -614,7 +584,7 @@ export default function RemoteUpdatesPage() {
                             ))}
                           </select>
                         </div>
-                        <div className="field" style={{ flex: "0 1 140px", marginBottom: 0 }}>
+                        <div className="field" style={{ flex: "0 1 120px", marginBottom: 0 }}>
                           <label>Modo</label>
                           <select
                             value={newConfigDraft.dateMode}
@@ -637,7 +607,7 @@ export default function RemoteUpdatesPage() {
                           </div>
                         ) : (
                           <>
-                            <div className="field" style={{ flex: "0 1 130px", marginBottom: 0 }}>
+                            <div className="field" style={{ flex: "0 1 110px", marginBottom: 0 }}>
                               <label>Início (dias atrás)</label>
                               <input
                                 type="number"
@@ -649,7 +619,7 @@ export default function RemoteUpdatesPage() {
                                 }
                               />
                             </div>
-                            <div className="field" style={{ flex: "0 1 130px", marginBottom: 0 }}>
+                            <div className="field" style={{ flex: "0 1 110px", marginBottom: 0 }}>
                               <label>Fim (dias atrás)</label>
                               <input
                                 type="number"
@@ -661,7 +631,23 @@ export default function RemoteUpdatesPage() {
                             </div>
                           </>
                         )}
-                        <button type="button" onClick={handleCreateConfig} disabled={addingConfigSaving}>
+                        <div className="field" style={{ flex: "0 1 110px", marginBottom: 0 }}>
+                          <label>Intervalo (min)</label>
+                          <input
+                            type="number"
+                            min={1}
+                            step={1}
+                            placeholder={String(intervalMinutes)}
+                            value={newConfigDraft.interval}
+                            onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, interval: e.target.value }))}
+                            title="Deixe em branco para usar o padrão global"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleCreateConfig}
+                          disabled={addingConfigSaving || !draftIntervalValid(newConfigDraft.interval)}
+                        >
                           {addingConfigSaving ? "Adicionando..." : "Adicionar"}
                         </button>
                         <button type="button" className="ghost" onClick={() => setAddingConfigForUrl(null)}>

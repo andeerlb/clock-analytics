@@ -224,7 +224,7 @@ export default function ImportPaymentsPage() {
   // Off by default — tracking is opt-in per save, not an automatic side
   // effect of importing by URL (see trackUrlForAutoReimport's doc comment).
   const [trackAutoUpdates, setTrackAutoUpdates] = useState(false);
-  const { remoteUpdates, dismissRemoteUpdate, setUrlCheckDisabled, trackUrl, trackedFiles } = useRemoteFileUpdates();
+  const { remoteUpdates, dismissRemoteUpdate, setConfigCheckDisabled, trackUrl, trackedFiles } = useRemoteFileUpdates();
 
   const [fileResults, setFileResults] = useState<PaymentFileResult[]>(restored?.fileResults ?? []);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(restored?.selectedRows ?? new Set());
@@ -937,8 +937,8 @@ export default function ImportPaymentsPage() {
               <button
                 type="button"
                 className="ghost"
-                onClick={() => setUrlCheckDisabled(u.sourceUrl, true)}
-                title="Não verificar mais este arquivo automaticamente (pode reativar em Configurações)"
+                onClick={() => setConfigCheckDisabled(u.configId, true)}
+                title="Não verificar mais essa configuração automaticamente (pode reativar em Verificação automática)"
               >
                 Desativar verificação automática
               </button>
