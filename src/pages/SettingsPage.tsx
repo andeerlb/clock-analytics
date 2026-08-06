@@ -1,5 +1,7 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import type { Update } from "@tauri-apps/plugin-updater";
 import {
   AlertTriangle,
   Archive,
@@ -7,6 +9,7 @@ import {
   Database,
   FileCheck2,
   FolderOpen,
+  RefreshCw,
   Sparkles,
   Trash2,
   XCircle,
@@ -14,6 +17,7 @@ import {
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import GithubIcon from "../components/GithubIcon";
+import UpdateModal from "../components/UpdateModal";
 import {
   backupAppData,
   checkPopplerStatus,
@@ -26,7 +30,7 @@ import {
 import { clearAllData, findRedundantOriginals, markOriginalsRemoved, vacuumDatabase } from "../lib/db";
 import { formatBytes } from "../lib/format";
 import type { PopplerStatus, StorageUsage } from "../lib/types";
-import { checkForUpdate, REPO_URL, type UpdateStatus } from "../lib/updateCheck";
+import { checkForUpdate, REPO_URL } from "../lib/updateCheck";
 
 const CLEAR_CONFIRM_PHRASE = "APAGAR TUDO";
 
@@ -56,7 +60,12 @@ export default function SettingsPage() {
   const [popplerSaving, setPopplerSaving] = useState(false);
   const [popplerError, setPopplerError] = useState<string | null>(null);
 
-  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [upToDate, setUpToDate] = useState(false);
+  const [updateCheckError, setUpdateCheckError] = useState<string | null>(null);
 
   // Employees need their company and client to survive (both are required
   // references); clients need their company. Checking a more specific level
@@ -93,8 +102,35 @@ export default function SettingsPage() {
   useEffect(() => {
     refreshStorage();
     refreshPopplerStatus();
-    checkForUpdate().then(setUpdateStatus);
+    getVersion().then(setAppVersion);
+    // Passive check on load — best-effort like the Sidebar's, any failure
+    // here just means the update badge doesn't show up; the user still has
+    // "Procurar atualização" below to check explicitly and see why.
+    checkForUpdate()
+      .then((update) => {
+        if (update) setAvailableUpdate(update);
+      })
+      .catch(() => {});
   }, []);
+
+  async function handleCheckForUpdate() {
+    setCheckingUpdate(true);
+    setUpToDate(false);
+    setUpdateCheckError(null);
+    try {
+      const update = await checkForUpdate();
+      if (update) {
+        setAvailableUpdate(update);
+        setShowUpdateModal(true);
+      } else {
+        setUpToDate(true);
+      }
+    } catch (e) {
+      setUpdateCheckError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
 
   function refreshPopplerStatus() {
     return checkPopplerStatus()
@@ -462,19 +498,32 @@ export default function SettingsPage() {
           Sobre
         </h3>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.8rem" }}>
-          <p className="muted" style={{ margin: 0, fontSize: "0.85rem" }}>
-            PontoScan {updateStatus ? `v${updateStatus.currentVersion}` : ""}
-            {updateStatus?.updateAvailable && (
-              <>
-                {" "}— nova versão disponível:{" "}
-                <strong style={{ color: "var(--success)" }}>{updateStatus.latestVersion}</strong>
-              </>
+          <div>
+            <p className="muted" style={{ margin: 0, fontSize: "0.85rem" }}>
+              PontoScan {appVersion ? `v${appVersion}` : ""}
+              {availableUpdate && (
+                <>
+                  {" "}— nova versão disponível:{" "}
+                  <strong style={{ color: "var(--success)" }}>{availableUpdate.version}</strong>
+                </>
+              )}
+              {upToDate && " — você já está na versão mais recente"}
+            </p>
+            {updateCheckError && (
+              <p className="muted" style={{ margin: "0.3rem 0 0", fontSize: "0.8rem", color: "var(--danger)" }}>
+                Não foi possível verificar atualizações: {updateCheckError}
+              </p>
             )}
-          </p>
+          </div>
           <div style={{ display: "flex", gap: "0.6rem" }}>
-            {updateStatus?.updateAvailable && (
-              <button type="button" onClick={() => openUrl(updateStatus.latestUrl ?? REPO_URL)}>
+            {availableUpdate ? (
+              <button type="button" onClick={() => setShowUpdateModal(true)}>
                 Ver nova versão
+              </button>
+            ) : (
+              <button type="button" className="secondary" onClick={handleCheckForUpdate} disabled={checkingUpdate}>
+                <RefreshCw size={15} style={{ marginRight: "0.4rem" }} />
+                {checkingUpdate ? "Verificando..." : "Procurar atualização"}
               </button>
             )}
             <button type="button" className="secondary" onClick={() => openUrl(REPO_URL)}>
@@ -484,6 +533,16 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+
+      {showUpdateModal && availableUpdate && (
+        <UpdateModal
+          update={availableUpdate}
+          onClose={() => {
+            setShowUpdateModal(false);
+            setAvailableUpdate(null);
+          }}
+        />
+      )}
     </div>
   );
 }

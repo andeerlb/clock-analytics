@@ -1,8 +1,10 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import type { Update } from "@tauri-apps/plugin-updater";
 import { Briefcase, Building2, Clock, FileUp, Settings, Users, Wallet } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import GithubIcon from "./GithubIcon";
+import UpdateModal from "./UpdateModal";
 import { checkForUpdate, REPO_URL } from "../lib/updateCheck";
 
 const NAV_ITEMS = [
@@ -19,12 +21,15 @@ function navLinkClass({ isActive }: { isActive: boolean }): string {
 }
 
 export default function Sidebar() {
-  const [updateUrl, setUpdateUrl] = useState<string | null>(null);
+  const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
 
   useEffect(() => {
-    checkForUpdate().then((status) => {
-      if (status.updateAvailable) setUpdateUrl(status.latestUrl ?? REPO_URL);
-    });
+    checkForUpdate()
+      .then((update) => {
+        if (update) setAvailableUpdate(update);
+      })
+      .catch(() => {});
   }, []);
 
   return (
@@ -50,12 +55,12 @@ export default function Sidebar() {
           type="button"
           className="app-nav-link ghost"
           style={{ width: "100%", textAlign: "left" }}
-          onClick={() => openUrl(updateUrl ?? REPO_URL)}
-          title={updateUrl ? "Nova versão disponível no GitHub" : "Ver no GitHub"}
+          onClick={() => (availableUpdate ? setShowUpdateModal(true) : openUrl(REPO_URL))}
+          title={availableUpdate ? "Nova versão disponível" : "Ver no GitHub"}
         >
           <GithubIcon size={18} />
           <span>GitHub</span>
-          {updateUrl && (
+          {availableUpdate && (
             <span
               style={{
                 marginLeft: "auto",
@@ -75,6 +80,16 @@ export default function Sidebar() {
           <span>Configurações</span>
         </NavLink>
       </div>
+
+      {showUpdateModal && availableUpdate && (
+        <UpdateModal
+          update={availableUpdate}
+          onClose={() => {
+            setShowUpdateModal(false);
+            setAvailableUpdate(null);
+          }}
+        />
+      )}
     </nav>
   );
 }

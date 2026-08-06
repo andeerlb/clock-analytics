@@ -22,6 +22,8 @@ jobs:
           # Intel Macs, instead of publishing two separate artifacts.
           - platform: macos-latest
             args: "--target universal-apple-darwin"
+          - platform: windows-latest
+            args: ""
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
@@ -85,15 +87,37 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updater artifacts (see `createUpdaterArtifacts` in
+          # tauri.conf.json) and produces `latest.json`, the manifest
+          # `@tauri-apps/plugin-updater` polls via the GitHub Releases
+          # endpoint configured there — without these, the build still
+          # succeeds but no update manifest gets published.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "PontoScan ${{ github.ref_name }}"
           releaseBody: |
-            Linux (.deb, .rpm, .AppImage) and macOS (.dmg, .app) build artifacts for this release.
+            Linux (.deb, .rpm, .AppImage), macOS (.dmg, .app) and Windows (.msi, .exe) build
+            artifacts for this release.
 
-            The macOS build is unsigned and not notarized — opening it will trigger a Gatekeeper
-            warning (right-click > Abrir, or System Settings > Privacy & Security > "Abrir assim
-            mesmo"). Windows isn't built here yet — see the README for manual instructions.
+            Neither the macOS nor the Windows build is signed (no Apple Developer ID or code
+            signing certificate yet), so the OS will warn on first install — this is expected,
+            not a sign anything is wrong:
+
+            - **macOS**: Gatekeeper blocks it ("cannot verify the developer" / "app is
+              damaged"). Right-click the app > Abrir > confirm, or System Settings > Privacy
+              & Security > "Abrir assim mesmo" after the first blocked attempt. If it still
+              refuses, run `xattr -cr /Applications/PontoScan.app` in Terminal.
+            - **Windows**: SmartScreen shows "Windows protected your PC" / "Unknown
+              publisher". Click "More info" > "Run anyway".
+            - **Linux**: no OS-level warning, but the AppImage needs its executable bit set
+              first — `chmod +x PontoScan_*.AppImage` — before it'll run.
+
+            This should only happen on the *initial* install: in-app updates (via "Procurar
+            atualização" in Configurações) download through the app itself instead of a
+            browser, so they shouldn't retrigger it. .deb/.rpm installs can't self-update this
+            way and still need the new package downloaded and installed by hand.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}

@@ -1,57 +1,29 @@
-import { getVersion } from "@tauri-apps/api/app";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 
 const REPO_OWNER = "andeerlb";
 const REPO_NAME = "clock-analytics";
 
 export const REPO_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}`;
-
-export interface UpdateStatus {
-  currentVersion: string;
-  latestVersion: string | null;
-  latestUrl: string | null;
-  updateAvailable: boolean;
-}
-
-/** "v1.2.3" or "1.2.3" -> [1, 2, 3] — anything non-numeric (a pre-release suffix, say) reads as 0. */
-function parseVersion(v: string): number[] {
-  return v
-    .replace(/^v/i, "")
-    .split(".")
-    .map((n) => parseInt(n, 10) || 0);
-}
-
-function isNewer(latest: string, current: string): boolean {
-  const a = parseVersion(latest);
-  const b = parseVersion(current);
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const x = a[i] ?? 0;
-    const y = b[i] ?? 0;
-    if (x !== y) return x > y;
-  }
-  return false;
-}
+/** For the manual fallback link on installs the updater can't self-replace (.deb/.rpm) or when an automatic update fails. */
+export const LATEST_RELEASE_URL = `${REPO_URL}/releases/latest`;
 
 /**
- * Compares the running app version (from `tauri.conf.json`, read via
- * Tauri's own API rather than duplicated here) against the latest GitHub
- * Release tag. Best-effort: a network failure (offline, rate-limited, no
- * releases published yet) just means no update is reported, not an error
- * shown to the user — this is an ambient "nova versão disponível" hint, not
- * a required check.
+ * Checks the GitHub Releases updater manifest (`plugins.updater.endpoints`
+ * in tauri.conf.json, published as `latest.json` alongside each release —
+ * see `release.yml`) for a newer version than the one currently running.
+ * `null` means "no update available"; a thrown error means the check
+ * itself failed (offline, no releases published yet, GitHub unreachable) —
+ * kept distinct so a caller can choose whether that's worth surfacing: the
+ * Sidebar's passive check on launch treats both the same (silently, it's
+ * just an ambient hint), but Configurações' on-demand "Procurar
+ * atualização" button should tell the user their check failed rather than
+ * claim they're up to date.
+ *
+ * Returns the live `Update` resource itself (not a plain status object),
+ * since actually installing means calling back into it via `UpdateModal` —
+ * a caller that checks but never shows/acts on the result must call
+ * `.close()` on it directly to release the underlying resource.
  */
-export async function checkForUpdate(): Promise<UpdateStatus> {
-  const currentVersion = await getVersion();
-  try {
-    const res = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`);
-    if (!res.ok) throw new Error(`GitHub respondeu ${res.status}`);
-    const data = (await res.json()) as { tag_name: string; html_url: string };
-    return {
-      currentVersion,
-      latestVersion: data.tag_name,
-      latestUrl: data.html_url,
-      updateAvailable: isNewer(data.tag_name, currentVersion),
-    };
-  } catch {
-    return { currentVersion, latestVersion: null, latestUrl: null, updateAvailable: false };
-  }
+export async function checkForUpdate(): Promise<Update | null> {
+  return check();
 }

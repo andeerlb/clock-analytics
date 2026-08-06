@@ -2172,7 +2172,7 @@ export async function listPaymentShiftsForReport(
      JOIN clients cl ON cl.id = e.client_id
      JOIN companies c ON c.id = e.company_id
      WHERE ${conditions.join(" AND ")}
-     ORDER BY ps.work_date, e.name`,
+     ORDER BY ps.work_date, ps.local, e.name`,
     params,
   );
 }
