@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, Clock3, History, Info, Moon, Pencil, RotateCcw, Sun } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock3, History, Info, Moon, Pencil, RotateCcw, ShieldCheck, Sun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
@@ -390,6 +390,15 @@ export default function PaymentDetailPage() {
                           <BadgeIcon size={13} />
                           {badge.label}
                         </span>
+                        {s.editedManually && (
+                          <span
+                            className="badge info"
+                            style={{ marginLeft: "0.4rem" }}
+                            title="Atualizado manualmente — uma reimportação não sobrescreve este turno enquanto 'Manter registros atualizados manualmente' estiver ativado (Configurações → Zona de risco → Pagamentos)."
+                          >
+                            <ShieldCheck size={12} />
+                          </span>
+                        )}
                         {s.status === "erro" && s.errorMessage && (
                           <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.25rem" }}>
                             {s.errorMessage}

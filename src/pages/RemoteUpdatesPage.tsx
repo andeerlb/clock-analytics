@@ -55,6 +55,7 @@ interface ConfigDraft {
   startOffset: string;
   endOffset: string;
   interval: string;
+  keepManualEdits: boolean;
 }
 
 function draftFromConfig(c: ReimportConfig): ConfigDraft {
@@ -66,6 +67,7 @@ function draftFromConfig(c: ReimportConfig): ConfigDraft {
     startOffset: c.startOffsetDays !== null ? String(c.startOffsetDays) : "",
     endOffset: c.endOffsetDays !== null ? String(c.endOffsetDays) : "",
     interval: String(c.checkIntervalMinutes),
+    keepManualEdits: c.keepManualEdits,
   };
 }
 
@@ -102,6 +104,7 @@ const BLANK_NEW_CONFIG: ConfigDraft & { templateId: string } = {
   startOffset: "",
   endOffset: "",
   interval: String(DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES),
+  keepManualEdits: true,
 };
 
 export default function RemoteUpdatesPage() {
@@ -192,6 +195,7 @@ export default function RemoteUpdatesPage() {
         startOffsetDays: draft.dateMode === "relative" ? (draft.startOffset === "" ? null : Number(draft.startOffset)) : null,
         endOffsetDays: draft.dateMode === "relative" ? (draft.endOffset === "" ? null : Number(draft.endOffset)) : null,
         checkIntervalMinutes: Math.round(Number(draft.interval)),
+        keepManualEdits: draft.keepManualEdits,
       });
       setConfigDrafts((prev) => {
         const next = new Map(prev);
@@ -262,6 +266,7 @@ export default function RemoteUpdatesPage() {
               : Number(newConfigDraft.endOffset)
             : null,
         checkIntervalMinutes: Math.round(Number(newConfigDraft.interval)),
+        keepManualEdits: newConfigDraft.keepManualEdits,
       });
       setAddingConfigForUrl(null);
     } catch (e) {
@@ -541,6 +546,19 @@ export default function RemoteUpdatesPage() {
                               onChange={(e) => patchConfigDraft(c, { interval: e.target.value })}
                             />
                           </div>
+                          <div className="field" style={{ flex: "0 1 200px", marginBottom: 0 }}>
+                            <label
+                              style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400 }}
+                              title="Uma reimportação automática por essa configuração não sobrescreve um turno já pago, revertido ou com valor corrigido à mão"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={draft.keepManualEdits}
+                                onChange={(e) => patchConfigDraft(c, { keepManualEdits: e.target.checked })}
+                              />
+                              Manter registros atualizados manualmente
+                            </label>
+                          </div>
                           <button
                             type="button"
                             className="ghost"
@@ -667,6 +685,18 @@ export default function RemoteUpdatesPage() {
                             value={newConfigDraft.interval}
                             onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, interval: e.target.value }))}
                           />
+                        </div>
+                        <div className="field" style={{ flex: "0 1 200px", marginBottom: 0 }}>
+                          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400 }}>
+                            <input
+                              type="checkbox"
+                              checked={newConfigDraft.keepManualEdits}
+                              onChange={(e) =>
+                                setNewConfigDraft((prev) => ({ ...prev, keepManualEdits: e.target.checked }))
+                              }
+                            />
+                            Manter registros atualizados manualmente
+                          </label>
                         </div>
                         <button
                           type="button"

@@ -478,10 +478,12 @@ export interface PaymentShiftRow {
   errorMessage: string | null;
   amount: number | null;
   importedAt: string;
-  /** The pendente/erro row this one replaces, if "Fazer pagamento" created it — that older row is frozen (never edited again) once this points to it. `null` for a row nothing has replaced yet. */
+  /** The row this one replaces (a status transition, a value edit, or a reprocessed import match) — that older row is frozen (never written to again) once this points to it. `null` for a row nothing has replaced yet. */
   previousShiftId: number | null;
   /** columnLetter -> raw text value, for every non-blank column the template left unmapped ("Ignorar") on this row — kept for history/audit instead of discarded. `null` when there was nothing left unmapped (or it was all blank). */
   extraData: Record<string, string> | null;
+  /** True when this row was created by a deliberate user action on the Pagamentos detail page (editar valor, fazer pagamento, voltar para pendente) rather than an import — a reprocessed import match refuses to supersede one of these unless "Manter registros atualizados manualmente" is off (see `PaymentSettings`). */
+  editedManually: boolean;
 }
 
 /** One row per (colaborador, competência) — the Pagamentos list. */

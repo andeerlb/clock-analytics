@@ -268,5 +268,17 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0044_reimport_config_interval_required.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 45,
+            description: "add payment_shifts.edited_manually and payment_settings.keep_manual_edits — reprocessing a duplicate payment shift can now skip one whose current row was a deliberate manual action instead of silently superseding it",
+            sql: include_str!("../migrations/0045_payment_shifts_manual_edits.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 46,
+            description: "add source_url_reimport_configs.keep_manual_edits — each reimport config now carries its own choice of whether to skip manually-edited matches, captured at creation and editable on Verificação automática",
+            sql: include_str!("../migrations/0046_reimport_config_keep_manual_edits.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

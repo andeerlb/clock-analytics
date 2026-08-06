@@ -1281,6 +1281,8 @@ export interface ReimportConfig {
   checkDisabled: boolean;
   /** This config's own check interval, in minutes — mandatory, minimum 1 (see `DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES` for the UI's default when creating a new config). There's no global fallback anymore — every config always has its own value. */
   checkIntervalMinutes: number;
+  /** Whether an automatic reimport through THIS config skips a "duplicate" match that was edited manually (Fazer pagamento/Editar valor/Voltar para pendente) instead of superseding it — captured from the checkbox on Importar Pagamentos when the config was created, editable afterward like every other field here. See `findDuplicatePaymentShifts`/`ImportPaymentsPage.handleSave` for where this is actually enforced. */
+  keepManualEdits: boolean;
 }
 
 /** Pre-filled in the "Adicionar configuração" form on the Verificação automática page — the user can change it, but a value is always required. */
@@ -1295,19 +1297,22 @@ export const DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES = 5;
  */
 export async function listReimportConfigs(): Promise<ReimportConfig[]> {
   const db = await getDb();
-  const rawRows = await db.select<(Omit<ReimportConfig, "checkDisabled"> & { checkDisabled: number })[]>(
+  const rawRows = await db.select<
+    (Omit<ReimportConfig, "checkDisabled" | "keepManualEdits"> & { checkDisabled: number; keepManualEdits: number })[]
+  >(
     `SELECT
        c.id, c.source_url AS sourceUrl, c.label,
        c.template_id AS templateId, pt.name AS templateName,
        c.date_mode AS dateMode,
        c.period_start AS periodStart, c.period_end AS periodEnd,
        c.start_offset_days AS startOffsetDays, c.end_offset_days AS endOffsetDays,
-       c.check_disabled AS checkDisabled, c.check_interval_minutes AS checkIntervalMinutes
+       c.check_disabled AS checkDisabled, c.check_interval_minutes AS checkIntervalMinutes,
+       c.keep_manual_edits AS keepManualEdits
      FROM source_url_reimport_configs c
      LEFT JOIN payment_templates pt ON pt.id = c.template_id
      ORDER BY c.created_at`,
   );
-  return rawRows.map((r) => ({ ...r, checkDisabled: Boolean(r.checkDisabled) }));
+  return rawRows.map((r) => ({ ...r, checkDisabled: Boolean(r.checkDisabled), keepManualEdits: Boolean(r.keepManualEdits) }));
 }
 
 export interface ReimportConfigInput {
@@ -1320,14 +1325,15 @@ export interface ReimportConfigInput {
   startOffsetDays: number | null;
   endOffsetDays: number | null;
   checkIntervalMinutes: number;
+  keepManualEdits: boolean;
 }
 
 export async function createReimportConfig(input: ReimportConfigInput): Promise<number> {
   const db = await getDb();
   const result = await db.execute(
     `INSERT INTO source_url_reimport_configs
-       (source_url, label, template_id, date_mode, period_start, period_end, start_offset_days, end_offset_days, check_interval_minutes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+       (source_url, label, template_id, date_mode, period_start, period_end, start_offset_days, end_offset_days, check_interval_minutes, keep_manual_edits)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       input.sourceUrl,
       input.label,
@@ -1338,6 +1344,7 @@ export async function createReimportConfig(input: ReimportConfigInput): Promise<
       input.startOffsetDays,
       input.endOffsetDays,
       input.checkIntervalMinutes,
+      input.keepManualEdits ? 1 : 0,
     ],
   );
   return result.lastInsertId as number;
@@ -1353,7 +1360,7 @@ export async function updateReimportConfig(
     `UPDATE source_url_reimport_configs SET
        label = $2, date_mode = $3, period_start = $4, period_end = $5,
        start_offset_days = $6, end_offset_days = $7, check_interval_minutes = $8,
-       updated_at = datetime('now')
+       keep_manual_edits = $9, updated_at = datetime('now')
      WHERE id = $1`,
     [
       id,
@@ -1364,6 +1371,7 @@ export async function updateReimportConfig(
       input.startOffsetDays,
       input.endOffsetDays,
       input.checkIntervalMinutes,
+      input.keepManualEdits ? 1 : 0,
     ],
   );
 }
@@ -1396,6 +1404,7 @@ export async function trackUrlForAutoReimport(
   templateId: number,
   periodStart: string | null,
   periodEnd: string | null,
+  keepManualEdits: boolean,
 ): Promise<void> {
   const db = await getDb();
   await db.execute(
@@ -1416,6 +1425,7 @@ export async function trackUrlForAutoReimport(
     startOffsetDays: null,
     endOffsetDays: null,
     checkIntervalMinutes: DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES,
+    keepManualEdits,
   });
 }
 
@@ -2114,20 +2124,24 @@ export async function findEmployeeByAttempts(
   return null;
 }
 
+export interface DuplicatePaymentShiftMatch {
+  /** The *current* (head) row for this identity — see `HEAD_SHIFT_CONDITION`. Reprocessing links its new row back to exactly this one via `PaymentShiftInput.previousShiftId`, not to whichever row happens to be oldest. */
+  shiftId: number;
+  /** Whether that head row was a deliberate manual action (see the transition functions above) rather than an import — the caller uses this to refuse to supersede it (unless `payment_settings.keep_manual_edits` is off). */
+  editedManually: boolean;
+}
+
 /**
- * Flags rows that already have a saved shift for the same employee/date/
- * local — purely informational (returns which *indices* of `rows` look
- * like duplicates), since unlike timesheet imports a payment shift is
- * additive: re-selecting a flagged row just adds another row, there's no
- * overwrite/replace semantics here.
- */
-/**
- * A row only counts as a duplicate when it matches an existing shift on
- * every column, not just employee/data/local — a partial match (say, same
- * colaborador and day and local but a different horário) is a plausible
- * second real shift, not a duplicate. An exact match is unambiguous, so
- * the caller treats it as "já importado" (offer to reprocess) rather than
- * a "possível duplicata" needing a judgment call.
+ * For each candidate row, finds the *current* payment_shifts row matching
+ * the same identity — employee/dia/local/função/horário, every column, not
+ * just employee/data/local (a partial match, say same colaborador and dia
+ * and local but a different horário, is a plausible second real shift, not
+ * a duplicate). An exact match is unambiguous, so the caller offers it as
+ * "reprocessar" rather than a "possível duplicata" needing a judgment call.
+ * Only ever matches a *head* row (`HEAD_SHIFT_CONDITION`) — a shift that's
+ * been paid/reverted/edited more than once has several rows sharing this
+ * same identity, and only the current one is what a reprocess would
+ * actually be superseding.
  */
 export async function findDuplicatePaymentShifts(
   rows: {
@@ -2138,21 +2152,24 @@ export async function findDuplicatePaymentShifts(
     scheduleStartMinutes: number | null;
     scheduleEndMinutes: number | null;
   }[],
-): Promise<Set<number>> {
+): Promise<Map<number, DuplicatePaymentShiftMatch>> {
   const db = await getDb();
-  const duplicates = new Set<number>();
+  const matches = new Map<number, DuplicatePaymentShiftMatch>();
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
-    const existing = await db.select<{ id: number }[]>(
-      `SELECT id FROM payment_shifts
-       WHERE employee_id = $1 AND work_date = $2 AND local = $3 AND role = $4
-         AND IFNULL(schedule_start_minutes, -1) = IFNULL($5, -1)
-         AND IFNULL(schedule_end_minutes, -1) = IFNULL($6, -1)`,
+    const existing = await db.select<{ id: number; editedManually: number }[]>(
+      `SELECT ps.id, ps.edited_manually AS editedManually FROM payment_shifts ps
+       WHERE ps.employee_id = $1 AND ps.work_date = $2 AND ps.local = $3 AND ps.role = $4
+         AND IFNULL(ps.schedule_start_minutes, -1) = IFNULL($5, -1)
+         AND IFNULL(ps.schedule_end_minutes, -1) = IFNULL($6, -1)
+         AND ${HEAD_SHIFT_CONDITION}`,
       [r.employeeId, r.workDate, r.local, r.role, r.scheduleStartMinutes, r.scheduleEndMinutes],
     );
-    if (existing.length > 0) duplicates.add(i);
+    if (existing.length > 0) {
+      matches.set(i, { shiftId: existing[0].id, editedManually: Boolean(existing[0].editedManually) });
+    }
   }
-  return duplicates;
+  return matches;
 }
 
 export interface PaymentShiftInput {
@@ -2168,17 +2185,19 @@ export interface PaymentShiftInput {
   status: PaymentShiftStatus;
   /** Every non-blank column the template left unmapped on this row (see `AppliedPaymentRow.extraFields`) — `null` when there was nothing left unmapped. */
   extraData: Record<string, string> | null;
+  /** Set when this row reprocesses an existing "duplicate" match (see `findDuplicatePaymentShifts`) — links back to it via `previous_shift_id`, so this new row becomes the current one and the old one is frozen as history instead of the two coexisting as unrelated rows. `null` for a brand-new shift. */
+  previousShiftId: number | null;
 }
 
-/** Bulk-inserts shifts — `valor` and any further `pago` transition still happen in a later step. */
+/** Bulk-inserts shifts — `valor` and any further `pago` transition still happen in a later step. Never sets `edited_manually` — that's exclusively for the manual transition functions above, never for anything import-originated. */
 export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void> {
   const db = await getDb();
   for (const r of rows) {
     await db.execute(
       `INSERT INTO payment_shifts
          (employee_id, template_id, source_file_id, local, work_date, role,
-          schedule_start_minutes, schedule_end_minutes, status, extra_data)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          schedule_start_minutes, schedule_end_minutes, status, extra_data, previous_shift_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
         r.employeeId,
         r.templateId,
@@ -2190,6 +2209,7 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
         r.scheduleEndMinutes,
         r.status,
         r.extraData ? JSON.stringify(r.extraData) : null,
+        r.previousShiftId,
       ],
     );
   }
@@ -2510,7 +2530,8 @@ const PAYMENT_SHIFT_SELECT_COLUMNS = `
   ps.schedule_start_minutes AS scheduleStartMinutes,
   ps.schedule_end_minutes AS scheduleEndMinutes,
   ps.status, ps.error_message AS errorMessage, ps.amount, ps.imported_at AS importedAt,
-  ps.previous_shift_id AS previousShiftId, ps.extra_data AS extraData
+  ps.previous_shift_id AS previousShiftId, ps.extra_data AS extraData,
+  ps.edited_manually AS editedManually
 `;
 
 const PAYMENT_SHIFT_FROM_CLAUSE = `
@@ -2518,11 +2539,14 @@ const PAYMENT_SHIFT_FROM_CLAUSE = `
   JOIN employees e ON e.id = ps.employee_id
 `;
 
-type PaymentShiftRowRaw = Omit<PaymentShiftRow, "extraData"> & { extraData: string | null };
+type PaymentShiftRowRaw = Omit<PaymentShiftRow, "extraData" | "editedManually"> & {
+  extraData: string | null;
+  editedManually: number;
+};
 
-/** `extra_data` is stored as a JSON string (or NULL) — parsed once here so every reader gets the real `Record<string, string> | null` shape. */
+/** `extra_data` is stored as a JSON string (or NULL), `edited_manually` as a 0/1 integer — normalized once here so every reader gets the real shape. */
 function parsePaymentShiftRow(row: PaymentShiftRowRaw): PaymentShiftRow {
-  return { ...row, extraData: row.extraData ? JSON.parse(row.extraData) : null };
+  return { ...row, extraData: row.extraData ? JSON.parse(row.extraData) : null, editedManually: Boolean(row.editedManually) };
 }
 
 /** Every *current* shift (see `HEAD_SHIFT_CONDITION`) for one colaborador in one competência ("YYYY-MM") — the Pagamentos detail. */
@@ -2590,7 +2614,11 @@ async function readPaymentShiftCoreFields(db: Database, shiftId: number): Promis
  * `shiftId`'s row — copies its core shift fields, sets status = 'pago',
  * the confirmed `amount`, and links `previousShiftId` back to it. From
  * this point on `shiftId`'s row is frozen (only ever read, never written)
- * and drops out of every head-only list/summary/total.
+ * and drops out of every head-only list/summary/total. Marked
+ * `edited_manually` like every other transition below — a deliberate user
+ * action, not an import — so a later reimport that matches this shift's
+ * identity refuses to supersede it (see `findDuplicatePaymentShifts` and
+ * `payment_settings.keep_manual_edits`).
  */
 export async function markPaymentShiftPaid(shiftId: number, amount: number): Promise<number> {
   const db = await getDb();
@@ -2599,8 +2627,8 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
   const result = await db.execute(
     `INSERT INTO payment_shifts
        (employee_id, template_id, source_file_id, local, work_date, role,
-        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pago', $9, $10, $11)`,
+        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pago', $9, $10, $11, 1)`,
     [
       s.employeeId,
       s.templateId,
@@ -2633,8 +2661,8 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
   const result = await db.execute(
     `INSERT INTO payment_shifts
        (employee_id, template_id, source_file_id, local, work_date, role,
-        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pendente', NULL, $9, $10)`,
+        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pendente', NULL, $9, $10, 1)`,
     [
       s.employeeId,
       s.templateId,
@@ -2672,8 +2700,8 @@ export async function editPaymentShiftValue(shiftId: number, amount: number): Pr
   const result = await db.execute(
     `INSERT INTO payment_shifts
        (employee_id, template_id, source_file_id, local, work_date, role,
-        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1)`,
     [
       s.employeeId,
       s.templateId,
@@ -2731,6 +2759,8 @@ export interface ClearDataOptions {
   keepPaymentTemplates?: boolean;
   /** Keep colaborador-import templates and their column-mapping groups. Same independence as `keepPaymentTemplates`. */
   keepEmployeeTemplates?: boolean;
+  /** Keep `payment_shifts` rows with `edited_manually` set (see the manual transition functions above) instead of wiping every one — only meaningful alongside `keepEmployees` (a kept shift's `employee_id` is `NOT NULL`), enforced by the caller disabling the checkbox rather than here. */
+  keepManuallyEditedShifts?: boolean;
 }
 
 /**
@@ -2755,6 +2785,7 @@ export async function clearAllData(options: ClearDataOptions = {}): Promise<void
   const keepCompanies = Boolean(options.keepCompanies) || keepClients;
   const keepPaymentTemplates = Boolean(options.keepPaymentTemplates);
   const keepEmployeeTemplates = Boolean(options.keepEmployeeTemplates);
+  const keepManuallyEditedShifts = Boolean(options.keepManuallyEditedShifts) && keepEmployees;
 
   await db.execute("DELETE FROM punches");
   await db.execute("DELETE FROM day_records");
@@ -2767,7 +2798,20 @@ export async function clearAllData(options: ClearDataOptions = {}): Promise<void
   // so null those out first — otherwise the bulk delete can violate that
   // FK mid-way through, depending on delete order.
   await db.execute("UPDATE payment_shifts SET previous_shift_id = NULL WHERE previous_shift_id IS NOT NULL");
-  await db.execute("DELETE FROM payment_shifts");
+  if (keepManuallyEditedShifts) {
+    // A kept row still loses its own links into what's actually being wiped
+    // right here — source_files always goes, and template_id only survives
+    // when keepPaymentTemplates is also on — otherwise it'd be a FK
+    // pointing at nothing. employee_id is left alone: it's NOT NULL, so a
+    // kept row requires keepEmployees, which the caller already guarantees.
+    await db.execute(
+      `UPDATE payment_shifts SET source_file_id = NULL${keepPaymentTemplates ? "" : ", template_id = NULL"}
+       WHERE edited_manually = 1`,
+    );
+    await db.execute("DELETE FROM payment_shifts WHERE edited_manually = 0");
+  } else {
+    await db.execute("DELETE FROM payment_shifts");
+  }
   await db.execute("DELETE FROM source_files");
 
   const clearedTables = ["punches", "day_records", "imports", "import_files", "payment_shifts", "source_files"];

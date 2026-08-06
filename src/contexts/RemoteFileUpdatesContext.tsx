@@ -33,6 +33,8 @@ export interface RemoteUpdateFlag {
   /** Already resolved — for a relative-Período config this is always "as of right now", never a stale cached date. */
   resolvedPeriodStart: string | null;
   resolvedPeriodEnd: string | null;
+  /** This config's own choice, replayed as-is on an automatic reimport — see `ReimportConfig.keepManualEdits`. */
+  keepManualEdits: boolean;
 }
 
 /**
@@ -72,7 +74,13 @@ interface RemoteFileUpdatesContextValue {
   remoteUpdates: RemoteUpdateFlag[];
   dismissRemoteUpdate: (configId: number) => void;
   /** Opts a URL into automatic tracking for the first time — creates its first reimport config from what this save used. */
-  trackUrl: (url: string, templateId: number, periodStart: string | null, periodEnd: string | null) => Promise<void>;
+  trackUrl: (
+    url: string,
+    templateId: number,
+    periodStart: string | null,
+    periodEnd: string | null,
+    keepManualEdits: boolean,
+  ) => Promise<void>;
   addReimportConfig: (input: ReimportConfigInput) => Promise<void>;
   updateReimportConfig: (id: number, input: Omit<ReimportConfigInput, "sourceUrl" | "templateId">) => Promise<void>;
   setConfigCheckDisabled: (id: number, disabled: boolean) => Promise<void>;
@@ -206,8 +214,14 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
     setDismissed((prev) => new Set(prev).add(configId));
   }
 
-  async function trackUrl(url: string, templateId: number, periodStart: string | null, periodEnd: string | null) {
-    await trackUrlForAutoReimport(url, templateId, periodStart, periodEnd);
+  async function trackUrl(
+    url: string,
+    templateId: number,
+    periodStart: string | null,
+    periodEnd: string | null,
+    keepManualEdits: boolean,
+  ) {
+    await trackUrlForAutoReimport(url, templateId, periodStart, periodEnd, keepManualEdits);
     // A fresh entry, not a patch to an existing one — re-fetch rather than
     // try to hand-construct the rest of TrackedPaymentUrl's/ReimportConfig's
     // shape client-side.
@@ -249,6 +263,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
         lastImportedAt: t?.importedAt ?? "",
         resolvedPeriodStart: start,
         resolvedPeriodEnd: end,
+        keepManualEdits: c.keepManualEdits,
       };
     });
 

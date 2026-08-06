@@ -127,6 +127,10 @@ interface PaymentPreviewRow {
   /** Every non-blank column the template left unmapped on this row — kept for history/audit instead of discarded. */
   extraFields: Record<string, string>;
   category: RowCategory;
+  /** Set alongside `isDuplicate`/`category === "duplicate"` — the current payment_shifts row this one matches (see `findDuplicatePaymentShifts`), linked via `previousShiftId` if reprocessed. `null` for every other category. */
+  matchedShiftId: number | null;
+  /** Whether that matched row was a deliberate manual action (editar valor/fazer pagamento/voltar para pendente), not an import — combined with the `keepManualEdits` setting, this decides whether the row can even be selected for reprocessing. */
+  matchedEditedManually: boolean;
 }
 
 interface PaymentFileResult {
@@ -253,6 +257,16 @@ export default function ImportPaymentsPage() {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  // Whether a "duplicate" row whose current match was edited manually
+  // (editar valor/fazer pagamento/voltar para pendente) can still be
+  // reprocessed on THIS save — see the checkbox/badge logic below. Not a
+  // persisted preference: defaults to on for a fresh import, replayed from
+  // the reimport config's own stored value on an automatic reimport (see
+  // `handleReimportFromUrl`), and carried into a new config's own
+  // `keepManualEdits` if "Rastrear atualizações automaticamente" is checked
+  // (see `handleSave`'s `trackUrl` call).
+  const [keepManualEdits, setKeepManualEdits] = useState(true);
+
   useEffect(() => {
     listPaymentTemplates().then(setTemplates);
   }, []);
@@ -347,6 +361,7 @@ export default function ImportPaymentsPage() {
     setUrlInput("");
     setTrackAutoUpdates(false);
     setIsAutoReimport(false);
+    setKeepManualEdits(true);
     cancelPreview();
     setError(null);
   }
@@ -462,6 +477,9 @@ export default function ImportPaymentsPage() {
     // context when it built this flag.
     setPeriodStart(flag.resolvedPeriodStart ?? "");
     setPeriodEnd(flag.resolvedPeriodEnd ?? "");
+    // Same replay for the config's own choice — not whatever `reset()` just
+    // defaulted to.
+    setKeepManualEdits(flag.keepManualEdits);
 
     let fullTemplate = null;
     try {
@@ -626,6 +644,9 @@ export default function ImportPaymentsPage() {
               paymentStatus:
                 resolvePaymentStatus(selectedTemplate.statusRules, applied_row.fields) ?? "pendente",
               extraFields: applied_row.extraFields,
+              // Filled in below, once `findDuplicatePaymentShifts` has actually run against the batch.
+              matchedShiftId: null,
+              matchedEditedManually: false,
             };
 
             // No fixed header row anymore — a physical row is only "real
@@ -705,7 +726,7 @@ export default function ImportPaymentsPage() {
       }
 
       const dbCheckCandidates = candidates.filter((r) => r.category !== "duplicate-in-file");
-      const dupIndices = await findDuplicatePaymentShifts(
+      const dupMatches = await findDuplicatePaymentShifts(
         dbCheckCandidates.map((r) => ({
           employeeId: r.employee!.id,
           workDate: r.workDate!,
@@ -715,9 +736,11 @@ export default function ImportPaymentsPage() {
           scheduleEndMinutes: r.scheduleEndMinutes,
         })),
       );
-      dupIndices.forEach((i) => {
+      dupMatches.forEach((match, i) => {
         dbCheckCandidates[i].isDuplicate = true;
         dbCheckCandidates[i].category = "duplicate";
+        dbCheckCandidates[i].matchedShiftId = match.shiftId;
+        dbCheckCandidates[i].matchedEditedManually = match.editedManually;
       });
 
       const defaultSelected = new Set<number>();
@@ -790,7 +813,7 @@ export default function ImportPaymentsPage() {
     }
 
     if (dbCheckTargets.length > 0) {
-      const dupIndices = await findDuplicatePaymentShifts(
+      const dupMatches = await findDuplicatePaymentShifts(
         dbCheckTargets.map((r) => ({
           employeeId: employee.id,
           workDate: r.workDate!,
@@ -800,9 +823,11 @@ export default function ImportPaymentsPage() {
           scheduleEndMinutes: r.scheduleEndMinutes,
         })),
       );
-      dupIndices.forEach((i) => {
+      dupMatches.forEach((match, i) => {
         dbCheckTargets[i].isDuplicate = true;
         dbCheckTargets[i].category = "duplicate";
+        dbCheckTargets[i].matchedShiftId = match.shiftId;
+        dbCheckTargets[i].matchedEditedManually = match.editedManually;
       });
     }
 
@@ -903,6 +928,14 @@ export default function ImportPaymentsPage() {
           scheduleEndMinutes: row.scheduleEndMinutes,
           status: row.paymentStatus,
           extraData: Object.keys(row.extraFields).length > 0 ? row.extraFields : null,
+          // "duplicate" rows are reprocessing an existing shift, not creating
+          // an independent new one — links this new row back to the current
+          // one it supersedes (see `findDuplicatePaymentShifts`), same
+          // append-only pattern as "Fazer pagamento"/"Editar valor". A
+          // protected match (edited_manually + keepManualEdits) never gets
+          // here selected in the first place — the checkbox is disabled for
+          // those (see `canSelect` above).
+          previousShiftId: row.category === "duplicate" ? row.matchedShiftId : null,
         });
         savedFileHashes.add(fileHash);
       }
@@ -927,7 +960,7 @@ export default function ImportPaymentsPage() {
         for (const url of savedUrls) {
           const alreadyTracked = trackedFiles.some((t) => t.sourceUrl === url);
           if (!alreadyTracked) {
-            await trackUrl(url, selectedTemplate.id, periodStart || null, periodEnd || null);
+            await trackUrl(url, selectedTemplate.id, periodStart || null, periodEnd || null, keepManualEdits);
           }
         }
       }
@@ -1012,6 +1045,24 @@ export default function ImportPaymentsPage() {
                 Filtra pela coluna de data do template. Deixe em branco para processar o relatório
                 inteiro.
               </p>
+            </div>
+
+            <div className="field" style={{ maxWidth: "28rem", marginBottom: "1.2rem" }}>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", fontWeight: 400 }}>
+                <input
+                  type="checkbox"
+                  checked={keepManualEdits}
+                  onChange={(e) => setKeepManualEdits(e.target.checked)}
+                  style={{ marginTop: "0.2rem" }}
+                />
+                <span>
+                  Manter registros atualizados manualmente
+                  <span className="muted" style={{ display: "block", fontSize: "0.78rem" }}>
+                    Uma linha duplicada de um turno já pago, revertido ou com valor corrigido à mão
+                    não é reprocessada — o registro manual continua sendo o vigente.
+                  </span>
+                </span>
+              </label>
             </div>
 
             <div className="field">
@@ -1390,7 +1441,16 @@ export default function ImportPaymentsPage() {
                         }
 
                         const { row, index } = item;
-                        const canSelect = Boolean(row.employee) && row.category !== "duplicate-in-file";
+                        // A duplicate whose current match was edited by hand (Fazer
+                        // pagamento/Voltar para pendente/Editar valor) and the
+                        // "Manter registros atualizados manualmente" setting is on
+                        // — reprocessing it would be a no-op at save time, so it's
+                        // not offered as selectable in the first place, instead of a
+                        // checkbox that silently does nothing once checked.
+                        const protectedByManualEdit =
+                          row.category === "duplicate" && row.matchedEditedManually && keepManualEdits;
+                        const canSelect =
+                          Boolean(row.employee) && row.category !== "duplicate-in-file" && !protectedByManualEdit;
                         return (
                           <tr key={index}>
                             <td className="checkbox-cell">
@@ -1399,6 +1459,11 @@ export default function ImportPaymentsPage() {
                                 checked={selectedRows.has(index)}
                                 onChange={() => toggleRow(index)}
                                 disabled={!canSelect}
+                                title={
+                                  protectedByManualEdit
+                                    ? "Este turno foi atualizado manualmente e está protegido contra reprocessamento — desative em Configurações → Zona de risco → Pagamentos para permitir."
+                                    : undefined
+                                }
                                 aria-label={`Selecionar linha ${row.rowNumber}`}
                               />
                             </td>
@@ -1451,7 +1516,15 @@ export default function ImportPaymentsPage() {
                                 </span>
                               )}
                               {row.category === "duplicate" &&
-                                (selectedRows.has(index) ? (
+                                (protectedByManualEdit ? (
+                                  <span
+                                    className="badge info"
+                                    title="Todas as colunas batem com um turno já salvo, mas esse turno foi atualizado manualmente — reprocessar não vai sobrescrevê-lo."
+                                  >
+                                    <AlertTriangle size={13} />
+                                    Editado manualmente — mantido
+                                  </span>
+                                ) : selectedRows.has(index) ? (
                                   <span className="badge warn">
                                     <AlertTriangle size={13} />
                                     Será reprocessado

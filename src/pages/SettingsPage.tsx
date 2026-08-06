@@ -51,6 +51,14 @@ export default function SettingsPage() {
   // became explicit choices (a template has no FK into any of those three).
   const [keepPaymentTemplates, setKeepPaymentTemplates] = useState(true);
   const [keepEmployeeTemplates, setKeepEmployeeTemplates] = useState(true);
+  // Whether "Apagar tudo" spares payment_shifts rows edited by hand (Fazer
+  // pagamento/Voltar para pendente/Editar valor) instead of wiping every
+  // one — an "Apagar tudo" option like the others above, not a persisted
+  // preference (never saved anywhere, just re-chosen each visit like
+  // `keepCompanies`/`keepPaymentTemplates`). Only meaningful alongside
+  // `keepEmployees` (a kept shift's employee_id is NOT NULL), so it's
+  // disabled below unless that's already checked.
+  const [keepManuallyEditedShifts, setKeepManuallyEditedShifts] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,6 +98,14 @@ export default function SettingsPage() {
       setKeepCompanies(true);
     }
   }
+
+  // `keepManuallyEditedShifts` only makes sense with employees kept too (a
+  // kept shift's employee_id is NOT NULL) — covers every path that turns
+  // `keepEmployees` off (the three toggle functions above each do it
+  // differently) instead of repeating the same reset in all three.
+  useEffect(() => {
+    if (!keepEmployees) setKeepManuallyEditedShifts(false);
+  }, [keepEmployees]);
 
   function refreshStorage() {
     setLoadingStorage(true);
@@ -220,7 +236,14 @@ export default function SettingsPage() {
         }
         await backupAppData(destPath, backupDb, backupFiles);
       }
-      await clearAllData({ keepCompanies, keepClients, keepEmployees, keepPaymentTemplates, keepEmployeeTemplates });
+      await clearAllData({
+        keepCompanies,
+        keepClients,
+        keepEmployees,
+        keepPaymentTemplates,
+        keepEmployeeTemplates,
+        keepManuallyEditedShifts,
+      });
       await clearImportsDir();
       navigate("/");
     } catch (e) {
@@ -382,6 +405,7 @@ export default function SettingsPage() {
           <AlertTriangle size={18} />
           Zona de risco
         </h3>
+
         <p className="muted" style={{ fontSize: "0.85rem" }}>
           Sempre apaga todo o histórico de importações e todos os PDFs salvos — isso não tem como
           escolher, já que é justamente o que dá pra recriar reimportando os mesmos arquivos. Como
@@ -419,6 +443,23 @@ export default function SettingsPage() {
                 onChange={(e) => toggleKeepEmployees(e.target.checked)}
               />
               Manter colaboradores
+            </label>
+            <label
+              style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}
+              title={
+                keepEmployees
+                  ? undefined
+                  : "Exige manter colaboradores — um turno mantido continua precisando de um colaborador válido"
+              }
+            >
+              <input
+                type="checkbox"
+                checked={keepManuallyEditedShifts}
+                disabled={!keepEmployees}
+                onChange={(e) => setKeepManuallyEditedShifts(e.target.checked)}
+              />
+              Manter turnos de pagamento atualizados manualmente (Fazer pagamento/Editar valor/Voltar
+              para pendente)
             </label>
           </div>
         </div>
