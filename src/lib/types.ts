@@ -32,6 +32,26 @@ export const NIGHT_SHIFT_RULE_LABELS: Record<NightShiftRule, string> = {
 /** A payment shift classified against its company's night window — see `classifyShiftPeriod` in `format.ts`. */
 export type ShiftPeriod = "diurno" | "noturno";
 
+/**
+ * The Pagamentos list's "Horário" filter — unlike `NightShiftRule` (which
+ * tests a shift's start/end against a *range*), this tests one side of the
+ * shift's own horário against a single reference point the user picks.
+ */
+export type ScheduleTimeRule = "start-before" | "start-after" | "end-before" | "end-after";
+
+export const SCHEDULE_TIME_RULE_LABELS: Record<ScheduleTimeRule, string> = {
+  "start-before": "Início antes de",
+  "start-after": "Início depois de",
+  "end-before": "Fim antes de",
+  "end-after": "Fim depois de",
+};
+
+export interface ScheduleTimeFilter {
+  rule: ScheduleTimeRule;
+  /** "HH:MM" */
+  time: string;
+}
+
 export interface Employee {
   name: string;
   cpf: string;

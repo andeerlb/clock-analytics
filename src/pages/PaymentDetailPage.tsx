@@ -1,14 +1,16 @@
-import { AlertCircle, CheckCircle2, Clock3, History, Info, Moon, RotateCcw, Sun } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock3, History, Info, Moon, Pencil, RotateCcw, Sun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
 import ConfirmPaymentModal from "../components/ConfirmPaymentModal";
 import DateRangePicker from "../components/DateRangePicker";
+import EditShiftValueModal from "../components/EditShiftValueModal";
 import ExtraColumnsModal from "../components/ExtraColumnsModal";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
 import ShiftHistoryModal from "../components/ShiftHistoryModal";
 import {
+  editPaymentShiftValue,
   getCompany,
   getEmployee,
   listPaymentShiftsForEmployeeMonth,
@@ -78,6 +80,9 @@ export default function PaymentDetailPage() {
   const [revertingShift, setRevertingShift] = useState<PaymentShiftRow | null>(null);
   const [reverting, setReverting] = useState(false);
   const [revertError, setRevertError] = useState<string | null>(null);
+  const [editingValueShift, setEditingValueShift] = useState<PaymentShiftRow | null>(null);
+  const [editingValue, setEditingValue] = useState(false);
+  const [editValueError, setEditValueError] = useState<string | null>(null);
   const [viewingHistoryId, setViewingHistoryId] = useState<number | null>(null);
   const [viewingExtraData, setViewingExtraData] = useState<Record<string, string> | null>(null);
 
@@ -121,6 +126,21 @@ export default function PaymentDetailPage() {
       setRevertError(String(e instanceof Error ? e.message : e));
     } finally {
       setReverting(false);
+    }
+  }
+
+  async function handleConfirmEditValue(amount: number) {
+    if (!editingValueShift || !competencia) return;
+    setEditingValue(true);
+    setEditValueError(null);
+    try {
+      await editPaymentShiftValue(editingValueShift.id, amount);
+      setShifts(await listPaymentShiftsForEmployeeMonth(id, competencia));
+      setEditingValueShift(null);
+    } catch (e) {
+      setEditValueError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setEditingValue(false);
     }
   }
 
@@ -283,7 +303,20 @@ export default function PaymentDetailPage() {
                           ? formatMinutesAsTime(shiftDurationMinutes(s.scheduleStartMinutes!, s.scheduleEndMinutes!))
                           : "—"}
                       </td>
-                      <td>{value !== null ? formatCurrencyBRL(value) : "—"}</td>
+                      <td>
+                        {value !== null ? formatCurrencyBRL(value) : "—"}
+                        {(s.status === "pendente" || s.status === "erro") && (
+                          <button
+                            type="button"
+                            className="ghost"
+                            style={{ padding: "0.2rem", marginLeft: "0.4rem" }}
+                            onClick={() => setEditingValueShift(s)}
+                            title="Editar valor"
+                          >
+                            <Pencil size={12} />
+                          </button>
+                        )}
+                      </td>
                       <td>
                         {s.extraData && Object.keys(s.extraData).length > 0 ? (
                           <button
@@ -378,6 +411,20 @@ export default function PaymentDetailPage() {
           onCancel={() => {
             setRevertingShift(null);
             setRevertError(null);
+          }}
+        />
+      )}
+
+      {editingValueShift && (
+        <EditShiftValueModal
+          shift={editingValueShift}
+          currentValue={shiftValue(editingValueShift)}
+          busy={editingValue}
+          error={editValueError}
+          onConfirm={handleConfirmEditValue}
+          onCancel={() => {
+            setEditingValueShift(null);
+            setEditValueError(null);
           }}
         />
       )}

@@ -1,6 +1,6 @@
 import Database from "@tauri-apps/plugin-sql";
 import { overtimeMinutesForDay, sumIntervalMinutes } from "./analysis";
-import { normalizeCnpj, normalizeCpf } from "./format";
+import { normalizeCnpj, normalizeCpf, parseTimeToMinutes } from "./format";
 import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "./periodStatus";
 import type {
   ConflictInfo,
@@ -29,6 +29,7 @@ import type {
   PaymentShiftSummaryRow,
   PaymentStatusRule,
   PaymentValueRule,
+  ScheduleTimeFilter,
   ShiftPeriod,
   StoredDayRecord,
   StoredImport,
@@ -1966,6 +1967,24 @@ function shiftPeriodSql(): { hasSchedule: string; isNoturno: string } {
   return { hasSchedule: `(${shiftStart} IS NOT NULL AND ${shiftEnd} IS NOT NULL)`, isNoturno };
 }
 
+/**
+ * Row-level SQL for the "Horário" filter: whether a shift's own start (or
+ * end) falls before/after a single reference time the user picked — unlike
+ * `shiftPeriodSql`, there's no range/rule table on the company to read, the
+ * reference time is just a literal supplied by the caller. A shift with no
+ * parsed horário never matches (same "missing schedule never matches"
+ * stance as `shiftPeriodSql`'s `hasSchedule` guard). Returns `null` for an
+ * unparseable time, meaning "don't filter" — same as the filter being unset.
+ */
+function scheduleTimeConditionSql(filter: ScheduleTimeFilter, params: (string | number)[]): string | null {
+  const referenceMinutes = parseTimeToMinutes(filter.time);
+  if (referenceMinutes === null) return null;
+  const field = filter.rule.startsWith("start") ? "ps.schedule_start_minutes" : "ps.schedule_end_minutes";
+  const op = filter.rule.endsWith("before") ? "<" : ">";
+  params.push(referenceMinutes);
+  return `(${field} IS NOT NULL AND ${field} ${op} $${params.length})`;
+}
+
 export interface ListPaymentShiftSummariesQuery {
   /** Substring match on employee name — case-insensitive only for ASCII (SQLite's `LOWER()` doesn't case-fold accents). */
   search?: string;
@@ -1977,6 +1996,8 @@ export interface ListPaymentShiftSummariesQuery {
   statuses: PaymentShiftStatus[];
   /** Diurno/noturno, per `shiftPeriodSql` — named `shiftPeriods` (not `periods`) to not collide with `periodStart`/`periodEnd` above, which are a date range. */
   shiftPeriods: ShiftPeriod[];
+  /** The "Horário" filter — `null`/omitted means unfiltered, unlike `statuses`/`shiftPeriods` where an empty array means "match nothing". */
+  scheduleTimeFilter?: ScheduleTimeFilter | null;
   page: number;
   pageSize: number;
 }
@@ -2030,6 +2051,10 @@ export async function listPaymentShiftSummaries(
         : `SUM(CASE WHEN ${hasSchedule} AND NOT ${isNoturno} THEN 1 ELSE 0 END) > 0`,
     );
     havingParts.push(`(${shiftPeriodConditions.join(" OR ")})`);
+  }
+  if (query.scheduleTimeFilter) {
+    const cond = scheduleTimeConditionSql(query.scheduleTimeFilter, params);
+    if (cond) havingParts.push(`SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) > 0`);
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -2131,6 +2156,10 @@ export async function listPaymentShiftsForReport(
       query.shiftPeriods[0] === "noturno" ? `(${hasSchedule} AND ${isNoturno})` : `(${hasSchedule} AND NOT ${isNoturno})`,
     );
   }
+  if (query.scheduleTimeFilter) {
+    const cond = scheduleTimeConditionSql(query.scheduleTimeFilter, params);
+    if (cond) conditions.push(cond);
+  }
   const shiftPeriodExpr = `(CASE WHEN NOT ${hasSchedule} THEN NULL WHEN ${isNoturno} THEN 'noturno' ELSE 'diurno' END)`;
 
   return db.select<PaymentShiftReportRow[]>(
@@ -2212,6 +2241,7 @@ interface PaymentShiftCoreFields {
   scheduleEndMinutes: number | null;
   /** Raw JSON string as stored (or NULL) — passed straight through into the new row, not re-parsed, since a status transition never changes what was in the original file. */
   extraData: string | null;
+  status: PaymentShiftStatus;
 }
 
 /** Shared by every status-transition function below — the fields that always carry over unchanged into the new row. */
@@ -2220,7 +2250,7 @@ async function readPaymentShiftCoreFields(db: Database, shiftId: number): Promis
     `SELECT employee_id AS employeeId, template_id AS templateId, source_file_id AS sourceFileId,
             local, work_date AS workDate, role,
             schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes,
-            extra_data AS extraData
+            extra_data AS extraData, status
      FROM payment_shifts WHERE id = $1`,
     [shiftId],
   );
@@ -2287,6 +2317,47 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
       s.role,
       s.scheduleStartMinutes,
       s.scheduleEndMinutes,
+      shiftId,
+      s.extraData,
+    ],
+  );
+  return result.lastInsertId as number;
+}
+
+/**
+ * Manually overrides a shift's Valor — same append-only pattern as "Fazer
+ * pagamento"/"Voltar para pendente": a brand-new row carrying the given
+ * `amount` and `previousShiftId` linked back to `shiftId`, whose own row is
+ * left untouched. Status carries over unchanged (unlike those other two
+ * transitions, which each force a specific status) — this only ever
+ * corrects the value, never the state of the shift.
+ *
+ * Only for `pendente`/`erro` shifts, where the Valor is just a live
+ * estimate from the company's rules until it's actually paid — once a shift
+ * is `pago` its amount is the historical record of what was paid and must
+ * never be edited, so this refuses to touch one.
+ */
+export async function editPaymentShiftValue(shiftId: number, amount: number): Promise<number> {
+  const db = await getDb();
+  const s = await readPaymentShiftCoreFields(db, shiftId);
+  if (s.status === "pago") throw new Error("Não é possível editar o valor de um turno já pago.");
+
+  const result = await db.execute(
+    `INSERT INTO payment_shifts
+       (employee_id, template_id, source_file_id, local, work_date, role,
+        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    [
+      s.employeeId,
+      s.templateId,
+      s.sourceFileId,
+      s.local,
+      s.workDate,
+      s.role,
+      s.scheduleStartMinutes,
+      s.scheduleEndMinutes,
+      s.status,
+      amount,
       shiftId,
       s.extraData,
     ],

@@ -6,6 +6,7 @@ import DateRangePicker from "../components/DateRangePicker";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
 import PdfViewerModal from "../components/PdfViewerModal";
+import ScheduleTimeFilterDropdown from "../components/ScheduleTimeFilterDropdown";
 import { PAYMENTS_PAGE_SIZE_OPTIONS, usePaymentsFilters } from "../contexts/FiltersContext";
 import { revealInFileManager } from "../lib/api";
 import { listClients, listCompanies, listPaymentShiftSummaries, type ClientRow, type CompanyRow } from "../lib/db";
@@ -46,6 +47,8 @@ export default function PaymentsPage() {
     setSelectedStatuses,
     selectedShiftPeriods,
     setSelectedShiftPeriods,
+    scheduleTimeFilter,
+    setScheduleTimeFilter,
     page,
     setPage,
     pageSize,
@@ -82,6 +85,7 @@ export default function PaymentsPage() {
       periodEnd: periodEnd || undefined,
       statuses: Array.from(selectedStatuses),
       shiftPeriods: Array.from(selectedShiftPeriods),
+      scheduleTimeFilter,
       page,
       pageSize,
     })
@@ -104,6 +108,7 @@ export default function PaymentsPage() {
     periodEnd,
     selectedStatuses,
     selectedShiftPeriods,
+    scheduleTimeFilter,
     page,
     pageSize,
   ]);
@@ -162,6 +167,7 @@ export default function PaymentsPage() {
         periodEnd: periodEnd || undefined,
         statuses: Array.from(selectedStatuses),
         shiftPeriods: Array.from(selectedShiftPeriods),
+        scheduleTimeFilter,
       });
       if (result.rowCount === 0) {
         setPdfError("Nenhum turno para os filtros selecionados.");
@@ -196,7 +202,8 @@ export default function PaymentsPage() {
       periodStart ||
       periodEnd ||
       selectedStatuses.size < STATUS_OPTIONS.length ||
-      selectedShiftPeriods.size < SHIFT_PERIOD_OPTIONS.length,
+      selectedShiftPeriods.size < SHIFT_PERIOD_OPTIONS.length ||
+      scheduleTimeFilter !== null,
   );
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
@@ -327,6 +334,10 @@ export default function PaymentsPage() {
               allLabel="Diurno e noturno"
               noneLabel="Nenhum"
             />
+          </div>
+          <div className="field">
+            <label>Horário</label>
+            <ScheduleTimeFilterDropdown value={scheduleTimeFilter} onChange={setScheduleTimeFilter} />
           </div>
         </div>
 
