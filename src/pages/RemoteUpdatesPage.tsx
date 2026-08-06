@@ -1,3 +1,4 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   AlertCircle,
   AlertTriangle,
@@ -10,7 +11,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import DateRangePicker from "../components/DateRangePicker";
 import Pagination from "../components/Pagination";
@@ -104,6 +105,7 @@ const BLANK_NEW_CONFIG: ConfigDraft & { templateId: string } = {
 };
 
 export default function RemoteUpdatesPage() {
+  const navigate = useNavigate();
   const {
     remoteUpdates,
     dismissRemoteUpdate,
@@ -113,11 +115,26 @@ export default function RemoteUpdatesPage() {
     updateReimportConfig,
     setConfigCheckDisabled,
     deleteReimportConfig,
-    checking,
     checkingUrls,
     forceCheckUrl,
     forceCheckAll,
   } = useRemoteFileUpdates();
+
+  // Own loading flag for the global "Forçar verificação de todas" button —
+  // deliberately NOT derived from `checkingUrls`/`checking`, which reflect
+  // ANY check in flight (the regular scheduled tick, or a single config's
+  // own "Forçar verificação"). Tying this button to that shared state made
+  // it flip to "Verificando..." whenever an unrelated single check ran,
+  // which reads as if "forçar todas" had been triggered when it hadn't.
+  const [forcingAll, setForcingAll] = useState(false);
+  async function handleForceCheckAll() {
+    setForcingAll(true);
+    try {
+      await forceCheckAll();
+    } finally {
+      setForcingAll(false);
+    }
+  }
 
   // Live "next check in Xm Ys" per config — ticks once a second purely to
   // redraw against `trackedFiles`'/`reimportConfigs`' timestamps.
@@ -297,12 +314,12 @@ export default function RemoteUpdatesPage() {
           <button
             type="button"
             className="ghost"
-            onClick={() => forceCheckAll()}
-            disabled={trackedFiles.length === 0 || checking}
+            onClick={handleForceCheckAll}
+            disabled={trackedFiles.length === 0 || forcingAll}
             title="Verifica todos os arquivos rastreados agora, ignorando os intervalos configurados"
           >
-            <RefreshCw size={14} className={checking ? "spin" : undefined} style={{ marginRight: "0.35rem" }} />
-            {checking ? "Verificando..." : "Forçar verificação de todas"}
+            <RefreshCw size={14} className={forcingAll ? "spin" : undefined} style={{ marginRight: "0.35rem" }} />
+            {forcingAll ? "Verificando..." : "Forçar verificação de todas"}
           </button>
         </div>
         {trackedFiles.length === 0 && (
@@ -326,14 +343,24 @@ export default function RemoteUpdatesPage() {
                   <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
                     <FileText size={16} style={{ color: "var(--accent)", flexShrink: 0 }} />
                     <span style={{ fontWeight: 600, fontSize: "0.92rem" }}>{t.fileName}</span>
-                    <Link2 size={12} style={{ opacity: 0.5 }} aria-label={t.sourceUrl}>
-                      <title>{t.sourceUrl}</title>
-                    </Link2>
                   </div>
-                  <div className="muted" style={{ fontSize: "0.8rem", marginTop: "0.2rem" }}>
-                    {t.provider || "—"} ·{" "}
-                    {t.lastCheckedAt ? `Última verificação: ${formatDateTime(t.lastCheckedAt)}` : "Nunca verificado"}
-                  </div>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => openUrl(t.sourceUrl)}
+                    title={t.sourceUrl}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.35rem",
+                      marginTop: "0.25rem",
+                      maxWidth: "100%",
+                      fontSize: "0.78rem",
+                    }}
+                  >
+                    <Link2 size={12} style={{ flexShrink: 0 }} />
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.sourceUrl}</span>
+                  </button>
                   {t.lastResult === "error" && t.lastErrorMessage && (
                     <div className="muted" style={{ fontSize: "0.75rem", marginTop: "0.15rem" }}>
                       {t.lastErrorMessage}
@@ -385,9 +412,14 @@ export default function RemoteUpdatesPage() {
                               <button type="button" className="outline" onClick={() => dismissRemoteUpdate(update.configId)}>
                                 Ignorar
                               </button>
-                              <Link to="/import/payments">
-                                <button type="button">Ir para Importar Pagamentos</button>
-                              </Link>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  navigate("/import/payments", { state: { autoReimportConfigId: update.configId } })
+                                }
+                              >
+                                Ir para Importar Pagamentos
+                              </button>
                             </div>
                           </div>
                         )}
@@ -672,7 +704,7 @@ export default function RemoteUpdatesPage() {
       </div>
 
       <div className="card table-card">
-        <div className="page-header" style={{ marginBottom: "1rem" }}>
+        <div className="table-toolbar">
           <h3 style={{ margin: 0 }}>Histórico de verificações</h3>
           <select
             value={logUrlFilter}
@@ -698,9 +730,9 @@ export default function RemoteUpdatesPage() {
               <table>
                 <thead>
                   <tr>
-                    <th>Quando</th>
-                    <th>Arquivo</th>
-                    <th>Resultado</th>
+                    <th style={{ whiteSpace: "nowrap" }}>Quando</th>
+                    <th style={{ maxWidth: 260 }}>Arquivo</th>
+                    <th style={{ whiteSpace: "nowrap" }}>Resultado</th>
                     <th>Detalhes</th>
                   </tr>
                 </thead>
@@ -710,8 +742,13 @@ export default function RemoteUpdatesPage() {
                     const BadgeIcon = badge.icon;
                     return (
                       <tr key={entry.id}>
-                        <td>{formatDateTime(entry.checkedAt)}</td>
-                        <td>{entry.fileName}</td>
+                        <td style={{ whiteSpace: "nowrap" }}>{formatDateTime(entry.checkedAt)}</td>
+                        <td
+                          style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                          title={entry.fileName}
+                        >
+                          {entry.fileName}
+                        </td>
                         <td>
                           <span className={badge.className}>
                             <BadgeIcon size={13} />

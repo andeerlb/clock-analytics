@@ -457,10 +457,19 @@ fn filename_from_content_disposition(header: Option<&str>) -> Option<String> {
     let header = header?;
     for part in header.split(';') {
         let part = part.trim();
-        let value = part
+        // A real header's first `part` is the disposition type itself
+        // (`attachment`), which matches neither prefix — that used to hit
+        // the trailing `?` and bail out of the WHOLE function with `None`
+        // right there, before ever reaching the `filename=`/`filename*=`
+        // part later in the same header. `continue` instead, so a
+        // non-matching part just skips to the next one.
+        let Some(value) = part
             .strip_prefix("filename*=")
             .map(|v| v.trim_start_matches("UTF-8''").trim_start_matches("utf-8''"))
-            .or_else(|| part.strip_prefix("filename="))?;
+            .or_else(|| part.strip_prefix("filename="))
+        else {
+            continue;
+        };
         let cleaned = value.trim_matches('"').trim();
         if !cleaned.is_empty() {
             return Some(cleaned.to_string());
@@ -520,6 +529,17 @@ pub async fn download_payment_file_from_url(
     let last_modified = header_str(response.headers(), reqwest::header::LAST_MODIFIED);
     let content_disposition = header_str(response.headers(), reqwest::header::CONTENT_DISPOSITION);
     let content_length = response.content_length().map(|n| n as i64);
+    // The URL actually served (after following every redirect) — a share
+    // host like OneDrive commonly bounces the request off to its real CDN
+    // blob URL, which is far more likely to carry the real filename than
+    // `parsed` (the original short link, whose only path segment is the
+    // opaque item id — exactly what was showing up as the "file name"
+    // whenever Content-Disposition didn't pan out either).
+    let final_url = response.url().clone();
+    eprintln!(
+        "[download_payment_file_from_url] content-disposition={:?} final_url={}",
+        content_disposition, final_url
+    );
 
     let bytes = response
         .bytes()
@@ -547,7 +567,7 @@ pub async fn download_payment_file_from_url(
     fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
 
     let file_name = filename_from_content_disposition(content_disposition.as_deref())
-        .or_else(|| filename_from_url(&parsed))
+        .or_else(|| filename_from_url(&final_url))
         .unwrap_or_else(|| format!("download.{kind}"));
 
     Ok(DownloadedPaymentFile {

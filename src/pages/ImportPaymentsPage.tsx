@@ -1,3 +1,4 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   AlertCircle,
   AlertTriangle,
@@ -224,7 +225,18 @@ export default function ImportPaymentsPage() {
   // Off by default — tracking is opt-in per save, not an automatic side
   // effect of importing by URL (see trackUrlForAutoReimport's doc comment).
   const [trackAutoUpdates, setTrackAutoUpdates] = useState(false);
-  const { remoteUpdates, dismissRemoteUpdate, setConfigCheckDisabled, trackUrl, trackedFiles } = useRemoteFileUpdates();
+  // True for the duration of a reimport triggered from a "Verificação
+  // automática" flag (handleReimportFromUrl) — this is already a tracked,
+  // already-validated URL, so the format warning, the URL input/"Baixar
+  // arquivo" button and the tracking checkbox (this page is shared with a
+  // regular manual URL import, where all of those still apply) don't make
+  // sense here; the URL itself still shows, just read-only. Cleared back to
+  // false by `reset()` (a fresh save or a new reimport starts clean) and,
+  // as a manual escape hatch, if the user removes the auto-downloaded file
+  // themselves (see `removePath`) — otherwise the URL input would stay
+  // stuck disabled with nothing left to reimport.
+  const [isAutoReimport, setIsAutoReimport] = useState(false);
+  const { remoteUpdates, dismissRemoteUpdate, trackUrl, trackedFiles } = useRemoteFileUpdates();
 
   const [fileResults, setFileResults] = useState<PaymentFileResult[]>(restored?.fileResults ?? []);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(restored?.selectedRows ?? new Set());
@@ -311,7 +323,14 @@ export default function ImportPaymentsPage() {
   }
 
   function removePath(path: string) {
-    setPaths((prev) => prev.filter((p) => p !== path));
+    setPaths((prev) => {
+      const next = prev.filter((p) => p !== path);
+      // The user tore down the auto-downloaded file themselves — unlock
+      // manual URL entry again instead of leaving it stuck disabled with
+      // nothing left to reimport.
+      if (next.length === 0) setIsAutoReimport(false);
+      return next;
+    });
   }
 
   function cancelPreview() {
@@ -325,7 +344,9 @@ export default function ImportPaymentsPage() {
   function reset() {
     setPaths([]);
     setUrlSourceByPath(new Map());
+    setUrlInput("");
     setTrackAutoUpdates(false);
+    setIsAutoReimport(false);
     cancelPreview();
     setError(null);
   }
@@ -394,7 +415,11 @@ export default function ImportPaymentsPage() {
         return next;
       });
       addPaths([result.path]);
-      setUrlInput("");
+      // Manual download: clear the field so the next URL can be typed.
+      // Automatic reimport: keep it showing (read-only, see isAutoReimport)
+      // — the user asked to still see which file this is, not have the
+      // field go blank right after.
+      setUrlInput(autoProcessAfter ? targetUrl : "");
       if (autoProcessAfter) setPendingAutoProcess(true);
     } catch (e) {
       setError(String(e));
@@ -431,6 +456,7 @@ export default function ImportPaymentsPage() {
     dismissRemoteUpdate(flag.configId);
     reset();
     setImportMode("url");
+    setIsAutoReimport(true);
     // Replays this specific reimport config's Período — already resolved
     // (a relative one as of right now, not a stale cached date) by the
     // context when it built this flag.
@@ -441,15 +467,34 @@ export default function ImportPaymentsPage() {
     try {
       fullTemplate = await getPaymentTemplate(flag.templateId);
     } catch {
-      // The config's template was deleted since it was created — leave the
-      // URL filled in and let the user pick a template themselves, same as
-      // a fresh URL import ("Baixar arquivo" already requires one).
+      // The config's template was deleted since it was created — nothing
+      // was actually downloaded automatically, so this falls back to the
+      // regular manual flow: leave the URL filled in, but let the user
+      // pick a template and take it from there themselves (warning box,
+      // editable input and "Baixar arquivo" all need to be back).
+      setIsAutoReimport(false);
       setUrlInput(flag.sourceUrl);
       return;
     }
     setTemplateId(String(fullTemplate.id));
     await handleDownloadFromUrl(flag.sourceUrl, true, fullTemplate);
   }
+
+  // "Ir para Importar Pagamentos", clicked from a specific reimport config's
+  // banner on the Verificação automática page, passes that config's id
+  // through navigation state — the whole point is landing here with the
+  // reimport already running, not just on the right tab waiting for another
+  // click. `location.state` is cleared right away (`replace`) so this fires
+  // exactly once per navigation, not again on a later re-render or on
+  // browser back/forward landing back on this same history entry.
+  useEffect(() => {
+    const configId = (location.state as { autoReimportConfigId?: number } | null)?.autoReimportConfigId;
+    if (configId === undefined) return;
+    navigate(location.pathname, { replace: true, state: null });
+    const flag = remoteUpdates.find((u) => u.configId === configId);
+    if (flag) handleReimportFromUrl(flag);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
 
   const shiftRows = useMemo(() => fileResults.flatMap((r) => r.rows), [fileResults]);
   const shiftRowFileHash = useMemo(
@@ -921,36 +966,6 @@ export default function ImportPaymentsPage() {
 
       {error && <div className="error-box">{error}</div>}
       {successMessage && <div className="success-box">{successMessage}</div>}
-      {remoteUpdates
-        .map((u) => (
-          <div
-            className="warning-box"
-            key={u.configId}
-            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem" }}
-          >
-            <span>
-              <AlertTriangle size={15} style={{ verticalAlign: "-2px", marginRight: "0.4rem" }} />
-              O arquivo remoto de <strong>{u.fileName}</strong> (importado em {formatDateTime(u.lastImportedAt)})
-              parece ter sido atualizado — configuração <strong>{u.configLabel}</strong>.
-            </span>
-            <div style={{ display: "flex", gap: "0.5rem", flexShrink: 0 }}>
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => setConfigCheckDisabled(u.configId, true)}
-                title="Não verificar mais essa configuração automaticamente (pode reativar em Verificação automática)"
-              >
-                Desativar verificação automática
-              </button>
-              <button type="button" className="outline" onClick={() => dismissRemoteUpdate(u.configId)}>
-                Ignorar
-              </button>
-              <button type="button" onClick={() => handleReimportFromUrl(u)}>
-                Reimportar
-              </button>
-            </div>
-          </div>
-        ))}
 
       <div className="import-layout">
         <div className="import-main">
@@ -1056,56 +1071,72 @@ export default function ImportPaymentsPage() {
                 </div>
               ) : (
                 <>
-                  <div className="warning-box">
-                    <AlertTriangle size={14} style={{ verticalAlign: "-2px", marginRight: "0.4rem" }} />
-                    Apenas arquivos do Microsoft Office (.xlsx, .xls) ou OpenDocument (.ods) são
-                    suportados por URL. O link precisa ser de download direto e anônimo — não pode
-                    exigir login.
-                  </div>
+                  {!isAutoReimport && (
+                    <div className="warning-box">
+                      <AlertTriangle size={14} style={{ verticalAlign: "-2px", marginRight: "0.4rem" }} />
+                      Apenas arquivos do Microsoft Office (.xlsx, .xls) ou OpenDocument (.ods) são
+                      suportados por URL. O link precisa ser de download direto e anônimo — não pode
+                      exigir login.
+                    </div>
+                  )}
                   <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.8rem" }}>
                     <input
                       type="url"
                       placeholder="https://exemplo.com/arquivo.xlsx"
                       value={urlInput}
                       onChange={(e) => setUrlInput(e.target.value)}
-                      disabled={urlDownloading}
+                      disabled={urlDownloading || isAutoReimport}
+                      title={isAutoReimport ? "Arquivo desta reimportação automática — não editável aqui." : undefined}
                       style={{ flex: 1 }}
                     />
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => handleDownloadFromUrl()}
-                      disabled={!selectedTemplate || !urlInput.trim() || urlDownloading}
-                      title={selectedTemplate ? undefined : "Selecione um template primeiro"}
-                    >
-                      {urlDownloading ? "Baixando..." : "Baixar arquivo"}
-                    </button>
+                    {isAutoReimport ? (
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={reset}
+                        title="Sai da reimportação automática e libera a tela para importar outro arquivo"
+                      >
+                        Processar outro arquivo
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => handleDownloadFromUrl()}
+                        disabled={!selectedTemplate || !urlInput.trim() || urlDownloading}
+                        title={selectedTemplate ? undefined : "Selecione um template primeiro"}
+                      >
+                        {urlDownloading ? "Baixando..." : "Baixar arquivo"}
+                      </button>
+                    )}
                   </div>
-                  <label
-                    style={{
-                      display: "flex",
-                      alignItems: "flex-start",
-                      gap: "0.5rem",
-                      marginTop: "0.8rem",
-                      fontSize: "0.85rem",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={trackAutoUpdates}
-                      onChange={(e) => setTrackAutoUpdates(e.target.checked)}
-                      style={{ marginTop: "0.2rem" }}
-                    />
-                    <span>
-                      Rastrear atualizações automaticamente
-                      <span className="muted" style={{ display: "block", fontSize: "0.78rem" }}>
-                        Verifica periodicamente se o arquivo mudou no servidor de origem e avisa
-                        (com a opção de reimportar) quando isso acontece — pode ser gerenciado
-                        depois em "Verificação automática". Só se aplica ao salvar; sem isso, este
-                        arquivo não fica sendo monitorado.
+                  {!isAutoReimport && (
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: "0.5rem",
+                        marginTop: "0.8rem",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={trackAutoUpdates}
+                        onChange={(e) => setTrackAutoUpdates(e.target.checked)}
+                        style={{ marginTop: "0.2rem" }}
+                      />
+                      <span>
+                        Rastrear atualizações automaticamente
+                        <span className="muted" style={{ display: "block", fontSize: "0.78rem" }}>
+                          Verifica periodicamente se o arquivo mudou no servidor de origem e avisa
+                          (com a opção de reimportar) quando isso acontece — pode ser gerenciado
+                          depois em "Verificação automática". Só se aplica ao salvar; sem isso, este
+                          arquivo não fica sendo monitorado.
+                        </span>
                       </span>
-                    </span>
-                  </label>
+                    </label>
+                  )}
                 </>
               )}
 
@@ -1122,7 +1153,10 @@ export default function ImportPaymentsPage() {
                         <div className="file-row-info">
                           <div className="file-name">
                             {info?.fileName ?? p}
-                            {provenance && (
+                            {/* Redundant once the URL is already shown, read-only, right above
+                                (the auto-reimport case) — only worth a hover hint here when
+                                this row is the only place the source URL shows at all. */}
+                            {provenance && !isAutoReimport && (
                               <Link2
                                 size={12}
                                 style={{ marginLeft: "0.4rem", opacity: 0.6, verticalAlign: "-1px" }}
@@ -1565,24 +1599,33 @@ export default function ImportPaymentsPage() {
                       <div className="file-row-info">
                         <div className="file-name" title={f.fileName}>
                           {f.fileName}
-                          {f.sourceUrl && (
-                            <Link2
-                              size={12}
-                              style={{ marginLeft: "0.4rem", opacity: f.checkDisabled ? 0.35 : 0.6, verticalAlign: "-1px" }}
-                              aria-label={
-                                f.checkDisabled
-                                  ? `Verificação automática desativada — ${f.sourceUrl}`
-                                  : `Verificação automática de atualização ativa — ${f.sourceUrl}`
-                              }
-                            >
-                              <title>
-                                {f.checkDisabled
-                                  ? `Verificação automática desativada — ${f.sourceUrl}`
-                                  : `Verificação automática de atualização ativa — ${f.sourceUrl}`}
-                              </title>
-                            </Link2>
-                          )}
                         </div>
+                        {f.sourceUrl && (
+                          <button
+                            type="button"
+                            className="link-button"
+                            onClick={() => openUrl(f.sourceUrl!)}
+                            title={
+                              f.checkDisabled
+                                ? `Verificação automática desativada — ${f.sourceUrl}`
+                                : `Verificação automática de atualização ativa — ${f.sourceUrl}`
+                            }
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "0.3rem",
+                              marginTop: "0.15rem",
+                              maxWidth: "100%",
+                              fontSize: "0.78rem",
+                              opacity: f.checkDisabled ? 0.55 : 1,
+                            }}
+                          >
+                            <Link2 size={12} style={{ flexShrink: 0 }} />
+                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {f.sourceUrl}
+                            </span>
+                          </button>
+                        )}
                         <div className="file-meta">
                           {f.provider || "—"} · {formatDateTime(f.importedAt)}
                         </div>
