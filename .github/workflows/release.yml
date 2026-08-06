@@ -66,9 +66,14 @@ jobs:
       # matching its own tag (the Settings > Sobre update check compares
       # `getVersion()` against the latest GitHub Release). A no-op on
       # workflow_dispatch off a branch, where github.ref_name isn't a tag.
+      # `${{ github.ref_name }}` is substituted by the Actions runner itself
+      # before the shell ever sees it, so this is safe on every OS's default
+      # shell (bash on Linux/macOS, PowerShell on Windows) — unlike bash's
+      # `${GITHUB_REF_NAME#v}` parameter expansion, which PowerShell doesn't
+      # understand at all (that's what broke the Windows job).
       - name: Ensure app version matches the release tag
         if: startsWith(github.ref_name, 'v')
-        run: node scripts/bump-version.mjs "${GITHUB_REF_NAME#v}"
+        run: node scripts/bump-version.mjs "${{ github.ref_name }}"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

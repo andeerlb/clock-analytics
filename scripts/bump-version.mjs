@@ -11,11 +11,17 @@
 // checkout only, never commits anything back.
 import { readFileSync, writeFileSync } from "node:fs";
 
-const version = process.argv[2];
-if (!version) {
+const raw = process.argv[2];
+if (!raw) {
   console.error("Usage: yarn version:bump <version>   (e.g. yarn version:bump 0.2.0)");
   process.exit(1);
 }
+// Accepts a bare "0.2.0" (the documented CLI usage) or a "v"-prefixed tag
+// name like "v0.2.0" (what release.yml passes, straight from the git tag) —
+// stripped here instead of in the workflow's shell, since bash's
+// `${VAR#v}` syntax silently breaks on Windows runners (`run:` steps there
+// default to PowerShell, which doesn't understand that syntax at all).
+const version = raw.replace(/^v/, "");
 
 const confPath = "src-tauri/tauri.conf.json";
 const conf = JSON.parse(readFileSync(confPath, "utf8"));
