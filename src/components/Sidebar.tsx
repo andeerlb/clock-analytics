@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import GithubIcon from "./GithubIcon";
 import UpdateModal from "./UpdateModal";
+import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { checkForUpdate, REPO_URL } from "../lib/updateCheck";
 
 const NAV_ITEMS = [
@@ -23,6 +24,7 @@ function navLinkClass({ isActive }: { isActive: boolean }): string {
 export default function Sidebar() {
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const { remoteUpdates } = useRemoteFileUpdates();
 
   useEffect(() => {
     checkForUpdate()
@@ -46,6 +48,20 @@ export default function Sidebar() {
           <NavLink key={to} to={to} end={end} className={navLinkClass}>
             <Icon size={18} />
             <span>{label}</span>
+            {to === "/import" && remoteUpdates.length > 0 && (
+              <span
+                style={{
+                  marginLeft: "auto",
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  background: "var(--warning)",
+                  flexShrink: 0,
+                }}
+                aria-label="Arquivo remoto atualizado — reimportação disponível"
+                title="Arquivo remoto atualizado — reimportação disponível"
+              />
+            )}
           </NavLink>
         ))}
       </div>

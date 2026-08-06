@@ -214,5 +214,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0035_payment_shift_extra_data.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 36,
+            description: "track a payment import's source URL and last-known remote signature, for reimport-when-changed detection",
+            sql: include_str!("../migrations/0036_source_file_url.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

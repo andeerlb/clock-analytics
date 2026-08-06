@@ -400,6 +400,204 @@ pub fn hash_payment_file(path: String) -> Result<PaymentFileHash, String> {
     Ok(PaymentFileHash { path, file_name, hash })
 }
 
+const OFFICE_DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const OFFICE_HEAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+fn build_http_client(timeout: std::time::Duration) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .user_agent(concat!("pontoscan/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+fn parse_http_url(url: &str) -> Result<reqwest::Url, String> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| "URL inválida.".to_string())?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("A URL deve começar com http:// ou https://.".to_string());
+    }
+    Ok(parsed)
+}
+
+fn header_str(headers: &reqwest::header::HeaderMap, name: reqwest::header::HeaderName) -> Option<String> {
+    headers.get(name).and_then(|v| v.to_str().ok()).map(|s| s.to_string())
+}
+
+/// Best-effort filename from `Content-Disposition: attachment;
+/// filename="..."` (the common shape for "direct download" links) — no
+/// percent-decoding of the RFC 5987 `filename*=UTF-8''...` form, just
+/// enough to strip the prefix/quoting. Falls through to the URL's last
+/// path segment, then a synthesized default, if this doesn't match.
+fn filename_from_content_disposition(header: Option<&str>) -> Option<String> {
+    let header = header?;
+    for part in header.split(';') {
+        let part = part.trim();
+        let value = part
+            .strip_prefix("filename*=")
+            .map(|v| v.trim_start_matches("UTF-8''").trim_start_matches("utf-8''"))
+            .or_else(|| part.strip_prefix("filename="))?;
+        let cleaned = value.trim_matches('"').trim();
+        if !cleaned.is_empty() {
+            return Some(cleaned.to_string());
+        }
+    }
+    None
+}
+
+fn filename_from_url(url: &reqwest::Url) -> Option<String> {
+    let last = url.path_segments()?.next_back()?;
+    (!last.trim().is_empty()).then(|| last.to_string())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadedPaymentFile {
+    /// Local uuid-named copy under `imports/` — from here on treated
+    /// exactly like a locally-picked file (hash/preview/apply_template all
+    /// just take a `path: String`).
+    pub path: String,
+    /// Display name — from Content-Disposition or the URL, NOT the uuid on
+    /// disk.
+    pub file_name: String,
+    pub file_kind: String, // "xlsx" | "xls"
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub content_length: Option<i64>,
+}
+
+/// Downloads a payment spreadsheet from a plain/anonymous direct-download
+/// URL, validates it's really an xlsx/xls by magic bytes (never trusting
+/// the URL's extension or Content-Type — both are attacker/misconfig-
+/// controllable, e.g. a login-wall HTML response served with a 200), and
+/// writes it into `imports/` next to the timesheet-PDF flow's own copies —
+/// `payment_templates/` is dead code today (nothing ever creates that
+/// directory), and `imports/` already carries the size/clear/backup
+/// lifecycle this file needs for free (see `storage.rs`).
+#[tauri::command]
+pub async fn download_payment_file_from_url(
+    app: AppHandle,
+    url: String,
+) -> Result<DownloadedPaymentFile, String> {
+    let parsed = parse_http_url(&url)?;
+    let client = build_http_client(OFFICE_DOWNLOAD_TIMEOUT)?;
+
+    let response = client
+        .get(parsed.clone())
+        .send()
+        .await
+        .map_err(|e| format!("Falha ao baixar o arquivo: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("O servidor retornou o status {}.", response.status()));
+    }
+
+    let etag = header_str(response.headers(), reqwest::header::ETAG);
+    let last_modified = header_str(response.headers(), reqwest::header::LAST_MODIFIED);
+    let content_disposition = header_str(response.headers(), reqwest::header::CONTENT_DISPOSITION);
+    let content_length = response.content_length().map(|n| n as i64);
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Falha ao baixar o arquivo: {e}"))?;
+
+    let kind = if infer::doc::is_xlsx(&bytes) {
+        "xlsx"
+    } else if infer::doc::is_xls(&bytes) {
+        "xls"
+    } else {
+        return Err(
+            "O link não retornou um arquivo do Microsoft Office (.xlsx/.xls) válido. Verifique \
+             se a URL exige login ou não é um link de download direto."
+                .to_string(),
+        );
+    };
+
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let imports_dir = data_dir.join("imports");
+    fs::create_dir_all(&imports_dir).map_err(|e| e.to_string())?;
+    let dest = imports_dir.join(format!("{}.{kind}", uuid::Uuid::new_v4()));
+    fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
+
+    let file_name = filename_from_content_disposition(content_disposition.as_deref())
+        .or_else(|| filename_from_url(&parsed))
+        .unwrap_or_else(|| format!("download.{kind}"));
+
+    Ok(DownloadedPaymentFile {
+        path: dest.to_string_lossy().to_string(),
+        file_name,
+        file_kind: kind.to_string(),
+        etag,
+        last_modified,
+        content_length,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteFileSignature {
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub content_length: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteChangeCheck {
+    /// `None` when the server gave no comparable signal at all (no ETag,
+    /// no Last-Modified, no Content-Length on either side) — treat as
+    /// "unknown", not "unchanged".
+    pub changed: Option<bool>,
+    pub current: RemoteFileSignature,
+}
+
+/// Cheap HEAD-based "did the remote file change" check — ETag is trusted
+/// alone when both sides have one (strongest, usually content-addressed);
+/// otherwise Last-Modified, then Content-Length, as weaker fallbacks. Runs
+/// silently and in parallel on the Importar Pagamentos screen's mount, one
+/// call per URL a payment file was ever downloaded from — see
+/// `listUrlSourcedPaymentFiles` on the frontend.
+#[tauri::command]
+pub async fn check_remote_payment_file(
+    url: String,
+    known_etag: Option<String>,
+    known_last_modified: Option<String>,
+    known_content_length: Option<i64>,
+) -> Result<RemoteChangeCheck, String> {
+    let parsed = parse_http_url(&url)?;
+    let client = build_http_client(OFFICE_HEAD_TIMEOUT)?;
+
+    let response = client
+        .head(parsed)
+        .send()
+        .await
+        .map_err(|e| format!("Falha ao verificar o arquivo remoto: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("O servidor retornou o status {}.", response.status()));
+    }
+
+    let etag = header_str(response.headers(), reqwest::header::ETAG);
+    let last_modified = header_str(response.headers(), reqwest::header::LAST_MODIFIED);
+    let content_length = response.content_length().map(|n| n as i64);
+
+    let changed = if let (Some(k), Some(c)) = (&known_etag, &etag) {
+        Some(k != c)
+    } else if let (Some(k), Some(c)) = (&known_last_modified, &last_modified) {
+        Some(k != c)
+    } else if let (Some(k), Some(c)) = (known_content_length, content_length) {
+        Some(k != c)
+    } else {
+        None
+    };
+
+    Ok(RemoteChangeCheck {
+        changed,
+        current: RemoteFileSignature { etag, last_modified, content_length },
+    })
+}
+
 /// Builds the Relatórios export zip. The frontend already knows the
 /// company/client/employee grouping and file naming (locale-aware period
 /// formatting lives in TS) — this just moves bytes into an archive, merging
@@ -518,6 +716,26 @@ pub fn set_poppler_dir(app: AppHandle, dir: Option<String>) -> Result<PopplerSta
     current.poppler_dir = dir.filter(|d| !d.trim().is_empty());
     settings::save(&data_dir, &current)?;
     Ok(poppler_status(current.poppler_dir))
+}
+
+/// How often (minutes) Importar Pagamentos re-checks URL-sourced payment
+/// files for a remote change — user-editable in Configurações, unlike the
+/// app's own (fixed 30-minute) update check.
+#[tauri::command]
+pub fn get_remote_file_check_interval_minutes(app: AppHandle) -> Result<u32, String> {
+    Ok(load_settings(&app)?.remote_file_check_interval_minutes)
+}
+
+/// Clamped to a minimum of 1 — a 0-minute interval would mean either "off"
+/// (ambiguous) or a tight request loop against whatever server hosts the
+/// file, neither of which is intended here.
+#[tauri::command]
+pub fn set_remote_file_check_interval_minutes(app: AppHandle, minutes: u32) -> Result<u32, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let mut current = settings::load(&data_dir);
+    current.remote_file_check_interval_minutes = minutes.max(1);
+    settings::save(&data_dir, &current)?;
+    Ok(current.remote_file_check_interval_minutes)
 }
 
 const MAX_RECENT_PAYMENT_FILES: usize = 5;

@@ -35,6 +35,14 @@ calamine = { version = "0.36.1", features = ["dates"] }
 csv = "1.4.0"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# Anonymous direct-download of a payment spreadsheet by URL, and the cheap
+# HEAD-based "did it change" check — rustls-no-provider (not reqwest's own
+# `rustls` feature) to reuse the same rustls+ring stack tauri-plugin-updater
+# already pulls in, instead of compiling in a second (aws-lc-rs) backend.
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider"] }
+# Magic-byte validation that a downloaded response is really an .xlsx/.xls
+# file, not e.g. an HTML login page some "direct download" links redirect to.
+infer = "0.19.0"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

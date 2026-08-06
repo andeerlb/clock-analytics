@@ -6,6 +6,7 @@ import {
   Eye,
   FileText,
   FolderOpen,
+  Link2,
   ListChecks,
   PlusCircle,
   Search,
@@ -19,9 +20,11 @@ import ConfirmModal from "../components/ConfirmModal";
 import DateRangePicker from "../components/DateRangePicker";
 import EmployeePicker from "../components/EmployeePicker";
 import Pagination from "../components/Pagination";
+import { useRemoteFileUpdates, type RemoteUpdateFlag } from "../contexts/RemoteFileUpdatesContext";
 import type { EmployeeFormNavState } from "./EmployeeFormPage";
 import {
   applyPaymentTemplate,
+  downloadPaymentFileFromUrl,
   hashPaymentFile,
   pickPaymentFiles,
   type AppliedPaymentRow,
@@ -128,8 +131,20 @@ interface PaymentPreviewRow {
 interface PaymentFileResult {
   fileHash: string;
   fileName: string;
+  /** Which entry in `paths` produced this — lets `handleSave` look up `urlSourceByPath` per file. */
+  path: string;
   rows: PaymentPreviewRow[];
   error: string | null;
+}
+
+type ImportMode = "local" | "url";
+
+/** Where a downloaded (not locally-picked) `paths` entry came from, and the response headers captured at that download — recorded so a later reimport can compare against them (see `checkRemotePaymentFile`). */
+interface UrlProvenance {
+  url: string;
+  etag: string | null;
+  lastModified: string | null;
+  contentLength: number | null;
 }
 
 /**
@@ -146,6 +161,8 @@ interface PaymentImportNavState {
   periodStart: string;
   periodEnd: string;
   paths: string[];
+  importMode: ImportMode;
+  urlSourceByPath: Map<string, UrlProvenance>;
   fileResults: PaymentFileResult[];
   selectedRows: Set<number>;
   rowFilter: RowFilter;
@@ -194,6 +211,15 @@ export default function ImportPaymentsPage() {
   const [fileHashes, setFileHashes] = useState<Map<string, { hash: string; fileName: string }>>(
     new Map(),
   );
+
+  const [importMode, setImportMode] = useState<ImportMode>(restored?.importMode ?? "local");
+  const [urlInput, setUrlInput] = useState("");
+  const [urlDownloading, setUrlDownloading] = useState(false);
+  const [urlSourceByPath, setUrlSourceByPath] = useState<Map<string, UrlProvenance>>(
+    restored?.urlSourceByPath ?? new Map(),
+  );
+  const [pendingAutoProcess, setPendingAutoProcess] = useState(false);
+  const { remoteUpdates, dismissRemoteUpdate } = useRemoteFileUpdates();
 
   const [fileResults, setFileResults] = useState<PaymentFileResult[]>(restored?.fileResults ?? []);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(restored?.selectedRows ?? new Set());
@@ -281,6 +307,7 @@ export default function ImportPaymentsPage() {
 
   function reset() {
     setPaths([]);
+    setUrlSourceByPath(new Map());
     cancelPreview();
     setError(null);
   }
@@ -304,6 +331,94 @@ export default function ImportPaymentsPage() {
       );
     }
     if (valid.length > 0) addPaths(valid);
+  }
+
+  /**
+   * Shared by the manual "Baixar arquivo" button and the remote-update
+   * banner's "Reimportar". A URL download can only ever produce .xlsx/.xls
+   * (see `download_payment_file_from_url`'s magic-byte check) — if the
+   * selected template expects csv/ods, that's caught here the same way
+   * `handlePick` catches a locally-picked file of the wrong format.
+   *
+   * `templateOverride` exists only for `handleReimportFromUrl`: it just
+   * called `setTemplateId`, and `selectedTemplate` (derived from
+   * `templateId` by its own effect + an async `getPaymentTemplate` call)
+   * hasn't caught up yet by the time this runs — so that caller fetches the
+   * template itself and passes it straight through instead of racing state.
+   */
+  async function handleDownloadFromUrl(
+    urlOverride?: string,
+    autoProcessAfter = false,
+    templateOverride?: PaymentTemplateRow,
+  ) {
+    const targetUrl = (urlOverride ?? urlInput).trim();
+    const template = templateOverride ?? selectedTemplate;
+    if (!targetUrl || !template) return;
+    setError(null);
+    setUrlDownloading(true);
+    try {
+      const result = await downloadPaymentFileFromUrl(targetUrl);
+      if (result.fileKind !== template.fileKind) {
+        setError(
+          `O template "${template.name}" espera arquivos ${PAYMENT_FILE_KIND_LABELS[template.fileKind]}, mas a URL retornou um arquivo ${PAYMENT_FILE_KIND_LABELS[result.fileKind]}.`,
+        );
+        return;
+      }
+      setUrlSourceByPath((prev) => {
+        const next = new Map(prev);
+        next.set(result.path, {
+          url: targetUrl,
+          etag: result.etag,
+          lastModified: result.lastModified,
+          contentLength: result.contentLength,
+        });
+        return next;
+      });
+      addPaths([result.path]);
+      setUrlInput("");
+      if (autoProcessAfter) setPendingAutoProcess(true);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setUrlDownloading(false);
+    }
+  }
+
+  // setPaths/setTemplateId from handleReimportFromUrl are async — calling
+  // handleProcessClick() synchronously right after would still see the
+  // stale `paths`/`selectedTemplate`. This waits for both to actually land
+  // (fileHashes catches up to paths once its own effect finishes) before
+  // firing the process step exactly once.
+  useEffect(() => {
+    if (pendingAutoProcess && selectedTemplate && paths.length > 0 && fileHashes.size === paths.length) {
+      setPendingAutoProcess(false);
+      handleProcessClick();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAutoProcess, selectedTemplate, paths, fileHashes]);
+
+  /**
+   * "Never both at once" is normally enforced by disabling the inactive
+   * mode's toggle while `paths.length > 0` (see the mode-toggle buttons
+   * below) — this bypasses that toggle, so it clears whatever was
+   * previously selected/downloaded first, the same way switching modes
+   * would require the user to do manually.
+   */
+  async function handleReimportFromUrl(flag: RemoteUpdateFlag) {
+    dismissRemoteUpdate(flag.sourceUrl);
+    reset();
+    setImportMode("url");
+    const match = templates.find((t) => t.name === flag.provider);
+    if (!match) {
+      // Template renamed/deleted since the original import — leave the URL
+      // filled in and let the user pick a template themselves, same as a
+      // fresh URL import (the "Baixar arquivo" button already requires one).
+      setUrlInput(flag.sourceUrl);
+      return;
+    }
+    setTemplateId(String(match.id));
+    const fullTemplate = await getPaymentTemplate(match.id);
+    await handleDownloadFromUrl(flag.sourceUrl, true, fullTemplate);
   }
 
   const shiftRows = useMemo(() => fileResults.flatMap((r) => r.rows), [fileResults]);
@@ -491,9 +606,9 @@ export default function ImportPaymentsPage() {
               category: !route ? "unresolved-route" : !employee ? "not-found" : "valid",
             });
           }
-          results.push({ fileHash, fileName, rows, error: null });
+          results.push({ fileHash, fileName, path, rows, error: null });
         } catch (e) {
-          results.push({ fileHash, fileName, rows: [], error: String(e) });
+          results.push({ fileHash, fileName, path, rows: [], error: String(e) });
         }
       }
 
@@ -639,6 +754,8 @@ export default function ImportPaymentsPage() {
       periodStart,
       periodEnd,
       paths,
+      importMode,
+      urlSourceByPath,
       fileResults,
       selectedRows,
       rowFilter,
@@ -675,6 +792,7 @@ export default function ImportPaymentsPage() {
     try {
       const sourceFileIdByHash = new Map<string, number>();
       for (const result of fileResults) {
+        const provenance = urlSourceByPath.get(result.path);
         const sourceFileId = await logSourceFile({
           fileHash: result.fileHash,
           fileName: result.fileName,
@@ -684,6 +802,10 @@ export default function ImportPaymentsPage() {
           status: result.error ? "error" : "success",
           errorMessage: result.error,
           originalPdfPath: "",
+          sourceUrl: provenance?.url ?? null,
+          sourceEtag: provenance?.etag ?? null,
+          sourceLastModified: provenance?.lastModified ?? null,
+          sourceContentLength: provenance?.contentLength ?? null,
         });
         sourceFileIdByHash.set(result.fileHash, sourceFileId);
       }
@@ -748,6 +870,28 @@ export default function ImportPaymentsPage() {
 
       {error && <div className="error-box">{error}</div>}
       {successMessage && <div className="success-box">{successMessage}</div>}
+      {remoteUpdates
+        .map((u) => (
+          <div
+            className="warning-box"
+            key={u.sourceUrl}
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem" }}
+          >
+            <span>
+              <AlertTriangle size={15} style={{ verticalAlign: "-2px", marginRight: "0.4rem" }} />
+              O arquivo remoto de <strong>{u.fileName}</strong> (importado em {formatDateTime(u.lastImportedAt)})
+              parece ter sido atualizado.
+            </span>
+            <div style={{ display: "flex", gap: "0.5rem", flexShrink: 0 }}>
+              <button type="button" className="outline" onClick={() => dismissRemoteUpdate(u.sourceUrl)}>
+                Ignorar
+              </button>
+              <button type="button" onClick={() => handleReimportFromUrl(u)}>
+                Reimportar
+              </button>
+            </div>
+          </div>
+        ))}
 
       <div className="import-layout">
         <div className="import-main">
@@ -798,39 +942,111 @@ export default function ImportPaymentsPage() {
 
             <div className="field">
               <label>Arquivos de pagamento</label>
-              <div className="dropzone">
-                <div className="dropzone-icon">
-                  <FileText size={20} />
-                </div>
-                <h4>Selecione os arquivos</h4>
-                <p className="muted" style={{ margin: 0 }}>
-                  {selectedTemplate
-                    ? `Formato do template: ${PAYMENT_FILE_KIND_LABELS[selectedTemplate.fileKind]} — suporta múltiplos arquivos.`
-                    : "Selecione um template para saber o formato aceito."}
-                </p>
+              <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.8rem" }}>
                 <button
                   type="button"
-                  className="secondary"
-                  onClick={handlePick}
-                  disabled={!selectedTemplate}
-                  title={selectedTemplate ? undefined : "Selecione um template primeiro"}
+                  className={`badge neutral chip-filter${importMode === "local" ? " active" : ""}`}
+                  onClick={() => setImportMode("local")}
+                  disabled={importMode !== "local" && paths.length > 0}
+                  title={
+                    importMode !== "local" && paths.length > 0
+                      ? "Remova os arquivos selecionados para trocar o modo de importação."
+                      : undefined
+                  }
                 >
-                  <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-                  Procurar arquivos
+                  <FolderOpen size={13} style={{ marginRight: "0.3rem" }} />
+                  Arquivo local
+                </button>
+                <button
+                  type="button"
+                  className={`badge neutral chip-filter${importMode === "url" ? " active" : ""}`}
+                  onClick={() => setImportMode("url")}
+                  disabled={importMode !== "url" && paths.length > 0}
+                  title={
+                    importMode !== "url" && paths.length > 0
+                      ? "Remova os arquivos selecionados para trocar o modo de importação."
+                      : undefined
+                  }
+                >
+                  <Link2 size={13} style={{ marginRight: "0.3rem" }} />
+                  URL
                 </button>
               </div>
+
+              {importMode === "local" ? (
+                <div className="dropzone">
+                  <div className="dropzone-icon">
+                    <FileText size={20} />
+                  </div>
+                  <h4>Selecione os arquivos</h4>
+                  <p className="muted" style={{ margin: 0 }}>
+                    {selectedTemplate
+                      ? `Formato do template: ${PAYMENT_FILE_KIND_LABELS[selectedTemplate.fileKind]} — suporta múltiplos arquivos.`
+                      : "Selecione um template para saber o formato aceito."}
+                  </p>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={handlePick}
+                    disabled={!selectedTemplate}
+                    title={selectedTemplate ? undefined : "Selecione um template primeiro"}
+                  >
+                    <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
+                    Procurar arquivos
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="warning-box">
+                    <AlertTriangle size={14} style={{ verticalAlign: "-2px", marginRight: "0.4rem" }} />
+                    Apenas arquivos do Microsoft Office (.xlsx ou .xls) são suportados por URL. O link
+                    precisa ser de download direto e anônimo — não pode exigir login.
+                  </div>
+                  <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.8rem" }}>
+                    <input
+                      type="url"
+                      placeholder="https://exemplo.com/arquivo.xlsx"
+                      value={urlInput}
+                      onChange={(e) => setUrlInput(e.target.value)}
+                      disabled={urlDownloading}
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => handleDownloadFromUrl()}
+                      disabled={!selectedTemplate || !urlInput.trim() || urlDownloading}
+                      title={selectedTemplate ? undefined : "Selecione um template primeiro"}
+                    >
+                      {urlDownloading ? "Baixando..." : "Baixar arquivo"}
+                    </button>
+                  </div>
+                </>
+              )}
 
               {paths.length > 0 && (
                 <div className="file-list">
                   {paths.map((p) => {
                     const info = fileHashes.get(p);
+                    const provenance = urlSourceByPath.get(p);
                     return (
                       <div className="file-row" key={p}>
                         <div className="file-row-icon">
                           <FileText size={18} />
                         </div>
                         <div className="file-row-info">
-                          <div className="file-name">{info?.fileName ?? p}</div>
+                          <div className="file-name">
+                            {info?.fileName ?? p}
+                            {provenance && (
+                              <Link2
+                                size={12}
+                                style={{ marginLeft: "0.4rem", opacity: 0.6, verticalAlign: "-1px" }}
+                                aria-label={provenance.url}
+                              >
+                                <title>{provenance.url}</title>
+                              </Link2>
+                            )}
+                          </div>
                         </div>
                         <div className="file-row-actions">
                           <button

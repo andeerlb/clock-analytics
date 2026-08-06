@@ -124,12 +124,18 @@ export async function logSourceFile(input: {
   status: ImportStatus;
   errorMessage: string | null;
   originalPdfPath: string;
+  /** Set only for a payment file downloaded via URL — null for local picks and timesheet PDFs. */
+  sourceUrl?: string | null;
+  sourceEtag?: string | null;
+  sourceLastModified?: string | null;
+  sourceContentLength?: number | null;
 }): Promise<number> {
   const db = await getDb();
   await db.execute(
     `INSERT INTO source_files
-       (file_name, file_hash, page_count, provider, import_type, status, error_message, original_pdf_path)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       (file_name, file_hash, page_count, provider, import_type, status, error_message, original_pdf_path,
+        source_url, source_etag, source_last_modified, source_content_length)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      ON CONFLICT(file_hash) DO UPDATE SET
        file_name = excluded.file_name,
        page_count = excluded.page_count,
@@ -138,6 +144,10 @@ export async function logSourceFile(input: {
        status = excluded.status,
        error_message = excluded.error_message,
        original_pdf_path = excluded.original_pdf_path,
+       source_url = excluded.source_url,
+       source_etag = excluded.source_etag,
+       source_last_modified = excluded.source_last_modified,
+       source_content_length = excluded.source_content_length,
        imported_at = datetime('now')`,
     [
       input.fileName,
@@ -148,6 +158,10 @@ export async function logSourceFile(input: {
       input.status,
       input.errorMessage,
       input.originalPdfPath,
+      input.sourceUrl ?? null,
+      input.sourceEtag ?? null,
+      input.sourceLastModified ?? null,
+      input.sourceContentLength ?? null,
     ],
   );
   // `lastInsertId` isn't reliable across the ON CONFLICT DO UPDATE path, so
@@ -1177,7 +1191,8 @@ export async function listImportFiles(query: ImportFilesQuery): Promise<PagedRes
       original_pdf_path AS originalPdfPath,
       page_count AS pageCount,
       imported_at AS importedAt,
-      saved_at AS savedAt
+      saved_at AS savedAt,
+      source_url AS sourceUrl
     FROM source_files
     ${whereClause}
     ORDER BY imported_at DESC
@@ -1186,6 +1201,39 @@ export async function listImportFiles(query: ImportFilesQuery): Promise<PagedRes
   );
 
   return { rows, total };
+}
+
+export interface UrlSourcedPaymentFile {
+  id: number;
+  sourceUrl: string;
+  sourceEtag: string | null;
+  sourceLastModified: string | null;
+  sourceContentLength: number | null;
+  fileName: string;
+  provider: string;
+  importedAt: string;
+}
+
+/**
+ * The latest known state of each distinct URL a payment file was ever
+ * downloaded from — one row per source_url (a URL whose content changed
+ * and got reimported has more than one source_files row; only the newest
+ * counts). Feeds the "check for remote updates" pass on
+ * ImportPaymentsPage's mount.
+ */
+export async function listUrlSourcedPaymentFiles(): Promise<UrlSourcedPaymentFile[]> {
+  const db = await getDb();
+  return db.select<UrlSourcedPaymentFile[]>(
+    `SELECT id, source_url AS sourceUrl, source_etag AS sourceEtag,
+            source_last_modified AS sourceLastModified, source_content_length AS sourceContentLength,
+            file_name AS fileName, provider, imported_at AS importedAt
+     FROM (
+       SELECT *, ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY imported_at DESC) AS rn
+       FROM source_files
+       WHERE import_type = 'payment' AND source_url IS NOT NULL
+     )
+     WHERE rn = 1`,
+  );
 }
 
 /**

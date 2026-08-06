@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 /// App-wide preferences, persisted as a small JSON file in the app data dir
 /// rather than SQLite — this isn't business data, and a single-file
 /// read/write is simpler than a migration for one column.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     /// Manual override for where to find the Poppler CLI tools, set from
@@ -20,6 +20,35 @@ pub struct AppSettings {
     /// from before this field existed still parse.
     #[serde(default)]
     pub recent_payment_files: Vec<String>,
+
+    /// How often (in minutes) Importar Pagamentos re-checks whether a
+    /// URL-sourced payment file has changed on the server since it was
+    /// last imported — user-editable in Configurações, default 5. The app
+    /// version's own update check is a separate, fixed 30-minute interval
+    /// (not user-editable, not stored here).
+    #[serde(default = "default_remote_file_check_interval_minutes")]
+    pub remote_file_check_interval_minutes: u32,
+}
+
+fn default_remote_file_check_interval_minutes() -> u32 {
+    5
+}
+
+// Written by hand instead of `#[derive(Default)]` — the derive would give
+// `remote_file_check_interval_minutes` a bare `0` (u32's own Default),
+// ignoring `default_remote_file_check_interval_minutes` entirely, since
+// that serde attribute only applies during deserialization, not to the
+// `Default` trait. `load()`'s `.unwrap_or_default()` (no settings.json yet)
+// needs the real default here too, not just when the field is merely
+// absent from an existing file.
+impl Default for AppSettings {
+    fn default() -> Self {
+        AppSettings {
+            poppler_dir: None,
+            recent_payment_files: Vec::new(),
+            remote_file_check_interval_minutes: default_remote_file_check_interval_minutes(),
+        }
+    }
 }
 
 fn settings_path(data_dir: &Path) -> PathBuf {

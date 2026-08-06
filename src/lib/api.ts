@@ -89,6 +89,52 @@ export function hashPaymentFile(path: string): Promise<PaymentFileHash> {
   return invoke("hash_payment_file", { path });
 }
 
+export interface DownloadedPaymentFile {
+  path: string;
+  fileName: string;
+  fileKind: "xlsx" | "xls";
+  etag: string | null;
+  lastModified: string | null;
+  contentLength: number | null;
+}
+
+/**
+ * Downloads a payment spreadsheet from a plain/anonymous direct-download
+ * URL into imports/, validating (by magic bytes, backend-side) that it's
+ * really an .xlsx/.xls — rejects e.g. an HTML login page some "direct
+ * download" links redirect to instead of the file.
+ */
+export function downloadPaymentFileFromUrl(url: string): Promise<DownloadedPaymentFile> {
+  return invoke("download_payment_file_from_url", { url });
+}
+
+export interface RemoteFileSignature {
+  etag: string | null;
+  lastModified: string | null;
+  contentLength: number | null;
+}
+
+export interface RemoteChangeCheck {
+  /** `null` = server gave no comparable signal — treat as unknown, not unchanged. */
+  changed: boolean | null;
+  current: RemoteFileSignature;
+}
+
+/** Cheap HEAD-only check for whether `url`'s content differs from the last-known signature. */
+export function checkRemotePaymentFile(
+  url: string,
+  knownEtag: string | null,
+  knownLastModified: string | null,
+  knownContentLength: number | null,
+): Promise<RemoteChangeCheck> {
+  return invoke("check_remote_payment_file", {
+    url,
+    knownEtag,
+    knownLastModified,
+    knownContentLength,
+  });
+}
+
 export interface SpreadsheetPreview {
   rows: string[][];
   delimiter: string | null;
@@ -172,6 +218,16 @@ export function checkPopplerStatus(): Promise<PopplerStatus> {
 /** Saves (or, passing null, clears) the manual override for where to find the Poppler CLI tools. */
 export function setPopplerDir(dir: string | null): Promise<PopplerStatus> {
   return invoke("set_poppler_dir", { dir });
+}
+
+/** How often (minutes) Importar Pagamentos re-checks a URL-sourced payment file for remote changes — user-editable in Configurações. */
+export function getRemoteFileCheckIntervalMinutes(): Promise<number> {
+  return invoke("get_remote_file_check_interval_minutes");
+}
+
+/** Saves the interval — clamped server-side to a minimum of 1 minute. Returns the saved (clamped) value. */
+export function setRemoteFileCheckIntervalMinutes(minutes: number): Promise<number> {
+  return invoke("set_remote_file_check_interval_minutes", { minutes });
 }
 
 /** Recently-picked payment template sample file paths, newest first — dead paths already filtered out. */

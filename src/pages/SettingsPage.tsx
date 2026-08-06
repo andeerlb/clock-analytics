@@ -9,6 +9,7 @@ import {
   Database,
   FileCheck2,
   FolderOpen,
+  Link2,
   RefreshCw,
   Sparkles,
   Trash2,
@@ -18,6 +19,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import GithubIcon from "../components/GithubIcon";
 import UpdateModal from "../components/UpdateModal";
+import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import {
   backupAppData,
   checkPopplerStatus,
@@ -59,6 +61,21 @@ export default function SettingsPage() {
   const [popplerDirInput, setPopplerDirInput] = useState("");
   const [popplerSaving, setPopplerSaving] = useState(false);
   const [popplerError, setPopplerError] = useState<string | null>(null);
+
+  const { intervalMinutes: remoteCheckInterval, setIntervalMinutes: saveRemoteCheckInterval } =
+    useRemoteFileUpdates();
+  const [remoteCheckInput, setRemoteCheckInput] = useState(String(remoteCheckInterval));
+  const [remoteCheckSaving, setRemoteCheckSaving] = useState(false);
+  const [remoteCheckError, setRemoteCheckError] = useState<string | null>(null);
+
+  // Keeps the input in sync with the persisted value once it loads (the
+  // context starts at a provisional default before that round-trip
+  // resolves) — same "sync input from source of truth" need as
+  // `popplerDirInput` below, just via a prop-like context value instead of
+  // a local fetch.
+  useEffect(() => {
+    setRemoteCheckInput(String(remoteCheckInterval));
+  }, [remoteCheckInterval]);
 
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
@@ -157,6 +174,23 @@ export default function SettingsPage() {
       setPopplerError(String(e));
     } finally {
       setPopplerSaving(false);
+    }
+  }
+
+  async function handleSaveRemoteCheckInterval() {
+    setRemoteCheckError(null);
+    const parsed = Number(remoteCheckInput);
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      setRemoteCheckError("Informe um número inteiro de minutos, no mínimo 1.");
+      return;
+    }
+    setRemoteCheckSaving(true);
+    try {
+      await saveRemoteCheckInterval(Math.round(parsed));
+    } catch (e) {
+      setRemoteCheckError(String(e));
+    } finally {
+      setRemoteCheckSaving(false);
     }
   }
 
@@ -298,6 +332,37 @@ export default function SettingsPage() {
           </button>
           <button type="button" onClick={handleSavePopplerDir} disabled={popplerSaving}>
             {popplerSaving ? "Salvando..." : "Salvar e testar"}
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <Link2 size={18} />
+          Importação por URL
+        </h3>
+        <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
+          De quanto em quanto tempo verificar se um arquivo de pagamento importado por URL mudou no
+          servidor de origem, oferecendo reimportar quando isso acontece. Não afeta a verificação de
+          atualização do próprio aplicativo, que continua fixa em 30 minutos.
+        </p>
+
+        {remoteCheckError && <div className="error-box">{remoteCheckError}</div>}
+
+        <div className="field-row" style={{ alignItems: "flex-end" }}>
+          <div className="field" style={{ flex: "0 1 160px", marginBottom: 0 }}>
+            <label htmlFor="remote-check-interval">Intervalo (minutos)</label>
+            <input
+              id="remote-check-interval"
+              type="number"
+              min={1}
+              step={1}
+              value={remoteCheckInput}
+              onChange={(e) => setRemoteCheckInput(e.target.value)}
+            />
+          </div>
+          <button type="button" onClick={handleSaveRemoteCheckInterval} disabled={remoteCheckSaving}>
+            {remoteCheckSaving ? "Salvando..." : "Salvar"}
           </button>
         </div>
       </div>

@@ -4,6 +4,7 @@ import { HashRouter, Link, Route, Routes } from "react-router-dom";
 import "./App.css";
 import Sidebar from "./components/Sidebar";
 import { FiltersProvider } from "./contexts/FiltersContext";
+import { RemoteFileUpdatesProvider } from "./contexts/RemoteFileUpdatesContext";
 import { checkPopplerStatus } from "./lib/api";
 import ClientFormPage from "./pages/ClientFormPage";
 import ClientsPage from "./pages/ClientsPage";
@@ -35,46 +36,48 @@ function App() {
   return (
     <HashRouter>
       <FiltersProvider>
-        <div className="app-shell">
-          <Sidebar />
-          <main className="app-content">
-            {popplerMissing && (
-              <div className="error-box" style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-                <AlertTriangle size={18} style={{ flexShrink: 0 }} />
-                <span>
-                  Não foi possível encontrar as ferramentas do Poppler (pdftotext, pdfinfo etc.),
-                  necessárias para importar e exportar PDFs. Vá em{" "}
-                  <Link to="/settings" style={{ color: "inherit", textDecoration: "underline" }}>
-                    Configurações
-                  </Link>{" "}
-                  para ajustar a pasta onde elas estão instaladas.
-                </span>
-              </div>
-            )}
-            <Routes>
-              <Route path="/" element={<LibraryPage />} />
-              <Route path="/companies" element={<CompaniesPage />} />
-              <Route path="/companies/new" element={<CompanyFormPage />} />
-              <Route path="/companies/:id" element={<CompanyFormPage />} />
-              <Route path="/clients" element={<ClientsPage />} />
-              <Route path="/clients/new" element={<ClientFormPage />} />
-              <Route path="/clients/:id" element={<ClientFormPage />} />
-              <Route path="/employees" element={<EmployeesPage />} />
-              <Route path="/employees/new" element={<EmployeeFormPage />} />
-              <Route path="/employees/:id" element={<EmployeeFormPage />} />
-              <Route path="/import" element={<ImportChooserPage />} />
-              <Route path="/import/timesheet" element={<ImportTimesheetPage />} />
-              <Route path="/import/payments" element={<ImportPaymentsPage />} />
-              <Route path="/import/payments/templates" element={<PaymentTemplatesPage />} />
-              <Route path="/import/employees" element={<ImportEmployeesPage />} />
-              <Route path="/import/employees/templates" element={<EmployeeTemplatesPage />} />
-              <Route path="/employee/:importId" element={<EmployeeDetailPage />} />
-              <Route path="/payments" element={<PaymentsPage />} />
-              <Route path="/payments/:employeeId/:competencia" element={<PaymentDetailPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-            </Routes>
-          </main>
-        </div>
+        <RemoteFileUpdatesProvider>
+          <div className="app-shell">
+            <Sidebar />
+            <main className="app-content">
+              {popplerMissing && (
+                <div className="error-box" style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                  <AlertTriangle size={18} style={{ flexShrink: 0 }} />
+                  <span>
+                    Não foi possível encontrar as ferramentas do Poppler (pdftotext, pdfinfo etc.),
+                    necessárias para importar e exportar PDFs. Vá em{" "}
+                    <Link to="/settings" style={{ color: "inherit", textDecoration: "underline" }}>
+                      Configurações
+                    </Link>{" "}
+                    para ajustar a pasta onde elas estão instaladas.
+                  </span>
+                </div>
+              )}
+              <Routes>
+                <Route path="/" element={<LibraryPage />} />
+                <Route path="/companies" element={<CompaniesPage />} />
+                <Route path="/companies/new" element={<CompanyFormPage />} />
+                <Route path="/companies/:id" element={<CompanyFormPage />} />
+                <Route path="/clients" element={<ClientsPage />} />
+                <Route path="/clients/new" element={<ClientFormPage />} />
+                <Route path="/clients/:id" element={<ClientFormPage />} />
+                <Route path="/employees" element={<EmployeesPage />} />
+                <Route path="/employees/new" element={<EmployeeFormPage />} />
+                <Route path="/employees/:id" element={<EmployeeFormPage />} />
+                <Route path="/import" element={<ImportChooserPage />} />
+                <Route path="/import/timesheet" element={<ImportTimesheetPage />} />
+                <Route path="/import/payments" element={<ImportPaymentsPage />} />
+                <Route path="/import/payments/templates" element={<PaymentTemplatesPage />} />
+                <Route path="/import/employees" element={<ImportEmployeesPage />} />
+                <Route path="/import/employees/templates" element={<EmployeeTemplatesPage />} />
+                <Route path="/employee/:importId" element={<EmployeeDetailPage />} />
+                <Route path="/payments" element={<PaymentsPage />} />
+                <Route path="/payments/:employeeId/:competencia" element={<PaymentDetailPage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+              </Routes>
+            </main>
+          </div>
+        </RemoteFileUpdatesProvider>
       </FiltersProvider>
     </HashRouter>
   );

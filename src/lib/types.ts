@@ -210,6 +210,8 @@ export interface ImportFileRow {
   importedAt: string;
   /** Set once at least one sheet from this file was actually saved. */
   savedAt: string | null;
+  /** Origin URL for a payment file downloaded via URL — null for local picks and timesheet PDFs. */
+  sourceUrl: string | null;
 }
 
 export type PaymentFileKind = "csv" | "xlsx" | "xls" | "ods";
