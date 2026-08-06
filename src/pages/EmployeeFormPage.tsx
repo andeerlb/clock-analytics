@@ -130,7 +130,15 @@ export default function EmployeeFormPage() {
       } else {
         await createEmployeeManual(Number(clientId), Number(companyId), name, cpf, trimmedMatricula);
       }
-      navigate("/employees");
+      // Same go-back-if-possible logic as `BackButton` — when this form was
+      // opened from the payment import preview's "Cadastrar colaborador"
+      // shortcut, this returns to that exact preview state (see
+      // `PaymentImportNavState`) instead of always landing on the listing.
+      if ((window.history.state?.idx ?? 0) > 0) {
+        navigate(-1);
+      } else {
+        navigate("/employees");
+      }
     } catch (err) {
       setError(String(err instanceof Error ? err.message : err));
     } finally {
