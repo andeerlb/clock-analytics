@@ -133,6 +133,16 @@ interface PaymentPreviewRow {
   matchedEditedManually: boolean;
 }
 
+function buildExtraData(row: PaymentPreviewRow): Record<string, string> {
+  const extraData: Record<string, string> = {
+    ...row.extraFields,
+    "arquivo de origem": row.fileName,
+    "linha de origem": String(row.rowNumber),
+  };
+  if (row.sheetName) extraData["aba de origem"] = row.sheetName;
+  return extraData;
+}
+
 interface PaymentFileResult {
   fileHash: string;
   fileName: string;
@@ -936,7 +946,7 @@ export default function ImportPaymentsPage() {
           scheduleStartMinutes: row.scheduleStartMinutes,
           scheduleEndMinutes: row.scheduleEndMinutes,
           status: row.paymentStatus,
-          extraData: Object.keys(row.extraFields).length > 0 ? row.extraFields : null,
+          extraData: buildExtraData(row),
           // "duplicate" rows are reprocessing an existing shift, not creating
           // an independent new one — links this new row back to the current
           // one it supersedes (see `findDuplicatePaymentShifts`), same

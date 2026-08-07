@@ -29,6 +29,14 @@ export default function ExtraColumnsModal({
   // by letter count first so single-letter columns come before double.
   const entries = Object.entries(data).sort(([a], [b]) => a.length - b.length || a.localeCompare(b));
 
+  function labelFor(key: string): string {
+    if (/^[A-Z]+$/i.test(key)) return `Coluna ${key}`;
+    if (key === "arquivo de origem") return "Arquivo de origem";
+    if (key === "aba de origem") return "Aba de origem";
+    if (key === "linha de origem") return "Linha de origem";
+    return key;
+  }
+
   return (
     <div
       style={{
@@ -64,7 +72,7 @@ export default function ExtraColumnsModal({
             }}
           >
             <span className="muted" style={{ fontSize: "0.85rem" }}>
-              Coluna {letter}
+              {labelFor(letter)}
             </span>
             <span style={{ textAlign: "right" }}>{value}</span>
           </div>
