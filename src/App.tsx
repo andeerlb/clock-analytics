@@ -19,7 +19,6 @@ import LibraryPage from "./pages/LibraryPage";
 import EmployeeDetailPage from "./pages/EmployeeDetailPage";
 import EmployeeFormPage from "./pages/EmployeeFormPage";
 import EmployeesPage from "./pages/EmployeesPage";
-import PaymentDetailPage from "./pages/PaymentDetailPage";
 import PaymentsPage from "./pages/PaymentsPage";
 import PaymentTemplatesPage from "./pages/PaymentTemplatesPage";
 import RemoteUpdatesPage from "./pages/RemoteUpdatesPage";
@@ -74,7 +73,6 @@ function App() {
                 <Route path="/import/employees/templates" element={<EmployeeTemplatesPage />} />
                 <Route path="/employee/:importId" element={<EmployeeDetailPage />} />
                 <Route path="/payments" element={<PaymentsPage />} />
-                <Route path="/payments/:employeeId/:competencia" element={<PaymentDetailPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Routes>
             </main>

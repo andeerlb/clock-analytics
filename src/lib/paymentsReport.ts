@@ -65,9 +65,9 @@ export async function generatePaymentsReportPdf(
 
   // A `pago` row already carries its own frozen `amount`; every other
   // status needs a live estimate from its own company's rules (same
-  // fallback `PaymentDetailPage`'s `shiftValue` uses) — batched per
-  // distinct company instead of once per row, since a report can span
-  // several at once.
+  // fallback `PaymentsPage`'s `shiftValueFor` uses) — batched per distinct
+  // company instead of once per row, since a report can span several at
+  // once.
   const companyIds = Array.from(new Set(rows.map((r) => r.companyId)));
   const valueRulesByCompany = new Map<number, PaymentValueRule[]>();
   await Promise.all(

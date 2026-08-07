@@ -2364,6 +2364,61 @@ function scheduleTimeConditionSql(filter: ScheduleTimeFilter, params: (string | 
   return `(${field} IS NOT NULL AND ${field} ${op} $${params.length})`;
 }
 
+/**
+ * Row-level WHERE conditions shared by every flat (non-aggregated) shift
+ * query — `listPaymentShiftsForReport`, `listPaymentShiftsFlat`, and
+ * `listPaymentShiftsForGroup`. `listPaymentShiftSummaries` doesn't use
+ * this: its status/diurno-noturno filters read aggregated SUMs, so they
+ * belong in HAVING instead, not here.
+ */
+function buildPaymentShiftRowConditions(
+  query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
+  params: (string | number)[],
+): string[] {
+  const conditions: string[] = [HEAD_SHIFT_CONDITION];
+  const search = query.search?.trim();
+  if (search) {
+    params.push(search);
+    conditions.push(`LOWER(e.name) LIKE '%' || LOWER($${params.length}) || '%'`);
+  }
+  const companyClause = inClause("c.id", query.companyIds ?? [], params);
+  if (companyClause) conditions.push(companyClause);
+  const clientClause = inClause("cl.id", query.clientIds ?? [], params);
+  if (clientClause) conditions.push(clientClause);
+  if (query.periodStart) {
+    params.push(query.periodStart);
+    conditions.push(`ps.work_date >= $${params.length}`);
+  }
+  if (query.periodEnd) {
+    params.push(query.periodEnd);
+    conditions.push(`ps.work_date <= $${params.length}`);
+  }
+  if (query.statuses.length < 3) {
+    const placeholders = query.statuses.map((s) => {
+      params.push(s);
+      return `$${params.length}`;
+    });
+    conditions.push(`ps.status IN (${placeholders.join(", ")})`);
+  }
+  const { hasSchedule, isNoturno } = shiftPeriodSql();
+  if (query.shiftPeriods.length < 2) {
+    conditions.push(
+      query.shiftPeriods[0] === "noturno" ? `(${hasSchedule} AND ${isNoturno})` : `(${hasSchedule} AND NOT ${isNoturno})`,
+    );
+  }
+  if (query.scheduleTimeFilter) {
+    const cond = scheduleTimeConditionSql(query.scheduleTimeFilter, params);
+    if (cond) conditions.push(cond);
+  }
+  return conditions;
+}
+
+/** A shift's Diurno/Noturno classification as a SQL expression — `NULL` when there's no schedule to classify, same stance as `shiftPeriodSql`'s `hasSchedule` guard. Requires `c` (companies) joined. */
+function shiftPeriodSelectSql(): string {
+  const { hasSchedule, isNoturno } = shiftPeriodSql();
+  return `(CASE WHEN NOT ${hasSchedule} THEN NULL WHEN ${isNoturno} THEN 'noturno' ELSE 'diurno' END)`;
+}
+
 export interface ListPaymentShiftSummariesQuery {
   /** Substring match on employee name — case-insensitive only for ASCII (SQLite's `LOWER()` doesn't case-fold accents). */
   search?: string;
@@ -2501,51 +2556,14 @@ export async function listPaymentShiftsForReport(
   if (query.statuses.length === 0 || query.shiftPeriods.length === 0) return [];
 
   const db = await getDb();
-  const conditions: string[] = [HEAD_SHIFT_CONDITION];
   const params: (string | number)[] = [];
-
-  const search = query.search?.trim();
-  if (search) {
-    params.push(search);
-    conditions.push(`LOWER(e.name) LIKE '%' || LOWER($${params.length}) || '%'`);
-  }
-  const companyClause = inClause("c.id", query.companyIds ?? [], params);
-  if (companyClause) conditions.push(companyClause);
-  const clientClause = inClause("cl.id", query.clientIds ?? [], params);
-  if (clientClause) conditions.push(clientClause);
-  if (query.periodStart) {
-    params.push(query.periodStart);
-    conditions.push(`ps.work_date >= $${params.length}`);
-  }
-  if (query.periodEnd) {
-    params.push(query.periodEnd);
-    conditions.push(`ps.work_date <= $${params.length}`);
-  }
-  if (query.statuses.length < 3) {
-    const placeholders = query.statuses.map((s) => {
-      params.push(s);
-      return `$${params.length}`;
-    });
-    conditions.push(`ps.status IN (${placeholders.join(", ")})`);
-  }
-
-  const { hasSchedule, isNoturno } = shiftPeriodSql();
-  if (query.shiftPeriods.length < 2) {
-    conditions.push(
-      query.shiftPeriods[0] === "noturno" ? `(${hasSchedule} AND ${isNoturno})` : `(${hasSchedule} AND NOT ${isNoturno})`,
-    );
-  }
-  if (query.scheduleTimeFilter) {
-    const cond = scheduleTimeConditionSql(query.scheduleTimeFilter, params);
-    if (cond) conditions.push(cond);
-  }
-  const shiftPeriodExpr = `(CASE WHEN NOT ${hasSchedule} THEN NULL WHEN ${isNoturno} THEN 'noturno' ELSE 'diurno' END)`;
+  const conditions = buildPaymentShiftRowConditions(query, params);
 
   return db.select<PaymentShiftReportRow[]>(
     `SELECT e.name AS employeeName, c.id AS companyId,
             ps.work_date AS workDate, ps.local, ps.role,
             ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
-            ps.status, ps.amount, ${shiftPeriodExpr} AS shiftPeriod
+            ps.status, ps.amount, ${shiftPeriodSelectSql()} AS shiftPeriod
      FROM payment_shifts ps
      JOIN employees e ON e.id = ps.employee_id
      JOIN clients cl ON cl.id = e.client_id
@@ -2554,6 +2572,58 @@ export async function listPaymentShiftsForReport(
      ORDER BY ps.work_date, ps.local, e.name`,
     params,
   );
+}
+
+export interface PaymentShiftFlatRow extends PaymentShiftRow {
+  companyId: number;
+  companyName: string;
+  clientId: number;
+  clientName: string;
+  /** Same idea as `PaymentShiftReportRow.shiftPeriod` — computed in SQL, `null` when there's no schedule to classify. */
+  shiftPeriod: ShiftPeriod | null;
+}
+
+type PaymentShiftFlatRowRaw = Omit<PaymentShiftFlatRow, "extraData" | "editedManually"> & {
+  extraData: string | null;
+  editedManually: number;
+};
+
+/**
+ * Every *current* shift matching the Pagamentos list's filters, one row per
+ * turno — the "desagrupado" view. Same WHERE-condition shape and pagination
+ * as `listPaymentShiftSummaries`, but flat (no `GROUP BY`), so status and
+ * diurno/noturno stay row-level `WHERE` conditions like
+ * `listPaymentShiftsForReport` instead of aggregated `HAVING` ones.
+ */
+export async function listPaymentShiftsFlat(
+  query: ListPaymentShiftSummariesQuery,
+): Promise<PagedResult<PaymentShiftFlatRow>> {
+  if (query.statuses.length === 0 || query.shiftPeriods.length === 0) return { rows: [], total: 0 };
+
+  const db = await getDb();
+  const params: (string | number)[] = [];
+  const conditions = buildPaymentShiftRowConditions(query, params);
+  const from = `FROM payment_shifts ps
+    JOIN employees e ON e.id = ps.employee_id
+    JOIN clients cl ON cl.id = e.client_id
+    JOIN companies c ON c.id = e.company_id`;
+  const whereClause = `WHERE ${conditions.join(" AND ")}`;
+
+  const countRows = await db.select<{ count: number }[]>(`SELECT COUNT(*) AS count ${from} ${whereClause}`, params);
+  const total = countRows[0]?.count ?? 0;
+
+  const rows = await db.select<PaymentShiftFlatRowRaw[]>(
+    `SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS},
+            c.id AS companyId, c.name AS companyName, cl.id AS clientId, cl.name AS clientName,
+            ${shiftPeriodSelectSql()} AS shiftPeriod
+     ${from}
+     ${whereClause}
+     ORDER BY ps.work_date DESC, e.name
+     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, query.pageSize, query.page * query.pageSize],
+  );
+
+  return { rows: rows.map((r) => ({ ...parsePaymentShiftRow(r), companyId: r.companyId, companyName: r.companyName, clientId: r.clientId, clientName: r.clientName, shiftPeriod: r.shiftPeriod })), total };
 }
 
 const PAYMENT_SHIFT_SELECT_COLUMNS = `
@@ -2581,27 +2651,60 @@ function parsePaymentShiftRow(row: PaymentShiftRowRaw): PaymentShiftRow {
   return { ...row, extraData: row.extraData ? JSON.parse(row.extraData) : null, editedManually: Boolean(row.editedManually) };
 }
 
-/** Every *current* shift (see `HEAD_SHIFT_CONDITION`) for one colaborador in one competência ("YYYY-MM") — the Pagamentos detail. */
-export async function listPaymentShiftsForEmployeeMonth(
+export interface PaymentShiftGroupRow extends PaymentShiftRow {
+  /** Same idea as `PaymentShiftReportRow.shiftPeriod` — computed in SQL, `null` when there's no schedule to classify. */
+  shiftPeriod: ShiftPeriod | null;
+}
+
+type PaymentShiftGroupRowRaw = Omit<PaymentShiftGroupRow, "extraData" | "editedManually"> & {
+  extraData: string | null;
+  editedManually: number;
+};
+
+/**
+ * Every *current* shift (see `HEAD_SHIFT_CONDITION`) for one colaborador in
+ * one competência ("YYYY-MM") matching the Pagamentos list's filters — the
+ * turnos shown when a grouped row is expanded inline. Unlike the old
+ * per-page `listPaymentShiftsForEmployeeMonth` this replaces, filtering
+ * happens here in SQL (same conditions as `listPaymentShiftsFlat`) instead
+ * of being reapplied in JS after an unfiltered fetch — an expanded group
+ * shows exactly the turnos the active filters would also select in
+ * "desagrupado" mode, not the group's full unfiltered contents.
+ */
+export async function listPaymentShiftsForGroup(
   employeeId: number,
   competencia: string,
-): Promise<PaymentShiftRow[]> {
+  filters: Pick<
+    ListPaymentShiftSummariesQuery,
+    "statuses" | "shiftPeriods" | "scheduleTimeFilter" | "periodStart" | "periodEnd"
+  >,
+): Promise<PaymentShiftGroupRow[]> {
+  if (filters.statuses.length === 0 || filters.shiftPeriods.length === 0) return [];
+
   const db = await getDb();
-  const rows = await db.select<PaymentShiftRowRaw[]>(
-    `SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS}
-     ${PAYMENT_SHIFT_FROM_CLAUSE}
-     WHERE ps.employee_id = $1 AND strftime('%Y-%m', ps.work_date) = $2 AND ${HEAD_SHIFT_CONDITION}
+  const params: (string | number)[] = [employeeId, competencia];
+  const conditions = [
+    "ps.employee_id = $1",
+    "strftime('%Y-%m', ps.work_date) = $2",
+    ...buildPaymentShiftRowConditions(filters, params),
+  ];
+  const rows = await db.select<PaymentShiftGroupRowRaw[]>(
+    `SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS}, ${shiftPeriodSelectSql()} AS shiftPeriod
+     FROM payment_shifts ps
+     JOIN employees e ON e.id = ps.employee_id
+     JOIN companies c ON c.id = e.company_id
+     WHERE ${conditions.join(" AND ")}
      ORDER BY ps.work_date, ps.id`,
-    [employeeId, competencia],
+    params,
   );
-  return rows.map(parsePaymentShiftRow);
+  return rows.map((r) => ({ ...parsePaymentShiftRow(r), shiftPeriod: r.shiftPeriod }));
 }
 
 /**
  * A single shift by id, current or superseded — used to open the "ver
  * status anterior" link on a `pago` row, which points at a row that
- * `listPaymentShiftsForEmployeeMonth` no longer returns on its own since
- * it's not a head row anymore.
+ * `listPaymentShiftsForGroup`/`listPaymentShiftsFlat` no longer return on
+ * their own since it's not a head row anymore.
  */
 export async function getPaymentShift(id: number): Promise<PaymentShiftRow> {
   const db = await getDb();
@@ -2712,22 +2815,34 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
 }
 
 /**
- * Manually overrides a shift's Valor — same append-only pattern as "Fazer
- * pagamento"/"Voltar para pendente": a brand-new row carrying the given
- * `amount` and `previousShiftId` linked back to `shiftId`, whose own row is
- * left untouched. Status carries over unchanged (unlike those other two
- * transitions, which each force a specific status) — this only ever
- * corrects the value, never the state of the shift.
+ * Manually overrides a shift's own data (Data/Local/Função/Horário/Valor) —
+ * same append-only pattern as "Fazer pagamento"/"Voltar para pendente": a
+ * brand-new row carrying the given fields and `previousShiftId` linked back
+ * to `shiftId`, whose own row is left untouched. Status carries over
+ * unchanged (unlike those other two transitions, which each force a
+ * specific status) — this only ever corrects the shift's own data, never
+ * its state. `amount: null` means "keep computing it live from the
+ * company's rules" (the pre-edit default for `pendente`/`erro` shifts), not
+ * "zero" — only a non-null `amount` freezes a manual override.
  *
- * Only for `pendente`/`erro` shifts, where the Valor is just a live
- * estimate from the company's rules until it's actually paid — once a shift
- * is `pago` its amount is the historical record of what was paid and must
+ * Only for `pendente`/`erro` shifts — once a shift is `pago` its data (and
+ * amount) is the historical record of what was actually paid and must
  * never be edited, so this refuses to touch one.
  */
-export async function editPaymentShiftValue(shiftId: number, amount: number): Promise<number> {
+export async function editPaymentShift(
+  shiftId: number,
+  fields: {
+    workDate: string;
+    local: string;
+    role: string;
+    scheduleStartMinutes: number | null;
+    scheduleEndMinutes: number | null;
+    amount: number | null;
+  },
+): Promise<number> {
   const db = await getDb();
   const s = await readPaymentShiftCoreFields(db, shiftId);
-  if (s.status === "pago") throw new Error("Não é possível editar o valor de um turno já pago.");
+  if (s.status === "pago") throw new Error("Não é possível editar um turno já pago.");
 
   const result = await db.execute(
     `INSERT INTO payment_shifts
@@ -2738,13 +2853,13 @@ export async function editPaymentShiftValue(shiftId: number, amount: number): Pr
       s.employeeId,
       s.templateId,
       s.sourceFileId,
-      s.local,
-      s.workDate,
-      s.role,
-      s.scheduleStartMinutes,
-      s.scheduleEndMinutes,
+      fields.local,
+      fields.workDate,
+      fields.role,
+      fields.scheduleStartMinutes,
+      fields.scheduleEndMinutes,
       s.status,
-      amount,
+      fields.amount,
       shiftId,
       s.extraData,
     ],

@@ -110,9 +110,9 @@ function HistoryEntry({
 /**
  * Read-only look at a shift's full status history — every row the append-
  * only chain (`previous_shift_id`) passed through before reaching the
- * current head, oldest first. Reached via the "Status anterior" link,
- * since `listPaymentShiftsForEmployeeMonth` only ever returns the head row.
- * Fetches by id itself, same self-contained recipe as `PdfViewerModal`.
+ * current head, oldest first. Reached via the "Status anterior" link, since
+ * the Pagamentos list only ever shows head rows. Fetches by id itself, same
+ * self-contained recipe as `PdfViewerModal`.
  */
 export default function ShiftHistoryModal({
   shiftId,

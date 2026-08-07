@@ -52,6 +52,9 @@ export interface PaymentsFilters {
   setSelectedShiftPeriods: Dispatch<SetStateAction<Set<ShiftPeriod>>>;
   scheduleTimeFilter: ScheduleTimeFilter | null;
   setScheduleTimeFilter: Dispatch<SetStateAction<ScheduleTimeFilter | null>>;
+  /** "Agrupar por colaborador" — off by default (flat, one row per turno); on shows one row per colaborador/competência, expandable inline. */
+  grouped: boolean;
+  setGrouped: Dispatch<SetStateAction<boolean>>;
   page: number;
   setPage: Dispatch<SetStateAction<number>>;
   pageSize: number;
@@ -121,6 +124,7 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
     () => new Set(SHIFT_PERIODS),
   );
   const [paymentsScheduleTimeFilter, setPaymentsScheduleTimeFilter] = useState<ScheduleTimeFilter | null>(null);
+  const [paymentsGrouped, setPaymentsGrouped] = useState(false);
   const [paymentsPage, setPaymentsPage] = useState(0);
   const [paymentsPageSize, setPaymentsPageSize] = useState(PAYMENTS_PAGE_SIZE_OPTIONS[0]);
 
@@ -143,6 +147,8 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
     setSelectedShiftPeriods: setPaymentsSelectedShiftPeriods,
     scheduleTimeFilter: paymentsScheduleTimeFilter,
     setScheduleTimeFilter: setPaymentsScheduleTimeFilter,
+    grouped: paymentsGrouped,
+    setGrouped: setPaymentsGrouped,
     page: paymentsPage,
     setPage: setPaymentsPage,
     pageSize: paymentsPageSize,

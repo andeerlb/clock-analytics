@@ -207,8 +207,7 @@ const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 export default function ImportPaymentsPage() {
   const navigate = useNavigate();
   // Only used as the initial values below — once here, each piece of state
-  // is this page's own, independently adjustable from that point on (same
-  // "read once, then own it" pattern as `PaymentDetailPage`'s navState).
+  // is this page's own, independently adjustable from that point on.
   const location = useLocation();
   const restored = location.state as PaymentImportNavState | null;
 
