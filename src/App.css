@@ -1625,6 +1625,17 @@ tr.row-error:hover {
   flex: 1;
 }
 
+/* Same card shell as .rule-card-grid/.status-rule-card-grid, but stacked
+   instead of a fixed-column grid — a value rule's condition list is
+   variable-length (zero or more Data/Local/Função/Horário conditions), so
+   there's no fixed column count to lay out. */
+.value-rule-card-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+}
+
 .rule-card-else-label {
   align-self: center;
   grid-column: 1 / 3;

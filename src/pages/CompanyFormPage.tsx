@@ -1,4 +1,4 @@
-import { Plus, X } from "lucide-react";
+import { Calculator, Moon, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
@@ -196,10 +196,6 @@ export default function CompanyFormPage() {
         <BackButton fallback="/companies" />
         <h2 style={{ margin: 0 }}>{isEditing ? "Editar empresa" : "Nova empresa"}</h2>
       </div>
-      <p className="page-subtitle">
-        O horário entre o início e o fim do noturno define quais turnos de um colaborador contam
-        como noturnos ao calcular pagamentos — o padrão (22:00–05:00) segue a CLT.
-      </p>
 
       {error && <div className="error-box">{error}</div>}
 
@@ -233,243 +229,235 @@ export default function CompanyFormPage() {
                 style={{ width: "100%" }}
               />
             </div>
-            <div className="field-row" style={{ marginBottom: "1.2rem" }}>
-              <div className="field" style={{ flex: "0 1 160px" }}>
-                <label htmlFor="company-night-start">Início do noturno</label>
-                <input
-                  id="company-night-start"
-                  type="time"
-                  value={nightStartTime}
-                  onChange={(e) => setNightStartTime(e.target.value)}
-                  required
-                />
+            <section className="glass-panel" style={{ marginBottom: "1.2rem" }}>
+              <h3 className="glass-panel-heading">
+                <Moon size={18} />
+                Horário noturno
+              </h3>
+              <p className="glass-panel-desc">
+                O horário entre o início e o fim do noturno define quais turnos de um colaborador
+                contam como noturnos ao calcular pagamentos — o padrão (22:00–05:00) segue a CLT.
+              </p>
+              <div className="field-row" style={{ marginBottom: "1.2rem" }}>
+                <div className="field" style={{ flex: "0 1 160px", marginBottom: 0 }}>
+                  <label htmlFor="company-night-start">Início do noturno</label>
+                  <input
+                    id="company-night-start"
+                    type="time"
+                    value={nightStartTime}
+                    onChange={(e) => setNightStartTime(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="field" style={{ flex: "0 1 160px", marginBottom: 0 }}>
+                  <label htmlFor="company-night-end">Fim do noturno</label>
+                  <input
+                    id="company-night-end"
+                    type="time"
+                    value={nightEndTime}
+                    onChange={(e) => setNightEndTime(e.target.value)}
+                    required
+                  />
+                </div>
               </div>
-              <div className="field" style={{ flex: "0 1 160px" }}>
-                <label htmlFor="company-night-end">Fim do noturno</label>
-                <input
-                  id="company-night-end"
-                  type="time"
-                  value={nightEndTime}
-                  onChange={(e) => setNightEndTime(e.target.value)}
-                  required
-                />
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label htmlFor="company-night-rule">Considerar noturno quando</label>
+                <select
+                  id="company-night-rule"
+                  value={nightShiftRule}
+                  onChange={(e) => setNightShiftRule(e.target.value as NightShiftRule)}
+                >
+                  {NIGHT_SHIFT_RULES.map((rule) => (
+                    <option key={rule} value={rule}>
+                      {NIGHT_SHIFT_RULE_LABELS[rule]}
+                    </option>
+                  ))}
+                </select>
               </div>
-            </div>
-            <div className="field" style={{ marginBottom: "1.2rem" }}>
-              <label htmlFor="company-night-rule">Considerar noturno quando</label>
-              <select
-                id="company-night-rule"
-                value={nightShiftRule}
-                onChange={(e) => setNightShiftRule(e.target.value as NightShiftRule)}
-              >
-                {NIGHT_SHIFT_RULES.map((rule) => (
-                  <option key={rule} value={rule}>
-                    {NIGHT_SHIFT_RULE_LABELS[rule]}
-                  </option>
-                ))}
-              </select>
-            </div>
+            </section>
 
-            <div className="field" style={{ marginBottom: "1.2rem" }}>
-              <label>Regras de valor por hora trabalhada</label>
-              <p className="field-hint" style={{ marginTop: 0 }}>
-                Decide o Valor de um turno a partir da duração (horas trabalhadas, somada do
-                Horário) — avaliadas em ordem, a primeira que bater vence. Opcional: sem nenhuma
-                regra, o Valor não é calculado.
+            <section className="glass-panel" style={{ marginBottom: "1.2rem" }}>
+              <h3 className="glass-panel-heading">
+                <Calculator size={18} />
+                Regras de valor por hora trabalhada
+              </h3>
+              <p className="glass-panel-desc">
+                Decide o Valor de um turno a partir de condições de coluna (Data/Local/Função/
+                Horário) e da duração (horas trabalhadas, somada do Horário) — avaliadas em
+                ordem, a primeira que bater vence. Opcional: sem nenhuma regra, o Valor não é
+                calculado.
               </p>
 
-              {valueRules.map((rule, i) => (
-                <div
-                  key={i}
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "0.5rem",
-                    marginBottom: "0.5rem",
-                    padding: "0.6rem",
-                    background: "var(--surface-container)",
-                    borderRadius: 8,
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                    <span className="muted" style={{ fontSize: "0.8rem" }}>{i + 1}.</span>
-                    <span className="muted" style={{ fontSize: "0.85rem" }}>
-                      {rule.kind === "condition" ? "Regra" : "Senão (qualquer outro turno)"}
-                    </span>
-                    <button
-                      type="button"
-                      className="ghost"
-                      style={{ padding: "0.3rem", marginLeft: "auto" }}
-                      onClick={() => removeValueRule(i)}
-                      aria-label="Remover regra"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-
-                  {rule.kind === "condition" && (
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: "0.4rem",
-                        paddingLeft: "0.8rem",
-                        borderLeft: "2px solid var(--border)",
-                      }}
-                    >
-                      {rule.conditions.map((cond, ci) => (
-                        <div key={ci} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.4rem" }}>
-                          <span className="muted" style={{ fontSize: "0.8rem" }}>{ci === 0 ? "Se coluna" : "e coluna"}</span>
-                          <select
-                            value={cond.field}
-                            onChange={(e) =>
-                              updateValueCondition(i, ci, { field: e.target.value as PaymentValueRuleCondition["field"] })
-                            }
-                            style={{ width: "auto" }}
-                            aria-label="Coluna"
-                          >
-                            {VALUE_CONDITION_FIELDS.map((f) => (
-                              <option key={f} value={f}>
-                                {VALUE_CONDITION_FIELD_LABELS[f]}
-                              </option>
+              <div className="rule-list">
+                {valueRules.map((rule, i) => (
+                  <div key={i} className="chain-row">
+                    {i > 0 && <div className="chain-connector" />}
+                    <div className={`logic-card rule-card${rule.kind === "else" ? " rule-card-else" : ""}`}>
+                      <div className={`chain-num${i === 0 ? " first" : ""}`}>{i + 1}</div>
+                      <div className="value-rule-card-grid">
+                        {rule.kind === "condition" ? (
+                          <>
+                            {rule.conditions.map((cond, ci) => (
+                              <div className="field-code" key={ci}>
+                                <label>{ci === 0 ? "Se [Coluna]" : "E [Coluna]"}</label>
+                                <select
+                                  className="glass-input"
+                                  value={cond.field}
+                                  onChange={(e) =>
+                                    updateValueCondition(i, ci, {
+                                      field: e.target.value as PaymentValueRuleCondition["field"],
+                                    })
+                                  }
+                                >
+                                  {VALUE_CONDITION_FIELDS.map((f) => (
+                                    <option key={f} value={f}>
+                                      {VALUE_CONDITION_FIELD_LABELS[f]}
+                                    </option>
+                                  ))}
+                                </select>
+                                {cond.field === "horario" ? (
+                                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                                    <select
+                                      className="glass-input"
+                                      value={cond.scheduleRule}
+                                      onChange={(e) =>
+                                        updateValueCondition(i, ci, { scheduleRule: e.target.value as ScheduleTimeRule })
+                                      }
+                                      aria-label="Comparação de horário"
+                                    >
+                                      {SCHEDULE_TIME_RULES.map((r) => (
+                                        <option key={r} value={r}>
+                                          {SCHEDULE_TIME_RULE_LABELS[r]}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <input
+                                      className="glass-input"
+                                      type="time"
+                                      value={cond.scheduleTime}
+                                      onChange={(e) => updateValueCondition(i, ci, { scheduleTime: e.target.value })}
+                                      aria-label="Horário de referência"
+                                    />
+                                  </div>
+                                ) : (
+                                  <input
+                                    className="glass-input"
+                                    type="text"
+                                    value={cond.valuesText}
+                                    onChange={(e) => updateValueCondition(i, ci, { valuesText: e.target.value })}
+                                    placeholder="Ex.: valor1, valor2"
+                                    aria-label="Valores (um ou mais, separados por vírgula)"
+                                  />
+                                )}
+                                <button
+                                  type="button"
+                                  className="ghost"
+                                  style={{ alignSelf: "flex-start", padding: "0.2rem" }}
+                                  onClick={() => removeValueCondition(i, ci)}
+                                  aria-label="Remover condição"
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
                             ))}
-                          </select>
-                          {cond.field === "horario" ? (
-                            <>
-                              <select
-                                value={cond.scheduleRule}
-                                onChange={(e) =>
-                                  updateValueCondition(i, ci, { scheduleRule: e.target.value as ScheduleTimeRule })
-                                }
-                                style={{ width: "auto" }}
-                                aria-label="Comparação de horário"
-                              >
-                                {SCHEDULE_TIME_RULES.map((r) => (
-                                  <option key={r} value={r}>
-                                    {SCHEDULE_TIME_RULE_LABELS[r]}
-                                  </option>
-                                ))}
-                              </select>
-                              <input
-                                type="time"
-                                value={cond.scheduleTime}
-                                onChange={(e) => updateValueCondition(i, ci, { scheduleTime: e.target.value })}
-                                style={{ width: "auto" }}
-                                aria-label="Horário de referência"
-                              />
-                            </>
-                          ) : (
-                            <>
-                              <span className="muted" style={{ fontSize: "0.8rem" }}>é</span>
-                              <input
-                                type="text"
-                                value={cond.valuesText}
-                                onChange={(e) => updateValueCondition(i, ci, { valuesText: e.target.value })}
-                                placeholder="valor1, valor2..."
-                                style={{ flex: "1 1 10rem", minWidth: "8rem" }}
-                                aria-label="Valores (um ou mais, separados por vírgula)"
-                              />
-                            </>
-                          )}
-                          <button
-                            type="button"
-                            className="ghost"
-                            style={{ padding: "0.2rem" }}
-                            onClick={() => removeValueCondition(i, ci)}
-                            aria-label="Remover condição"
-                          >
-                            <X size={12} />
-                          </button>
+                            <button type="button" className="glow-button" style={{ alignSelf: "flex-start" }} onClick={() => addValueCondition(i)}>
+                              <Plus size={12} />
+                              Condição de coluna
+                            </button>
+                            <div className="field-code">
+                              <label>{rule.conditions.length > 0 ? "E, se trabalhou" : "Se trabalhou"}</label>
+                              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                                <select
+                                  className="glass-input"
+                                  value={rule.operator}
+                                  onChange={(e) => updateValueRule(i, { operator: e.target.value as PaymentValueRuleOperator })}
+                                  style={{ width: "auto" }}
+                                  aria-label="Operador"
+                                >
+                                  {PAYMENT_VALUE_RULE_OPERATORS.map((op) => (
+                                    <option key={op} value={op}>
+                                      {PAYMENT_VALUE_RULE_OPERATOR_LABELS[op]}
+                                    </option>
+                                  ))}
+                                </select>
+                                <input
+                                  className="glass-input"
+                                  type="number"
+                                  min="0"
+                                  value={rule.hours}
+                                  onChange={(e) => updateValueRule(i, { hours: e.target.value })}
+                                  placeholder="0"
+                                  style={{ width: "4rem" }}
+                                  aria-label="Horas"
+                                />
+                                <span className="muted" style={{ fontSize: "0.85rem" }}>h</span>
+                                <input
+                                  className="glass-input"
+                                  type="number"
+                                  min="0"
+                                  max="59"
+                                  value={rule.minutes}
+                                  onChange={(e) => updateValueRule(i, { minutes: e.target.value })}
+                                  placeholder="0"
+                                  style={{ width: "4rem" }}
+                                  aria-label="Minutos"
+                                />
+                                <span className="muted" style={{ fontSize: "0.85rem" }}>min</span>
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <span className="rule-card-else-label">
+                            SENÃO — se nenhuma regra acima bater, usa este valor
+                          </span>
+                        )}
+                        <div className="field-code consequence">
+                          <label>Então [Valor]</label>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                            <span className="muted" style={{ fontSize: "0.85rem" }}>R$</span>
+                            <input
+                              className="glass-input"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={rule.amount}
+                              onChange={(e) => updateValueRule(i, { amount: e.target.value })}
+                              placeholder="0,00"
+                              aria-label="Valor"
+                            />
+                          </div>
                         </div>
-                      ))}
-                      <button
-                        type="button"
-                        className="ghost"
-                        style={{ alignSelf: "flex-start", fontSize: "0.78rem", padding: "0.2rem 0.4rem" }}
-                        onClick={() => addValueCondition(i)}
-                      >
-                        <Plus size={12} style={{ marginRight: "0.25rem" }} />
-                        Condição de coluna
-                      </button>
-                    </div>
-                  )}
-
-                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem" }}>
-                    {rule.kind === "condition" ? (
-                      <>
-                        <span className="muted" style={{ fontSize: "0.85rem" }}>
-                          {rule.conditions.length > 0 ? "e se trabalhou" : "Se trabalhou"}
-                        </span>
-                        <select
-                          value={rule.operator}
-                          onChange={(e) =>
-                            updateValueRule(i, { operator: e.target.value as PaymentValueRuleOperator })
-                          }
-                          style={{ width: "auto" }}
-                          aria-label="Operador"
+                      </div>
+                      <div className="rule-card-delete">
+                        <button
+                          type="button"
+                          className="ghost"
+                          style={{ padding: "0.4rem" }}
+                          onClick={() => removeValueRule(i)}
+                          aria-label="Remover regra"
+                          title="Remover regra"
                         >
-                          {PAYMENT_VALUE_RULE_OPERATORS.map((op) => (
-                            <option key={op} value={op}>
-                              {PAYMENT_VALUE_RULE_OPERATOR_LABELS[op]}
-                            </option>
-                          ))}
-                        </select>
-                        <input
-                          type="number"
-                          min="0"
-                          value={rule.hours}
-                          onChange={(e) => updateValueRule(i, { hours: e.target.value })}
-                          placeholder="0"
-                          style={{ width: "4rem" }}
-                          aria-label="Horas"
-                        />
-                        <span className="muted" style={{ fontSize: "0.85rem" }}>h</span>
-                        <input
-                          type="number"
-                          min="0"
-                          max="59"
-                          value={rule.minutes}
-                          onChange={(e) => updateValueRule(i, { minutes: e.target.value })}
-                          placeholder="0"
-                          style={{ width: "4rem" }}
-                          aria-label="Minutos"
-                        />
-                        <span className="muted" style={{ fontSize: "0.85rem" }}>min</span>
-                      </>
-                    ) : (
-                      <span className="muted" style={{ fontSize: "0.85rem" }}>
-                        Senão (qualquer outra duração)
-                      </span>
-                    )}
-                    <span className="muted" style={{ fontSize: "0.85rem", marginLeft: "auto" }}>=</span>
-                    <span className="muted" style={{ fontSize: "0.85rem" }}>R$</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={rule.amount}
-                      onChange={(e) => updateValueRule(i, { amount: e.target.value })}
-                      placeholder="0,00"
-                      style={{ width: "6rem" }}
-                      aria-label="Valor"
-                    />
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
 
-              <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.6rem" }}>
-                <button type="button" className="secondary" onClick={addValueConditionRule}>
-                  <Plus size={14} style={{ marginRight: "0.3rem" }} />
+              <div style={{ display: "flex", gap: "0.6rem", marginTop: valueRules.length > 0 ? "1rem" : 0 }}>
+                <button type="button" className="glow-button" onClick={addValueConditionRule}>
+                  <Plus size={14} />
                   Adicionar regra
                 </button>
                 {!hasElseValueRule && (
-                  <button type="button" className="secondary" onClick={addValueElseRule}>
-                    <Plus size={14} style={{ marginRight: "0.3rem" }} />
+                  <button type="button" className="glow-button" onClick={addValueElseRule}>
+                    <Plus size={14} />
                     Adicionar "senão"
                   </button>
                 )}
               </div>
-            </div>
+            </section>
 
             <button type="submit" disabled={busy || valueRules.some((r) => !isValueRuleValid(r))}>
               {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
