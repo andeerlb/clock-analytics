@@ -1,26 +1,20 @@
 import { Calendar, ChevronLeft, ChevronRight } from "lucide-react";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MONTH_NAMES, WEEKDAY_HEADER, addMonthsIso, gridStart, toIso, todayUtc } from "../lib/calendar";
 import { formatDateSlash } from "../lib/format";
 
-type Field = "start" | "end";
+type Phase = "start" | "end";
+type Bounds = [string, string];
 
-const segmentStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  border: "none",
-  boxShadow: "none",
-  background: "transparent",
-  color: "var(--text)",
-  fontSize: "0.92em",
-  padding: "0.55em 0.7em",
-};
+const PANEL_WIDTH = "15.5rem";
 
 /**
- * "De"/"Até" as one visual control instead of two unrelated inputs — a
- * single bordered pill with both dates and a "→" between them. Picking the
- * start automatically hands the popover to the end side, instead of making
- * the user reopen it themselves.
+ * A single trigger opens one popover with two linked month calendars (like
+ * MUI X's range picker) — one pair of arrows on the outer edges advances
+ * both panels together, and hovering after picking the start previews the
+ * range before the second click commits it. Replaces the earlier two
+ * separate "De"/"Até" buttons, which read as unrelated fields rather than
+ * one range.
  *
  * `maxSpanMonths`, when set, keeps the range valid and capped by pushing
  * the other side along with whichever side was just picked — used where a
@@ -28,13 +22,11 @@ const segmentStyle: CSSProperties = {
  * narrowing filter. Since both sides are always non-empty in that mode,
  * `onChange` fires right after picking the start.
  *
- * Without `maxSpanMonths`, the two sides are independent and can be left
- * empty — and picking a start there is only held locally (not reported via
- * `onChange`) until "Até" is picked too, so a consumer that filters/queries
- * on every change (like a table's period filter) doesn't act on a
- * half-picked range. Order is still enforced either way: picking a start
- * after an earlier end pulls the end forward to match, and picking an end
- * before the (possibly still-pending) start pulls the start back.
+ * Without `maxSpanMonths`, picking a start is only held as a local draft
+ * (not reported via `onChange`) until the end is picked too, so a consumer
+ * that filters/queries on every change (like a table's period filter)
+ * doesn't act on a half-picked range. Reopening an already-complete range
+ * starts a fresh pick on the next click, same as MUI's behavior.
  */
 export default function DateRangePicker({
   startValue,
@@ -42,8 +34,8 @@ export default function DateRangePicker({
   onChange,
   maxSpanMonths,
   allowClear = true,
-  startPlaceholder = "Início",
-  endPlaceholder = "Fim",
+  startPlaceholder = "dd/mm/aaaa",
+  endPlaceholder = "dd/mm/aaaa",
 }: {
   startValue: string;
   endValue: string;
@@ -53,121 +45,125 @@ export default function DateRangePicker({
   startPlaceholder?: string;
   endPlaceholder?: string;
 }) {
-  const [openField, setOpenField] = useState<Field | null>(null);
-  // Only used when `maxSpanMonths` is unset: the start date the user just
-  // clicked, held here (not yet reported via `onChange`) until "Até" is
-  // picked too — see the doc comment above.
-  const [pendingStart, setPendingStart] = useState<string | null>(null);
-  const [viewDate, setViewDate] = useState(() => todayUtc());
+  const [open, setOpen] = useState(false);
+  const [phase, setPhase] = useState<Phase>("start");
+  const [draftStart, setDraftStart] = useState("");
+  const [draftEnd, setDraftEnd] = useState("");
+  const [hoverIso, setHoverIso] = useState<string | null>(null);
+  const [leftMonth, setLeftMonth] = useState(() => todayUtc());
   // Anchored to whichever side has room — a field near the right edge of
   // the screen (like the last one in a filter row) would otherwise have
   // its popover run off-screen and get clipped by the window.
   const [align, setAlign] = useState<"left" | "right">("left");
   const rootRef = useRef<HTMLDivElement>(null);
-  const POPOVER_WIDTH = 280; // 17.5rem at the default 16px root size
+  const POPOVER_WIDTH = 560;
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setOpenField(null);
-        setPendingStart(null);
+        setOpen(false);
       }
     }
     document.addEventListener("mousedown", onClickOutside);
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
 
-  const displayStart = pendingStart ?? startValue;
-
-  function openPicker(field: Field) {
-    const base = (field === "start" ? displayStart : endValue) || toIso(todayUtc());
-    setViewDate(new Date(`${base}T00:00:00Z`));
+  function openPicker() {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setDraftStart(startValue);
+    setDraftEnd(endValue);
+    setPhase(startValue && !endValue ? "end" : "start");
+    setHoverIso(null);
+    const base = startValue || toIso(todayUtc());
+    setLeftMonth(new Date(`${base}T00:00:00Z`));
     if (rootRef.current) {
       const rect = rootRef.current.getBoundingClientRect();
       setAlign(rect.left + POPOVER_WIDTH > window.innerWidth ? "right" : "left");
     }
-    setOpenField((f) => (f === field ? null : field));
+    setOpen(true);
   }
 
-  const year = viewDate.getUTCFullYear();
-  const month = viewDate.getUTCMonth();
-  const days: Date[] = [];
-  const gridFirst = gridStart(year, month);
-  for (let i = 0; i < 42; i++) {
-    const d = new Date(gridFirst);
-    d.setUTCDate(gridFirst.getUTCDate() + i);
-    days.push(d);
+  function changeMonths(delta: number) {
+    setLeftMonth((d) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + delta, 1)));
   }
 
-  function changeMonth(delta: number) {
-    setViewDate(new Date(Date.UTC(year, month + delta, 1)));
-  }
-
-  function selectDay(d: Date) {
-    const iso = toIso(d);
-    if (openField === "start") {
+  function selectDay(iso: string) {
+    if (phase === "start") {
       if (maxSpanMonths !== undefined) {
-        // Bounded mode: both sides are always meaningful, so report the
-        // change right away.
-        let nextEnd = endValue;
-        if (nextEnd && nextEnd < iso) nextEnd = iso;
-        if (!nextEnd) nextEnd = iso;
+        let nextEnd = draftEnd || iso;
+        if (nextEnd < iso) nextEnd = iso;
         const maxEnd = addMonthsIso(iso, maxSpanMonths);
         if (nextEnd > maxEnd) nextEnd = maxEnd;
+        setDraftStart(iso);
+        setDraftEnd(nextEnd);
         onChange(iso, nextEnd);
-        setViewDate(new Date(`${nextEnd}T00:00:00Z`));
       } else {
-        // Independent mode: hold the pick locally until "Até" is chosen
-        // too, instead of reporting a half-picked range.
-        setPendingStart(iso);
-        setViewDate(new Date(`${iso}T00:00:00Z`));
+        setDraftStart(iso);
+        setDraftEnd("");
       }
-      // Picking the start is naturally followed by picking the end — keep
-      // the popover open and hand it straight to the "Até" side.
-      setOpenField("end");
+      setLeftMonth(new Date(`${iso}T00:00:00Z`));
+      setPhase("end");
     } else {
-      let nextStart = displayStart;
-      if (nextStart && nextStart > iso) nextStart = iso;
+      let s = draftStart;
+      let e = iso;
+      if (e < s) [s, e] = [e, s];
       if (maxSpanMonths !== undefined) {
-        if (!nextStart) nextStart = iso;
-        const minStart = addMonthsIso(iso, -maxSpanMonths);
-        if (nextStart < minStart) nextStart = minStart;
+        const minStart = addMonthsIso(e, -maxSpanMonths);
+        if (s < minStart) s = minStart;
       }
-      onChange(nextStart, iso);
-      setPendingStart(null);
-      setOpenField(null);
+      setDraftStart(s);
+      setDraftEnd(e);
+      setHoverIso(null);
+      onChange(s, e);
+      setOpen(false);
     }
   }
 
   function clear() {
     onChange("", "");
-    setPendingStart(null);
-    setOpenField(null);
+    setOpen(false);
   }
 
-  const selectedValue = openField === "start" ? displayStart : endValue;
+  // The current preview range: the committed draft, or — while the end is
+  // still being picked — the start extended to whichever day is hovered.
+  const bounds: Bounds | null = draftStart
+    ? draftStart <= (draftEnd || hoverIso || draftStart)
+      ? [draftStart, draftEnd || hoverIso || draftStart]
+      : [draftEnd || hoverIso || draftStart, draftStart]
+    : null;
+
+  const rightMonth = new Date(Date.UTC(leftMonth.getUTCFullYear(), leftMonth.getUTCMonth() + 1, 1));
+
+  const displayStart = startValue ? formatDateSlash(startValue) : startPlaceholder;
+  const displayEnd = endValue ? formatDateSlash(endValue) : endPlaceholder;
 
   return (
     <div style={{ position: "relative" }} ref={rootRef}>
-      <div
+      <button
+        type="button"
+        onClick={openPicker}
         style={{
           display: "flex",
           alignItems: "center",
+          gap: "0.5em",
           border: "1px solid var(--border)",
           borderRadius: 7,
           background: "var(--surface-container)",
+          color: "var(--text)",
+          fontSize: "0.92em",
+          padding: "0.55em 0.7em",
+          boxShadow: "none",
         }}
       >
-        <Calendar size={14} style={{ marginLeft: "0.7em", flexShrink: 0, color: "var(--text-muted)" }} />
-        <button type="button" onClick={() => openPicker("start")} style={segmentStyle}>
-          {displayStart ? formatDateSlash(displayStart) : <span className="muted">{startPlaceholder}</span>}
-        </button>
+        <Calendar size={14} style={{ flexShrink: 0, color: "var(--text-muted)" }} />
+        <span className={startValue ? undefined : "muted"}>{displayStart}</span>
         <span className="muted">→</span>
-        <button type="button" onClick={() => openPicker("end")} style={segmentStyle}>
-          {endValue ? formatDateSlash(endValue) : <span className="muted">{endPlaceholder}</span>}
-        </button>
-      </div>
-      {openField && (
+        <span className={endValue ? undefined : "muted"}>{displayEnd}</span>
+      </button>
+      {open && (
         <div
           style={{
             position: "absolute",
@@ -178,77 +174,153 @@ export default function DateRangePicker({
             border: "1px solid var(--border)",
             borderRadius: 10,
             padding: "0.7rem",
-            width: "17.5rem",
             boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.4)",
             zIndex: 20,
           }}
         >
-          <div className="muted" style={{ fontSize: "0.75rem", marginBottom: "0.5rem" }}>
-            {openField === "start" ? "Data inicial" : "Data final"}
-            {maxSpanMonths !== undefined && ` · período de até ${maxSpanMonths} mês${maxSpanMonths > 1 ? "es" : ""}`}
+          {maxSpanMonths !== undefined && (
+            <div className="muted" style={{ fontSize: "0.75rem", marginBottom: "0.5rem" }}>
+              Período de até {maxSpanMonths} mês{maxSpanMonths > 1 ? "es" : ""}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: "1rem" }}>
+            <MonthPanel
+              monthDate={leftMonth}
+              bounds={bounds}
+              onPrev={() => changeMonths(-1)}
+              onSelect={selectDay}
+              onHover={setHoverIso}
+              showPrev
+            />
+            <MonthPanel
+              monthDate={rightMonth}
+              bounds={bounds}
+              onNext={() => changeMonths(1)}
+              onSelect={selectDay}
+              onHover={setHoverIso}
+              showNext
+            />
           </div>
-
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.6rem" }}>
-            <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={() => changeMonth(-1)} aria-label="Mês anterior">
-              <ChevronLeft size={16} />
-            </button>
-            <strong style={{ fontSize: "0.9rem" }}>
-              {MONTH_NAMES[month]} {year}
-            </strong>
-            <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={() => changeMonth(1)} aria-label="Próximo mês">
-              <ChevronRight size={16} />
-            </button>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "0.15rem", marginBottom: "0.2rem" }}>
-            {WEEKDAY_HEADER.map((w) => (
-              <div key={w} className="muted" style={{ textAlign: "center", fontSize: "0.72rem" }}>
-                {w}
-              </div>
-            ))}
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "0.15rem" }}>
-            {days.map((d) => {
-              const iso = toIso(d);
-              const inMonth = d.getUTCMonth() === month;
-              const selected = iso === selectedValue;
-              return (
-                <button
-                  key={iso}
-                  type="button"
-                  onClick={() => selectDay(d)}
-                  style={{
-                    padding: "0.4rem 0",
-                    fontSize: "0.82rem",
-                    borderRadius: 6,
-                    border: "none",
-                    boxShadow: "none",
-                    fontWeight: selected ? 700 : 500,
-                    background: selected ? "var(--accent)" : "transparent",
-                    color: selected ? "var(--on-accent)" : inMonth ? "var(--text)" : "var(--text-muted)",
-                  }}
-                >
-                  {d.getUTCDate()}
-                </button>
-              );
-            })}
-          </div>
-
           {allowClear && (
-            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.6rem" }}>
-              <button
-                type="button"
-                className="ghost"
-                style={{ padding: "0.15rem 0.4rem", fontSize: "0.78rem" }}
-                onClick={clear}
-              >
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.4rem" }}>
+              <button type="button" className="ghost" style={{ padding: "0.15rem 0.4rem", fontSize: "0.78rem" }} onClick={clear}>
                 Limpar
               </button>
             </div>
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function MonthPanel({
+  monthDate,
+  bounds,
+  onPrev,
+  onNext,
+  onSelect,
+  onHover,
+  showPrev,
+  showNext,
+}: {
+  monthDate: Date;
+  bounds: Bounds | null;
+  onPrev?: () => void;
+  onNext?: () => void;
+  onSelect: (iso: string) => void;
+  onHover: (iso: string | null) => void;
+  showPrev?: boolean;
+  showNext?: boolean;
+}) {
+  const year = monthDate.getUTCFullYear();
+  const month = monthDate.getUTCMonth();
+  const days: Date[] = [];
+  const gridFirst = gridStart(year, month);
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(gridFirst);
+    d.setUTCDate(gridFirst.getUTCDate() + i);
+    days.push(d);
+  }
+
+  return (
+    <div style={{ width: PANEL_WIDTH }} onMouseLeave={() => onHover(null)}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.6rem" }}>
+        {showPrev ? (
+          <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={onPrev} aria-label="Mês anterior">
+            <ChevronLeft size={16} />
+          </button>
+        ) : (
+          <span style={{ width: "2rem" }} />
+        )}
+        <strong style={{ fontSize: "0.9rem" }}>
+          {MONTH_NAMES[month]} {year}
+        </strong>
+        {showNext ? (
+          <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={onNext} aria-label="Próximo mês">
+            <ChevronRight size={16} />
+          </button>
+        ) : (
+          <span style={{ width: "2rem" }} />
+        )}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: "0.2rem" }}>
+        {WEEKDAY_HEADER.map((w) => (
+          <div key={w} className="muted" style={{ textAlign: "center", fontSize: "0.72rem" }}>
+            {w}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)" }}>
+        {days.map((d) => {
+          const iso = toIso(d);
+          const inMonth = d.getUTCMonth() === month;
+          const dow = d.getUTCDay();
+
+          const inBounds = bounds && iso >= bounds[0] && iso <= bounds[1];
+          const isEndpoint = bounds && (iso === bounds[0] || iso === bounds[1]);
+          const isRange = bounds && bounds[0] !== bounds[1];
+          const showBand = isRange && inBounds;
+          const roundLeft = dow === 0 || (bounds && iso === bounds[0]);
+          const roundRight = dow === 6 || (bounds && iso === bounds[1]);
+
+          return (
+            <div
+              key={iso}
+              style={{
+                background: showBand ? "var(--accent-soft)" : "transparent",
+                borderRadius: showBand
+                  ? `${roundLeft ? "999px" : "0"} ${roundRight ? "999px" : "0"} ${roundRight ? "999px" : "0"} ${roundLeft ? "999px" : "0"}`
+                  : 0,
+                display: "flex",
+                justifyContent: "center",
+                padding: "0.1rem 0",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => onSelect(iso)}
+                onMouseEnter={() => onHover(iso)}
+                style={{
+                  width: "2rem",
+                  height: "2rem",
+                  fontSize: "0.82rem",
+                  borderRadius: 999,
+                  border: "none",
+                  boxShadow: "none",
+                  fontWeight: isEndpoint ? 700 : 500,
+                  background: isEndpoint ? "var(--accent)" : "transparent",
+                  color: isEndpoint ? "var(--on-accent)" : inMonth ? "var(--text)" : "var(--text-muted)",
+                }}
+              >
+                {d.getUTCDate()}
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
