@@ -187,6 +187,7 @@ export default function DateRangePicker({
             <MonthPanel
               monthDate={leftMonth}
               bounds={bounds}
+              hoverIso={hoverIso}
               onPrev={() => changeMonths(-1)}
               onSelect={selectDay}
               onHover={setHoverIso}
@@ -195,6 +196,7 @@ export default function DateRangePicker({
             <MonthPanel
               monthDate={rightMonth}
               bounds={bounds}
+              hoverIso={hoverIso}
               onNext={() => changeMonths(1)}
               onSelect={selectDay}
               onHover={setHoverIso}
@@ -217,6 +219,7 @@ export default function DateRangePicker({
 function MonthPanel({
   monthDate,
   bounds,
+  hoverIso,
   onPrev,
   onNext,
   onSelect,
@@ -226,6 +229,7 @@ function MonthPanel({
 }: {
   monthDate: Date;
   bounds: Bounds | null;
+  hoverIso: string | null;
   onPrev?: () => void;
   onNext?: () => void;
   onSelect: (iso: string) => void;
@@ -242,6 +246,7 @@ function MonthPanel({
     d.setUTCDate(gridFirst.getUTCDate() + i);
     days.push(d);
   }
+  const todayIso = toIso(todayUtc());
 
   return (
     <div style={{ width: PANEL_WIDTH }} onMouseLeave={() => onHover(null)}>
@@ -279,12 +284,21 @@ function MonthPanel({
           const inMonth = d.getUTCMonth() === month;
           const dow = d.getUTCDay();
 
+          // Leading/trailing days from the neighboring month are left blank
+          // instead of shown dimmed — with two linked panels, that month is
+          // already visible in the other calendar, so repeating its days
+          // here (and having the range band bleed into them) only confuses
+          // which panel a click actually lands in.
+          if (!inMonth) return <div key={iso} style={{ height: "2.2rem" }} />;
+
           const inBounds = bounds && iso >= bounds[0] && iso <= bounds[1];
           const isEndpoint = bounds && (iso === bounds[0] || iso === bounds[1]);
           const isRange = bounds && bounds[0] !== bounds[1];
           const showBand = isRange && inBounds;
           const roundLeft = dow === 0 || (bounds && iso === bounds[0]);
           const roundRight = dow === 6 || (bounds && iso === bounds[1]);
+          const isToday = iso === todayIso;
+          const isHovered = iso === hoverIso;
 
           return (
             <div
@@ -306,13 +320,18 @@ function MonthPanel({
                 style={{
                   width: "2rem",
                   height: "2rem",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: 0,
+                  lineHeight: 1,
                   fontSize: "0.82rem",
                   borderRadius: 999,
                   border: "none",
-                  boxShadow: "none",
-                  fontWeight: isEndpoint ? 700 : 500,
-                  background: isEndpoint ? "var(--accent)" : "transparent",
-                  color: isEndpoint ? "var(--on-accent)" : inMonth ? "var(--text)" : "var(--text-muted)",
+                  boxShadow: isToday && !isEndpoint ? "inset 0 0 0 1px var(--accent)" : "none",
+                  fontWeight: isEndpoint || isToday ? 700 : 500,
+                  background: isEndpoint ? "var(--accent)" : isHovered ? "var(--surface-container)" : "transparent",
+                  color: isEndpoint ? "var(--on-accent)" : isToday ? "var(--accent)" : "var(--text)",
                 }}
               >
                 {d.getUTCDate()}
