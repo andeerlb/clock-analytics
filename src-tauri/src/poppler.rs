@@ -3,6 +3,16 @@ use std::path::{Path, PathBuf};
 /// The Poppler CLI tools this app shells out to.
 pub const BINARIES: [&str; 4] = ["pdfinfo", "pdftotext", "pdfseparate", "pdfunite"];
 
+#[cfg(target_os = "windows")]
+fn executable_name(name: &str) -> String {
+    format!("{name}.exe")
+}
+
+#[cfg(not(target_os = "windows"))]
+fn executable_name(name: &str) -> String {
+    name.to_string()
+}
+
 /// Resolves a Poppler CLI tool (`pdfinfo`, `pdftotext`, `pdfseparate`,
 /// `pdfunite`) to an absolute path when possible, instead of relying on
 /// `$PATH`.
@@ -39,8 +49,10 @@ pub fn resolve(name: &str, custom_dir: Option<&str>) -> PathBuf {
         "/usr/bin",          // apt/dnf poppler-utils on Linux
     ];
 
+    let executable_name = executable_name(name);
+
     if let Some(dir) = custom_dir {
-        let path = Path::new(dir).join(name);
+        let path = Path::new(dir).join(&executable_name);
         if path.is_file() {
             return path;
         }
@@ -48,7 +60,54 @@ pub fn resolve(name: &str, custom_dir: Option<&str>) -> PathBuf {
 
     KNOWN_DIRS
         .iter()
-        .map(|dir| Path::new(dir).join(name))
+        .map(|dir| Path::new(dir).join(&executable_name))
         .find(|path| path.is_file())
-        .unwrap_or_else(|| PathBuf::from(name))
+        .unwrap_or_else(|| PathBuf::from(executable_name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(prefix: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock moved backwards")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("{prefix}-{unique}"));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn resolves_poppler_binary_inside_custom_dir() {
+        let dir = temp_dir("poppler-resolve");
+        let file_name = if cfg!(target_os = "windows") {
+            "pdfinfo.exe"
+        } else {
+            "pdfinfo"
+        };
+        let file_path = dir.join(file_name);
+        fs::write(&file_path, b"").expect("create stub binary");
+
+        let resolved = resolve("pdfinfo", Some(dir.to_string_lossy().as_ref()));
+
+        assert_eq!(resolved, file_path);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn falls_back_to_platform_executable_name() {
+        let resolved = resolve("pdfinfo", None);
+
+        if cfg!(target_os = "windows") {
+            assert_eq!(resolved, PathBuf::from("pdfinfo.exe"));
+        } else {
+            assert_eq!(resolved, PathBuf::from("pdfinfo"));
+        }
+    }
 }

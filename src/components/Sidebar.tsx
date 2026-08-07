@@ -72,7 +72,7 @@ export default function Sidebar() {
   const { label: statusLabel, color: remoteDotColor, pulse: remoteDotPulsing } = REMOTE_STATUS_META[remoteStatus];
 
   function goToRemoteUpdates() {
-    navigate("/import/payments/remote-updates");
+    navigate("/remote-updates/imports");
   }
 
   return (
@@ -99,7 +99,7 @@ export default function Sidebar() {
           onMouseEnter={() => setRemoteHovered(true)}
           onMouseLeave={() => setRemoteHovered(false)}
         >
-          <NavLink to="/import/payments/remote-updates" className={navLinkClass}>
+          <NavLink to="/remote-updates/imports" className={navLinkClass}>
             <span style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
               <RefreshCw size={18} className={checking ? "spin" : undefined} />
               <span

@@ -2746,6 +2746,7 @@ export async function getPaymentShiftHistory(shiftId: number): Promise<PaymentSh
 export async function vacuumDatabase(): Promise<void> {
   const db = await getDb();
   await db.execute("VACUUM");
+  await db.execute("PRAGMA wal_checkpoint(TRUNCATE)");
 }
 
 export interface ClearDataOptions {
@@ -2875,4 +2876,5 @@ export async function clearAllData(options: ClearDataOptions = {}): Promise<void
   }
 
   await db.execute("VACUUM");
+  await db.execute("PRAGMA wal_checkpoint(TRUNCATE)");
 }

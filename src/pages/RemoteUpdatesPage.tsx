@@ -303,7 +303,7 @@ export default function RemoteUpdatesPage() {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-        <BackButton fallback="/import/payments" />
+        <BackButton fallback="/payments" />
         <h2 style={{ margin: 0 }}>Verificação automática</h2>
       </div>
       <p className="page-subtitle">
