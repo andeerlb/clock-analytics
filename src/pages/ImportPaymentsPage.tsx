@@ -176,6 +176,7 @@ interface PaymentImportNavState {
   nameSearch: string;
   previewPage: number;
   previewPageSize: number;
+  keepManualEdits: boolean;
 }
 
 type DisplayRow =
@@ -246,6 +247,7 @@ export default function ImportPaymentsPage() {
   const [selectedRows, setSelectedRows] = useState<Set<number>>(restored?.selectedRows ?? new Set());
   const [previewPage, setPreviewPage] = useState(restored?.previewPage ?? 0);
   const [previewPageSize, setPreviewPageSize] = useState(restored?.previewPageSize ?? PREVIEW_PAGE_SIZE_OPTIONS[0]);
+  const [processedKeepManualEdits, setProcessedKeepManualEdits] = useState<boolean | null>(null);
 
   const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
   const [recentFilesTotal, setRecentFilesTotal] = useState(0);
@@ -361,6 +363,7 @@ export default function ImportPaymentsPage() {
     setUrlInput("");
     setTrackAutoUpdates(false);
     setIsAutoReimport(false);
+      setProcessedKeepManualEdits(null);
     setKeepManualEdits(true);
     cancelPreview();
     setError(null);
@@ -571,7 +574,11 @@ export default function ImportPaymentsPage() {
     [previewRows, previewPage, previewPageSize],
   );
 
-  const isSelectable = (r: PaymentPreviewRow) => Boolean(r.employee) && r.category !== "duplicate-in-file";
+  const effectiveKeepManualEdits = processedKeepManualEdits ?? keepManualEdits;
+  const isSelectable = (r: PaymentPreviewRow) =>
+    Boolean(r.employee) &&
+    r.category !== "duplicate-in-file" &&
+    !(r.category === "duplicate" && r.matchedEditedManually && effectiveKeepManualEdits);
   const selectableCount = shiftRows.filter(isSelectable).length;
   const allSelected = selectableCount > 0 && shiftRows.every((r, i) => selectedRows.has(i) || !isSelectable(r));
 
@@ -750,6 +757,7 @@ export default function ImportPaymentsPage() {
 
       setFileResults(results);
       setSelectedRows(defaultSelected);
+        setProcessedKeepManualEdits(keepManualEdits);
       setPreviewPage(0);
       setRowFilter("all");
       setNameSearch("");
@@ -862,6 +870,7 @@ export default function ImportPaymentsPage() {
       nameSearch,
       previewPage,
       previewPageSize,
+      keepManualEdits: processedKeepManualEdits ?? keepManualEdits,
     };
     navigate(".", { replace: true, state: snapshot });
     // The row's routing rule already resolved exactly which cliente/empresa
@@ -932,7 +941,7 @@ export default function ImportPaymentsPage() {
           // an independent new one — links this new row back to the current
           // one it supersedes (see `findDuplicatePaymentShifts`), same
           // append-only pattern as "Fazer pagamento"/"Editar valor". A
-          // protected match (edited_manually + keepManualEdits) never gets
+          // protected match (edited_manually + keepManualEdits snapshot) never gets
           // here selected in the first place — the checkbox is disabled for
           // those (see `canSelect` above).
           previousShiftId: row.category === "duplicate" ? row.matchedShiftId : null,
@@ -960,7 +969,7 @@ export default function ImportPaymentsPage() {
         for (const url of savedUrls) {
           const alreadyTracked = trackedFiles.some((t) => t.sourceUrl === url);
           if (!alreadyTracked) {
-            await trackUrl(url, selectedTemplate.id, periodStart || null, periodEnd || null, keepManualEdits);
+            await trackUrl(url, selectedTemplate.id, periodStart || null, periodEnd || null, effectiveKeepManualEdits);
           }
         }
       }
@@ -1448,7 +1457,7 @@ export default function ImportPaymentsPage() {
                         // not offered as selectable in the first place, instead of a
                         // checkbox that silently does nothing once checked.
                         const protectedByManualEdit =
-                          row.category === "duplicate" && row.matchedEditedManually && keepManualEdits;
+                          row.category === "duplicate" && row.matchedEditedManually && effectiveKeepManualEdits;
                         const canSelect =
                           Boolean(row.employee) && row.category !== "duplicate-in-file" && !protectedByManualEdit;
                         return (
