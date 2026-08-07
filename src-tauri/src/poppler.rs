@@ -47,6 +47,11 @@ pub fn resolve(name: &str, custom_dir: Option<&str>) -> PathBuf {
         "/usr/local/bin",    // Homebrew on Intel
         "/opt/local/bin",    // MacPorts
         "/usr/bin",          // apt/dnf poppler-utils on Linux
+        "/Program Files/Poppler/bin", // Windows
+        "/Program Files (x86)/Poppler/bin", // Windows
+        "C:/Program Files/Poppler/bin", // Windows
+        "C:/Program Files (x86)/Poppler/bin", // Windows
+        "C:/poppler/bin", // Windows
     ];
 
     let executable_name = executable_name(name);
