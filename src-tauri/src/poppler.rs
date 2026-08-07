@@ -42,7 +42,7 @@ fn executable_name(name: &str) -> String {
 /// on `$PATH` on Windows the way it can be via Homebrew/apt, so bundling it
 /// as a sidecar is more likely the right call there than path-guessing).
 pub fn resolve(name: &str, custom_dir: Option<&str>) -> PathBuf {
-    const KNOWN_DIRS: [&str; 4] = [
+    const KNOWN_DIRS: [&str; 9] = [
         "/opt/homebrew/bin", // Homebrew on Apple Silicon
         "/usr/local/bin",    // Homebrew on Intel
         "/opt/local/bin",    // MacPorts
