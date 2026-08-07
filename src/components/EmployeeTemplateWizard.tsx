@@ -102,6 +102,8 @@ export default function EmployeeTemplateWizard({
   const [fileKind, setFileKind] = useState<PaymentFileKind | null>(null);
   const [sheets, setSheets] = useState<string[]>([]);
   const [activeSheet, setActiveSheet] = useState<string | null>(null);
+  const [editingSheetName, setEditingSheetName] = useState<string | null>(null);
+  const [editingSheetNameDraft, setEditingSheetNameDraft] = useState("");
   const [includedSheets, setIncludedSheets] = useState<Set<string>>(new Set());
   const [delimiter, setDelimiter] = useState<string | null>(null);
   const [rows, setRows] = useState<string[][]>([]);
@@ -158,6 +160,8 @@ export default function EmployeeTemplateWizard({
       setFileKind(null);
       setSheets([]);
       setActiveSheet(null);
+      setEditingSheetName(null);
+      setEditingSheetNameDraft("");
       setIncludedSheets(new Set());
       setDelimiter(null);
       setRows([]);
@@ -268,6 +272,8 @@ export default function EmployeeTemplateWizard({
     setGroupHeaderRow(newGroupHeaderRow);
     setIncludedSheets(new Set(t.groups.flatMap((g) => g.sheetNames)));
     setActiveSheet(sheetNames[0] ?? null);
+    setEditingSheetName(null);
+    setEditingSheetNameDraft("");
     setRows([]);
     setExtraColumns(0);
   }
@@ -280,6 +286,8 @@ export default function EmployeeTemplateWizard({
       const firstSheet = sheetNames[0] ?? null;
       setSheets(sheetNames);
       setActiveSheet(firstSheet);
+      setEditingSheetName(null);
+      setEditingSheetNameDraft("");
       // Everything starts included — flagging the few sheets that don't
       // belong is less work than hand-picking every roster sheet in a
       // large workbook.
@@ -337,10 +345,18 @@ export default function EmployeeTemplateWizard({
   // it.
   function handleSheetClick(sheetName: string) {
     if (sheetName === activeSheet) return;
+    setEditingSheetName(null);
+    setEditingSheetNameDraft("");
     setActiveSheet(sheetName);
     setExtraColumns(0);
     setFocusedColumn(null);
     refetchRows(sheetName, delimiter);
+  }
+
+  function startEditingSheetName(sheetName: string) {
+    setEditingSheetName(sheetName);
+    setEditingSheetNameDraft(sheetName);
+    setActiveSheet(sheetName);
   }
 
   /** Includes or excludes a single sheet from the import — independent of whatever it's mirroring, since that's just where its mapping comes from, not a shared identity. */
@@ -351,6 +367,74 @@ export default function EmployeeTemplateWizard({
       else next.add(sheet);
       return next;
     });
+  }
+
+  function renameSheet(oldName: string, rawNewName: string) {
+    const newName = rawNewName.trim();
+    if (!newName || newName === oldName) {
+      setEditingSheetName(null);
+      setEditingSheetNameDraft("");
+      return;
+    }
+    if (sheets.includes(newName)) {
+      setError(`Já existe uma aba chamada "${newName}".`);
+      setEditingSheetName(oldName);
+      setEditingSheetNameDraft(oldName);
+      return;
+    }
+
+    setError(null);
+    setSheets((prev) => prev.map((sheet) => (sheet === oldName ? newName : sheet)));
+    setIncludedSheets((prev) => {
+      const next = new Set(prev);
+      if (next.has(oldName)) {
+        next.delete(oldName);
+        next.add(newName);
+      }
+      return next;
+    });
+    setSheetGroupOf((prev) => {
+      const next: Record<string, string> = {};
+      for (const [sheet, groupKey] of Object.entries(prev)) {
+        const renamedSheet = sheet === oldName ? newName : sheet;
+        const renamedGroupKey = groupKey === oldName ? newName : groupKey;
+        next[renamedSheet] = renamedGroupKey;
+      }
+      if (!prev[oldName]) next[newName] = newName;
+      return next;
+    });
+    setGroupMapping((prev) => {
+      if (!(oldName in prev)) return prev;
+      const next = { ...prev };
+      if (newName !== oldName) {
+        next[newName] = next[oldName] ?? {};
+        delete next[oldName];
+      }
+      return next;
+    });
+    setGroupFieldLabels((prev) => {
+      if (!(oldName in prev)) return prev;
+      const next = { ...prev };
+      if (newName !== oldName) {
+        next[newName] = next[oldName] ?? {};
+        delete next[oldName];
+      }
+      return next;
+    });
+    setGroupHeaderRow((prev) => {
+      if (!(oldName in prev)) return prev;
+      const next = { ...prev };
+      if (newName !== oldName) {
+        next[newName] = next[oldName] ?? null;
+        delete next[oldName];
+      }
+      return next;
+    });
+    if (activeSheet === oldName) {
+      setActiveSheet(newName);
+    }
+    setEditingSheetName(null);
+    setEditingSheetNameDraft("");
   }
 
   function addNewSheet() {
@@ -368,6 +452,8 @@ export default function EmployeeTemplateWizard({
     setGroupHeaderRow((prev) => ({ ...prev, [sheetName]: null }));
     setIncludedSheets((prev) => new Set(prev).add(sheetName));
     setActiveSheet(sheetName);
+    setEditingSheetName(null);
+    setEditingSheetNameDraft("");
     setExtraColumns(0);
   }
 
@@ -659,7 +745,7 @@ export default function EmployeeTemplateWizard({
       </div>
 
       <div
-        style={{ flex: 1, overflow: "auto", padding: "1.5rem", background: "var(--bg)" }}
+        style={{ flex: 1, overflow: "auto", padding: "1.5rem", background: "var(--bg)", display: "flex", flexDirection: "column", minHeight: 0 }}
         onClick={(e) => e.stopPropagation()}
       >
         {error && <div className="error-box" style={{ marginBottom: "1rem" }}>{error}</div>}
@@ -758,61 +844,87 @@ export default function EmployeeTemplateWizard({
         )}
 
         {currentStep === "mapping" && (
-          <div style={{ display: "flex", gap: "1.2rem", alignItems: "flex-start" }}>
+          <div style={{ display: "flex", gap: "1.2rem", alignItems: "stretch", minHeight: 0, flex: 1 }}>
             {sheets.length > 0 && (
-              <aside className="mapping-sidebar">
-                <div className="mapping-sidebar-header">
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
+              <div style={{ display: "flex", flexDirection: "column", flex: "0 0 256px", minHeight: 0, alignSelf: "stretch" }}>
+                <aside className="mapping-sidebar">
+                  <div className="mapping-sidebar-header">
                     <strong>{sheets.length === 1 ? "Aba do arquivo" : "Mapeamento por aba"}</strong>
-                    {!filePath && (
-                      <button type="button" className="ghost" style={{ padding: "0.2rem 0.5rem" }} onClick={addNewSheet}>
-                        <Plus size={12} style={{ marginRight: "0.25rem" }} />
-                        Adicionar aba
-                      </button>
-                    )}
+                    <p className="muted">
+                      {sheets.length === 1 ? "Aba carregada neste template" : "Selecione a aba para configurar"}
+                    </p>
                   </div>
-                  <p className="muted">
-                    {sheets.length === 1 ? "Aba carregada neste template" : "Selecione a aba para configurar"}
-                  </p>
-                </div>
-                <nav className="mapping-sidebar-nav">
-                  {sheets.map((s) => {
-                    const included = includedSheets.has(s);
-                    const groupKey = groupKeyOf(s);
-                    const mirroring = groupKey !== s ? groupKey : null;
-                    return (
-                      <button
-                        key={s}
-                        type="button"
-                        className={`mapping-sidebar-item${s === activeSheet ? " active" : ""}${included ? "" : " excluded"}`}
-                        onClick={() => handleSheetClick(s)}
-                      >
-                        <span
-                          className="mapping-sidebar-check"
-                          role="checkbox"
-                          aria-checked={included}
-                          aria-label={included ? `Remover "${s}" da importação` : `Incluir "${s}" na importação`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleSheetIncluded(s);
-                          }}
+                  <nav className="mapping-sidebar-nav">
+                    {sheets.map((s) => {
+                      const included = includedSheets.has(s);
+                      const groupKey = groupKeyOf(s);
+                      const mirroring = groupKey !== s ? groupKey : null;
+                      const isEditing = editingSheetName === s;
+                      return (
+                        <button
+                          key={s}
+                          type="button"
+                          className={`mapping-sidebar-item${s === activeSheet ? " active" : ""}${included ? "" : " excluded"}`}
+                          onClick={() => handleSheetClick(s)}
+                          onDoubleClick={() => startEditingSheetName(s)}
                         >
-                          {included ? <CheckSquare size={14} /> : <Square size={14} />}
-                        </span>
-                        <span className="mapping-sidebar-label">
-                          {s}
-                          {mirroring && <span className="mapping-sidebar-mirroring"> → {mirroring}</span>}
-                        </span>
-                        {included && !isGroupMappingValid(groupKey) && (
-                          <span className="mapping-sidebar-warn" title="Faltam mapear CPF e/ou Nome">
-                            •
+                          <span
+                            className="mapping-sidebar-check"
+                            role="checkbox"
+                            aria-checked={included}
+                            aria-label={included ? `Remover "${s}" da importação` : `Incluir "${s}" na importação`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleSheetIncluded(s);
+                            }}
+                          >
+                            {included ? <CheckSquare size={14} /> : <Square size={14} />}
                           </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </nav>
-              </aside>
+                          <span className="mapping-sidebar-label">
+                            {isEditing ? (
+                              <input
+                                autoFocus
+                                type="text"
+                                value={editingSheetNameDraft}
+                                onChange={(e) => setEditingSheetNameDraft(e.target.value)}
+                                onBlur={() => renameSheet(s, editingSheetNameDraft)}
+                                onClick={(e) => e.stopPropagation()}
+                                onDoubleClick={(e) => e.stopPropagation()}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    renameSheet(s, editingSheetNameDraft);
+                                  } else if (e.key === "Escape") {
+                                    e.preventDefault();
+                                    setEditingSheetName(null);
+                                    setEditingSheetNameDraft("");
+                                  }
+                                }}
+                                style={{ width: "100%" }}
+                              />
+                            ) : (
+                              s
+                            )}
+                            {mirroring && <span className="mapping-sidebar-mirroring"> → {mirroring}</span>}
+                          </span>
+                          {included && !isGroupMappingValid(groupKey) && (
+                            <span className="mapping-sidebar-warn" title="Faltam mapear CPF e/ou Nome">
+                              •
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </nav>
+                </aside>
+
+                <div style={{ display: "flex", justifyContent: "center", marginTop: "0.6rem" }}>
+                  <button type="button" className="ghost" onClick={addNewSheet}>
+                    <Plus size={12} style={{ marginRight: "0.25rem" }} />
+                    Adicionar aba
+                  </button>
+                </div>
+              </div>
             )}
 
             <div style={{ flex: 1, minWidth: 0 }}>
