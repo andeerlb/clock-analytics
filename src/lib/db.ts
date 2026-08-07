@@ -2885,6 +2885,25 @@ export async function getPaymentShiftHistory(shiftId: number): Promise<PaymentSh
   return chain.reverse();
 }
 
+/** Which columns of the Pagamentos table are shown — `null` means every column (the default, and what a fresh install has). */
+export async function getPaymentVisibleColumns(): Promise<string[] | null> {
+  const db = await getDb();
+  const rows = await db.select<{ visibleColumnsJson: string | null }[]>(
+    "SELECT visible_columns_json AS visibleColumnsJson FROM payment_settings WHERE id = 1",
+  );
+  const json = rows[0]?.visibleColumnsJson ?? null;
+  return json ? JSON.parse(json) : null;
+}
+
+/** Persists the Pagamentos table's column visibility — saved immediately on every toggle, not behind a "Salvar" button, same as the other filter state that lives in `FiltersContext`. */
+export async function setPaymentVisibleColumns(columns: string[]): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE payment_settings SET visible_columns_json = $1, updated_at = datetime('now') WHERE id = 1",
+    [JSON.stringify(columns)],
+  );
+}
+
 /**
  * Recompacts the DB file — reclaims space left behind by deleted rows
  * without touching any surviving data. Cheap, non-destructive; the natural

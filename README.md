@@ -9,7 +9,7 @@ A cross-platform desktop app (Linux, macOS, Windows) built with [Tauri](https://
 - **Companies, Clients, Employees.** A company can have many clients and a client can be linked to more than one company (many-to-many); employees and their imported timesheets are scoped to a client.
 - **Cartão de Ponto (employee detail).** A full day-by-day breakdown per import, with dynamic Entrada/Saída columns, computed metrics (worked hours, overtime, faltas/atrasos, breaks), and a multi-select filter over per-day status.
 - **Colaboradores.** The main list of already-imported timesheets, filterable by name, company, client, period, and per-period status — the same filters double as a report generator, bundling the matching employees' original PDFs into a single ZIP organized in `Company/Client/` folders, either one PDF per employee or one merged PDF per client.
-- **In-app PDF viewer.** PDFs are rendered inside the app with [pdf.js](https://mozilla.github.io/pdf.js/), with actions to download a copy or reveal the file in the OS file manager.
+- **In-app PDF viewer.** PDFs are rendered inside the app with [pdf.js](https://mozilla.github.io/pdf.js/), with actions to download a copy or reveal the file in the OS file manager (Explorer/Finder/Nautilus — works on all three of Windows, macOS, and Linux, unlike the Poppler-dependent features below).
 
 ## Tech stack
 

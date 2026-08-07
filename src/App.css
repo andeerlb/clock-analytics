@@ -448,6 +448,16 @@ tr:last-child td {
   gap: 0.65rem;
 }
 
+/* Pagamentos "Modo edição" — a table cell that turns into an input on click. */
+.editable-value {
+  cursor: text;
+  border-bottom: 1px dashed var(--border);
+}
+
+.editable-value:hover {
+  border-bottom-color: var(--accent);
+}
+
 .avatar {
   width: 32px;
   height: 32px;

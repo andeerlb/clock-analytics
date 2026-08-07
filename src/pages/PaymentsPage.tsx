@@ -1,6 +1,7 @@
 import {
   AlertCircle,
   Building2,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -12,19 +13,20 @@ import {
   Info,
   Layers,
   Moon,
-  Pencil,
   RotateCcw,
   Search,
+  Settings2,
   ShieldCheck,
   Sun,
   Users,
+  X,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
 import ConfirmPaymentModal from "../components/ConfirmPaymentModal";
+import DatePicker from "../components/DatePicker";
 import DateRangePicker from "../components/DateRangePicker";
-import EditShiftModal, { type EditShiftFields } from "../components/EditShiftModal";
 import ExtraColumnsModal from "../components/ExtraColumnsModal";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
@@ -36,6 +38,7 @@ import { revealInFileManager } from "../lib/api";
 import {
   editPaymentShift,
   getCompany,
+  getPaymentVisibleColumns,
   listClients,
   listCompanies,
   listPaymentShiftSummaries,
@@ -43,6 +46,7 @@ import {
   listPaymentShiftsForGroup,
   markPaymentShiftPaid,
   revertPaymentShiftToPending,
+  setPaymentVisibleColumns,
   type ClientRow,
   type CompanyDetail,
   type CompanyRow,
@@ -50,7 +54,16 @@ import {
   type PaymentShiftFlatRow,
   type PaymentShiftGroupRow,
 } from "../lib/db";
-import { formatCurrencyBRL, formatDate, formatDateTime, formatMinutesAsTime, resolvePaymentValue, shiftDurationMinutes } from "../lib/format";
+import {
+  formatCurrencyBRL,
+  formatDate,
+  formatDateAbbrevYY,
+  formatDateTimeAbbrevYY,
+  formatMinutesAsTime,
+  parseTimeToMinutes,
+  resolvePaymentValue,
+  shiftDurationMinutes,
+} from "../lib/format";
 import { generatePaymentsReportPdf, type PaymentsReportResult } from "../lib/paymentsReport";
 import type { PaymentShiftRow, PaymentShiftStatus, PaymentShiftSummaryRow, ShiftPeriod } from "../lib/types";
 
@@ -72,6 +85,27 @@ const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: strin
   pago: { className: "badge ok", label: "Pago", icon: CheckCircle2 },
 };
 
+/** Every column a turno row can show — `identityOnly` ones only ever appear in the flat (desagrupado) table, since a grouped row's expanded turno table already shows its colaborador/cliente/empresa once, in the summary header above it. */
+const FLAT_COLUMNS: MultiSelectOption<string>[] = [
+  { id: "colaborador", label: "Colaborador" },
+  { id: "cliente", label: "Cliente" },
+  { id: "empresa", label: "Empresa" },
+  { id: "data", label: "Data" },
+  { id: "local", label: "Local" },
+  { id: "funcao", label: "Função" },
+  { id: "horario", label: "Horário" },
+  { id: "horas", label: "H/trab." },
+  { id: "valor", label: "Valor" },
+  { id: "status", label: "Status" },
+  { id: "importado", label: "Importado em" },
+  { id: "extras", label: "Extras" },
+];
+const ALL_COLUMN_IDS = FLAT_COLUMNS.map((c) => c.id);
+/** What a fresh install (no saved column preference yet) shows — everything except "Importado em", which is metadata most people don't need visible by default. */
+const DEFAULT_VISIBLE_COLUMN_IDS = ALL_COLUMN_IDS.filter((id) => id !== "importado");
+const IDENTITY_COLUMN_IDS = new Set(["colaborador", "cliente", "empresa"]);
+const TURNO_COLUMNS = FLAT_COLUMNS.filter((c) => !IDENTITY_COLUMN_IDS.has(c.id));
+
 /** "2026-02" -> "fev/2026" */
 function formatCompetencia(competencia: string): string {
   const date = new Date(`${competencia}-01T00:00:00Z`);
@@ -85,13 +119,190 @@ function groupKey(employeeId: number, competencia: string): string {
 /** Where a row action came from — `null` for a flat (desagrupado) row, or the group it's nested under so a mutation can refresh exactly that group plus the summary counts. */
 type GroupRef = { employeeId: number; competencia: string } | null;
 
+/** A patch to one or more of a shift's own editable fields — whichever keys are present overwrite that field, everything else carries over from the shift's current value (see `commitField` in `PaymentsPage`). */
+type ShiftFieldPatch = Partial<{
+  workDate: string;
+  local: string;
+  role: string;
+  scheduleStartMinutes: number | null;
+  scheduleEndMinutes: number | null;
+  amount: number | null;
+}>;
+
+/**
+ * A cell that's plain text until clicked (only when `editable`), then swaps
+ * to an input — commits on blur or Enter, discards on Escape. Used for
+ * every single-value editable text/number column (Local/Função/Valor);
+ * Data has its own variant (`EditableDateCell`, a custom calendar instead
+ * of the native date input) and Horário its own two-input one
+ * (`EditableSchedule`, since a blur on one of its two fields shouldn't
+ * commit until the user is done with both).
+ */
+function EditableCell({
+  editable,
+  type,
+  value,
+  display,
+  placeholder,
+  onCommit,
+}: {
+  editable: boolean;
+  type: "text" | "number";
+  value: string;
+  display: ReactNode;
+  placeholder?: string;
+  onCommit: (value: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  if (!editable) return <>{display}</>;
+
+  if (!editing) {
+    return (
+      <span
+        className="editable-value"
+        onClick={() => {
+          setDraft(value);
+          setEditing(true);
+        }}
+      >
+        {display}
+      </span>
+    );
+  }
+
+  function commit() {
+    setEditing(false);
+    if (draft !== value) onCommit(draft);
+  }
+
+  return (
+    <input
+      autoFocus
+      type={type}
+      step={type === "number" ? "0.01" : undefined}
+      min={type === "number" ? "0" : undefined}
+      placeholder={placeholder}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+        if (e.key === "Escape") setEditing(false);
+      }}
+      style={{ width: type === "text" ? "100%" : "auto" }}
+    />
+  );
+}
+
+/** Data's own editable cell — opens the custom `DatePicker` popover instead of a native `<input type="date">`, which renders with the OS/browser's own (often English, always visually inconsistent) date control. */
+function EditableDateCell({
+  editable,
+  value,
+  display,
+  onCommit,
+}: {
+  editable: boolean;
+  /** "YYYY-MM-DD" */
+  value: string;
+  display: ReactNode;
+  onCommit: (value: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const triggerRef = useRef<HTMLSpanElement>(null);
+
+  if (!editable) return <>{display}</>;
+
+  if (!editing) {
+    return (
+      <span ref={triggerRef} className="editable-value" onClick={() => setEditing(true)}>
+        {display}
+      </span>
+    );
+  }
+
+  return (
+    <span ref={triggerRef} className="editable-value" onClick={(e) => e.stopPropagation()}>
+      {display}
+      <DatePicker
+        value={value}
+        anchorRef={triggerRef}
+        onSelect={(iso) => {
+          setEditing(false);
+          if (iso !== value) onCommit(iso);
+        }}
+        onClose={() => setEditing(false)}
+      />
+    </span>
+  );
+}
+
+/** Horário's own editable cell — two time inputs committed together via explicit confirm/cancel buttons (not blur), since blurring one field to focus the other isn't "done editing" the way it is for every other single-value column. */
+function EditableSchedule({
+  editable,
+  startTime,
+  endTime,
+  display,
+  onCommit,
+}: {
+  editable: boolean;
+  /** "HH:MM", or "" when there's no schedule. */
+  startTime: string;
+  endTime: string;
+  display: ReactNode;
+  onCommit: (startTime: string, endTime: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draftStart, setDraftStart] = useState(startTime);
+  const [draftEnd, setDraftEnd] = useState(endTime);
+
+  if (!editable) return <>{display}</>;
+
+  if (!editing) {
+    return (
+      <span
+        className="editable-value"
+        onClick={() => {
+          setDraftStart(startTime);
+          setDraftEnd(endTime);
+          setEditing(true);
+        }}
+      >
+        {display}
+      </span>
+    );
+  }
+
+  function commit() {
+    setEditing(false);
+    if (draftStart !== startTime || draftEnd !== endTime) onCommit(draftStart, draftEnd);
+  }
+
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }} onClick={(e) => e.stopPropagation()}>
+      <input autoFocus type="time" value={draftStart} onChange={(e) => setDraftStart(e.target.value)} />
+      <span className="muted">–</span>
+      <input type="time" value={draftEnd} onChange={(e) => setDraftEnd(e.target.value)} />
+      <button type="button" className="ghost" style={{ padding: "0.15rem" }} onClick={commit} title="Confirmar">
+        <Check size={12} />
+      </button>
+      <button type="button" className="ghost" style={{ padding: "0.15rem" }} onClick={() => setEditing(false)} title="Cancelar">
+        <X size={12} />
+      </button>
+    </span>
+  );
+}
+
 /**
  * One turno's cells (Data through Ações) — shared between the flat table
  * (which prepends Colaborador/Cliente/Empresa via `identity`) and a grouped
  * row's expanded turno table (no `identity`, since that's already the
- * group's own header). Keeping this as one component instead of two
- * near-identical tables is what let the "editar valor"-only pencil grow
- * into full "editar turno" (Data/Local/Função/Horário/Valor) in one place.
+ * group's own header). `visibleColumns` is an app-wide setting (see
+ * `PaymentsPage`), not per-row state, but lives here since this is the only
+ * place it changes what actually renders. Data/Local/Função/Horário/Valor
+ * are always inline-editable for a `pendente`/`erro` shift — there's no
+ * separate "modo edição" toggle to gate it.
  */
 function ShiftRow({
   shift: s,
@@ -99,8 +310,9 @@ function ShiftRow({
   groupRef,
   identity,
   company,
+  visibleColumns,
+  onCommitField,
   onPay,
-  onEdit,
   onRevert,
   onViewHistory,
   onViewExtra,
@@ -110,8 +322,9 @@ function ShiftRow({
   groupRef: GroupRef;
   identity?: { employeeName: string; companyName: string; clientName: string };
   company: CompanyDetail | null;
+  visibleColumns: Set<string>;
+  onCommitField: (shift: PaymentShiftRow, groupRef: GroupRef, patch: ShiftFieldPatch) => void;
   onPay: (shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) => void;
-  onEdit: (shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) => void;
   onRevert: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
   onViewHistory: (shiftId: number, companyId: number) => void;
   onViewExtra: (data: Record<string, string>) => void;
@@ -132,93 +345,125 @@ function ShiftRow({
             scheduleEndMinutes: s.scheduleEndMinutes,
           })
         : null;
+  const canEdit = s.status === "pendente" || s.status === "erro";
+  const col = (id: string) => visibleColumns.has(id);
+  const patch = (p: ShiftFieldPatch) => onCommitField(s, groupRef, p);
 
   return (
     <tr>
-      {identity && (
-        <>
-          <td>
-            <div className="person-cell">
-              <Avatar name={identity.employeeName} />
-              {identity.employeeName}
-            </div>
-          </td>
-          <td>{identity.clientName}</td>
-          <td>{identity.companyName}</td>
-        </>
-      )}
-      <td>{formatDate(s.workDate)}</td>
-      <td>{s.local}</td>
-      <td>{s.role}</td>
-      <td>
-        {hasSchedule ? (
-          <>
-            {formatMinutesAsTime(s.scheduleStartMinutes!)} – {formatMinutesAsTime(s.scheduleEndMinutes!)}
-            {s.shiftPeriod && (
-              <span className={s.shiftPeriod === "noturno" ? "badge info" : "badge neutral"} style={{ marginLeft: "0.5rem" }}>
-                {s.shiftPeriod === "noturno" ? <Moon size={12} /> : <Sun size={12} />}
-                {s.shiftPeriod === "noturno" ? "Noturno" : "Diurno"}
-              </span>
-            )}
-          </>
-        ) : (
-          "—"
-        )}
-      </td>
-      <td>{duration !== null ? formatMinutesAsTime(duration) : "—"}</td>
-      <td>
-        {value !== null ? formatCurrencyBRL(value) : "—"}
-        {(s.status === "pendente" || s.status === "erro") && (
-          <button
-            type="button"
-            className="ghost"
-            style={{ padding: "0.2rem", marginLeft: "0.4rem" }}
-            onClick={() => onEdit(s, companyId, groupRef)}
-            title="Editar turno"
-          >
-            <Pencil size={12} />
-          </button>
-        )}
-      </td>
-      <td>
-        {s.extraData && Object.keys(s.extraData).length > 0 ? (
-          <button
-            type="button"
-            className="badge neutral"
-            style={{ border: "none", cursor: "pointer" }}
-            onClick={() => onViewExtra(s.extraData!)}
-            title="Ver colunas não mapeadas lidas do arquivo"
-          >
-            <Info size={12} />
-            {Object.keys(s.extraData).length}
-          </button>
-        ) : (
-          <span className="muted">—</span>
-        )}
-      </td>
-      <td>
-        <span className={badge.className}>
-          <BadgeIcon size={13} />
-          {badge.label}
-        </span>
-        {s.editedManually && (
-          <span
-            className="badge info"
-            style={{ marginLeft: "0.4rem" }}
-            title="Atualizado manualmente — uma reimportação não sobrescreve este turno enquanto 'Manter registros atualizados manualmente' estiver ativado (Configurações → Zona de risco → Pagamentos)."
-          >
-            <ShieldCheck size={12} />
-          </span>
-        )}
-        {s.status === "erro" && s.errorMessage && (
-          <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.25rem" }}>
-            {s.errorMessage}
+      {identity && col("colaborador") && (
+        <td>
+          <div className="person-cell">
+            <Avatar name={identity.employeeName} />
+            {identity.employeeName}
           </div>
-        )}
-      </td>
-      <td className="muted" style={{ fontSize: "0.8rem" }}>
-        {formatDateTime(s.importedAt)}
-      </td>
+        </td>
+      )}
+      {identity && col("cliente") && <td>{identity.clientName}</td>}
+      {identity && col("empresa") && <td>{identity.companyName}</td>}
+      {col("data") && (
+        <td>
+          <EditableDateCell editable={canEdit} value={s.workDate} display={formatDateAbbrevYY(s.workDate)} onCommit={(v) => patch({ workDate: v })} />
+        </td>
+      )}
+      {col("local") && (
+        <td>
+          <EditableCell editable={canEdit} type="text" value={s.local} display={s.local} onCommit={(v) => patch({ local: v })} />
+        </td>
+      )}
+      {col("funcao") && (
+        <td>
+          <EditableCell editable={canEdit} type="text" value={s.role} display={s.role} onCommit={(v) => patch({ role: v })} />
+        </td>
+      )}
+      {col("horario") && (
+        <td>
+          <EditableSchedule
+            editable={canEdit}
+            startTime={s.scheduleStartMinutes !== null ? formatMinutesAsTime(s.scheduleStartMinutes) : ""}
+            endTime={s.scheduleEndMinutes !== null ? formatMinutesAsTime(s.scheduleEndMinutes) : ""}
+            display={
+              hasSchedule ? (
+                <>
+                  {formatMinutesAsTime(s.scheduleStartMinutes!)} – {formatMinutesAsTime(s.scheduleEndMinutes!)}
+                  {s.shiftPeriod && (
+                    <span className={s.shiftPeriod === "noturno" ? "badge info" : "badge neutral"} style={{ marginLeft: "0.5rem" }}>
+                      {s.shiftPeriod === "noturno" ? <Moon size={12} /> : <Sun size={12} />}
+                      {s.shiftPeriod === "noturno" ? "Noturno" : "Diurno"}
+                    </span>
+                  )}
+                </>
+              ) : (
+                "—"
+              )
+            }
+            onCommit={(start, end) =>
+              patch({
+                scheduleStartMinutes: start ? parseTimeToMinutes(start) : null,
+                scheduleEndMinutes: end ? parseTimeToMinutes(end) : null,
+              })
+            }
+          />
+        </td>
+      )}
+      {col("horas") && <td>{duration !== null ? formatMinutesAsTime(duration) : "—"}</td>}
+      {col("valor") && (
+        <td>
+          <EditableCell
+            editable={canEdit}
+            type="number"
+            value={value !== null ? String(value) : ""}
+            display={value !== null ? formatCurrencyBRL(value) : "—"}
+            placeholder="Automático"
+            onCommit={(v) => patch({ amount: v.trim() === "" ? null : Math.round(Number(v) * 100) / 100 })}
+          />
+        </td>
+      )}
+      {col("status") && (
+        <td>
+          <span className={badge.className}>
+            <BadgeIcon size={13} />
+            {badge.label}
+          </span>
+          {s.editedManually && (
+            <span
+              className="badge info"
+              style={{ marginLeft: "0.4rem" }}
+              title="Atualizado manualmente — uma reimportação não sobrescreve este turno enquanto 'Manter registros atualizados manualmente' estiver ativado (Configurações → Zona de risco → Pagamentos)."
+            >
+              <ShieldCheck size={12} />
+            </span>
+          )}
+          {s.status === "erro" && s.errorMessage && (
+            <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.25rem" }}>
+              {s.errorMessage}
+            </div>
+          )}
+        </td>
+      )}
+      {col("importado") && (
+        <td className="muted" style={{ fontSize: "0.8rem" }}>
+          {formatDateTimeAbbrevYY(s.importedAt)}
+        </td>
+      )}
+      {col("extras") && (
+        <td>
+          {s.extraData && Object.keys(s.extraData).length > 0 ? (
+            <button
+              type="button"
+              className="badge neutral"
+              style={{ border: "none", cursor: "pointer" }}
+              onClick={() => onViewExtra(s.extraData!)}
+              title="Ver colunas não mapeadas lidas do arquivo"
+            >
+              <Info size={12} />
+              {Object.keys(s.extraData).length}
+            </button>
+          ) : (
+            <span className="muted">—</span>
+          )}
+        </td>
+      )}
       <td>
         {(s.status === "pendente" || s.status === "erro") && (
           <button type="button" className="secondary" onClick={() => onPay(s, companyId, groupRef)}>
@@ -235,11 +480,11 @@ function ShiftRow({
           <button
             type="button"
             className="ghost"
+            style={{ padding: "0.4rem" }}
             onClick={() => onViewHistory(s.previousShiftId!, companyId)}
             title="Ver histórico de status deste turno"
           >
-            <History size={13} style={{ marginRight: "0.3rem" }} />
-            Status anterior
+            <History size={13} />
           </button>
         )}
       </td>
@@ -285,6 +530,8 @@ export default function PaymentsPage() {
   const [generatedReport, setGeneratedReport] = useState<PaymentsReportResult | null>(null);
   const [viewerPath, setViewerPath] = useState<string | null>(null);
 
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(DEFAULT_VISIBLE_COLUMN_IDS));
+
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const [groupRows, setGroupRows] = useState<Map<string, PaymentShiftGroupRow[]>>(new Map());
   const [loadingGroups, setLoadingGroups] = useState<Set<string>>(new Set());
@@ -298,9 +545,7 @@ export default function PaymentsPage() {
   const [revertingShift, setRevertingShift] = useState<{ shift: PaymentShiftRow; groupRef: GroupRef } | null>(null);
   const [reverting, setReverting] = useState(false);
   const [revertError, setRevertError] = useState<string | null>(null);
-  const [editingShift, setEditingShift] = useState<{ shift: PaymentShiftRow; companyId: number; groupRef: GroupRef } | null>(null);
-  const [editing, setEditing] = useState(false);
-  const [editError, setEditError] = useState<string | null>(null);
+  const [inlineEditError, setInlineEditError] = useState<string | null>(null);
   const [viewingHistory, setViewingHistory] = useState<{ shiftId: number; companyId: number } | null>(null);
   const [viewingExtraData, setViewingExtraData] = useState<Record<string, string> | null>(null);
 
@@ -308,6 +553,9 @@ export default function PaymentsPage() {
     Promise.all([listCompanies(), listClients()]).then(([companyRows, clientRows]) => {
       setCompanies(companyRows);
       setClients(clientRows);
+    });
+    getPaymentVisibleColumns().then((cols) => {
+      if (cols) setVisibleColumns(new Set(cols));
     });
   }, []);
 
@@ -321,6 +569,16 @@ export default function PaymentsPage() {
         fetched.forEach((c) => next.set(c.id, c));
         return next;
       });
+    });
+  }
+
+  function toggleColumn(id: string) {
+    setVisibleColumns((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      setPaymentVisibleColumns(Array.from(next));
+      return next;
     });
   }
 
@@ -382,6 +640,18 @@ export default function PaymentsPage() {
     page,
     pageSize,
   ]);
+
+  // A previously generated PDF reflects a specific set of filters — changing
+  // any of them means the next "Gerar PDF" would produce different rows, so
+  // the stale "PDF gerado com sucesso" banner (and any leftover error) no
+  // longer applies. Deliberately excludes `grouped`/`page`/`pageSize`: those
+  // change how the table is displayed, not which rows would end up in a
+  // report.
+  useEffect(() => {
+    setGeneratedReport(null);
+    setPdfError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, selectedCompanyIds, selectedClientIds, periodStart, periodEnd, selectedStatuses, selectedShiftPeriods, scheduleTimeFilter]);
 
   async function afterMutation(groupRef: GroupRef) {
     if (groupRef === null) {
@@ -446,19 +716,19 @@ export default function PaymentsPage() {
     }
   }
 
-  async function handleConfirmEdit(fields: EditShiftFields) {
-    if (!editingShift) return;
-    setEditing(true);
-    setEditError(null);
-    try {
-      await editPaymentShift(editingShift.shift.id, fields);
-      await afterMutation(editingShift.groupRef);
-      setEditingShift(null);
-    } catch (e) {
-      setEditError(String(e instanceof Error ? e.message : e));
-    } finally {
-      setEditing(false);
-    }
+  /** Fields not in `patch` carry over from `shift`'s own current value — an inline edit only ever touches the one column the user clicked on. */
+  function commitField(shift: PaymentShiftRow, groupRef: GroupRef, patch: ShiftFieldPatch) {
+    setInlineEditError(null);
+    editPaymentShift(shift.id, {
+      workDate: patch.workDate !== undefined ? patch.workDate : shift.workDate,
+      local: patch.local !== undefined ? patch.local : shift.local,
+      role: patch.role !== undefined ? patch.role : shift.role,
+      scheduleStartMinutes: patch.scheduleStartMinutes !== undefined ? patch.scheduleStartMinutes : shift.scheduleStartMinutes,
+      scheduleEndMinutes: patch.scheduleEndMinutes !== undefined ? patch.scheduleEndMinutes : shift.scheduleEndMinutes,
+      amount: patch.amount !== undefined ? patch.amount : shift.amount,
+    })
+      .then(() => afterMutation(groupRef))
+      .catch((e) => setInlineEditError(String(e instanceof Error ? e.message : e)));
   }
 
   function shiftValueFor(s: PaymentShiftRow, companyId: number): number | null {
@@ -572,6 +842,7 @@ export default function PaymentsPage() {
           : "Turnos importados, um turno por linha."}
       </p>
       {pdfError && <div className="error-box">{pdfError}</div>}
+      {inlineEditError && <div className="error-box">{inlineEditError}</div>}
 
       <div className="card">
         <div className="field-row" style={{ marginBottom: 0, alignItems: "flex-end" }}>
@@ -688,18 +959,6 @@ export default function PaymentsPage() {
         </div>
 
         <div className="field-row" style={{ marginTop: "1rem", marginBottom: 0, alignItems: "center" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
-            <input
-              type="checkbox"
-              checked={grouped}
-              onChange={(e) => {
-                setGrouped(e.target.checked);
-                setPage(0);
-              }}
-            />
-            <Layers size={14} />
-            Agrupar por colaborador
-          </label>
           <button
             type="button"
             style={{ marginLeft: "auto" }}
@@ -740,6 +999,38 @@ export default function PaymentsPage() {
             </div>
           </div>
         )}
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "0.8rem", margin: "1rem 0" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
+          <input
+            type="checkbox"
+            checked={grouped}
+            onChange={(e) => {
+              setGrouped(e.target.checked);
+              setPage(0);
+            }}
+          />
+          <Layers size={14} />
+          Agrupar por colaborador
+        </label>
+        <MultiSelectDropdown
+          options={FLAT_COLUMNS}
+          selected={visibleColumns}
+          onToggle={toggleColumn}
+          onSelectAll={() => {
+            setVisibleColumns(new Set(ALL_COLUMN_IDS));
+            setPaymentVisibleColumns(ALL_COLUMN_IDS);
+          }}
+          onSelectNone={() => {
+            setVisibleColumns(new Set());
+            setPaymentVisibleColumns([]);
+          }}
+          icon={Settings2}
+          allLabel="Configurar colunas"
+          noneLabel="Nenhuma coluna"
+          countLabel={(n) => `Colunas (${n})`}
+        />
       </div>
 
       <div className="card table-card">
@@ -811,7 +1102,7 @@ export default function PaymentsPage() {
                                 </p>
                               )}
                               {rows && (
-                                <div style={{ padding: "0.8rem 1rem" }}>
+                                <div style={{ padding: "0.8rem 1rem" }} onClick={(e) => e.stopPropagation()}>
                                   <p className="muted" style={{ fontSize: "0.85rem", marginTop: 0 }}>
                                     {rows.length} de {s.total} turno(s)
                                   </p>
@@ -819,15 +1110,9 @@ export default function PaymentsPage() {
                                     <table>
                                       <thead>
                                         <tr>
-                                          <th>Data</th>
-                                          <th>Local</th>
-                                          <th>Função</th>
-                                          <th>Horário</th>
-                                          <th>Horas trabalhadas</th>
-                                          <th>Valor</th>
-                                          <th>Extras</th>
-                                          <th>Status</th>
-                                          <th>Importado em</th>
+                                          {TURNO_COLUMNS.filter((c) => visibleColumns.has(c.id)).map((c) => (
+                                            <th key={c.id}>{c.label}</th>
+                                          ))}
                                           <th>Ações</th>
                                         </tr>
                                       </thead>
@@ -839,8 +1124,9 @@ export default function PaymentsPage() {
                                             companyId={s.companyId}
                                             groupRef={{ employeeId: s.employeeId, competencia: s.competencia }}
                                             company={companiesById.get(s.companyId) ?? null}
+                                            visibleColumns={visibleColumns}
+                                            onCommitField={commitField}
                                             onPay={(shift, companyId, groupRef) => setPayingShift({ shift, companyId, groupRef })}
-                                            onEdit={(shift, companyId, groupRef) => setEditingShift({ shift, companyId, groupRef })}
                                             onRevert={(shift, groupRef) => setRevertingShift({ shift, groupRef })}
                                             onViewHistory={(shiftId, companyId) => setViewingHistory({ shiftId, companyId })}
                                             onViewExtra={setViewingExtraData}
@@ -884,18 +1170,9 @@ export default function PaymentsPage() {
               <table>
                 <thead>
                   <tr>
-                    <th>Colaborador</th>
-                    <th>Cliente</th>
-                    <th>Empresa</th>
-                    <th>Data</th>
-                    <th>Local</th>
-                    <th>Função</th>
-                    <th>Horário</th>
-                    <th>Horas trabalhadas</th>
-                    <th>Valor</th>
-                    <th>Extras</th>
-                    <th>Status</th>
-                    <th>Importado em</th>
+                    {FLAT_COLUMNS.filter((c) => visibleColumns.has(c.id)).map((c) => (
+                      <th key={c.id}>{c.label}</th>
+                    ))}
                     <th>Ações</th>
                   </tr>
                 </thead>
@@ -908,8 +1185,9 @@ export default function PaymentsPage() {
                       groupRef={null}
                       identity={{ employeeName: r.employeeName, companyName: r.companyName, clientName: r.clientName }}
                       company={companiesById.get(r.companyId) ?? null}
+                      visibleColumns={visibleColumns}
+                      onCommitField={commitField}
                       onPay={(shift, companyId, groupRef) => setPayingShift({ shift, companyId, groupRef })}
-                      onEdit={(shift, companyId, groupRef) => setEditingShift({ shift, companyId, groupRef })}
                       onRevert={(shift, groupRef) => setRevertingShift({ shift, groupRef })}
                       onViewHistory={(shiftId, companyId) => setViewingHistory({ shiftId, companyId })}
                       onViewExtra={setViewingExtraData}
@@ -963,20 +1241,6 @@ export default function PaymentsPage() {
           onCancel={() => {
             setRevertingShift(null);
             setRevertError(null);
-          }}
-        />
-      )}
-
-      {editingShift && (
-        <EditShiftModal
-          shift={editingShift.shift}
-          currentValue={shiftValueFor(editingShift.shift, editingShift.companyId)}
-          busy={editing}
-          error={editError}
-          onConfirm={handleConfirmEdit}
-          onCancel={() => {
-            setEditingShift(null);
-            setEditError(null);
           }}
         />
       )}

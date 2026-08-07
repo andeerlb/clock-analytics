@@ -292,5 +292,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0048_payment_value_rules_conditions.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 49,
+            description: "add payment_settings.visible_columns_json — which columns of the Pagamentos table are shown, NULL meaning all of them",
+            sql: include_str!("../migrations/0049_payment_settings_visible_columns.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

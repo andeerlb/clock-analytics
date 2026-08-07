@@ -272,8 +272,23 @@ fn copy_into_imports_dir(source_path: &str, imports_dir: &Path) -> Result<String
 /// the file falls back to just opening the parent folder, same as before.
 #[cfg(target_os = "windows")]
 fn reveal_path(_app: &AppHandle, path: &str) -> Result<(), String> {
+    // Explorer parses its own command line itself instead of going through
+    // the normal CommandLineToArgvW convention every other Win32 program
+    // uses — so `Command::arg`'s automatic escaping (which assumes that
+    // convention) actively works against it here: given a path containing a
+    // space, `.arg(format!("/select,\"{path}\""))` makes `Command` see an
+    // argument with an embedded quote and *also* wrap/escape the whole
+    // thing, so Explorer receives literal backslash-quote sequences instead
+    // of the bare `"..."` it expects — it can't parse that, so it silently
+    // falls back to whatever folder it opens by default (Documents), not
+    // the file that was actually just saved. `raw_arg` bypasses `Command`'s
+    // escaping entirely and appends the string to the command line
+    // verbatim, which is what actually gets Explorer's own parser the
+    // `/select,"C:\path with spaces\file.pdf"` syntax it documents.
+    use std::os::windows::process::CommandExt;
+    let normalized = path.replace('/', "\\");
     std::process::Command::new("explorer")
-        .arg(format!("/select,{path}"))
+        .raw_arg(format!("/select,\"{normalized}\""))
         .spawn()
         .map_err(|e| e.to_string())?;
     Ok(())

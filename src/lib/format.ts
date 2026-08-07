@@ -64,6 +64,24 @@ export function formatDateAbbrev(isoDate: string): string {
   return `${d}/${month.charAt(0).toUpperCase()}${month.slice(1)}/${y}`;
 }
 
+/** "2026-01-22" -> "22/Jan/26" — same idea as `formatDateAbbrev`, but a 2-digit year for the Pagamentos table's dense columns. */
+export function formatDateAbbrevYY(isoDate: string): string {
+  const [y, m, d] = isoDate.split("-");
+  const month = MONTH_ABBR[Number(m) - 1];
+  return `${d}/${month.charAt(0).toUpperCase()}${month.slice(1)}/${y.slice(2)}`;
+}
+
+/** SQLite `datetime('now')` output ("2026-08-03 20:55:52", UTC) -> "03/Ago/26 17:55" (local time) — same compact date as `formatDateAbbrevYY`, plus the time `formatDateTime`'s long form also carries. */
+export function formatDateTimeAbbrevYY(sqliteDatetime: string): string {
+  const date = parseSqliteDateTime(sqliteDatetime);
+  const month = MONTH_ABBR[date.getMonth()];
+  const d = String(date.getDate()).padStart(2, "0");
+  const y = String(date.getFullYear()).slice(2);
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  return `${d}/${month.charAt(0).toUpperCase()}${month.slice(1)}/${y} ${hh}:${mm}`;
+}
+
 /**
  * Makes a string safe to use as a file or folder name across Linux/macOS/
  * Windows — strips path separators and the handful of characters Windows
