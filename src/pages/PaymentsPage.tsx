@@ -1,7 +1,6 @@
 import {
   AlertCircle,
   Building2,
-  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -19,9 +18,9 @@ import {
   ShieldCheck,
   Sun,
   Users,
-  X,
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import AnchoredPopover from "../components/AnchoredPopover";
 import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
 import ConfirmPaymentModal from "../components/ConfirmPaymentModal";
@@ -55,6 +54,8 @@ import {
   type PaymentShiftGroupRow,
 } from "../lib/db";
 import {
+  centsMaskToAmount,
+  formatCentsMask,
   formatCurrencyBRL,
   formatDate,
   formatDateAbbrevYY,
@@ -131,26 +132,21 @@ type ShiftFieldPatch = Partial<{
 
 /**
  * A cell that's plain text until clicked (only when `editable`), then swaps
- * to an input — commits on blur or Enter, discards on Escape. Used for
- * every single-value editable text/number column (Local/Função/Valor);
- * Data has its own variant (`EditableDateCell`, a custom calendar instead
- * of the native date input) and Horário its own two-input one
- * (`EditableSchedule`, since a blur on one of its two fields shouldn't
- * commit until the user is done with both).
+ * to a text input — commits on blur or Enter, discards on Escape. Used for
+ * every single-value editable text column (Local/Função). Data, Horário,
+ * and Valor each have their own variant (`EditableDateCell`,
+ * `EditableSchedule`, `EditableCurrencyCell`) since none of them are a
+ * plain string a native text input handles well.
  */
 function EditableCell({
   editable,
-  type,
   value,
   display,
-  placeholder,
   onCommit,
 }: {
   editable: boolean;
-  type: "text" | "number";
   value: string;
   display: ReactNode;
-  placeholder?: string;
   onCommit: (value: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -180,10 +176,7 @@ function EditableCell({
   return (
     <input
       autoFocus
-      type={type}
-      step={type === "number" ? "0.01" : undefined}
-      min={type === "number" ? "0" : undefined}
-      placeholder={placeholder}
+      type="text"
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
@@ -191,7 +184,7 @@ function EditableCell({
         if (e.key === "Enter") commit();
         if (e.key === "Escape") setEditing(false);
       }}
-      style={{ width: type === "text" ? "100%" : "auto" }}
+      style={{ width: "100%" }}
     />
   );
 }
@@ -238,7 +231,115 @@ function EditableDateCell({
   );
 }
 
-/** Horário's own editable cell — two time inputs committed together via explicit confirm/cancel buttons (not blur), since blurring one field to focus the other isn't "done editing" the way it is for every other single-value column. */
+/**
+ * Valor's own editable cell — a live "1.234,56" mask as digits are typed
+ * (cents-first, like a checkout amount field) instead of a native
+ * `<input type="number">`, which shows a spinner that makes no sense for a
+ * currency value and doesn't format the number at all while typing. Only
+ * commits if the digits actually changed from what the field opened with
+ * (`touched`) — comparing the *parsed amount* instead would wrongly freeze
+ * a still-automatic value into a manual override just from opening and
+ * closing the field without editing it, since the field opens pre-filled
+ * with the live estimate, not literally `null`.
+ */
+function EditableCurrencyCell({
+  editable,
+  value,
+  display,
+  onCommit,
+}: {
+  editable: boolean;
+  /** The live estimate or stored amount currently shown — just the initial seed for the mask, not what change-detection compares against. */
+  value: number | null;
+  display: ReactNode;
+  onCommit: (amount: number | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [digits, setDigits] = useState("");
+  const [touched, setTouched] = useState(false);
+
+  if (!editable) return <>{display}</>;
+
+  if (!editing) {
+    return (
+      <span
+        className="editable-value"
+        onClick={() => {
+          setDigits(value !== null ? String(Math.round(value * 100)) : "");
+          setTouched(false);
+          setEditing(true);
+        }}
+      >
+        {display}
+      </span>
+    );
+  }
+
+  function commit() {
+    setEditing(false);
+    if (!touched) return;
+    onCommit(digits === "" ? null : centsMaskToAmount(digits));
+  }
+
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+      <span className="muted">R$</span>
+      <input
+        autoFocus
+        type="text"
+        inputMode="numeric"
+        value={digits === "" ? "" : formatCentsMask(digits)}
+        placeholder="Automático"
+        onChange={(e) => {
+          setDigits(e.target.value.replace(/\D/g, ""));
+          setTouched(true);
+        }}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") setEditing(false);
+        }}
+        style={{ width: "6rem" }}
+      />
+    </span>
+  );
+}
+
+const SCHEDULE_HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
+const SCHEDULE_MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"));
+const SCHEDULE_POPOVER_WIDTH = 230;
+
+/** One "HH" + "MM" pair of selects — Início and Fim are two of these side by side inside `EditableSchedule`'s popover. Explicit widths override the global `select` rule's generous padding (built for full-width filter dropdowns, not a 2-digit value) — without them, two "HH : MM" pairs don't fit the popover and visually run into each other. */
+function TimeSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [h, m] = value.split(":");
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}>
+      <select value={h} onChange={(e) => onChange(`${e.target.value}:${m}`)} aria-label="Hora" style={{ width: "4.2rem" }}>
+        {SCHEDULE_HOURS.map((hh) => (
+          <option key={hh} value={hh}>
+            {hh}
+          </option>
+        ))}
+      </select>
+      <span className="muted">:</span>
+      <select value={m} onChange={(e) => onChange(`${h}:${e.target.value}`)} aria-label="Minuto" style={{ width: "4.2rem" }}>
+        {SCHEDULE_MINUTES.map((mm) => (
+          <option key={mm} value={mm}>
+            {mm}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+/**
+ * Horário's own editable cell — one trigger opening one popover with
+ * Início and Fim together (hora/minuto dropdowns, always 24h), the same
+ * "connected" idea as `DateRangePicker`'s single popover with two linked
+ * months, instead of two separate native `<input type="time">` fields each
+ * rendering the OS's own (often 12h AM/PM) time control.
+ */
 function EditableSchedule({
   editable,
   startTime,
@@ -254,18 +355,20 @@ function EditableSchedule({
   onCommit: (startTime: string, endTime: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draftStart, setDraftStart] = useState(startTime);
-  const [draftEnd, setDraftEnd] = useState(endTime);
+  const [draftStart, setDraftStart] = useState(startTime || "00:00");
+  const [draftEnd, setDraftEnd] = useState(endTime || "00:00");
+  const triggerRef = useRef<HTMLSpanElement>(null);
 
   if (!editable) return <>{display}</>;
 
   if (!editing) {
     return (
       <span
+        ref={triggerRef}
         className="editable-value"
         onClick={() => {
-          setDraftStart(startTime);
-          setDraftEnd(endTime);
+          setDraftStart(startTime || "00:00");
+          setDraftEnd(endTime || "00:00");
           setEditing(true);
         }}
       >
@@ -280,16 +383,32 @@ function EditableSchedule({
   }
 
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }} onClick={(e) => e.stopPropagation()}>
-      <input autoFocus type="time" value={draftStart} onChange={(e) => setDraftStart(e.target.value)} />
-      <span className="muted">–</span>
-      <input type="time" value={draftEnd} onChange={(e) => setDraftEnd(e.target.value)} />
-      <button type="button" className="ghost" style={{ padding: "0.15rem" }} onClick={commit} title="Confirmar">
-        <Check size={12} />
-      </button>
-      <button type="button" className="ghost" style={{ padding: "0.15rem" }} onClick={() => setEditing(false)} title="Cancelar">
-        <X size={12} />
-      </button>
+    <span ref={triggerRef} className="editable-value" onClick={(e) => e.stopPropagation()}>
+      {display}
+      <AnchoredPopover anchorRef={triggerRef} width={SCHEDULE_POPOVER_WIDTH} onClose={() => setEditing(false)}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+          <div>
+            <div className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.3rem" }}>
+              Início
+            </div>
+            <TimeSelect value={draftStart} onChange={setDraftStart} />
+          </div>
+          <div>
+            <div className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.3rem" }}>
+              Fim
+            </div>
+            <TimeSelect value={draftEnd} onChange={setDraftEnd} />
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.8rem" }}>
+          <button type="button" className="outline" style={{ flex: 1, minWidth: 0, padding: "0.5em 0" }} onClick={() => setEditing(false)}>
+            Cancelar
+          </button>
+          <button type="button" style={{ flex: 1, minWidth: 0, padding: "0.5em 0", boxShadow: "none" }} onClick={commit}>
+            Confirmar
+          </button>
+        </div>
+      </AnchoredPopover>
     </span>
   );
 }
@@ -368,12 +487,12 @@ function ShiftRow({
       )}
       {col("local") && (
         <td>
-          <EditableCell editable={canEdit} type="text" value={s.local} display={s.local} onCommit={(v) => patch({ local: v })} />
+          <EditableCell editable={canEdit} value={s.local} display={s.local} onCommit={(v) => patch({ local: v })} />
         </td>
       )}
       {col("funcao") && (
         <td>
-          <EditableCell editable={canEdit} type="text" value={s.role} display={s.role} onCommit={(v) => patch({ role: v })} />
+          <EditableCell editable={canEdit} value={s.role} display={s.role} onCommit={(v) => patch({ role: v })} />
         </td>
       )}
       {col("horario") && (
@@ -409,13 +528,11 @@ function ShiftRow({
       {col("horas") && <td>{duration !== null ? formatMinutesAsTime(duration) : "—"}</td>}
       {col("valor") && (
         <td>
-          <EditableCell
+          <EditableCurrencyCell
             editable={canEdit}
-            type="number"
-            value={value !== null ? String(value) : ""}
+            value={value}
             display={value !== null ? formatCurrencyBRL(value) : "—"}
-            placeholder="Automático"
-            onCommit={(v) => patch({ amount: v.trim() === "" ? null : Math.round(Number(v) * 100) / 100 })}
+            onCommit={(amount) => patch({ amount })}
           />
         </td>
       )}
@@ -471,9 +588,14 @@ function ShiftRow({
           </button>
         )}
         {s.status === "pago" && (
-          <button type="button" className="ghost" onClick={() => onRevert(s, groupRef)} title="Voltar este turno para pendente">
-            <RotateCcw size={13} style={{ marginRight: "0.3rem" }} />
-            Voltar para pendente
+          <button
+            type="button"
+            className="ghost"
+            style={{ padding: "0.4rem" }}
+            onClick={() => onRevert(s, groupRef)}
+            title="Voltar este turno para pendente"
+          >
+            <RotateCcw size={13} />
           </button>
         )}
         {s.previousShiftId !== null && (

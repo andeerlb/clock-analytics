@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { useEffect, useRef, useState, type RefObject } from "react";
-import { createPortal } from "react-dom";
+import { useState, type RefObject } from "react";
+import AnchoredPopover from "./AnchoredPopover";
 import { MONTH_NAMES, WEEKDAY_HEADER, gridStart, toIso, todayUtc } from "../lib/calendar";
 
 const POPOVER_WIDTH = 248; // 15.5rem at the default 16px root size
@@ -12,15 +12,9 @@ const POPOVER_WIDTH = 248; // 15.5rem at the default 16px root size
  * pulled out on its own for inline single-date editing. Exists because the
  * native `<input type="date">` picker looks and behaves inconsistently
  * across OS/browsers (English month names, "Today"/"Clear" links, its own
- * unstyled popup) and clashes with the rest of the app.
- *
- * Rendered through a portal into `document.body`, positioned from
- * `anchorRef`'s own on-screen position, instead of `position: absolute`
- * inside the caller's own DOM location — a plain nested popover ended up
- * painted *behind* later rows when the trigger sits inside a table cell
- * (table rows don't establish the stacking context a naively-nested
- * absolute popover needs to reliably sit on top of later siblings). A
- * portal sidesteps that entirely.
+ * unstyled popup) and clashes with the rest of the app. Positioning/portal/
+ * outside-click mechanics live in `AnchoredPopover`, shared with Horário's
+ * inline range editor.
  */
 export default function DatePicker({
   value,
@@ -35,50 +29,6 @@ export default function DatePicker({
   onClose: () => void;
 }) {
   const [viewDate, setViewDate] = useState(() => new Date(`${value || toIso(todayUtc())}T00:00:00Z`));
-  const popoverRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-
-  useEffect(() => {
-    const rect = anchorRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    setPos({
-      top: rect.bottom + 4,
-      left: Math.min(rect.left, window.innerWidth - POPOVER_WIDTH - 8),
-    });
-  }, [anchorRef]);
-
-  useEffect(() => {
-    function onClickOutside(e: MouseEvent) {
-      const target = e.target as Node;
-      if (popoverRef.current?.contains(target)) return;
-      if (anchorRef.current?.contains(target)) return;
-      onClose();
-    }
-    document.addEventListener("mousedown", onClickOutside);
-    return () => document.removeEventListener("mousedown", onClickOutside);
-  }, [onClose, anchorRef]);
-
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
-  // A detached popover that no longer lines up with its trigger (because
-  // the table underneath it scrolled) is worse than just closing it —
-  // `true` catches scroll on any ancestor, not just `window`, since the
-  // scrolling element here is usually `.table-scroll`, not the page itself.
-  useEffect(() => {
-    function onScroll() {
-      onClose();
-    }
-    document.addEventListener("scroll", onScroll, true);
-    return () => document.removeEventListener("scroll", onScroll, true);
-  }, [onClose]);
-
-  if (!pos) return null;
 
   const year = viewDate.getUTCFullYear();
   const month = viewDate.getUTCMonth();
@@ -94,22 +44,8 @@ export default function DatePicker({
     setViewDate(new Date(Date.UTC(year, month + delta, 1)));
   }
 
-  return createPortal(
-    <div
-      ref={popoverRef}
-      style={{
-        position: "fixed",
-        top: pos.top,
-        left: pos.left,
-        background: "var(--card-bg)",
-        border: "1px solid var(--border)",
-        borderRadius: 10,
-        padding: "0.7rem",
-        width: `${POPOVER_WIDTH}px`,
-        boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.4)",
-        zIndex: 1000,
-      }}
-    >
+  return (
+    <AnchoredPopover anchorRef={anchorRef} width={POPOVER_WIDTH} onClose={onClose}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.6rem" }}>
         <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={() => changeMonth(-1)} aria-label="Mês anterior">
           <ChevronLeft size={16} />
@@ -165,7 +101,6 @@ export default function DatePicker({
           );
         })}
       </div>
-    </div>,
-    document.body,
+    </AnchoredPopover>
   );
 }

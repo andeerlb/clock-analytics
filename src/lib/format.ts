@@ -12,6 +12,28 @@ export function formatCurrencyBRL(value: number): string {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
 }
 
+/**
+ * Digits-only input (as typed, cents-first) -> "1.234,56" — the live mask
+ * for a currency text field: every keystroke is a digit shifting in from
+ * the right, always the last two representing centavos, same convention
+ * bank/checkout apps use so there's no separate "cursor jumps to the right
+ * spot" logic to get right. "" (nothing typed yet) -> "0,00".
+ */
+export function formatCentsMask(digits: string): string {
+  const clean = digits.replace(/\D/g, "");
+  const cents = clean.padStart(3, "0");
+  const intPart = cents.slice(0, -2).replace(/^0+(?=\d)/, "");
+  const centPart = cents.slice(-2);
+  const withThousands = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return `${withThousands},${centPart}`;
+}
+
+/** The digit string a `formatCentsMask` input represents -> the actual decimal amount (e.g. "12321" -> 123.21). */
+export function centsMaskToAmount(digits: string): number {
+  const clean = digits.replace(/\D/g, "");
+  return clean === "" ? 0 : Number(clean) / 100;
+}
+
 /** Bytes -> "12.3 MB" — the Configurações storage indicator. */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

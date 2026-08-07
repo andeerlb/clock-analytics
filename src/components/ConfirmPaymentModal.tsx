@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { formatDate, formatMinutesAsTime } from "../lib/format";
+import { centsMaskToAmount, formatCentsMask, formatDate, formatMinutesAsTime } from "../lib/format";
 import type { PaymentShiftRow } from "../lib/types";
 
 /**
@@ -24,7 +24,7 @@ export default function ConfirmPaymentModal({
   onConfirm: (amount: number) => void;
   onCancel: () => void;
 }) {
-  const [amountText, setAmountText] = useState(suggestedAmount !== null ? suggestedAmount.toFixed(2) : "");
+  const [digits, setDigits] = useState(suggestedAmount !== null ? String(Math.round(suggestedAmount * 100)) : "");
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -34,8 +34,7 @@ export default function ConfirmPaymentModal({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onCancel]);
 
-  const amount = Number(amountText);
-  const amountValid = amountText.trim() !== "" && !Number.isNaN(amount) && amount >= 0;
+  const amountValid = digits !== "";
 
   return (
     <div
@@ -71,12 +70,11 @@ export default function ConfirmPaymentModal({
             <span className="muted">R$</span>
             <input
               id="confirm-payment-amount"
-              type="number"
-              min="0"
-              step="0.01"
+              type="text"
+              inputMode="numeric"
               autoFocus
-              value={amountText}
-              onChange={(e) => setAmountText(e.target.value)}
+              value={digits === "" ? "" : formatCentsMask(digits)}
+              onChange={(e) => setDigits(e.target.value.replace(/\D/g, ""))}
             />
           </div>
         </div>
@@ -91,7 +89,7 @@ export default function ConfirmPaymentModal({
           </button>
           <button
             type="button"
-            onClick={() => onConfirm(Math.round(amount * 100) / 100)}
+            onClick={() => onConfirm(centsMaskToAmount(digits))}
             disabled={!amountValid || busy}
           >
             Confirmar pagamento
