@@ -286,5 +286,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0047_template_sheet_included.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 48,
+            description: "add payment_value_rules.conditions_json — narrows a pay-value rule step to shifts matching Data/Local/Função/Horário conditions before its duration check runs",
+            sql: include_str!("../migrations/0048_payment_value_rules_conditions.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -197,7 +197,13 @@ export default function PaymentDetailPage() {
     if (s.amount !== null) return s.amount;
     if (!company || s.scheduleStartMinutes === null || s.scheduleEndMinutes === null) return null;
     const duration = shiftDurationMinutes(s.scheduleStartMinutes, s.scheduleEndMinutes);
-    return resolvePaymentValue(company.valueRules, duration);
+    return resolvePaymentValue(company.valueRules, duration, {
+      workDate: s.workDate,
+      local: s.local,
+      role: s.role,
+      scheduleStartMinutes: s.scheduleStartMinutes,
+      scheduleEndMinutes: s.scheduleEndMinutes,
+    });
   }
 
   /** Same rule as `scheduleTimeConditionSql` in db.ts: a shift with no parsed horário never matches. */

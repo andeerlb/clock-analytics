@@ -362,11 +362,12 @@ export interface CompanyDetail extends CompanyRow {
 async function insertCompanyValueRules(db: Database, companyId: number, rules: PaymentValueRule[]): Promise<void> {
   for (const rule of rules) {
     await db.execute(
-      `INSERT INTO payment_value_rules (company_id, kind, operator, threshold_minutes, amount)
-       VALUES ($1, $2, $3, $4, $5)`,
+      `INSERT INTO payment_value_rules (company_id, kind, conditions_json, operator, threshold_minutes, amount)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
       [
         companyId,
         rule.kind,
+        rule.kind === "condition" && rule.conditions.length > 0 ? JSON.stringify(rule.conditions) : null,
         rule.kind === "condition" ? rule.operator : null,
         rule.kind === "condition" ? rule.thresholdMinutes : null,
         rule.amount,
@@ -424,11 +425,15 @@ export async function getCompany(id: number): Promise<CompanyDetail> {
   );
   if (rows.length === 0) throw new Error("Empresa não encontrada.");
 
-  const valueRules = await db.select<PaymentValueRule[]>(
-    `SELECT kind, operator, threshold_minutes AS thresholdMinutes, amount
+  const valueRuleRows = await db.select<(Omit<PaymentValueRule, "conditions"> & { conditionsJson: string | null })[]>(
+    `SELECT kind, conditions_json AS conditionsJson, operator, threshold_minutes AS thresholdMinutes, amount
      FROM payment_value_rules WHERE company_id = $1 ORDER BY id`,
     [id],
   );
+  const valueRules: PaymentValueRule[] = valueRuleRows.map(({ conditionsJson, ...rule }) => ({
+    ...rule,
+    conditions: conditionsJson ? JSON.parse(conditionsJson) : [],
+  }));
 
   return { ...rows[0], valueRules };
 }

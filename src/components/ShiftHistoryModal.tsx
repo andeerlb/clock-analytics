@@ -50,7 +50,16 @@ function HistoryEntry({
       ? classifyShiftPeriod(company.nightShiftRule, nightStart, nightEnd, shift.scheduleStartMinutes!, shift.scheduleEndMinutes!)
       : null;
   const value =
-    shift.amount ?? (company && durationMinutes !== null ? resolvePaymentValue(company.valueRules, durationMinutes) : null);
+    shift.amount ??
+    (company && durationMinutes !== null
+      ? resolvePaymentValue(company.valueRules, durationMinutes, {
+          workDate: shift.workDate,
+          local: shift.local,
+          role: shift.role,
+          scheduleStartMinutes: shift.scheduleStartMinutes,
+          scheduleEndMinutes: shift.scheduleEndMinutes,
+        })
+      : null);
   const badge = STATUS_BADGE[shift.status];
   const BadgeIcon = badge.icon;
 

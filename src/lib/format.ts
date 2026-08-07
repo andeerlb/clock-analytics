@@ -1,5 +1,11 @@
 import { addDaysIso, todayUtc, toIso } from "./calendar";
-import type { NightShiftRule, PaymentShiftStatus, PaymentValueRuleOperator, ShiftPeriod } from "./types";
+import type {
+  NightShiftRule,
+  PaymentShiftStatus,
+  PaymentValueRuleCondition,
+  PaymentValueRuleOperator,
+  ShiftPeriod,
+} from "./types";
 
 /** 120 -> "R$ 120,00" */
 export function formatCurrencyBRL(value: number): string {
@@ -508,11 +514,30 @@ export function resolvePaymentStatus(
   return null;
 }
 
+/** Whether a single `PaymentValueRuleCondition` matches a shift's own column values. */
+function matchesValueCondition(
+  condition: PaymentValueRuleCondition,
+  shift: { workDate: string; local: string; role: string; scheduleStartMinutes: number | null; scheduleEndMinutes: number | null },
+): boolean {
+  if (condition.field === "horario") {
+    const minutes = condition.scheduleRule.startsWith("start") ? shift.scheduleStartMinutes : shift.scheduleEndMinutes;
+    if (minutes === null) return false;
+    return condition.scheduleRule.endsWith("before") ? minutes < condition.scheduleMinutes : minutes > condition.scheduleMinutes;
+  }
+  if (condition.values.length === 0) return true;
+  const raw = condition.field === "data" ? shift.workDate : condition.field === "local" ? shift.local : shift.role;
+  const fold = (s: string) => (condition.caseInsensitive ? s.toLowerCase() : s);
+  const normalized = fold(raw.trim());
+  return condition.values.some((v) => fold(v.trim()) === normalized);
+}
+
 /**
  * Resolves a shift's Valor by walking a company's if/else-if/else
  * pay-value chain — first match wins, same order-of-evaluation idea as
- * `resolvePaymentStatus`. A `"condition"` step compares `durationMinutes`
- * (the shift's own horas trabalhadas, see `shiftDurationMinutes`) to
+ * `resolvePaymentStatus`. A `"condition"` step matches when every one of
+ * its `conditions` (Data/Local/Função/Horário, see
+ * `matchesValueCondition`) matches *and* `durationMinutes` (the shift's own
+ * horas trabalhadas, see `shiftDurationMinutes`) compares to
  * `thresholdMinutes` per `operator`; an `"else"` step always matches.
  * `null` means no rule matched — including an empty chain, since this is
  * entirely optional — the caller shows "—", not a zero (a zero would
@@ -521,14 +546,17 @@ export function resolvePaymentStatus(
 export function resolvePaymentValue(
   rules: {
     kind: "condition" | "else";
+    conditions: PaymentValueRuleCondition[];
     operator: PaymentValueRuleOperator | null;
     thresholdMinutes: number | null;
     amount: number;
   }[],
   durationMinutes: number,
+  shift: { workDate: string; local: string; role: string; scheduleStartMinutes: number | null; scheduleEndMinutes: number | null },
 ): number | null {
   for (const rule of rules) {
     if (rule.kind === "else") return rule.amount;
+    if (!rule.conditions.every((c) => matchesValueCondition(c, shift))) continue;
     if (rule.operator === null || rule.thresholdMinutes === null) continue;
     const matches = {
       "=": durationMinutes === rule.thresholdMinutes,

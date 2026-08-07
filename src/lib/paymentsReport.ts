@@ -81,7 +81,13 @@ export async function generatePaymentsReportPdf(
     if (r.amount !== null) return r.amount;
     if (r.scheduleStartMinutes === null || r.scheduleEndMinutes === null) return null;
     const duration = shiftDurationMinutes(r.scheduleStartMinutes, r.scheduleEndMinutes);
-    return resolvePaymentValue(valueRulesByCompany.get(r.companyId) ?? [], duration);
+    return resolvePaymentValue(valueRulesByCompany.get(r.companyId) ?? [], duration, {
+      workDate: r.workDate,
+      local: r.local,
+      role: r.role,
+      scheduleStartMinutes: r.scheduleStartMinutes,
+      scheduleEndMinutes: r.scheduleEndMinutes,
+    });
   }
 
   let totalMinutes = 0;

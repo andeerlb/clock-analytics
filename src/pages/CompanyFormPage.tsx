@@ -3,21 +3,57 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import { createCompany, getCompany, updateCompany } from "../lib/db";
-import { maskCnpj } from "../lib/format";
+import { formatMinutesAsTime, maskCnpj, parseTimeToMinutes } from "../lib/format";
 import {
   NIGHT_SHIFT_RULE_LABELS,
   PAYMENT_VALUE_RULE_OPERATOR_LABELS,
+  SCHEDULE_TIME_RULE_LABELS,
   type NightShiftRule,
   type PaymentValueRule,
+  type PaymentValueRuleCondition,
   type PaymentValueRuleOperator,
+  type ScheduleTimeRule,
 } from "../lib/types";
 
 const NIGHT_SHIFT_RULES = Object.keys(NIGHT_SHIFT_RULE_LABELS) as NightShiftRule[];
 const PAYMENT_VALUE_RULE_OPERATORS = Object.keys(PAYMENT_VALUE_RULE_OPERATOR_LABELS) as PaymentValueRuleOperator[];
+const SCHEDULE_TIME_RULES = Object.keys(SCHEDULE_TIME_RULE_LABELS) as ScheduleTimeRule[];
+const VALUE_CONDITION_FIELDS: PaymentValueRuleCondition["field"][] = ["data", "local", "funcao", "horario"];
+const VALUE_CONDITION_FIELD_LABELS: Record<PaymentValueRuleCondition["field"], string> = {
+  data: "Data",
+  local: "Local",
+  funcao: "Função",
+  horario: "Horário",
+};
+
+/**
+ * The form's editable draft of one column condition narrowing a value-rule
+ * step — see `PaymentValueRuleCondition` in types.ts for the saved shape.
+ * Always case-insensitive (no toggle in this UI, unlike the template
+ * routing rules' editor) — a simpler default that covers the realistic
+ * case without another checkbox per row.
+ */
+interface WizardValueCondition {
+  field: PaymentValueRuleCondition["field"];
+  /** Comma-separated — ignored when `field === "horario"`. */
+  valuesText: string;
+  scheduleRule: ScheduleTimeRule;
+  /** "HH:MM" — ignored unless `field === "horario"`. */
+  scheduleTime: string;
+}
+
+function newValueCondition(): WizardValueCondition {
+  return { field: "local", valuesText: "", scheduleRule: "start-after", scheduleTime: "" };
+}
+
+function isConditionValid(c: WizardValueCondition): boolean {
+  return c.field === "horario" ? parseTimeToMinutes(c.scheduleTime) !== null : c.valuesText.trim() !== "";
+}
 
 /** The form's editable draft of one step in a company's optional pay-value chain — see `PaymentValueRule` in types.ts for the saved shape. Hours/minutes are kept as separate text inputs (not a single `thresholdMinutes`) so "7h20" is a natural pair of fields, combined into minutes only on save. */
 interface WizardValueRule {
   kind: "condition" | "else";
+  conditions: WizardValueCondition[];
   operator: PaymentValueRuleOperator;
   hours: string;
   minutes: string;
@@ -25,7 +61,7 @@ interface WizardValueRule {
 }
 
 function isValueRuleValid(r: WizardValueRule): boolean {
-  return r.amount.trim() !== "" && !Number.isNaN(Number(r.amount));
+  return r.amount.trim() !== "" && !Number.isNaN(Number(r.amount)) && r.conditions.every(isConditionValid);
 }
 
 export default function CompanyFormPage() {
@@ -55,6 +91,12 @@ export default function CompanyFormPage() {
         setValueRules(
           c.valueRules.map((r) => ({
             kind: r.kind,
+            conditions: r.conditions.map(
+              (cond): WizardValueCondition =>
+                cond.field === "horario"
+                  ? { field: "horario", valuesText: "", scheduleRule: cond.scheduleRule, scheduleTime: formatMinutesAsTime(cond.scheduleMinutes) }
+                  : { field: cond.field, valuesText: cond.values.join(", "), scheduleRule: "start-after", scheduleTime: "" },
+            ),
             operator: r.operator ?? ">=",
             hours: r.thresholdMinutes !== null ? String(Math.floor(r.thresholdMinutes / 60)) : "",
             minutes: r.thresholdMinutes !== null ? String(r.thresholdMinutes % 60) : "",
@@ -70,7 +112,7 @@ export default function CompanyFormPage() {
 
   /** New condition rows always land right before the "senão" rule, if one exists — that one always stays last. */
   function addValueConditionRule() {
-    const newRule: WizardValueRule = { kind: "condition", operator: ">=", hours: "", minutes: "", amount: "" };
+    const newRule: WizardValueRule = { kind: "condition", conditions: [], operator: ">=", hours: "", minutes: "", amount: "" };
     setValueRules((prev) => {
       const elseIndex = prev.findIndex((r) => r.kind === "else");
       if (elseIndex === -1) return [...prev, newRule];
@@ -79,7 +121,7 @@ export default function CompanyFormPage() {
   }
 
   function addValueElseRule() {
-    setValueRules((prev) => [...prev, { kind: "else", operator: ">=", hours: "", minutes: "", amount: "" }]);
+    setValueRules((prev) => [...prev, { kind: "else", conditions: [], operator: ">=", hours: "", minutes: "", amount: "" }]);
   }
 
   function removeValueRule(index: number) {
@@ -90,6 +132,26 @@ export default function CompanyFormPage() {
     setValueRules((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }
 
+  function addValueCondition(ruleIndex: number) {
+    setValueRules((prev) =>
+      prev.map((r, i) => (i === ruleIndex ? { ...r, conditions: [...r.conditions, newValueCondition()] } : r)),
+    );
+  }
+
+  function removeValueCondition(ruleIndex: number, condIndex: number) {
+    setValueRules((prev) =>
+      prev.map((r, i) => (i === ruleIndex ? { ...r, conditions: r.conditions.filter((_, ci) => ci !== condIndex) } : r)),
+    );
+  }
+
+  function updateValueCondition(ruleIndex: number, condIndex: number, patch: Partial<WizardValueCondition>) {
+    setValueRules((prev) =>
+      prev.map((r, i) =>
+        i === ruleIndex ? { ...r, conditions: r.conditions.map((c, ci) => (ci === condIndex ? { ...c, ...patch } : c)) } : r,
+      ),
+    );
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -97,6 +159,19 @@ export default function CompanyFormPage() {
     try {
       const valueRuleInputs: PaymentValueRule[] = valueRules.map((r) => ({
         kind: r.kind,
+        conditions:
+          r.kind === "condition"
+            ? r.conditions.map(
+                (c): PaymentValueRuleCondition =>
+                  c.field === "horario"
+                    ? { field: "horario", scheduleRule: c.scheduleRule, scheduleMinutes: parseTimeToMinutes(c.scheduleTime) ?? 0 }
+                    : {
+                        field: c.field,
+                        values: c.valuesText.split(",").map((v) => v.trim()).filter(Boolean),
+                        caseInsensitive: true,
+                      },
+              )
+            : [],
         operator: r.kind === "condition" ? r.operator : null,
         thresholdMinutes: r.kind === "condition" ? (Number(r.hours) || 0) * 60 + (Number(r.minutes) || 0) : null,
         amount: Number(r.amount) || 0,
@@ -208,81 +283,177 @@ export default function CompanyFormPage() {
                   key={i}
                   style={{
                     display: "flex",
-                    flexWrap: "wrap",
+                    flexDirection: "column",
                     gap: "0.5rem",
-                    alignItems: "center",
                     marginBottom: "0.5rem",
                     padding: "0.6rem",
                     background: "var(--surface-container)",
                     borderRadius: 8,
                   }}
                 >
-                  <span className="muted" style={{ fontSize: "0.8rem" }}>{i + 1}.</span>
-                  {rule.kind === "condition" ? (
-                    <>
-                      <span className="muted" style={{ fontSize: "0.85rem" }}>Se trabalhou</span>
-                      <select
-                        value={rule.operator}
-                        onChange={(e) =>
-                          updateValueRule(i, { operator: e.target.value as PaymentValueRuleOperator })
-                        }
-                        style={{ width: "auto" }}
-                        aria-label="Operador"
-                      >
-                        {PAYMENT_VALUE_RULE_OPERATORS.map((op) => (
-                          <option key={op} value={op}>
-                            {PAYMENT_VALUE_RULE_OPERATOR_LABELS[op]}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="number"
-                        min="0"
-                        value={rule.hours}
-                        onChange={(e) => updateValueRule(i, { hours: e.target.value })}
-                        placeholder="0"
-                        style={{ width: "4rem" }}
-                        aria-label="Horas"
-                      />
-                      <span className="muted" style={{ fontSize: "0.85rem" }}>h</span>
-                      <input
-                        type="number"
-                        min="0"
-                        max="59"
-                        value={rule.minutes}
-                        onChange={(e) => updateValueRule(i, { minutes: e.target.value })}
-                        placeholder="0"
-                        style={{ width: "4rem" }}
-                        aria-label="Minutos"
-                      />
-                      <span className="muted" style={{ fontSize: "0.85rem" }}>min</span>
-                    </>
-                  ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <span className="muted" style={{ fontSize: "0.8rem" }}>{i + 1}.</span>
                     <span className="muted" style={{ fontSize: "0.85rem" }}>
-                      Senão (qualquer outra duração)
+                      {rule.kind === "condition" ? "Regra" : "Senão (qualquer outro turno)"}
                     </span>
+                    <button
+                      type="button"
+                      className="ghost"
+                      style={{ padding: "0.3rem", marginLeft: "auto" }}
+                      onClick={() => removeValueRule(i)}
+                      aria-label="Remover regra"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+
+                  {rule.kind === "condition" && (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "0.4rem",
+                        paddingLeft: "0.8rem",
+                        borderLeft: "2px solid var(--border)",
+                      }}
+                    >
+                      {rule.conditions.map((cond, ci) => (
+                        <div key={ci} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.4rem" }}>
+                          <span className="muted" style={{ fontSize: "0.8rem" }}>{ci === 0 ? "Se coluna" : "e coluna"}</span>
+                          <select
+                            value={cond.field}
+                            onChange={(e) =>
+                              updateValueCondition(i, ci, { field: e.target.value as PaymentValueRuleCondition["field"] })
+                            }
+                            style={{ width: "auto" }}
+                            aria-label="Coluna"
+                          >
+                            {VALUE_CONDITION_FIELDS.map((f) => (
+                              <option key={f} value={f}>
+                                {VALUE_CONDITION_FIELD_LABELS[f]}
+                              </option>
+                            ))}
+                          </select>
+                          {cond.field === "horario" ? (
+                            <>
+                              <select
+                                value={cond.scheduleRule}
+                                onChange={(e) =>
+                                  updateValueCondition(i, ci, { scheduleRule: e.target.value as ScheduleTimeRule })
+                                }
+                                style={{ width: "auto" }}
+                                aria-label="Comparação de horário"
+                              >
+                                {SCHEDULE_TIME_RULES.map((r) => (
+                                  <option key={r} value={r}>
+                                    {SCHEDULE_TIME_RULE_LABELS[r]}
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                type="time"
+                                value={cond.scheduleTime}
+                                onChange={(e) => updateValueCondition(i, ci, { scheduleTime: e.target.value })}
+                                style={{ width: "auto" }}
+                                aria-label="Horário de referência"
+                              />
+                            </>
+                          ) : (
+                            <>
+                              <span className="muted" style={{ fontSize: "0.8rem" }}>é</span>
+                              <input
+                                type="text"
+                                value={cond.valuesText}
+                                onChange={(e) => updateValueCondition(i, ci, { valuesText: e.target.value })}
+                                placeholder="valor1, valor2..."
+                                style={{ flex: "1 1 10rem", minWidth: "8rem" }}
+                                aria-label="Valores (um ou mais, separados por vírgula)"
+                              />
+                            </>
+                          )}
+                          <button
+                            type="button"
+                            className="ghost"
+                            style={{ padding: "0.2rem" }}
+                            onClick={() => removeValueCondition(i, ci)}
+                            aria-label="Remover condição"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        className="ghost"
+                        style={{ alignSelf: "flex-start", fontSize: "0.78rem", padding: "0.2rem 0.4rem" }}
+                        onClick={() => addValueCondition(i)}
+                      >
+                        <Plus size={12} style={{ marginRight: "0.25rem" }} />
+                        Condição de coluna
+                      </button>
+                    </div>
                   )}
-                  <span className="muted" style={{ fontSize: "0.85rem", marginLeft: "auto" }}>=</span>
-                  <span className="muted" style={{ fontSize: "0.85rem" }}>R$</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={rule.amount}
-                    onChange={(e) => updateValueRule(i, { amount: e.target.value })}
-                    placeholder="0,00"
-                    style={{ width: "6rem" }}
-                    aria-label="Valor"
-                  />
-                  <button
-                    type="button"
-                    className="ghost"
-                    style={{ padding: "0.3rem" }}
-                    onClick={() => removeValueRule(i)}
-                    aria-label="Remover regra"
-                  >
-                    <X size={14} />
-                  </button>
+
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem" }}>
+                    {rule.kind === "condition" ? (
+                      <>
+                        <span className="muted" style={{ fontSize: "0.85rem" }}>
+                          {rule.conditions.length > 0 ? "e se trabalhou" : "Se trabalhou"}
+                        </span>
+                        <select
+                          value={rule.operator}
+                          onChange={(e) =>
+                            updateValueRule(i, { operator: e.target.value as PaymentValueRuleOperator })
+                          }
+                          style={{ width: "auto" }}
+                          aria-label="Operador"
+                        >
+                          {PAYMENT_VALUE_RULE_OPERATORS.map((op) => (
+                            <option key={op} value={op}>
+                              {PAYMENT_VALUE_RULE_OPERATOR_LABELS[op]}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="number"
+                          min="0"
+                          value={rule.hours}
+                          onChange={(e) => updateValueRule(i, { hours: e.target.value })}
+                          placeholder="0"
+                          style={{ width: "4rem" }}
+                          aria-label="Horas"
+                        />
+                        <span className="muted" style={{ fontSize: "0.85rem" }}>h</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="59"
+                          value={rule.minutes}
+                          onChange={(e) => updateValueRule(i, { minutes: e.target.value })}
+                          placeholder="0"
+                          style={{ width: "4rem" }}
+                          aria-label="Minutos"
+                        />
+                        <span className="muted" style={{ fontSize: "0.85rem" }}>min</span>
+                      </>
+                    ) : (
+                      <span className="muted" style={{ fontSize: "0.85rem" }}>
+                        Senão (qualquer outra duração)
+                      </span>
+                    )}
+                    <span className="muted" style={{ fontSize: "0.85rem", marginLeft: "auto" }}>=</span>
+                    <span className="muted" style={{ fontSize: "0.85rem" }}>R$</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={rule.amount}
+                      onChange={(e) => updateValueRule(i, { amount: e.target.value })}
+                      placeholder="0,00"
+                      style={{ width: "6rem" }}
+                      aria-label="Valor"
+                    />
+                  </div>
                 </div>
               ))}
 

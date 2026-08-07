@@ -375,16 +375,45 @@ export const PAYMENT_VALUE_RULE_OPERATOR_LABELS: Record<PaymentValueRuleOperator
 };
 
 /**
+ * Narrows which shifts a `PaymentValueRule` step even applies to, before its
+ * duration check runs. "data"/"local"/"funcao" match like
+ * `PaymentTemplateRule`'s field/values — the shift's value must be one of
+ * `values` (an "OR" within the condition). "horario" instead compares one
+ * side of the shift's own schedule to a reference point, reusing
+ * `ScheduleTimeRule` — a range, not a discrete value, so a values list
+ * wouldn't make sense there. A rule step's `conditions` array is AND'd
+ * together (see `resolvePaymentValue`); composing multiple "horario"
+ * conditions is how a window ("começa depois de X E termina antes de Y") is
+ * expressed.
+ */
+export type PaymentValueRuleCondition =
+  | {
+      field: "data" | "local" | "funcao";
+      values: string[];
+      /** Whether matching `values` folds case — same idea as `PaymentTemplateRule.caseInsensitive`. */
+      caseInsensitive: boolean;
+    }
+  | {
+      field: "horario";
+      scheduleRule: ScheduleTimeRule;
+      scheduleMinutes: number;
+    };
+
+/**
  * One step of a company's (not a template's) if/else-if/else pay-value
  * chain — see `resolvePaymentValue` in `format.ts`. A `"condition"` step
- * matches when the shift's own duration (horas trabalhadas, summed from
- * its Horário) compares to `thresholdMinutes` per `operator`; an `"else"`
- * step (operator/thresholdMinutes both `null`) always matches. Entirely
- * optional, same as `PaymentStatusRule` — a company with none of these has
- * no computed Valor at all, not a zero.
+ * matches when every entry in `conditions` matches (see
+ * `PaymentValueRuleCondition`) *and* the shift's own duration (horas
+ * trabalhadas, summed from its Horário) compares to `thresholdMinutes` per
+ * `operator`; an `"else"` step (operator/thresholdMinutes both `null`,
+ * conditions ignored) always matches. Entirely optional, same as
+ * `PaymentStatusRule` — a company with none of these has no computed Valor
+ * at all, not a zero.
  */
 export interface PaymentValueRule {
   kind: PaymentTemplateRuleKind;
+  /** Column conditions narrowing which shifts this step can match — empty means no restriction, matching every group (the behavior before this existed). */
+  conditions: PaymentValueRuleCondition[];
   operator: PaymentValueRuleOperator | null;
   /** Duration threshold in whole minutes (not decimal hours) — "7h20" is exactly 440, comparable with `=`/`!=` without float rounding. */
   thresholdMinutes: number | null;
