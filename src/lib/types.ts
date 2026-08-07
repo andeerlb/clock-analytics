@@ -313,6 +313,7 @@ export interface PaymentTemplateFieldMapping {
  */
 export interface PaymentTemplateGroup {
   sheetNames: string[];
+  excludedSheetNames: string[];
   fieldMappings: PaymentTemplateFieldMapping[];
 }
 
@@ -429,6 +430,7 @@ export interface EmployeeTemplateFieldMapping {
 /** Same per-sheet-group shape as PaymentTemplateGroup — see its doc comment. */
 export interface EmployeeTemplateGroup {
   sheetNames: string[];
+  excludedSheetNames: string[];
   fieldMappings: EmployeeTemplateFieldMapping[];
   /** 1-indexed physical row where this group's header/title ends — rows up to and including it are skipped at import time. `null` when no header row is marked (every row is treated as data). */
   headerRow: number | null;

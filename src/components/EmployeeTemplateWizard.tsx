@@ -238,7 +238,7 @@ export default function EmployeeTemplateWizard({
     const sheetNames: string[] = [];
 
     for (const group of t.groups) {
-      const repKey = group.sheetNames[0] ?? CSV_GROUP_KEY;
+      const repKey = group.sheetNames[0] ?? group.excludedSheetNames[0] ?? CSV_GROUP_KEY;
       const m: Record<number, EmployeeTargetField> = {};
       const labels: Record<number, string | null> = {};
       for (const fm of group.fieldMappings) {
@@ -255,6 +255,10 @@ export default function EmployeeTemplateWizard({
         newSheetGroupOf[s] = repKey;
         sheetNames.push(s);
       }
+      for (const s of group.excludedSheetNames) {
+        newSheetGroupOf[s] = s;
+        sheetNames.push(s);
+      }
     }
 
     setSheets(sheetNames);
@@ -262,7 +266,7 @@ export default function EmployeeTemplateWizard({
     setGroupMapping(newGroupMapping);
     setGroupFieldLabels(newGroupFieldLabels);
     setGroupHeaderRow(newGroupHeaderRow);
-    setIncludedSheets(new Set(sheetNames));
+    setIncludedSheets(new Set(t.groups.flatMap((g) => g.sheetNames)));
     setActiveSheet(sheetNames[0] ?? null);
     setRows([]);
     setExtraColumns(0);
@@ -347,6 +351,24 @@ export default function EmployeeTemplateWizard({
       else next.add(sheet);
       return next;
     });
+  }
+
+  function addNewSheet() {
+    const baseName = "Nova aba";
+    let suffix = 1;
+    let sheetName = baseName;
+    while (sheets.includes(sheetName)) {
+      suffix += 1;
+      sheetName = `${baseName} ${suffix}`;
+    }
+    setSheets((prev) => [...prev, sheetName]);
+    setSheetGroupOf((prev) => ({ ...prev, [sheetName]: sheetName }));
+    setGroupMapping((prev) => ({ ...prev, [sheetName]: {} }));
+    setGroupFieldLabels((prev) => ({ ...prev, [sheetName]: {} }));
+    setGroupHeaderRow((prev) => ({ ...prev, [sheetName]: null }));
+    setIncludedSheets((prev) => new Set(prev).add(sheetName));
+    setActiveSheet(sheetName);
+    setExtraColumns(0);
   }
 
   /** "Espelhar mapeamento": the active sheet (and anyone already sharing its mapping) adopts `sourceSheet`'s mapping instead of its own. */
@@ -516,6 +538,9 @@ export default function EmployeeTemplateWizard({
       ? [CSV_GROUP_KEY]
       : Array.from(new Set(sheets.filter((s) => includedSheets.has(s)).map((s) => groupKeyOf(s))));
 
+  const allGroupKeys =
+    fileKind === "csv" ? [CSV_GROUP_KEY] : Array.from(new Set(sheets.map((s) => groupKeyOf(s))));
+
   // Every other included sheet — candidates for "espelhar mapeamento"
   // (including whichever one the active sheet currently mirrors, if any,
   // so that value shows up selected in the dropdown below).
@@ -554,9 +579,9 @@ export default function EmployeeTemplateWizard({
     try {
       const editing = target !== null && target !== "new" ? target : null;
 
-      const groups: EmployeeTemplateGroup[] = includedGroupKeys.map((key) => {
-        const sheetNames =
-          fileKind === "csv" ? [] : sheets.filter((s) => includedSheets.has(s) && groupKeyOf(s) === key);
+      const groups: EmployeeTemplateGroup[] = allGroupKeys.map((key) => {
+        const sheetNames = fileKind === "csv" ? [] : sheets.filter((s) => includedSheets.has(s) && groupKeyOf(s) === key);
+        const excludedSheetNames = fileKind === "csv" ? [] : sheets.filter((s) => !includedSheets.has(s) && groupKeyOf(s) === key);
         const m = groupMapping[key] ?? {};
         const labels = groupFieldLabels[key] ?? {};
         const fieldMappings = Object.entries(m).map(([indexStr, targetField]) => {
@@ -567,7 +592,7 @@ export default function EmployeeTemplateWizard({
             headerLabel: labels[index] ?? null,
           };
         });
-        return { sheetNames, fieldMappings, headerRow: groupHeaderRow[key] ?? null };
+        return { sheetNames, excludedSheetNames, fieldMappings, headerRow: groupHeaderRow[key] ?? null };
       });
 
       const input: EmployeeTemplateInput = {
@@ -734,11 +759,21 @@ export default function EmployeeTemplateWizard({
 
         {currentStep === "mapping" && (
           <div style={{ display: "flex", gap: "1.2rem", alignItems: "flex-start" }}>
-            {sheets.length > 1 && (
+            {sheets.length > 0 && (
               <aside className="mapping-sidebar">
                 <div className="mapping-sidebar-header">
-                  <strong>Mapeamento por aba</strong>
-                  <p className="muted">Selecione a aba para configurar</p>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
+                    <strong>{sheets.length === 1 ? "Aba do arquivo" : "Mapeamento por aba"}</strong>
+                    {!filePath && (
+                      <button type="button" className="ghost" style={{ padding: "0.2rem 0.5rem" }} onClick={addNewSheet}>
+                        <Plus size={12} style={{ marginRight: "0.25rem" }} />
+                        Adicionar aba
+                      </button>
+                    )}
+                  </div>
+                  <p className="muted">
+                    {sheets.length === 1 ? "Aba carregada neste template" : "Selecione a aba para configurar"}
+                  </p>
                 </div>
                 <nav className="mapping-sidebar-nav">
                   {sheets.map((s) => {

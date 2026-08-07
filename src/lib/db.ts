@@ -1564,8 +1564,11 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
   );
   const groups: PaymentTemplateGroup[] = [];
   for (const g of groupRows) {
-    const sheetRows = await db.select<{ sheetName: string }[]>(
-      "SELECT sheet_name AS sheetName FROM payment_template_sheets WHERE group_id = $1 ORDER BY sheet_name",
+    const sheetRows = await db.select<{ sheetName: string; included: number }[]>(
+      `SELECT sheet_name AS sheetName, included
+       FROM payment_template_sheets
+       WHERE group_id = $1
+       ORDER BY sheet_name`,
       [g.id],
     );
     const fieldMappings = await db.select<PaymentTemplateFieldMapping[]>(
@@ -1575,7 +1578,11 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
        ORDER BY column_letter`,
       [g.id],
     );
-    groups.push({ sheetNames: sheetRows.map((r) => r.sheetName), fieldMappings });
+    groups.push({
+      sheetNames: sheetRows.filter((r) => r.included).map((r) => r.sheetName),
+      excludedSheetNames: sheetRows.filter((r) => !r.included).map((r) => r.sheetName),
+      fieldMappings,
+    });
   }
 
   const ruleRows = await db.select<
@@ -1677,7 +1684,13 @@ async function insertTemplateGroups(
     const groupId = result.lastInsertId as number;
     for (const sheetName of group.sheetNames) {
       await db.execute(
-        "INSERT INTO payment_template_sheets (group_id, sheet_name) VALUES ($1, $2)",
+        "INSERT INTO payment_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 1)",
+        [groupId, sheetName],
+      );
+    }
+    for (const sheetName of group.excludedSheetNames) {
+      await db.execute(
+        "INSERT INTO payment_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 0)",
         [groupId, sheetName],
       );
     }
@@ -1835,8 +1848,11 @@ export async function getEmployeeTemplate(id: number): Promise<EmployeeTemplateR
   );
   const groups: EmployeeTemplateGroup[] = [];
   for (const g of groupRows) {
-    const sheetRows = await db.select<{ sheetName: string }[]>(
-      "SELECT sheet_name AS sheetName FROM employee_template_sheets WHERE group_id = $1 ORDER BY sheet_name",
+    const sheetRows = await db.select<{ sheetName: string; included: number }[]>(
+      `SELECT sheet_name AS sheetName, included
+       FROM employee_template_sheets
+       WHERE group_id = $1
+       ORDER BY sheet_name`,
       [g.id],
     );
     const fieldMappings = await db.select<EmployeeTemplateFieldMapping[]>(
@@ -1846,7 +1862,12 @@ export async function getEmployeeTemplate(id: number): Promise<EmployeeTemplateR
        ORDER BY column_letter`,
       [g.id],
     );
-    groups.push({ sheetNames: sheetRows.map((r) => r.sheetName), fieldMappings, headerRow: g.headerRow });
+    groups.push({
+      sheetNames: sheetRows.filter((r) => r.included).map((r) => r.sheetName),
+      excludedSheetNames: sheetRows.filter((r) => !r.included).map((r) => r.sheetName),
+      fieldMappings,
+      headerRow: g.headerRow,
+    });
   }
 
   return {
@@ -1877,7 +1898,13 @@ async function insertEmployeeTemplateGroups(
     const groupId = result.lastInsertId as number;
     for (const sheetName of group.sheetNames) {
       await db.execute(
-        "INSERT INTO employee_template_sheets (group_id, sheet_name) VALUES ($1, $2)",
+        "INSERT INTO employee_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 1)",
+        [groupId, sheetName],
+      );
+    }
+    for (const sheetName of group.excludedSheetNames) {
+      await db.execute(
+        "INSERT INTO employee_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 0)",
         [groupId, sheetName],
       );
     }

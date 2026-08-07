@@ -280,5 +280,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0046_reimport_config_keep_manual_edits.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 47,
+            description: "preserve whether each template sheet is included or disabled, so hidden sheets reappear when editing a saved template",
+            sql: include_str!("../migrations/0047_template_sheet_included.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
