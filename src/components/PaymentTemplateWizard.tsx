@@ -157,6 +157,8 @@ export default function PaymentTemplateWizard({
   // abstract, file-less column editor in the "Mapeamento" step below.
   const [filePath, setFilePath] = useState<string | null>(null);
   const [fileKind, setFileKind] = useState<PaymentFileKind | null>(null);
+  /** Every format an import accepts for this template, beyond `fileKind` itself (see "Formatos aceitos" in the Detalhes step) — xlsx/xls/ods can be freely combined, but never with csv. */
+  const [acceptedFileKinds, setAcceptedFileKinds] = useState<Set<PaymentFileKind>>(new Set());
   const [sheets, setSheets] = useState<string[]>([]);
   const [activeSheet, setActiveSheet] = useState<string | null>(null);
   const [editingSheetName, setEditingSheetName] = useState<string | null>(null);
@@ -219,6 +221,7 @@ export default function PaymentTemplateWizard({
     if (target === "new") {
       setFilePath(null);
       setFileKind(null);
+      setAcceptedFileKinds(new Set());
       setSheets([]);
       setActiveSheet(null);
       setEditingSheetName(null);
@@ -240,6 +243,7 @@ export default function PaymentTemplateWizard({
 
     setFilePath(null);
     setFileKind(target.fileKind);
+    setAcceptedFileKinds(new Set(target.acceptedFileKinds));
     setDelimiter(target.delimiter);
     setName(target.name);
     setDateFormat(target.dateFormat);
@@ -404,7 +408,9 @@ export default function PaymentTemplateWizard({
   async function selectFile(path: string) {
     setError(null);
     setFilePath(path);
-    setFileKind(fileKindFromPath(path));
+    const kind = fileKindFromPath(path);
+    setFileKind(kind);
+    setAcceptedFileKinds(new Set([kind]));
     await loadFile(path);
     addRecentPaymentFile(path)
       .then(() => listRecentPaymentFiles())
@@ -692,6 +698,16 @@ export default function PaymentTemplateWizard({
     setIdentifierAttempts((prev) => prev.filter((_, i) => i !== index));
   }
 
+  /** `fileKind` itself is never toggled off here — the checkbox for it is disabled-checked in the UI, this only ever runs for the other xlsx/xls/ods kinds. */
+  function toggleAcceptedFileKind(kind: PaymentFileKind) {
+    setAcceptedFileKinds((prev) => {
+      const next = new Set(prev);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
+  }
+
   function toggleIdentifierField(index: number, field: IdentifierField) {
     setIdentifierAttempts((prev) =>
       prev.map((attempt, i) =>
@@ -845,6 +861,7 @@ export default function PaymentTemplateWizard({
       const input: PaymentTemplateInput = {
         name: name.trim(),
         fileKind,
+        acceptedFileKinds: Array.from(new Set([fileKind, ...acceptedFileKinds])),
         delimiter: fileKind === "csv" ? delimiter : null,
         dateFormat,
         identifierPriority: identifierAttempts,
@@ -1299,6 +1316,34 @@ export default function PaymentTemplateWizard({
                       </option>
                     ))}
                   </select>
+                </div>
+                <div className="field-code">
+                  <label>Formatos aceitos</label>
+                  {fileKind === "csv" ? (
+                    <p className="glass-panel-desc" style={{ margin: 0 }}>
+                      CSV — um arquivo de texto delimitado não pode ser combinado com planilhas.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="glass-panel-desc" style={{ margin: "0 0 0.4rem" }}>
+                        Este template foi montado com um arquivo {fileKind?.toUpperCase()}. Um arquivo Excel
+                        (XLSX/XLS) ou ODS com as mesmas colunas é lido exatamente do mesmo jeito — marque
+                        abaixo se, além de {fileKind?.toUpperCase()}, este template também deve aceitar
+                        algum dos outros na hora de importar.
+                      </p>
+                      {(["xlsx", "xls", "ods"] as PaymentFileKind[]).map((k) => (
+                        <label key={k} className="field-code-checkbox">
+                          <input
+                            type="checkbox"
+                            checked={k === fileKind || acceptedFileKinds.has(k)}
+                            disabled={k === fileKind}
+                            onChange={() => toggleAcceptedFileKind(k)}
+                          />
+                          {k.toUpperCase()}
+                        </label>
+                      ))}
+                    </>
+                  )}
                 </div>
 
                 <h4 className="glass-panel-heading" style={{ marginTop: "1.2rem" }}>

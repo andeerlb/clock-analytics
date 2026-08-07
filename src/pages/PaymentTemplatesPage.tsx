@@ -83,7 +83,7 @@ export default function PaymentTemplatesPage() {
               <thead>
                 <tr>
                   <th>Nome</th>
-                  <th>Formato</th>
+                  <th>Formatos aceitos</th>
                   <th>Atualizado em</th>
                   <th>Ações</th>
                 </tr>
@@ -92,7 +92,7 @@ export default function PaymentTemplatesPage() {
                 {templates.map((t) => (
                   <tr key={t.id}>
                     <td>{t.name}</td>
-                    <td>{FILE_KIND_LABELS[t.fileKind] ?? t.fileKind}</td>
+                    <td>{Array.from(new Set(t.acceptedFileKinds.map((k) => FILE_KIND_LABELS[k] ?? k))).join(", ")}</td>
                     <td>{formatDateTime(t.updatedAt)}</td>
                     <td>
                       <span style={{ display: "flex", gap: "0.3rem" }}>

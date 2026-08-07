@@ -83,6 +83,13 @@ const PAYMENT_FILE_KIND_LABELS: Record<PaymentFileKind, string> = {
   ods: "ODS",
 };
 
+/** ["xlsx","ods"] -> "Excel (XLSX) ou ODS" — how a template's `acceptedFileKinds` reads in an error/status message. */
+function formatFileKindList(kinds: PaymentFileKind[]): string {
+  const labels = kinds.map((k) => PAYMENT_FILE_KIND_LABELS[k]);
+  if (labels.length <= 1) return labels.join("");
+  return `${labels.slice(0, -1).join(", ")} ou ${labels[labels.length - 1]}`;
+}
+
 /**
  * Every row lands in exactly one bucket — this is both what the toolbar
  * counts and what the toolbar's chips filter by (see `rowFilter`).
@@ -381,19 +388,19 @@ export default function ImportPaymentsPage() {
   async function handlePick() {
     if (!selectedTemplate) return;
     setError(null);
-    const selected = await pickPaymentFiles([selectedTemplate.fileKind]);
+    const selected = await pickPaymentFiles(selectedTemplate.acceptedFileKinds);
     if (selected.length === 0) return;
 
-    // The OS dialog is already filtered to the template's format, but
-    // that's a soft filter on some platforms (an "all files" toggle is
+    // The OS dialog is already filtered to the template's accepted formats,
+    // but that's a soft filter on some platforms (an "all files" toggle is
     // usually still reachable) — checked again here so a mismatched file
     // never silently gets treated as if it matched.
-    const suffix = `.${selectedTemplate.fileKind}`;
-    const valid = selected.filter((p) => p.toLowerCase().endsWith(suffix));
-    const invalid = selected.filter((p) => !p.toLowerCase().endsWith(suffix));
+    const suffixes = selectedTemplate.acceptedFileKinds.map((k) => `.${k}`);
+    const valid = selected.filter((p) => suffixes.some((s) => p.toLowerCase().endsWith(s)));
+    const invalid = selected.filter((p) => !suffixes.some((s) => p.toLowerCase().endsWith(s)));
     if (invalid.length > 0) {
       setError(
-        `O template "${selectedTemplate.name}" espera arquivos ${PAYMENT_FILE_KIND_LABELS[selectedTemplate.fileKind]}. Ignorado(s) por formato incompatível: ${invalid.map(fileNameFromPath).join(", ")}`,
+        `O template "${selectedTemplate.name}" espera arquivos ${formatFileKindList(selectedTemplate.acceptedFileKinds)}. Ignorado(s) por formato incompatível: ${invalid.map(fileNameFromPath).join(", ")}`,
       );
     }
     if (valid.length > 0) addPaths(valid);
@@ -424,9 +431,9 @@ export default function ImportPaymentsPage() {
     setUrlDownloading(true);
     try {
       const result = await downloadPaymentFileFromUrl(targetUrl);
-      if (result.fileKind !== template.fileKind) {
+      if (!template.acceptedFileKinds.includes(result.fileKind)) {
         setError(
-          `O template "${template.name}" espera arquivos ${PAYMENT_FILE_KIND_LABELS[template.fileKind]}, mas a URL retornou um arquivo ${PAYMENT_FILE_KIND_LABELS[result.fileKind]}.`,
+          `O template "${template.name}" espera arquivos ${formatFileKindList(template.acceptedFileKinds)}, mas a URL retornou um arquivo ${PAYMENT_FILE_KIND_LABELS[result.fileKind]}.`,
         );
         return;
       }
@@ -1124,8 +1131,8 @@ export default function ImportPaymentsPage() {
                   <h4>Selecione os arquivos</h4>
                   <p className="muted" style={{ margin: 0 }}>
                     {selectedTemplate
-                      ? `Formato do template: ${PAYMENT_FILE_KIND_LABELS[selectedTemplate.fileKind]} — suporta múltiplos arquivos.`
-                      : "Selecione um template para saber o formato aceito."}
+                      ? `Formatos aceitos: ${formatFileKindList(selectedTemplate.acceptedFileKinds)} — suporta múltiplos arquivos.`
+                      : "Selecione um template para saber os formatos aceitos."}
                   </p>
                   <button
                     type="button"

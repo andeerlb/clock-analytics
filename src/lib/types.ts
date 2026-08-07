@@ -321,7 +321,16 @@ export interface PaymentTemplateGroup {
 export interface PaymentTemplateListRow {
   id: number;
   name: string;
+  /** The format the template's mapping was originally built against — still what "Arquivo" step re-derives from a newly picked sample file. */
   fileKind: PaymentFileKind;
+  /**
+   * Every format an import actually accepts for this template — always
+   * includes `fileKind` itself. xlsx/xls/ods can be freely combined (they
+   * already parse through the same calamine-backed reader, see
+   * spreadsheet.rs) but never mixed with csv, which has its own delimiter/
+   * no-sheets shape a csv template's mapping assumes.
+   */
+  acceptedFileKinds: PaymentFileKind[];
   updatedAt: string;
 }
 
@@ -469,7 +478,10 @@ export interface EmployeeTemplateGroup {
 export interface EmployeeTemplateListRow {
   id: number;
   name: string;
+  /** The format the template's mapping was originally built against — still what "Arquivo" step re-derives from a newly picked sample file. */
   fileKind: PaymentFileKind;
+  /** Same idea as `PaymentTemplateListRow.acceptedFileKinds` — every format an import actually accepts, always including `fileKind` itself. */
+  acceptedFileKinds: PaymentFileKind[];
   updatedAt: string;
 }
 

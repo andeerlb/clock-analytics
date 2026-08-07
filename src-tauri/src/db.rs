@@ -298,5 +298,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0049_payment_settings_visible_columns.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 50,
+            description: "add accepted_file_kinds_json to payment_templates and employee_templates — a template can now accept more than one file format at import time",
+            sql: include_str!("../migrations/0050_template_accepted_file_kinds.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

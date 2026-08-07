@@ -1540,21 +1540,33 @@ export async function markOriginalsRemoved(sourceFileIds: number[]): Promise<voi
   );
 }
 
+/** `accepted_file_kinds_json` is `NULL` for every template predating that column — falls back to a single-element list of just its own `fileKind`, the exact behavior before it existed. */
+function parseAcceptedFileKinds(fileKind: PaymentFileKind, json: string | null): PaymentFileKind[] {
+  return json ? JSON.parse(json) : [fileKind];
+}
+
 export async function listPaymentTemplates(): Promise<PaymentTemplateListRow[]> {
   const db = await getDb();
-  return db.select<PaymentTemplateListRow[]>(`
-    SELECT pt.id, pt.name, pt.file_kind AS fileKind, pt.updated_at AS updatedAt
+  const rows = await db.select<(Omit<PaymentTemplateListRow, "acceptedFileKinds"> & { acceptedFileKindsJson: string | null })[]>(`
+    SELECT pt.id, pt.name, pt.file_kind AS fileKind, pt.accepted_file_kinds_json AS acceptedFileKindsJson, pt.updated_at AS updatedAt
     FROM payment_templates pt
     ORDER BY pt.updated_at DESC
   `);
+  return rows.map(({ acceptedFileKindsJson, ...r }) => ({
+    ...r,
+    acceptedFileKinds: parseAcceptedFileKinds(r.fileKind, acceptedFileKindsJson),
+  }));
 }
 
 export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow> {
   const db = await getDb();
   const rows = await db.select<
-    (Omit<PaymentTemplateRow, "groups" | "rules" | "identifierPriority"> & { identifierPriority: string })[]
+    (Omit<PaymentTemplateRow, "groups" | "rules" | "identifierPriority" | "acceptedFileKinds"> & {
+      identifierPriority: string;
+      acceptedFileKindsJson: string | null;
+    })[]
   >(
-    `SELECT pt.id, pt.name, pt.file_kind AS fileKind, pt.delimiter,
+    `SELECT pt.id, pt.name, pt.file_kind AS fileKind, pt.accepted_file_kinds_json AS acceptedFileKindsJson, pt.delimiter,
             pt.date_format AS dateFormat, pt.identifier_priority AS identifierPriority,
             pt.created_at AS createdAt, pt.updated_at AS updatedAt
      FROM payment_templates pt
@@ -1639,9 +1651,11 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
     caseInsensitive: Boolean(r.caseInsensitive),
   }));
 
+  const { acceptedFileKindsJson, ...row } = rows[0];
   return {
-    ...rows[0],
+    ...row,
     identifierPriority: JSON.parse(rows[0].identifierPriority) as IdentifierAttempt[],
+    acceptedFileKinds: parseAcceptedFileKinds(row.fileKind, acceptedFileKindsJson),
     groups,
     rules,
     statusRules,
@@ -1668,6 +1682,7 @@ export interface PaymentTemplateStatusRuleInput {
 export interface PaymentTemplateInput {
   name: string;
   fileKind: PaymentFileKind;
+  acceptedFileKinds: PaymentFileKind[];
   delimiter: string | null;
   dateFormat: string;
   identifierPriority: IdentifierAttempt[];
@@ -1781,9 +1796,16 @@ async function deleteTemplateStatusRules(db: Database, templateId: number): Prom
 export async function createPaymentTemplate(input: PaymentTemplateInput): Promise<number> {
   const db = await getDb();
   const result = await db.execute(
-    `INSERT INTO payment_templates (name, file_kind, delimiter, date_format, identifier_priority)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [input.name, input.fileKind, input.delimiter, input.dateFormat, JSON.stringify(input.identifierPriority)],
+    `INSERT INTO payment_templates (name, file_kind, accepted_file_kinds_json, delimiter, date_format, identifier_priority)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      input.name,
+      input.fileKind,
+      JSON.stringify(input.acceptedFileKinds),
+      input.delimiter,
+      input.dateFormat,
+      JSON.stringify(input.identifierPriority),
+    ],
   );
   const templateId = result.lastInsertId as number;
   await insertTemplateGroups(db, templateId, input.groups);
@@ -1796,10 +1818,18 @@ export async function updatePaymentTemplate(id: number, input: PaymentTemplateIn
   const db = await getDb();
   await db.execute(
     `UPDATE payment_templates SET
-       name = $1, file_kind = $2, delimiter = $3, date_format = $4,
-       identifier_priority = $5, updated_at = datetime('now')
-     WHERE id = $6`,
-    [input.name, input.fileKind, input.delimiter, input.dateFormat, JSON.stringify(input.identifierPriority), id],
+       name = $1, file_kind = $2, accepted_file_kinds_json = $3, delimiter = $4, date_format = $5,
+       identifier_priority = $6, updated_at = datetime('now')
+     WHERE id = $7`,
+    [
+      input.name,
+      input.fileKind,
+      JSON.stringify(input.acceptedFileKinds),
+      input.delimiter,
+      input.dateFormat,
+      JSON.stringify(input.identifierPriority),
+      id,
+    ],
   );
   await deleteTemplateGroups(db, id);
   await insertTemplateGroups(db, id, input.groups);
@@ -1826,19 +1856,26 @@ export async function deletePaymentTemplate(id: number): Promise<void> {
 
 export async function listEmployeeTemplates(): Promise<EmployeeTemplateListRow[]> {
   const db = await getDb();
-  return db.select<EmployeeTemplateListRow[]>(`
-    SELECT et.id, et.name, et.file_kind AS fileKind, et.updated_at AS updatedAt
+  const rows = await db.select<(Omit<EmployeeTemplateListRow, "acceptedFileKinds"> & { acceptedFileKindsJson: string | null })[]>(`
+    SELECT et.id, et.name, et.file_kind AS fileKind, et.accepted_file_kinds_json AS acceptedFileKindsJson, et.updated_at AS updatedAt
     FROM employee_templates et
     ORDER BY et.updated_at DESC
   `);
+  return rows.map(({ acceptedFileKindsJson, ...r }) => ({
+    ...r,
+    acceptedFileKinds: parseAcceptedFileKinds(r.fileKind, acceptedFileKindsJson),
+  }));
 }
 
 export async function getEmployeeTemplate(id: number): Promise<EmployeeTemplateRow> {
   const db = await getDb();
   const rows = await db.select<
-    (Omit<EmployeeTemplateRow, "groups" | "identifierPriority"> & { identifierPriority: string })[]
+    (Omit<EmployeeTemplateRow, "groups" | "identifierPriority" | "acceptedFileKinds"> & {
+      identifierPriority: string;
+      acceptedFileKindsJson: string | null;
+    })[]
   >(
-    `SELECT et.id, et.name, et.file_kind AS fileKind, et.delimiter,
+    `SELECT et.id, et.name, et.file_kind AS fileKind, et.accepted_file_kinds_json AS acceptedFileKindsJson, et.delimiter,
             et.identifier_priority AS identifierPriority,
             et.created_at AS createdAt, et.updated_at AS updatedAt
      FROM employee_templates et
@@ -1875,9 +1912,11 @@ export async function getEmployeeTemplate(id: number): Promise<EmployeeTemplateR
     });
   }
 
+  const { acceptedFileKindsJson, ...row } = rows[0];
   return {
-    ...rows[0],
+    ...row,
     identifierPriority: JSON.parse(rows[0].identifierPriority) as IdentifierAttempt[],
+    acceptedFileKinds: parseAcceptedFileKinds(row.fileKind, acceptedFileKindsJson),
     groups,
   };
 }
@@ -1885,6 +1924,7 @@ export async function getEmployeeTemplate(id: number): Promise<EmployeeTemplateR
 export interface EmployeeTemplateInput {
   name: string;
   fileKind: PaymentFileKind;
+  acceptedFileKinds: PaymentFileKind[];
   delimiter: string | null;
   identifierPriority: IdentifierAttempt[];
   groups: EmployeeTemplateGroup[];
@@ -1940,9 +1980,15 @@ async function deleteEmployeeTemplateGroups(db: Database, templateId: number): P
 export async function createEmployeeTemplate(input: EmployeeTemplateInput): Promise<number> {
   const db = await getDb();
   const result = await db.execute(
-    `INSERT INTO employee_templates (name, file_kind, delimiter, identifier_priority)
-     VALUES ($1, $2, $3, $4)`,
-    [input.name, input.fileKind, input.delimiter, JSON.stringify(input.identifierPriority)],
+    `INSERT INTO employee_templates (name, file_kind, accepted_file_kinds_json, delimiter, identifier_priority)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [
+      input.name,
+      input.fileKind,
+      JSON.stringify(input.acceptedFileKinds),
+      input.delimiter,
+      JSON.stringify(input.identifierPriority),
+    ],
   );
   const templateId = result.lastInsertId as number;
   await insertEmployeeTemplateGroups(db, templateId, input.groups);
@@ -1953,10 +1999,17 @@ export async function updateEmployeeTemplate(id: number, input: EmployeeTemplate
   const db = await getDb();
   await db.execute(
     `UPDATE employee_templates SET
-       name = $1, file_kind = $2, delimiter = $3,
-       identifier_priority = $4, updated_at = datetime('now')
-     WHERE id = $5`,
-    [input.name, input.fileKind, input.delimiter, JSON.stringify(input.identifierPriority), id],
+       name = $1, file_kind = $2, accepted_file_kinds_json = $3, delimiter = $4,
+       identifier_priority = $5, updated_at = datetime('now')
+     WHERE id = $6`,
+    [
+      input.name,
+      input.fileKind,
+      JSON.stringify(input.acceptedFileKinds),
+      input.delimiter,
+      JSON.stringify(input.identifierPriority),
+      id,
+    ],
   );
   await deleteEmployeeTemplateGroups(db, id);
   await insertEmployeeTemplateGroups(db, id, input.groups);
