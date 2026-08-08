@@ -1518,7 +1518,7 @@ export default function PaymentsPage() {
       {deletingShift && (
         <ConfirmModal
           title="Remover turno"
-          message={`Isso apaga definitivamente o registro de ${formatDate(deletingShift.shift.workDate)} · ${deletingShift.shift.local} e todo o seu histórico (pagamentos, reversões e edições anteriores). Não pode ser desfeito.`}
+          message={`Isso remove o registro de ${formatDate(deletingShift.shift.workDate)} · ${deletingShift.shift.local} e todo o seu histórico (pagamentos, reversões e edições anteriores) — não aparece mais em nenhuma lista, relatório ou exportação. Se esse turno for reimportado depois, a pré-visualização vai avisar que ele já foi removido, para você decidir se quer trazê-lo de volta.`}
           confirmLabel={deleting ? "Removendo..." : "Remover"}
           confirmDisabled={deleting}
           error={deleteError}

@@ -11,6 +11,7 @@ import {
   PlusCircle,
   Search,
   Settings2,
+  Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -40,6 +41,7 @@ import {
   logSourceFile,
   markSourceFileSaved,
   savePaymentShifts,
+  type DuplicatePaymentShiftMatch,
   type EmployeeRow,
   type PaymentShiftInput,
 } from "../lib/db";
@@ -95,15 +97,20 @@ function formatFileKindList(kinds: PaymentFileKind[]): string {
 /**
  * Every row lands in exactly one bucket — this is both what the toolbar
  * counts and what the toolbar's chips filter by (see `rowFilter`).
- * "valid"/"duplicate"/"duplicate-in-file" are the only ones with a
- * resolved `employee`. "duplicate" means an exact match already exists in
- * `payment_shifts` (see `findDuplicatePaymentShifts`) — offered as
- * "reprocessar", not excluded outright. "duplicate-in-file" means this row
- * is byte-for-byte identical to an earlier candidate row in this same
- * import batch — a source-file artifact, not importable at all, since
- * keeping both would just double-import the same shift within one run.
+ * "valid"/"duplicate"/"deleted"/"duplicate-in-file" are the only ones with
+ * a resolved `employee`. "duplicate" means an exact match already exists
+ * in `payment_shifts` (see `findDuplicatePaymentShifts`) — offered as
+ * "reprocessar", not excluded outright. "deleted" is the same idea but the
+ * match was soft-deleted ("Remover" on the Pagamentos table never
+ * physically deletes a shift, precisely so this can happen) — surfaced for
+ * review instead of either silently recreating it or hiding the fact it
+ * once existed, and just as unselected-by-default as "duplicate".
+ * "duplicate-in-file" means this row is byte-for-byte identical to an
+ * earlier candidate row in this same import batch — a source-file
+ * artifact, not importable at all, since keeping both would just
+ * double-import the same shift within one run.
  */
-type RowCategory = "valid" | "duplicate" | "duplicate-in-file" | "not-found" | "unresolved-route" | "skipped";
+type RowCategory = "valid" | "duplicate" | "deleted" | "duplicate-in-file" | "not-found" | "unresolved-route" | "skipped";
 type RowFilter = RowCategory | "error" | "all" | "selected";
 
 interface PaymentPreviewRow {
@@ -152,6 +159,15 @@ function buildExtraData(row: PaymentPreviewRow): Record<string, string> {
   };
   if (row.sheetName) extraData["aba de origem"] = row.sheetName;
   return extraData;
+}
+
+/** Applies one `findDuplicatePaymentShifts` result to its row — shared by every place that runs the check (initial processing, "vincular colaborador", "cadastrar colaborador"), so the "deleted" vs "duplicate" split can't drift between them. */
+function applyDuplicateMatch(row: PaymentPreviewRow, match: DuplicatePaymentShiftMatch) {
+  row.isDuplicate = true;
+  row.category = match.deleted ? "deleted" : "duplicate";
+  row.matchedShiftId = match.shiftId;
+  row.matchedEditedManually = match.editedManually;
+  row.matchedIdentityChanged = match.identityChanged;
 }
 
 interface PaymentFileResult {
@@ -579,6 +595,7 @@ export default function ImportPaymentsPage() {
     const counts: Record<RowCategory, number> = {
       valid: 0,
       duplicate: 0,
+      deleted: 0,
       "duplicate-in-file": 0,
       "not-found": 0,
       "unresolved-route": 0,
@@ -590,6 +607,7 @@ export default function ImportPaymentsPage() {
 
   const errorCount = fileResults.filter((r) => r.error).length;
   const duplicateCount = categoryCounts.duplicate;
+  const deletedCount = categoryCounts.deleted;
   const duplicateInFileCount = categoryCounts["duplicate-in-file"];
   const skippedCount = categoryCounts.skipped;
 
@@ -769,13 +787,7 @@ export default function ImportPaymentsPage() {
           scheduleEndMinutes: r.scheduleEndMinutes,
         })),
       );
-      dupMatches.forEach((match, i) => {
-        dbCheckCandidates[i].isDuplicate = true;
-        dbCheckCandidates[i].category = "duplicate";
-        dbCheckCandidates[i].matchedShiftId = match.shiftId;
-        dbCheckCandidates[i].matchedEditedManually = match.editedManually;
-        dbCheckCandidates[i].matchedIdentityChanged = match.identityChanged;
-      });
+      dupMatches.forEach((match, i) => applyDuplicateMatch(dbCheckCandidates[i], match));
 
       const defaultSelected = new Set<number>();
       allRows.forEach((r, i) => {
@@ -858,13 +870,7 @@ export default function ImportPaymentsPage() {
           scheduleEndMinutes: r.scheduleEndMinutes,
         })),
       );
-      dupMatches.forEach((match, i) => {
-        dbCheckTargets[i].isDuplicate = true;
-        dbCheckTargets[i].category = "duplicate";
-        dbCheckTargets[i].matchedShiftId = match.shiftId;
-        dbCheckTargets[i].matchedEditedManually = match.editedManually;
-        dbCheckTargets[i].matchedIdentityChanged = match.identityChanged;
-      });
+      dupMatches.forEach((match, i) => applyDuplicateMatch(dbCheckTargets[i], match));
     }
 
     setSelectedRows((prev) => {
@@ -931,13 +937,7 @@ export default function ImportPaymentsPage() {
         scheduleEndMinutes: r.scheduleEndMinutes,
       })),
     );
-    dupMatches.forEach((match, i) => {
-      dbCheckTargets[i].isDuplicate = true;
-      dbCheckTargets[i].category = "duplicate";
-      dbCheckTargets[i].matchedShiftId = match.shiftId;
-      dbCheckTargets[i].matchedEditedManually = match.editedManually;
-      dbCheckTargets[i].matchedIdentityChanged = match.identityChanged;
-    });
+    dupMatches.forEach((match, i) => applyDuplicateMatch(dbCheckTargets[i], match));
 
     setSelectedRows((prev) => {
       const next = new Set(prev);
@@ -1044,14 +1044,18 @@ export default function ImportPaymentsPage() {
           scheduleEndMinutes: row.scheduleEndMinutes,
           status: row.paymentStatus,
           extraData: buildExtraData(row),
-          // "duplicate" rows are reprocessing an existing shift, not creating
-          // an independent new one — links this new row back to the current
-          // one it supersedes (see `findDuplicatePaymentShifts`), same
-          // append-only pattern as "Fazer pagamento"/"Editar valor". A
-          // protected match (edited_manually + keepManualEdits snapshot) never gets
-          // here selected in the first place — the checkbox is disabled for
-          // those (see `canSelect` above).
-          previousShiftId: row.category === "duplicate" ? row.matchedShiftId : null,
+          // "duplicate"/"deleted" rows are reprocessing an existing shift, not
+          // creating an independent new one — links this new row back to the
+          // current one it supersedes (see `findDuplicatePaymentShifts`), same
+          // append-only pattern as "Fazer pagamento"/"Editar valor". For
+          // "deleted" this is also what "restores" it: the new row isn't
+          // itself deleted, so it becomes the head again (see
+          // `deletePaymentShift`/`HEAD_SHIFT_CONDITION`). A protected
+          // "duplicate" match (edited_manually + keepManualEdits snapshot)
+          // never gets here selected in the first place — the checkbox is
+          // disabled for those (see `canSelect` above); "deleted" is never
+          // protected that way, only ever unselected by default.
+          previousShiftId: row.category === "duplicate" || row.category === "deleted" ? row.matchedShiftId : null,
         });
         savedFileHashes.add(fileHash);
       }
@@ -1397,10 +1401,11 @@ export default function ImportPaymentsPage() {
                       <Eye size={18} />
                       Pré-visualização da Importação
                     </h3>
-                    {duplicateCount > 0 ? (
+                    {duplicateCount > 0 || deletedCount > 0 ? (
                       <p className="muted" style={{ maxWidth: "42rem" }}>
-                        Algumas linhas batem, em todas as colunas, com um turno já salvo — marque
-                        a linha se quiser reprocessar (importar de novo) mesmo assim.
+                        Algumas linhas batem, em todas as colunas, com um turno já salvo
+                        {deletedCount > 0 && " (ou já removido)"} — marque a linha se quiser
+                        reprocessar (importar de novo) mesmo assim.
                       </p>
                     ) : (
                       <p className="muted">Revise os dados antes de confirmar.</p>
@@ -1444,6 +1449,16 @@ export default function ImportPaymentsPage() {
                         title="Todas as colunas batem com um turno já salvo. Clique para filtrar."
                       >
                         {duplicateCount} já importado(s)
+                      </button>
+                    )}
+                    {deletedCount > 0 && (
+                      <button
+                        type="button"
+                        className={`count-chip chip-filter${rowFilter === "deleted" ? " active" : ""}`}
+                        onClick={() => toggleRowFilter("deleted")}
+                        title="Esse turno foi removido no sistema. Clique para filtrar."
+                      >
+                        {deletedCount} excluído(s)
                       </button>
                     )}
                     {duplicateInFileCount > 0 && (
@@ -1678,6 +1693,21 @@ export default function ImportPaymentsPage() {
                                   >
                                     <AlertTriangle size={13} />
                                     Já importado
+                                  </span>
+                                ))}
+                              {row.category === "deleted" &&
+                                (selectedRows.has(index) ? (
+                                  <span className="badge warn">
+                                    <Trash2 size={13} />
+                                    Será restaurado
+                                  </span>
+                                ) : (
+                                  <span
+                                    className="badge neutral"
+                                    title="Esse turno foi removido no sistema (Remover, na tela de Pagamentos). Marque a linha para importar de novo (restaurar) mesmo assim."
+                                  >
+                                    <Trash2 size={13} />
+                                    Excluído anteriormente
                                   </span>
                                 ))}
                               {row.category === "duplicate-in-file" && (

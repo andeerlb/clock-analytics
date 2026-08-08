@@ -310,5 +310,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0051_payment_export_templates.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 52,
+            description: "add deleted_at to payment_shifts — 'Remover' soft-deletes a shift's whole history chain instead of physically deleting it, so a later reimport can recognize and flag it instead of silently recreating it",
+            sql: include_str!("../migrations/0052_payment_shifts_soft_delete.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

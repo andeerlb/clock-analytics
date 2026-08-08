@@ -2269,6 +2269,16 @@ export interface DuplicatePaymentShiftMatch {
    * not just a status/valor.
    */
   identityChanged: boolean;
+  /**
+   * True when the matched head is soft-deleted (see
+   * 0052_payment_shifts_soft_delete.sql / `deletePaymentShift`) — "Remover"
+   * never physically deletes a row precisely so a later reimport can still
+   * find it here and flag it for review instead of silently recreating a
+   * shift the user deliberately removed. The caller categorizes this
+   * separately from a plain "duplicate" (`editedManually`/`identityChanged`
+   * don't matter once this is true).
+   */
+  deleted: boolean;
 }
 
 /**
@@ -2293,6 +2303,12 @@ export interface DuplicatePaymentShiftMatch {
  * row reachable that way was necessarily produced by one of the manual
  * transition functions above (only those ever set `previous_shift_id`), so
  * landing on a head this way always means `editedManually` is true for it.
+ *
+ * Uses `STRUCTURAL_HEAD_CONDITION`, not `HEAD_SHIFT_CONDITION` — a
+ * soft-deleted chain's head is still structurally "the head" (nothing
+ * points to it), and this function needs to find it precisely so a
+ * reimport can flag "this was removed" instead of just not noticing it at
+ * all and creating a brand-new, disconnected shift.
  */
 export async function findDuplicatePaymentShifts(
   rows: {
@@ -2312,6 +2328,7 @@ export async function findDuplicatePaymentShifts(
       {
         id: number;
         editedManually: number;
+        deletedAt: string | null;
         currentWorkDate: string;
         currentLocal: string;
         currentRole: string;
@@ -2328,11 +2345,11 @@ export async function findDuplicatePaymentShifts(
          SELECT next_ps.id FROM payment_shifts next_ps
          JOIN lineage ON next_ps.previous_shift_id = lineage.id
        )
-       SELECT ps.id, ps.edited_manually AS editedManually,
+       SELECT ps.id, ps.edited_manually AS editedManually, ps.deleted_at AS deletedAt,
               ps.work_date AS currentWorkDate, ps.local AS currentLocal, ps.role AS currentRole,
               ps.schedule_start_minutes AS currentScheduleStart, ps.schedule_end_minutes AS currentScheduleEnd
        FROM payment_shifts ps
-       WHERE ps.id IN (SELECT id FROM lineage) AND ${HEAD_SHIFT_CONDITION}
+       WHERE ps.id IN (SELECT id FROM lineage) AND ${STRUCTURAL_HEAD_CONDITION}
        ORDER BY ps.id DESC
        LIMIT 1`,
       [r.employeeId, r.workDate, r.local, r.role, r.scheduleStartMinutes, r.scheduleEndMinutes],
@@ -2345,7 +2362,12 @@ export async function findDuplicatePaymentShifts(
         head.currentRole !== r.role ||
         (head.currentScheduleStart ?? null) !== r.scheduleStartMinutes ||
         (head.currentScheduleEnd ?? null) !== r.scheduleEndMinutes;
-      matches.set(i, { shiftId: head.id, editedManually: Boolean(head.editedManually), identityChanged });
+      matches.set(i, {
+        shiftId: head.id,
+        editedManually: Boolean(head.editedManually),
+        identityChanged,
+        deleted: head.deletedAt !== null,
+      });
     }
   }
   return matches;
@@ -2399,10 +2421,24 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
  * `previous_shift_id` — once "Fazer pagamento" creates a new row linked
  * back to a pendente/erro one, that older row is superseded and drops out
  * of every list/summary/total, staying only as history reachable through
- * the link on the row that replaced it (see `getPaymentShift`).
+ * the link on the row that replaced it (see `getPaymentShift`). Purely
+ * structural — doesn't consider `deleted_at` — so `findDuplicatePaymentShifts`
+ * can use this alone to still find a *deleted* chain's head (it needs to,
+ * to flag a reimport of it for review); every other consumer wants
+ * `HEAD_SHIFT_CONDITION` below instead.
  */
-const HEAD_SHIFT_CONDITION =
+const STRUCTURAL_HEAD_CONDITION =
   "ps.id NOT IN (SELECT previous_shift_id FROM payment_shifts WHERE previous_shift_id IS NOT NULL)";
+
+/**
+ * The actual "currently visible" condition every list/summary/report query
+ * uses — structurally the head AND not soft-deleted (see
+ * 0052_payment_shifts_soft_delete.sql). "Remover" on a turno never
+ * physically deletes it (so a later reimport can still recognize and flag
+ * it — see `findDuplicatePaymentShifts`), so hiding it from every normal
+ * view has to happen here instead.
+ */
+const HEAD_SHIFT_CONDITION = `${STRUCTURAL_HEAD_CONDITION} AND ps.deleted_at IS NULL`;
 
 /** Which aggregated column each "Status" checkbox reads — a group matches a status once at least one of its shifts has it. */
 const PAYMENT_STATUS_HAVING_CONDITIONS: Record<PaymentShiftStatus, string> = {
@@ -3038,16 +3074,23 @@ export async function getPaymentShiftHistory(shiftId: number): Promise<PaymentSh
 }
 
 /**
- * "Remover": deletes a shift AND its entire append-only history chain —
- * every row reachable by walking `previous_shift_id` backward from
+ * "Remover": soft-deletes a shift AND its entire append-only history chain
+ * — every row reachable by walking `previous_shift_id` backward from
  * `shiftId` (same chain `getPaymentShiftHistory` walks), not just the row
  * itself. Works the same whether the row came from an import or from a
  * manual edit/pagamento — both live in this same table (see
  * `savePaymentShifts`/`markPaymentShiftPaid`'s own doc comments), there is
- * no separate "manual" storage to also clean up. Nulls out any reference
- * into the chain before deleting (mirroring `clearAllData`'s own ordering)
- * so the self-referencing `previous_shift_id` FK can never block the
- * deletes below.
+ * no separate "manual" storage to also clean up.
+ *
+ * Sets `deleted_at` rather than physically deleting — `HEAD_SHIFT_CONDITION`
+ * excludes it, so it disappears from every normal list/summary/report just
+ * like a hard delete would, but the row (and its history) is still there
+ * for `findDuplicatePaymentShifts` to find. That's deliberate: without it,
+ * reimporting the same source file later would have no way to know this
+ * shift ever existed and would just silently recreate it. Kept as data,
+ * this way it instead shows up in the import preview flagged "excluído",
+ * unselected by default, so the user gets a chance to review it instead of
+ * it either reappearing unannounced or disappearing forever.
  */
 export async function deletePaymentShift(shiftId: number): Promise<void> {
   const db = await getDb();
@@ -3067,8 +3110,7 @@ export async function deletePaymentShift(shiftId: number): Promise<void> {
 
   const idList = [...ids];
   const placeholders = idList.map((_, i) => `$${i + 1}`).join(", ");
-  await db.execute(`UPDATE payment_shifts SET previous_shift_id = NULL WHERE previous_shift_id IN (${placeholders})`, idList);
-  await db.execute(`DELETE FROM payment_shifts WHERE id IN (${placeholders})`, idList);
+  await db.execute(`UPDATE payment_shifts SET deleted_at = datetime('now') WHERE id IN (${placeholders})`, idList);
 }
 
 /** Which columns of the Pagamentos table are shown — `null` means every column (the default, and what a fresh install has). */
