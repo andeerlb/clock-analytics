@@ -31,10 +31,9 @@ import {
 } from "../lib/db";
 import {
   formatCountdown,
-  formatDateTime,
-  formatDayShort,
+  formatDateAbbrevYY,
+  formatDateTimeAbbrevYY,
   parseSqliteDateTime,
-  resolveReimportConfigLabel,
   resolveReimportPeriod,
 } from "../lib/format";
 import type { PaymentTemplateListRow } from "../lib/types";
@@ -49,7 +48,6 @@ const RESULT_BADGE: Record<UrlCheckResult, { className: string; label: string; i
 const LOG_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 interface ConfigDraft {
-  label: string;
   dateMode: ReimportDateMode;
   start: string;
   end: string;
@@ -61,7 +59,6 @@ interface ConfigDraft {
 
 function draftFromConfig(c: ReimportConfig): ConfigDraft {
   return {
-    label: c.label,
     dateMode: c.dateMode,
     start: c.periodStart ?? "",
     end: c.periodEnd ?? "",
@@ -85,8 +82,8 @@ function resolveDraftPeriod(draft: ConfigDraft): { start: string | null; end: st
 
 function formatResolvedPreview(resolved: { start: string | null; end: string | null }): string {
   if (!resolved.start && !resolved.end) return "todo o relatório";
-  const start = resolved.start ? formatDayShort(resolved.start) : "início";
-  const end = resolved.end ? formatDayShort(resolved.end) : "fim";
+  const start = resolved.start ? formatDateAbbrevYY(resolved.start) : "início";
+  const end = resolved.end ? formatDateAbbrevYY(resolved.end) : "fim";
   return `${start} → ${end}`;
 }
 
@@ -97,7 +94,6 @@ function draftIntervalValid(interval: string): boolean {
 }
 
 const BLANK_NEW_CONFIG: ConfigDraft & { templateId: string } = {
-  label: "",
   templateId: "",
   dateMode: "fixed",
   start: "",
@@ -193,7 +189,7 @@ export default function RemoteUpdatesPage() {
     setSavingConfigId(c.id);
     try {
       await updateReimportConfig(c.id, {
-        label: draft.label,
+        label: c.label,
         dateMode: draft.dateMode,
         periodStart: draft.dateMode === "fixed" ? draft.start || null : null,
         periodEnd: draft.dateMode === "fixed" ? draft.end || null : null,
@@ -253,7 +249,7 @@ export default function RemoteUpdatesPage() {
     try {
       await addReimportConfig({
         sourceUrl: addingConfigForUrl,
-        label: newConfigDraft.label,
+        label: "",
         templateId: Number(newConfigDraft.templateId),
         dateMode: newConfigDraft.dateMode,
         periodStart: newConfigDraft.dateMode === "fixed" ? newConfigDraft.start || null : null,
@@ -502,15 +498,6 @@ export default function RemoteUpdatesPage() {
                           </button>
                         </div>
                         <div className="field-row" style={{ marginBottom: 0, alignItems: "flex-end" }}>
-                          <div className="field" style={{ flex: "1 1 160px", marginBottom: 0 }}>
-                            <label>Rótulo</label>
-                            <input
-                              type="text"
-                              value={draft.label}
-                              placeholder={resolveReimportConfigLabel(c)}
-                              onChange={(e) => patchConfigDraft(c, { label: e.target.value })}
-                            />
-                          </div>
                           <div className="field" style={{ flex: "0 1 150px", marginBottom: 0 }}>
                             <label>Template</label>
                             <p
@@ -635,14 +622,6 @@ export default function RemoteUpdatesPage() {
                     >
                       {addingConfigError && <div className="error-box" style={{ marginBottom: "0.6rem" }}>{addingConfigError}</div>}
                       <div className="field-row" style={{ marginBottom: 0, alignItems: "flex-end" }}>
-                        <div className="field" style={{ flex: "1 1 160px", marginBottom: 0 }}>
-                          <label>Rótulo (opcional)</label>
-                          <input
-                            type="text"
-                            value={newConfigDraft.label}
-                            onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, label: e.target.value }))}
-                          />
-                        </div>
                         <div className="field" style={{ flex: "0 1 170px", marginBottom: 0 }}>
                           <label>Template</label>
                           <select
@@ -792,6 +771,8 @@ export default function RemoteUpdatesPage() {
                     <th style={{ whiteSpace: "nowrap" }}>Quando</th>
                     <th style={{ maxWidth: 260 }}>Arquivo</th>
                     <th style={{ whiteSpace: "nowrap" }}>Resultado</th>
+                    <th>Template</th>
+                    <th>Período</th>
                     <th>Detalhes</th>
                   </tr>
                 </thead>
@@ -799,9 +780,18 @@ export default function RemoteUpdatesPage() {
                   {logEntries.map((entry) => {
                     const badge = RESULT_BADGE[entry.result];
                     const BadgeIcon = badge.icon;
+                    // A check is per-URL, but each URL can have several
+                    // reimport configs (see the "Arquivos rastreados" card
+                    // above) — every one of them shares this same check, so
+                    // this row lists all of their templates/períodos
+                    // side-by-side (paired by position) rather than picking
+                    // just one. Read against the CURRENT configs, not a
+                    // historical snapshot — a config edited/removed since
+                    // this check ran shows as it is now.
+                    const configsForEntry = reimportConfigs.filter((c) => c.sourceUrl === entry.sourceUrl);
                     return (
                       <tr key={entry.id}>
-                        <td style={{ whiteSpace: "nowrap" }}>{formatDateTime(entry.checkedAt)}</td>
+                        <td style={{ whiteSpace: "nowrap" }}>{formatDateTimeAbbrevYY(entry.checkedAt, true)}</td>
                         <td
                           style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                           title={entry.fileName}
@@ -813,6 +803,16 @@ export default function RemoteUpdatesPage() {
                             <BadgeIcon size={13} />
                             {badge.label}
                           </span>
+                        </td>
+                        <td className="muted" style={{ fontSize: "0.8rem" }}>
+                          {configsForEntry.length > 0
+                            ? configsForEntry.map((c) => c.templateName ?? "Template removido").join(", ")
+                            : "—"}
+                        </td>
+                        <td className="muted" style={{ fontSize: "0.8rem", whiteSpace: "nowrap" }}>
+                          {configsForEntry.length > 0
+                            ? configsForEntry.map((c) => formatResolvedPreview(resolveReimportPeriod(c))).join(", ")
+                            : "—"}
                         </td>
                         <td className="muted" style={{ fontSize: "0.8rem" }}>
                           {entry.message ?? "—"}

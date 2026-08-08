@@ -53,16 +53,6 @@ export function formatDate(isoDate: string): string {
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "long", timeZone: "UTC" }).format(date);
 }
 
-/** "2026-07-01" -> "01 de jul." — compact form for dense per-day tables. */
-export function formatDayShort(isoDate: string): string {
-  const date = new Date(`${isoDate}T00:00:00Z`);
-  return new Intl.DateTimeFormat("pt-BR", {
-    day: "2-digit",
-    month: "short",
-    timeZone: "UTC",
-  }).format(date);
-}
-
 /** "2026-07-01" -> "01/07/2026" */
 export function formatDateSlash(isoDate: string): string {
   const [y, m, d] = isoDate.split("-");
@@ -93,15 +83,23 @@ export function formatDateAbbrevYY(isoDate: string): string {
   return `${d}/${month.charAt(0).toUpperCase()}${month.slice(1)}/${y.slice(2)}`;
 }
 
-/** SQLite `datetime('now')` output ("2026-08-03 20:55:52", UTC) -> "03/Ago/26 17:55" (local time) — same compact date as `formatDateAbbrevYY`, plus the time `formatDateTime`'s long form also carries. */
-export function formatDateTimeAbbrevYY(sqliteDatetime: string): string {
+/**
+ * SQLite `datetime('now')` output ("2026-08-03 20:55:52", UTC) -> "03/Ago/26
+ * 17:55" (local time) — same compact date as `formatDateAbbrevYY`, plus the
+ * time `formatDateTime`'s long form also carries. Pass `withSeconds` for
+ * "03/Ago/26 17:55:52" — the Verificação automática log, where the interval
+ * between checks can be under a minute, so the seconds are the only thing
+ * that tells two entries apart.
+ */
+export function formatDateTimeAbbrevYY(sqliteDatetime: string, withSeconds = false): string {
   const date = parseSqliteDateTime(sqliteDatetime);
   const month = MONTH_ABBR[date.getMonth()];
   const d = String(date.getDate()).padStart(2, "0");
   const y = String(date.getFullYear()).slice(2);
   const hh = String(date.getHours()).padStart(2, "0");
   const mm = String(date.getMinutes()).padStart(2, "0");
-  return `${d}/${month.charAt(0).toUpperCase()}${month.slice(1)}/${y} ${hh}:${mm}`;
+  const time = withSeconds ? `${hh}:${mm}:${String(date.getSeconds()).padStart(2, "0")}` : `${hh}:${mm}`;
+  return `${d}/${month.charAt(0).toUpperCase()}${month.slice(1)}/${y} ${time}`;
 }
 
 /**

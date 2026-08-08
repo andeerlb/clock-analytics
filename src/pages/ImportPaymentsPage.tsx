@@ -32,6 +32,7 @@ import {
 } from "../lib/api";
 import {
   addEmployeeAlias,
+  DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES,
   findDuplicatePaymentShifts,
   findEmployeeByAttempts,
   getPaymentTemplate,
@@ -56,6 +57,7 @@ import {
 } from "../lib/format";
 import {
   PAYMENT_SHIFT_STATUS_LABELS,
+  type IdentifierAttempt,
   type ImportFileRow,
   type ImportStatus,
   type PaymentFileKind,
@@ -258,7 +260,8 @@ export default function ImportPaymentsPage() {
   // themselves (see `removePath`) — otherwise the URL input would stay
   // stuck disabled with nothing left to reimport.
   const [isAutoReimport, setIsAutoReimport] = useState(false);
-  const { dismissRemoteUpdate, trackUrl, trackedFiles, getReimportFlag } = useRemoteFileUpdates();
+  const { dismissRemoteUpdate, trackUrl, trackedFiles, reimportConfigs, addReimportConfig, getReimportFlag } =
+    useRemoteFileUpdates();
 
   const [fileResults, setFileResults] = useState<PaymentFileResult[]>(restored?.fileResults ?? []);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(restored?.selectedRows ?? new Set());
@@ -871,6 +874,84 @@ export default function ImportPaymentsPage() {
   }
 
   /**
+   * Runs once, only on a mount restored from "Cadastrar colaborador" (see
+   * `PaymentImportNavState`) — a colaborador registered there gets a fresh
+   * `employees` row with exactly the raw name this preview already has on
+   * the row (`prefillName`), but the preview itself was captured BEFORE
+   * that row existed, so it still shows "não encontrado" unless it's
+   * explicitly re-checked against the database on the way back. Matches
+   * purely by name (like "Vincular colaborador"'s alias match), not the
+   * template's own `identifierPriority` — there's no raw cpf/matrícula left
+   * on a preview row to replay through it, only `nameRaw`.
+   */
+  async function reresolveNotFoundRows(currentFileResults: PaymentFileResult[]) {
+    const allRows = currentFileResults.flatMap((r) => r.rows);
+    const notFound = allRows.filter(
+      (r) => r.category === "not-found" && r.resolvedClientId !== null && r.resolvedCompanyId !== null,
+    );
+    if (notFound.length === 0) return;
+
+    const seenInBatch = new Set<string>();
+    for (const r of allRows) {
+      if (r.employee) seenInBatch.add(shiftDedupKey(r.employee.id, r));
+    }
+
+    const nameAttempt: IdentifierAttempt[] = [{ fields: ["nome"], caseInsensitive: true }];
+    const dbCheckTargets: PaymentPreviewRow[] = [];
+    for (const r of notFound) {
+      const employee = await findEmployeeByAttempts(r.resolvedClientId!, r.resolvedCompanyId!, nameAttempt, {
+        cpf: null,
+        matricula: null,
+        nome: r.nameRaw,
+      });
+      if (!employee) continue;
+      r.employee = employee;
+      const key = shiftDedupKey(employee.id, r);
+      if (seenInBatch.has(key)) {
+        r.category = "duplicate-in-file";
+      } else {
+        seenInBatch.add(key);
+        r.category = "valid";
+        dbCheckTargets.push(r);
+      }
+    }
+    if (dbCheckTargets.length === 0) return;
+
+    const dupMatches = await findDuplicatePaymentShifts(
+      dbCheckTargets.map((r) => ({
+        employeeId: r.employee!.id,
+        workDate: r.workDate!,
+        local: r.local,
+        role: r.role,
+        scheduleStartMinutes: r.scheduleStartMinutes,
+        scheduleEndMinutes: r.scheduleEndMinutes,
+      })),
+    );
+    dupMatches.forEach((match, i) => {
+      dbCheckTargets[i].isDuplicate = true;
+      dbCheckTargets[i].category = "duplicate";
+      dbCheckTargets[i].matchedShiftId = match.shiftId;
+      dbCheckTargets[i].matchedEditedManually = match.editedManually;
+    });
+
+    setSelectedRows((prev) => {
+      const next = new Set(prev);
+      allRows.forEach((r, i) => {
+        if (dbCheckTargets.includes(r) && r.category === "valid") next.add(i);
+      });
+      return next;
+    });
+    setFileResults([...currentFileResults]);
+  }
+
+  useEffect(() => {
+    if (restored?.fileResults?.length) reresolveNotFoundRows(restored.fileResults);
+    // Only on this exact mount, from a "Cadastrar colaborador" restore —
+    // `fileResults`/`restored` deliberately excluded, see the comment above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
    * "Cadastrar colaborador" on a "colaborador não encontrado" row: this
    * preview took real processing to build (file reads, DB lookups), so
    * instead of losing it, it's attached to this page's own history entry
@@ -978,19 +1059,44 @@ export default function ImportPaymentsPage() {
       // config, from what this save just used — only if "Rastrear
       // atualizações automaticamente" is checked; tracking is never
       // created as a side effect on its own. A URL that's ALREADY tracked
-      // is left alone here: its reimport configs (there may be several)
-      // are only ever added/edited explicitly on the Verificação
-      // automática page, never implicitly overwritten by an ad-hoc manual
-      // save — there'd be no unambiguous way to pick which of several
-      // configs a plain save should update.
+      // is left alone UNLESS this save's own template+período combination
+      // doesn't match any of its existing reimport configs — in that case
+      // this save adds itself as a new config alongside the others (still
+      // never editing/overwriting one that's already there, and never
+      // adding a duplicate of one that already matches).
       if (trackAutoUpdates) {
         const savedUrls = new Set(
           fileResults.map((r) => urlSourceByPath.get(r.path)?.url).filter((u): u is string => Boolean(u)),
         );
+        const resolvedPeriodStart = periodStart || null;
+        const resolvedPeriodEnd = periodEnd || null;
         for (const url of savedUrls) {
           const alreadyTracked = trackedFiles.some((t) => t.sourceUrl === url);
           if (!alreadyTracked) {
-            await trackUrl(url, selectedTemplate.id, periodStart || null, periodEnd || null, effectiveKeepManualEdits);
+            await trackUrl(url, selectedTemplate.id, resolvedPeriodStart, resolvedPeriodEnd, effectiveKeepManualEdits);
+            continue;
+          }
+          const matchesExistingConfig = reimportConfigs.some(
+            (c) =>
+              c.sourceUrl === url &&
+              c.templateId === selectedTemplate.id &&
+              c.dateMode === "fixed" &&
+              c.periodStart === resolvedPeriodStart &&
+              c.periodEnd === resolvedPeriodEnd,
+          );
+          if (!matchesExistingConfig) {
+            await addReimportConfig({
+              sourceUrl: url,
+              label: "",
+              templateId: selectedTemplate.id,
+              dateMode: "fixed",
+              periodStart: resolvedPeriodStart,
+              periodEnd: resolvedPeriodEnd,
+              startOffsetDays: null,
+              endOffsetDays: null,
+              checkIntervalMinutes: DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES,
+              keepManualEdits: effectiveKeepManualEdits,
+            });
           }
         }
       }
