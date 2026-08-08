@@ -19,6 +19,8 @@ import LibraryPage from "./pages/LibraryPage";
 import EmployeeDetailPage from "./pages/EmployeeDetailPage";
 import EmployeeFormPage from "./pages/EmployeeFormPage";
 import EmployeesPage from "./pages/EmployeesPage";
+import PaymentExportTemplateEditorPage from "./pages/PaymentExportTemplateEditorPage";
+import PaymentExportTemplatesPage from "./pages/PaymentExportTemplatesPage";
 import PaymentsPage from "./pages/PaymentsPage";
 import PaymentTemplatesPage from "./pages/PaymentTemplatesPage";
 import RemoteUpdatesPage from "./pages/RemoteUpdatesPage";
@@ -73,6 +75,9 @@ function App() {
                 <Route path="/import/employees/templates" element={<EmployeeTemplatesPage />} />
                 <Route path="/employee/:importId" element={<EmployeeDetailPage />} />
                 <Route path="/payments" element={<PaymentsPage />} />
+                <Route path="/payments/export-templates" element={<PaymentExportTemplatesPage />} />
+                <Route path="/payments/export-templates/new" element={<PaymentExportTemplateEditorPage />} />
+                <Route path="/payments/export-templates/:id" element={<PaymentExportTemplateEditorPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Routes>
             </main>

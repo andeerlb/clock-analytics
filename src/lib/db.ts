@@ -16,6 +16,10 @@ import type {
   NightShiftRule,
   PagedResult,
   ParsedTimesheet,
+  PaymentExportTemplateConfig,
+  PaymentExportTemplateInput,
+  PaymentExportTemplateListRow,
+  PaymentExportTemplateRow,
   PaymentFileKind,
   PaymentTargetField,
   PaymentTemplateFieldMapping,
@@ -1854,6 +1858,48 @@ export async function deletePaymentTemplate(id: number): Promise<void> {
   await db.execute("DELETE FROM payment_templates WHERE id = $1", [id]);
 }
 
+export async function listPaymentExportTemplates(): Promise<PaymentExportTemplateListRow[]> {
+  const db = await getDb();
+  return db.select<PaymentExportTemplateListRow[]>(
+    "SELECT id, name, updated_at AS updatedAt FROM payment_export_templates ORDER BY updated_at DESC",
+  );
+}
+
+export async function getPaymentExportTemplate(id: number): Promise<PaymentExportTemplateRow> {
+  const db = await getDb();
+  const rows = await db.select<
+    (Omit<PaymentExportTemplateRow, "config"> & { configJson: string })[]
+  >(
+    "SELECT id, name, config_json AS configJson, created_at AS createdAt, updated_at AS updatedAt FROM payment_export_templates WHERE id = $1",
+    [id],
+  );
+  if (rows.length === 0) throw new Error("Template de exportação não encontrado.");
+  const { configJson, ...rest } = rows[0];
+  return { ...rest, config: JSON.parse(configJson) as PaymentExportTemplateConfig };
+}
+
+export async function createPaymentExportTemplate(input: PaymentExportTemplateInput): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute("INSERT INTO payment_export_templates (name, config_json) VALUES ($1, $2)", [
+    input.name,
+    JSON.stringify(input.config),
+  ]);
+  return result.lastInsertId as number;
+}
+
+export async function updatePaymentExportTemplate(id: number, input: PaymentExportTemplateInput): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE payment_export_templates SET name = $1, config_json = $2, updated_at = datetime('now') WHERE id = $3",
+    [input.name, JSON.stringify(input.config), id],
+  );
+}
+
+export async function deletePaymentExportTemplate(id: number): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM payment_export_templates WHERE id = $1", [id]);
+}
+
 export async function listEmployeeTemplates(): Promise<EmployeeTemplateListRow[]> {
   const db = await getDb();
   const rows = await db.select<(Omit<EmployeeTemplateListRow, "acceptedFileKinds"> & { acceptedFileKindsJson: string | null })[]>(`
@@ -2584,6 +2630,10 @@ export async function listPaymentShiftSummaries(
 export interface PaymentShiftReportRow {
   employeeName: string;
   companyId: number;
+  /** companyName/clientId/clientName: added for the Excel export template's groupBy/column bindings — the PDF report only ever used companyId (for the per-shift value-rule lookup). */
+  companyName: string;
+  clientId: number;
+  clientName: string;
   workDate: string;
   local: string;
   role: string;
@@ -2613,7 +2663,8 @@ export async function listPaymentShiftsForReport(
   const conditions = buildPaymentShiftRowConditions(query, params);
 
   return db.select<PaymentShiftReportRow[]>(
-    `SELECT e.name AS employeeName, c.id AS companyId,
+    `SELECT e.name AS employeeName, c.id AS companyId, c.name AS companyName,
+            cl.id AS clientId, cl.name AS clientName,
             ps.work_date AS workDate, ps.local, ps.role,
             ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
             ps.status, ps.amount, ${shiftPeriodSelectSql()} AS shiftPeriod

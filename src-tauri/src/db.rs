@@ -304,5 +304,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0050_template_accepted_file_kinds.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 51,
+            description: "add payment_export_templates — user-designed layouts (columns, colors, grouping, subtotal rows) for exporting payment shifts to a styled .xlsx",
+            sql: include_str!("../migrations/0051_payment_export_templates.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

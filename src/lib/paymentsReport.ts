@@ -2,17 +2,10 @@ import { save } from "@tauri-apps/plugin-dialog";
 import jsPDF from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import { writeBinaryFile } from "./api";
-import { getCompany, listPaymentShiftsForReport, type ListPaymentShiftSummariesQuery, type PaymentShiftReportRow } from "./db";
-import {
-  formatCurrencyBRL,
-  formatDateAbbrev,
-  formatMinutesAsTime,
-  formatTimestampForFileName,
-  resolvePaymentValue,
-  sanitizeFileName,
-  shiftDurationMinutes,
-} from "./format";
-import type { PaymentShiftStatus, PaymentValueRule } from "./types";
+import { listPaymentShiftsForReport, type ListPaymentShiftSummariesQuery } from "./db";
+import { formatCurrencyBRL, formatDateAbbrev, formatMinutesAsTime, formatTimestampForFileName, sanitizeFileName, shiftDurationMinutes } from "./format";
+import { buildShiftValueResolver } from "./paymentShiftValue";
+import type { PaymentShiftStatus } from "./types";
 
 const STATUS_LABELS: Record<PaymentShiftStatus, string> = { pendente: "Pendente", erro: "Erro", pago: "Pago" };
 const SHIFT_PERIOD_LABELS: Record<"diurno" | "noturno", string> = { diurno: "Diurno", noturno: "Noturno" };
@@ -63,32 +56,7 @@ export async function generatePaymentsReportPdf(
     return { rowCount: 0, path: null, title };
   }
 
-  // A `pago` row already carries its own frozen `amount`; every other
-  // status needs a live estimate from its own company's rules (same
-  // fallback `PaymentsPage`'s `shiftValueFor` uses) — batched per distinct
-  // company instead of once per row, since a report can span several at
-  // once.
-  const companyIds = Array.from(new Set(rows.map((r) => r.companyId)));
-  const valueRulesByCompany = new Map<number, PaymentValueRule[]>();
-  await Promise.all(
-    companyIds.map(async (id) => {
-      const company = await getCompany(id);
-      valueRulesByCompany.set(id, company.valueRules);
-    }),
-  );
-
-  function shiftValue(r: PaymentShiftReportRow): number | null {
-    if (r.amount !== null) return r.amount;
-    if (r.scheduleStartMinutes === null || r.scheduleEndMinutes === null) return null;
-    const duration = shiftDurationMinutes(r.scheduleStartMinutes, r.scheduleEndMinutes);
-    return resolvePaymentValue(valueRulesByCompany.get(r.companyId) ?? [], duration, {
-      workDate: r.workDate,
-      local: r.local,
-      role: r.role,
-      scheduleStartMinutes: r.scheduleStartMinutes,
-      scheduleEndMinutes: r.scheduleEndMinutes,
-    });
-  }
+  const shiftValue = await buildShiftValueResolver(rows);
 
   let totalMinutes = 0;
   let totalValue = 0;

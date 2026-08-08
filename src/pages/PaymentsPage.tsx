@@ -7,6 +7,7 @@ import {
   Clock3,
   Eye,
   FileDown,
+  FileSpreadsheet,
   FolderOpen,
   History,
   Info,
@@ -20,6 +21,7 @@ import {
   Users,
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import AnchoredPopover from "../components/AnchoredPopover";
 import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
@@ -40,6 +42,7 @@ import {
   getPaymentVisibleColumns,
   listClients,
   listCompanies,
+  listPaymentExportTemplates,
   listPaymentShiftSummaries,
   listPaymentShiftsFlat,
   listPaymentShiftsForGroup,
@@ -65,8 +68,15 @@ import {
   resolvePaymentValue,
   shiftDurationMinutes,
 } from "../lib/format";
+import { generatePaymentsExportXlsx, type PaymentExportResult } from "../lib/paymentExport";
 import { generatePaymentsReportPdf, type PaymentsReportResult } from "../lib/paymentsReport";
-import type { PaymentShiftRow, PaymentShiftStatus, PaymentShiftSummaryRow, ShiftPeriod } from "../lib/types";
+import type {
+  PaymentExportTemplateListRow,
+  PaymentShiftRow,
+  PaymentShiftStatus,
+  PaymentShiftSummaryRow,
+  ShiftPeriod,
+} from "../lib/types";
 
 const STATUS_OPTIONS: MultiSelectOption<PaymentShiftStatus>[] = [
   { id: "pendente", label: "Pendente" },
@@ -615,6 +625,7 @@ function ShiftRow({
 }
 
 export default function PaymentsPage() {
+  const navigate = useNavigate();
   const {
     search,
     setSearch,
@@ -652,6 +663,13 @@ export default function PaymentsPage() {
   const [generatedReport, setGeneratedReport] = useState<PaymentsReportResult | null>(null);
   const [viewerPath, setViewerPath] = useState<string | null>(null);
 
+  const [exportTemplates, setExportTemplates] = useState<PaymentExportTemplateListRow[]>([]);
+  const [selectedExportTemplateId, setSelectedExportTemplateId] = useState("");
+  const [generatingExport, setGeneratingExport] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [revealingExport, setRevealingExport] = useState(false);
+  const [generatedExport, setGeneratedExport] = useState<PaymentExportResult | null>(null);
+
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(DEFAULT_VISIBLE_COLUMN_IDS));
 
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
@@ -679,6 +697,10 @@ export default function PaymentsPage() {
     getPaymentVisibleColumns().then((cols) => {
       if (cols) setVisibleColumns(new Set(cols));
     });
+  }, []);
+
+  useEffect(() => {
+    listPaymentExportTemplates().then(setExportTemplates);
   }, []);
 
   function ensureCompaniesLoaded(ids: number[]) {
@@ -940,6 +962,38 @@ export default function PaymentsPage() {
     }
   }
 
+  /** Same shape as `handleGeneratePdf`, but a template has to be chosen first — see "Exportar Excel" below. */
+  async function handleGenerateExport() {
+    if (!selectedExportTemplateId) return;
+    setExportError(null);
+    setGeneratedExport(null);
+    setGeneratingExport(true);
+    try {
+      const result = await generatePaymentsExportXlsx(Number(selectedExportTemplateId), baseQuery());
+      if (result.rowCount === 0) {
+        setExportError("Nenhum turno para os filtros selecionados.");
+      } else if (result.path) {
+        setGeneratedExport(result);
+      }
+    } catch (e) {
+      setExportError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setGeneratingExport(false);
+    }
+  }
+
+  async function handleRevealExport() {
+    if (!generatedExport?.path) return;
+    setRevealingExport(true);
+    try {
+      await revealInFileManager(generatedExport.path);
+    } catch (e) {
+      setExportError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setRevealingExport(false);
+    }
+  }
+
   const hasFilters = Boolean(
     search.trim() ||
       selectedCompanyIds.size > 0 ||
@@ -1081,17 +1135,78 @@ export default function PaymentsPage() {
         </div>
 
         <div className="field-row" style={{ marginTop: "1rem", marginBottom: 0, alignItems: "center" }}>
-          <button
-            type="button"
-            style={{ marginLeft: "auto" }}
-            onClick={handleGeneratePdf}
-            disabled={generatingPdf}
-            title="Considera os filtros acima"
-          >
-            <FileDown size={15} style={{ marginRight: "0.4rem" }} />
-            {generatingPdf ? "Gerando..." : "Gerar PDF"}
-          </button>
+          <div style={{ marginLeft: "auto", display: "flex", gap: "0.6rem", alignItems: "center" }}>
+            {exportTemplates.length > 0 && (
+              <select
+                value={selectedExportTemplateId}
+                onChange={(e) => setSelectedExportTemplateId(e.target.value)}
+                title="Template de exportação Excel"
+              >
+                <option value="">Selecione um template...</option>
+                {exportTemplates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            <button
+              type="button"
+              className="ghost"
+              style={{ padding: "0.3rem" }}
+              onClick={() => navigate("/payments/export-templates")}
+              aria-label="Gerenciar templates de exportação"
+              title="Gerenciar templates de exportação — criar, editar ou excluir"
+            >
+              <Settings2 size={15} />
+            </button>
+            {exportTemplates.length > 0 && (
+              <button
+                type="button"
+                className="secondary"
+                onClick={handleGenerateExport}
+                disabled={generatingExport || !selectedExportTemplateId}
+                title="Considera os filtros acima"
+              >
+                <FileSpreadsheet size={15} style={{ marginRight: "0.4rem" }} />
+                {generatingExport ? "Exportando..." : "Exportar Excel"}
+              </button>
+            )}
+            <button type="button" onClick={handleGeneratePdf} disabled={generatingPdf} title="Considera os filtros acima">
+              <FileDown size={15} style={{ marginRight: "0.4rem" }} />
+              {generatingPdf ? "Gerando..." : "Gerar PDF"}
+            </button>
+          </div>
         </div>
+
+        {exportError && (
+          <div className="error-box" style={{ marginTop: "1rem", marginBottom: 0 }}>
+            {exportError}
+          </div>
+        )}
+
+        {generatedExport && generatedExport.path && (
+          <div
+            className="success-box"
+            style={{
+              marginTop: "1rem",
+              marginBottom: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "1rem",
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <CheckCircle2 size={16} />
+              Excel gerado com sucesso: {generatedExport.title} ({generatedExport.rowCount} turno(s))
+            </span>
+            <button type="button" className="outline" onClick={handleRevealExport} disabled={revealingExport}>
+              <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
+              Abrir no explorador
+            </button>
+          </div>
+        )}
 
         {generatedReport && generatedReport.path && (
           <div

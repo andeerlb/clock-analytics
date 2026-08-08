@@ -545,6 +545,96 @@ export interface PaymentShiftSummaryRow {
   pago: number;
 }
 
+/**
+ * One payment-shift field a Excel export template's cell can bind to via a
+ * `{{field}}` token — see `PaymentExportTemplateConfig`. Deliberately a
+ * small, fixed vocabulary (unlike `PaymentTargetField`'s import-mapping
+ * side): every one of these is always present on every shift regardless of
+ * which import template produced it. `extraData` is NOT included here on
+ * purpose — its keys are raw source-column letters from whichever import
+ * template a shift came through, not a stable field name, so binding to one
+ * would silently break for shifts imported through a different template.
+ */
+export type PaymentExportBindableField =
+  | "companyName"
+  | "clientName"
+  | "local"
+  | "workDate"
+  | "role"
+  | "horario"
+  | "shiftPeriod"
+  | "valor"
+  | "status"
+  | "employeeName";
+
+export const PAYMENT_EXPORT_BINDABLE_FIELD_LABELS: Record<PaymentExportBindableField, string> = {
+  companyName: "Loja/Empresa",
+  clientName: "Cliente",
+  local: "Local",
+  workDate: "Data",
+  role: "Função",
+  horario: "Horário",
+  shiftPeriod: "Diurno/Noturno",
+  valor: "Valor",
+  status: "Status",
+  employeeName: "Colaborador",
+};
+
+/**
+ * A saved, reusable layout for exporting payment shifts to a real, styled
+ * `.xlsx` — see `src/lib/paymentExport.ts`. The grid itself (cell text,
+ * colors, merges, column widths) is built directly in the jspreadsheet-ce
+ * editor and round-tripped opaquely via its own `getConfig()`/`worksheets`
+ * shape; this type only adds the "row role" markers the export engine needs
+ * on top of that grid, since jspreadsheet-ce has no native concept of a
+ * repeating/grouped report.
+ */
+export interface PaymentExportTemplateConfig {
+  /** jspreadsheet-ce's own worksheet config (`data`/`style`/`mergeCells`/`columns`/...) — opaque to the rest of the app, passed straight into `jspreadsheet(el, { worksheets: [grid] })` to reload it. */
+  grid: Record<string, unknown>;
+  /** 0-based row index within `grid.data` that repeats once per payment-shift record within a group. Its cells may contain `{{field}}` tokens (see `PaymentExportBindableField`). Rows strictly above this are static header/title, written once, verbatim. */
+  detailRowIndex: number;
+  /** In priority order; a new group starts whenever any of these differ between two consecutive (sorted) shifts. Empty means no grouping — every shift in one group. */
+  groupBy: PaymentExportBindableField[];
+  /** An optional blank row placed between groups, reusing one templated row's style. */
+  separator: {
+    enabled: boolean;
+    /** Row index (within `grid.data`) whose style is reused for the separator. */
+    rowIndex: number;
+  } | null;
+  /** An optional subtotal row at the end of each group, summing one numeric column. The sum is a plain computed number written at export time — never a live Excel formula. */
+  subtotal: {
+    enabled: boolean;
+    /** Row index (within `grid.data`) whose style is reused for the subtotal row. */
+    rowIndex: number;
+    /** 0-based column index the label ("SOMA" by default) is written into. */
+    labelCellColumn: number;
+    labelText: string;
+    /** Only "valor" is summable today — kept as a union (not a bare literal) so a second summable field can be added later without reshaping this. */
+    sumField: "valor";
+    /** 0-based column index the computed sum is written into. */
+    sumCellColumn: number;
+  } | null;
+}
+
+/** One row per saved payment export template — the list view. */
+export interface PaymentExportTemplateListRow {
+  id: number;
+  name: string;
+  updatedAt: string;
+}
+
+/** Full shape of a payment export template, including its grid/grouping/subtotal config. */
+export interface PaymentExportTemplateRow extends PaymentExportTemplateListRow {
+  config: PaymentExportTemplateConfig;
+  createdAt: string;
+}
+
+export interface PaymentExportTemplateInput {
+  name: string;
+  config: PaymentExportTemplateConfig;
+}
+
 /** An existing import for the same employee+company whose period overlaps a freshly parsed sheet. */
 export interface ConflictInfo {
   sheetIndex: number;
