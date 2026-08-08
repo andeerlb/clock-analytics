@@ -18,6 +18,7 @@ import {
   Settings2,
   ShieldCheck,
   Sun,
+  Trash2,
   Users,
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -37,6 +38,7 @@ import ShiftHistoryModal from "../components/ShiftHistoryModal";
 import { PAYMENTS_PAGE_SIZE_OPTIONS, usePaymentsFilters } from "../contexts/FiltersContext";
 import { revealInFileManager } from "../lib/api";
 import {
+  deletePaymentShift,
   editPaymentShift,
   getCompany,
   getPaymentVisibleColumns,
@@ -443,6 +445,7 @@ function ShiftRow({
   onCommitField,
   onPay,
   onRevert,
+  onDelete,
   onViewHistory,
   onViewExtra,
 }: {
@@ -455,6 +458,7 @@ function ShiftRow({
   onCommitField: (shift: PaymentShiftRow, groupRef: GroupRef, patch: ShiftFieldPatch) => void;
   onPay: (shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) => void;
   onRevert: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
+  onDelete: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
   onViewHistory: (shiftId: number, companyId: number) => void;
   onViewExtra: (data: Record<string, string>) => void;
 }) {
@@ -619,6 +623,15 @@ function ShiftRow({
             <History size={13} />
           </button>
         )}
+        <button
+          type="button"
+          className="ghost"
+          style={{ padding: "0.4rem" }}
+          onClick={() => onDelete(s, groupRef)}
+          title="Remover este turno e todo o seu histórico"
+        >
+          <Trash2 size={13} />
+        </button>
       </td>
     </tr>
   );
@@ -685,6 +698,9 @@ export default function PaymentsPage() {
   const [revertingShift, setRevertingShift] = useState<{ shift: PaymentShiftRow; groupRef: GroupRef } | null>(null);
   const [reverting, setReverting] = useState(false);
   const [revertError, setRevertError] = useState<string | null>(null);
+  const [deletingShift, setDeletingShift] = useState<{ shift: PaymentShiftRow; groupRef: GroupRef } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [inlineEditError, setInlineEditError] = useState<string | null>(null);
   const [viewingHistory, setViewingHistory] = useState<{ shiftId: number; companyId: number } | null>(null);
   const [viewingExtraData, setViewingExtraData] = useState<Record<string, string> | null>(null);
@@ -857,6 +873,21 @@ export default function PaymentsPage() {
       setRevertError(String(e instanceof Error ? e.message : e));
     } finally {
       setReverting(false);
+    }
+  }
+
+  async function handleConfirmDelete() {
+    if (!deletingShift) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deletePaymentShift(deletingShift.shift.id);
+      await afterMutation(deletingShift.groupRef);
+      setDeletingShift(null);
+    } catch (e) {
+      setDeleteError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -1365,6 +1396,7 @@ export default function PaymentsPage() {
                                             onCommitField={commitField}
                                             onPay={(shift, companyId, groupRef) => setPayingShift({ shift, companyId, groupRef })}
                                             onRevert={(shift, groupRef) => setRevertingShift({ shift, groupRef })}
+                                            onDelete={(shift, groupRef) => setDeletingShift({ shift, groupRef })}
                                             onViewHistory={(shiftId, companyId) => setViewingHistory({ shiftId, companyId })}
                                             onViewExtra={setViewingExtraData}
                                           />
@@ -1426,6 +1458,7 @@ export default function PaymentsPage() {
                       onCommitField={commitField}
                       onPay={(shift, companyId, groupRef) => setPayingShift({ shift, companyId, groupRef })}
                       onRevert={(shift, groupRef) => setRevertingShift({ shift, groupRef })}
+                      onDelete={(shift, groupRef) => setDeletingShift({ shift, groupRef })}
                       onViewHistory={(shiftId, companyId) => setViewingHistory({ shiftId, companyId })}
                       onViewExtra={setViewingExtraData}
                     />
@@ -1478,6 +1511,21 @@ export default function PaymentsPage() {
           onCancel={() => {
             setRevertingShift(null);
             setRevertError(null);
+          }}
+        />
+      )}
+
+      {deletingShift && (
+        <ConfirmModal
+          title="Remover turno"
+          message={`Isso apaga definitivamente o registro de ${formatDate(deletingShift.shift.workDate)} · ${deletingShift.shift.local} e todo o seu histórico (pagamentos, reversões e edições anteriores). Não pode ser desfeito.`}
+          confirmLabel={deleting ? "Removendo..." : "Remover"}
+          confirmDisabled={deleting}
+          error={deleteError}
+          onConfirm={handleConfirmDelete}
+          onCancel={() => {
+            setDeletingShift(null);
+            setDeleteError(null);
           }}
         />
       )}

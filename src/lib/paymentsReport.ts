@@ -49,14 +49,26 @@ export interface PaymentsReportResult {
 export async function generatePaymentsReportPdf(
   query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
 ): Promise<PaymentsReportResult> {
-  const rows = await listPaymentShiftsForReport(query);
+  const allRows = await listPaymentShiftsForReport(query);
   const title = reportTitle(query.statuses);
+
+  if (allRows.length === 0) {
+    return { rowCount: 0, path: null, title };
+  }
+
+  const shiftValue = await buildShiftValueResolver(allRows);
+
+  // A row with no value at all (still awaiting a schedule/value rule) or a
+  // literal zero isn't a payment — it has nothing to report, so it's left
+  // out of the PDF entirely rather than printed with a "—"/R$ 0,00 Valor.
+  const rows = allRows.filter((r) => {
+    const value = shiftValue(r);
+    return value !== null && value !== 0;
+  });
 
   if (rows.length === 0) {
     return { rowCount: 0, path: null, title };
   }
-
-  const shiftValue = await buildShiftValueResolver(rows);
 
   let totalMinutes = 0;
   let totalValue = 0;
@@ -64,8 +76,9 @@ export async function generatePaymentsReportPdf(
     const hasSchedule = r.scheduleStartMinutes !== null && r.scheduleEndMinutes !== null;
     const duration = hasSchedule ? shiftDurationMinutes(r.scheduleStartMinutes!, r.scheduleEndMinutes!) : null;
     if (duration !== null) totalMinutes += duration;
-    const value = shiftValue(r);
-    if (value !== null) totalValue += value;
+    // Guaranteed non-null/non-zero by the filter above.
+    const value = shiftValue(r)!;
+    totalValue += value;
 
     const horario = hasSchedule
       ? `${formatMinutesAsTime(r.scheduleStartMinutes!)} – ${formatMinutesAsTime(r.scheduleEndMinutes!)}${
@@ -79,7 +92,7 @@ export async function generatePaymentsReportPdf(
       r.role,
       duration !== null ? formatMinutesAsTime(duration) : "—",
       horario,
-      value !== null ? formatCurrencyBRL(value) : "—",
+      formatCurrencyBRL(value),
       r.employeeName,
       STATUS_LABELS[r.status],
     ];

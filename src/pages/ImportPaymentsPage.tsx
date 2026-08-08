@@ -8,7 +8,6 @@ import {
   FileText,
   FolderOpen,
   Link2,
-  ListChecks,
   PlusCircle,
   Search,
   Settings2,
@@ -1415,14 +1414,12 @@ export default function ImportPaymentsPage() {
               <div className="card table-card">
                 <div className="table-toolbar">
                   <div className="counts">
-                    <span>{shiftRows.length} registro(s) encontrado(s)</span>
                     <button
                       type="button"
                       className={`badge ok chip-filter${rowFilter === "selected" ? " active" : ""}`}
                       onClick={() => toggleRowFilter("selected")}
                       title="Linhas marcadas — vão ser importadas ao salvar. Clique para filtrar."
                     >
-                      <ListChecks size={13} />
                       {selectedRows.size} a importar
                     </button>
                     <button
@@ -1431,7 +1428,6 @@ export default function ImportPaymentsPage() {
                       onClick={() => toggleRowFilter("valid")}
                       title="Colaborador encontrado, sem turno igual já importado. Clique para filtrar."
                     >
-                      <CheckCircle2 size={13} />
                       {categoryCounts.valid} novo(s)
                     </button>
                     {duplicateCount > 0 && (
@@ -1441,7 +1437,6 @@ export default function ImportPaymentsPage() {
                         onClick={() => toggleRowFilter("duplicate")}
                         title="Todas as colunas batem com um turno já salvo. Clique para filtrar."
                       >
-                        <AlertTriangle size={13} />
                         {duplicateCount} já importado(s)
                       </button>
                     )}
@@ -1462,7 +1457,6 @@ export default function ImportPaymentsPage() {
                         onClick={() => toggleRowFilter("not-found")}
                         title="Clique para filtrar"
                       >
-                        <AlertTriangle size={13} />
                         {categoryCounts["not-found"]} colaborador não encontrado
                       </button>
                     )}
@@ -1473,7 +1467,6 @@ export default function ImportPaymentsPage() {
                         onClick={() => toggleRowFilter("unresolved-route")}
                         title="Clique para filtrar"
                       >
-                        <AlertTriangle size={13} />
                         {categoryCounts["unresolved-route"]} empresa/cliente não definido
                       </button>
                     )}
@@ -1494,7 +1487,6 @@ export default function ImportPaymentsPage() {
                         onClick={() => toggleRowFilter("error")}
                         title="Clique para filtrar"
                       >
-                        <AlertCircle size={13} />
                         {errorCount} erro(s)
                       </button>
                     )}

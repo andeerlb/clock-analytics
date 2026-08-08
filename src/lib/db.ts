@@ -2989,6 +2989,40 @@ export async function getPaymentShiftHistory(shiftId: number): Promise<PaymentSh
   return chain.reverse();
 }
 
+/**
+ * "Remover": deletes a shift AND its entire append-only history chain —
+ * every row reachable by walking `previous_shift_id` backward from
+ * `shiftId` (same chain `getPaymentShiftHistory` walks), not just the row
+ * itself. Works the same whether the row came from an import or from a
+ * manual edit/pagamento — both live in this same table (see
+ * `savePaymentShifts`/`markPaymentShiftPaid`'s own doc comments), there is
+ * no separate "manual" storage to also clean up. Nulls out any reference
+ * into the chain before deleting (mirroring `clearAllData`'s own ordering)
+ * so the self-referencing `previous_shift_id` FK can never block the
+ * deletes below.
+ */
+export async function deletePaymentShift(shiftId: number): Promise<void> {
+  const db = await getDb();
+
+  const ids = new Set<number>([shiftId]);
+  let currentId: number | null = shiftId;
+  while (currentId !== null) {
+    const rows: { previousShiftId: number | null }[] = await db.select(
+      "SELECT previous_shift_id AS previousShiftId FROM payment_shifts WHERE id = $1",
+      [currentId],
+    );
+    const previousId: number | null = rows[0]?.previousShiftId ?? null;
+    if (previousId === null || ids.has(previousId)) break;
+    ids.add(previousId);
+    currentId = previousId;
+  }
+
+  const idList = [...ids];
+  const placeholders = idList.map((_, i) => `$${i + 1}`).join(", ");
+  await db.execute(`UPDATE payment_shifts SET previous_shift_id = NULL WHERE previous_shift_id IN (${placeholders})`, idList);
+  await db.execute(`DELETE FROM payment_shifts WHERE id IN (${placeholders})`, idList);
+}
+
 /** Which columns of the Pagamentos table are shown — `null` means every column (the default, and what a fresh install has). */
 export async function getPaymentVisibleColumns(): Promise<string[] | null> {
   const db = await getDb();

@@ -517,13 +517,20 @@ tr:last-child td {
 }
 /* Small neutral count chip for table toolbars (e.g. "8 conflitos") —
    informational, not a status. */
+/* Border is transparent, not omitted — `.badge` siblings in the same
+   toolbar row (e.g. `.table-toolbar .counts`) have a real 1px border, and
+   box-sizing:border-box means a borderless chip renders ~2px smaller than
+   a bordered one even with identical padding. Matching the border (visible
+   or not) keeps every chip the same height when they wrap onto their own
+   line. */
 .count-chip {
   display: inline-flex;
   align-items: center;
   background: var(--surface-variant);
   color: var(--text-muted);
+  border: 1px solid transparent;
   border-radius: 0;
-  padding: 0.1rem 0.5rem;
+  padding: 0.15em 0.55em;
   font-size: 0.75rem;
 }
 .badge.duplicate {
@@ -997,15 +1004,18 @@ tr.row-incomplete {
 
 .table-toolbar {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
+  gap: 0.6rem;
   margin-bottom: 1rem;
 }
 
 .table-toolbar .counts {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.5rem;
   font-size: 0.85rem;
 }
 
