@@ -1,6 +1,6 @@
 import type ExcelJS from "exceljs";
-import { columnLetter, formatDateSlash, formatMinutesAsTime } from "./format";
-import { PAYMENT_SHIFT_STATUS_LABELS, type PaymentExportBindableField } from "./types";
+import { formatDateSlash, formatMinutesAsTime, shiftDurationMinutes } from "./format";
+import { PAYMENT_SHIFT_STATUS_LABELS, type PaymentExportBindableField, type TemplateGridData } from "./types";
 import type { PaymentShiftReportRow } from "./db";
 
 /**
@@ -24,11 +24,19 @@ export function isBindableField(field: string): field is PaymentExportBindableFi
     field === "workDate" ||
     field === "role" ||
     field === "horario" ||
+    field === "workedHours" ||
     field === "shiftPeriod" ||
     field === "valor" ||
     field === "status" ||
     field === "employeeName"
   );
+}
+
+/** A shift's worked duration in minutes, or `null` when it has no parsed schedule to compute one from — shared by `fieldDisplayValue`/`groupKeyValue`'s "workedHours" case. */
+function workedMinutes(row: PaymentShiftReportRow): number | null {
+  return row.scheduleStartMinutes !== null && row.scheduleEndMinutes !== null
+    ? shiftDurationMinutes(row.scheduleStartMinutes, row.scheduleEndMinutes)
+    : null;
 }
 
 /** A shift's displayable text for one bindable field — used when a token is mixed into other text in a cell (so the whole cell has to become one string), or for any field that isn't `valor` even in an exact-token cell. */
@@ -48,6 +56,10 @@ export function fieldDisplayValue(field: PaymentExportBindableField, row: Paymen
       return row.scheduleStartMinutes !== null && row.scheduleEndMinutes !== null
         ? `${formatMinutesAsTime(row.scheduleStartMinutes)} - ${formatMinutesAsTime(row.scheduleEndMinutes)}`
         : "";
+    case "workedHours": {
+      const minutes = workedMinutes(row);
+      return minutes !== null ? formatMinutesAsTime(minutes) : "";
+    }
     case "shiftPeriod":
       return row.shiftPeriod ? SHIFT_PERIOD_LABELS[row.shiftPeriod] : "";
     case "valor":
@@ -82,6 +94,11 @@ export function groupKeyValue(field: PaymentExportBindableField, row: PaymentShi
       return row.role;
     case "horario":
       return `${row.scheduleStartMinutes ?? -1}-${row.scheduleEndMinutes ?? -1}`;
+    case "workedHours":
+      // Zero-padded (unlike the other raw keys above) so lexical comparison
+      // sorts groups by ACTUAL duration — "60" would otherwise sort before
+      // "120" as plain strings.
+      return String(workedMinutes(row) ?? -1).padStart(4, "0");
     case "shiftPeriod":
       return row.shiftPeriod ?? "";
     case "valor":
@@ -109,102 +126,39 @@ export function renderTemplateCell(rawValue: string, row: PaymentShiftReportRow,
   return rawValue.replace(TOKEN_RE, (whole, field) => (isBindableField(field) ? fieldDisplayValue(field, row, amount) : whole));
 }
 
-export function parseCellName(name: string): { col: number; row: number } {
-  const m = name.match(/^([A-Z]+)(\d+)$/);
-  if (!m) throw new Error(`Célula inválida no template: ${name}`);
-  let col = 0;
-  for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
-  return { col: col - 1, row: Number(m[2]) - 1 };
+/** "#rrggbb" -> "FFRRGGBB" (ARGB, opaque) — the shape ExcelJS's `fgColor.argb` wants. */
+function hexToArgb(hex: string): string {
+  return "FF" + hex.replace("#", "").toUpperCase();
 }
 
-interface ParsedCellStyle {
-  bgColor?: string;
-  fontColor?: string;
-  bold?: boolean;
-  italic?: boolean;
-  align?: "left" | "center" | "right";
+/** Excel's column width unit is "characters of the default font", not pixels — the grid editor's own widths are pixels, so this is an approximate conversion (Excel's own rule of thumb: `(pixels - 5) / 7`), not a pixel-perfect match. */
+export function pxToExcelWidth(px: number): number {
+  if (!px || Number.isNaN(px)) return 12;
+  return Math.max(4, Math.round((px - 5) / 7));
 }
 
-/** `rgb(255, 255, 0)` / `#ffff00` -> `"FFFFFF00"` (ARGB, opaque) — the shape ExcelJS's `fgColor.argb` wants. */
-export function cssColorToArgb(css: string): string | undefined {
-  const rgb = css.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-  if (rgb) {
-    return "FF" + rgb.slice(1, 4).map((c) => Number(c).toString(16).padStart(2, "0").toUpperCase()).join("");
-  }
-  const hex = css.match(/^#([0-9a-fA-F]{6})$/);
-  return hex ? "FF" + hex[1].toUpperCase() : undefined;
-}
-
-/** jspreadsheet-ce stores a cell's style as a semicolon-separated CSS string (e.g. `"background-color: rgb(255,255,0); font-weight: bold;"`) — parsed once here into the handful of properties ExcelJS needs. */
-export function parseCellStyle(styleStr: string | undefined): ParsedCellStyle {
-  if (!styleStr) return {};
-  const result: ParsedCellStyle = {};
-  for (const decl of styleStr.split(";")) {
-    const [rawKey, ...rest] = decl.split(":");
-    const key = rawKey?.trim().toLowerCase();
-    const val = rest.join(":").trim();
-    if (!key || !val) continue;
-    if (key === "background-color") result.bgColor = cssColorToArgb(val);
-    else if (key === "color") result.fontColor = cssColorToArgb(val);
-    else if (key === "font-weight") result.bold = val === "bold" || Number(val) >= 700;
-    else if (key === "font-style") result.italic = val === "italic";
-    else if (key === "text-align" && (val === "left" || val === "center" || val === "right")) result.align = val;
-  }
-  return result;
-}
-
-export function applyStyleToCell(cell: ExcelJS.Cell, styleStr: string | undefined) {
-  const style = parseCellStyle(styleStr);
-  if (style.bgColor) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: style.bgColor } };
-  if (style.bold || style.italic || style.fontColor) {
-    cell.font = { bold: style.bold, italic: style.italic, color: style.fontColor ? { argb: style.fontColor } : undefined };
-  }
-  if (style.align) cell.alignment = { horizontal: style.align };
-}
-
-export interface TemplateGrid {
-  data: (string | number | boolean)[][];
-  style?: Record<string, string>;
-  mergeCells?: Record<string, [number, number, ...unknown[]]>;
-  columns?: { width?: number | string }[];
-}
-
-/** Excel's column width unit is "characters of the default font", not pixels — jspreadsheet-ce's own widths are pixels, so this is an approximate conversion (Excel's own rule of thumb: `(pixels - 5) / 7`), not a pixel-perfect match. */
-export function pxToExcelWidth(px: number | string | undefined): number {
-  const n = typeof px === "string" ? Number(px) : px;
-  if (!n || Number.isNaN(n)) return 12;
-  return Math.max(4, Math.round((n - 5) / 7));
-}
-
-/** Copies one template row (values + per-cell style + merges anchored on it) into the workbook at `destRowNumber` (1-based), optionally substituting each cell's text via `renderCell`. Used for the static header block (identity mapping, no substitution) and for every repeated detail/separator/subtotal row. */
+/** Copies one template row (values + per-cell background/text color/bold) into the workbook at `destRowNumber` (1-based), optionally substituting each cell's text via `renderCell`. Used for the static header block (identity mapping, no substitution) and for every repeated detail/separator/subtotal row. */
 export function writeTemplateRow(
   sheet: ExcelJS.Worksheet,
-  grid: TemplateGrid,
+  grid: TemplateGridData,
   templateRowIndex: number,
   destRowNumber: number,
-  colCount: number,
   renderCell?: (colIndex: number, rawValue: string) => string | number,
 ) {
-  const templateValues = grid.data[templateRowIndex] ?? [];
+  const templateRow = grid.rows[templateRowIndex] ?? [];
   const destRow = sheet.getRow(destRowNumber);
-  for (let c = 0; c < colCount; c++) {
-    const raw = String(templateValues[c] ?? "");
-    const value = renderCell ? renderCell(c, raw) : raw;
-    const cell = destRow.getCell(c + 1);
-    cell.value = value === "" ? null : value;
-    applyStyleToCell(cell, grid.style?.[`${columnLetter(c)}${templateRowIndex + 1}`]);
-  }
-  for (const [name, span] of Object.entries(grid.mergeCells ?? {})) {
-    const anchor = parseCellName(name);
-    if (anchor.row !== templateRowIndex) continue;
-    const colspan = span[0] ?? 1;
-    // Repeated (detail/separator/subtotal) rows are always exactly one
-    // physical row per record — a template row marked with one of those
-    // roles isn't expected to carry a vertical (rowspan>1) merge, only
-    // horizontal. Capped here rather than honored, so a stray rowspan on
-    // one of those roles can't silently swallow the next record's row.
-    if (colspan > 1) {
-      sheet.mergeCells(destRowNumber, anchor.col + 1, destRowNumber, anchor.col + colspan);
+  templateRow.forEach((templateCell, c) => {
+    const value = renderCell ? renderCell(c, templateCell.value) : templateCell.value;
+    const destCell = destRow.getCell(c + 1);
+    destCell.value = value === "" ? null : value;
+    if (templateCell.backgroundColor) {
+      destCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: hexToArgb(templateCell.backgroundColor) } };
     }
-  }
+    if (templateCell.bold || templateCell.fontColor) {
+      destCell.font = {
+        bold: templateCell.bold || undefined,
+        color: templateCell.fontColor ? { argb: hexToArgb(templateCell.fontColor) } : undefined,
+      };
+    }
+  });
 }

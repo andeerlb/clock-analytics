@@ -562,6 +562,7 @@ export type PaymentExportBindableField =
   | "workDate"
   | "role"
   | "horario"
+  | "workedHours"
   | "shiftPeriod"
   | "valor"
   | "status"
@@ -574,38 +575,56 @@ export const PAYMENT_EXPORT_BINDABLE_FIELD_LABELS: Record<PaymentExportBindableF
   workDate: "Data",
   role: "Função",
   horario: "Horário",
+  workedHours: "Horas trabalhadas",
   shiftPeriod: "Diurno/Noturno",
   valor: "Valor",
   status: "Status",
   employeeName: "Colaborador",
 };
 
+/** One cell in a `TemplateGridData` — deliberately minimal: text + background/text color + bold, nothing else (no formulas, no merges, no borders). */
+export interface TemplateGridCell {
+  value: string;
+  /** "#rrggbb", or `null` for no fill. */
+  backgroundColor: string | null;
+  /** "#rrggbb", or `null` for the sheet's default text color. */
+  fontColor: string | null;
+  bold: boolean;
+}
+
+/** The whole hand-built grid a `PaymentExportTemplateConfig` is designed on — see `src/components/TemplateGridEditor.tsx`. */
+export interface TemplateGridData {
+  /** `rows[r][c]` — every row has the same length (`columnWidths.length`). */
+  rows: TemplateGridCell[][];
+  /** Pixel width per column, same length as every row in `rows`. */
+  columnWidths: number[];
+}
+
 /**
  * A saved, reusable layout for exporting payment shifts to a real, styled
  * `.xlsx` — see `src/lib/paymentExport.ts`. The grid itself (cell text,
- * colors, merges, column widths) is built directly in the jspreadsheet-ce
- * editor and round-tripped opaquely via its own `getConfig()`/`worksheets`
- * shape; this type only adds the "row role" markers the export engine needs
- * on top of that grid, since jspreadsheet-ce has no native concept of a
- * repeating/grouped report.
+ * background color, column widths) is built directly in the
+ * `TemplateGridEditor`; this type adds the "row role" markers the export
+ * engine needs on top of that grid (which row row/column plays which part),
+ * since the grid itself has no built-in concept of a repeating/grouped
+ * report.
  */
 export interface PaymentExportTemplateConfig {
-  /** jspreadsheet-ce's own worksheet config (`data`/`style`/`mergeCells`/`columns`/...) — opaque to the rest of the app, passed straight into `jspreadsheet(el, { worksheets: [grid] })` to reload it. */
-  grid: Record<string, unknown>;
-  /** 0-based row index within `grid.data` that repeats once per payment-shift record within a group. Its cells may contain `{{field}}` tokens (see `PaymentExportBindableField`). Rows strictly above this are static header/title, written once, verbatim. */
+  grid: TemplateGridData;
+  /** 0-based row index within `grid.rows` that repeats once per payment-shift record within a group. Its cells may contain `{{field}}` tokens (see `PaymentExportBindableField`). Rows strictly above this are static header/title, written once, verbatim. */
   detailRowIndex: number;
   /** In priority order; a new group starts whenever any of these differ between two consecutive (sorted) shifts. Empty means no grouping — every shift in one group. */
   groupBy: PaymentExportBindableField[];
   /** An optional blank row placed between groups, reusing one templated row's style. */
   separator: {
     enabled: boolean;
-    /** Row index (within `grid.data`) whose style is reused for the separator. */
+    /** Row index (within `grid.rows`) whose style is reused for the separator. */
     rowIndex: number;
   } | null;
   /** An optional subtotal row at the end of each group, summing one numeric column. The sum is a plain computed number written at export time — never a live Excel formula. */
   subtotal: {
     enabled: boolean;
-    /** Row index (within `grid.data`) whose style is reused for the subtotal row. */
+    /** Row index (within `grid.rows`) whose style is reused for the subtotal row. */
     rowIndex: number;
     /** 0-based column index the label ("SOMA" by default) is written into. */
     labelCellColumn: number;

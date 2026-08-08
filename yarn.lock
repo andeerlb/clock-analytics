@@ -32,11 +32,6 @@
     lodash.isundefined "^3.0.1"
     lodash.uniq "^4.5.0"
 
-"@jspreadsheet/formula@^2.0.2":
-  version "2.0.2"
-  resolved "https://registry.npmjs.org/@jspreadsheet/formula/-/formula-2.0.2.tgz"
-  integrity sha512-PDQYf9REQA53I7tVYkvkeyQxrd5jcjUeHgItYnRpjN2QiIQwawSqBDtGGEVQTSboTG+JwgGCuhvOpj7FxeKwew==
-
 "@napi-rs/canvas-win32-x64-msvc@1.0.3":
   version "1.0.3"
   resolved "https://registry.npmjs.org/@napi-rs/canvas-win32-x64-msvc/-/canvas-win32-x64-msvc-1.0.3.tgz"
@@ -557,19 +552,6 @@ jspdf-autotable@^5.0.8:
     core-js "^3.6.0"
     dompurify "^3.3.1"
     html2canvas "^1.0.0-rc.5"
-
-jspreadsheet-ce@^5.0.4:
-  version "5.0.4"
-  resolved "https://registry.npmjs.org/jspreadsheet-ce/-/jspreadsheet-ce-5.0.4.tgz"
-  integrity sha512-ra1JI1n+tEGgRMzTzNkPZjG0HZz8W6bFGAiTiHl+eYarXdRmS5qDc/ua3l2ev7oZ6Og9kjfrXYHVLUWiVc308w==
-  dependencies:
-    "@jspreadsheet/formula" "^2.0.2"
-    jsuites "^5.12.0"
-
-jsuites@^5.12.0:
-  version "5.13.5"
-  resolved "https://registry.npmjs.org/jsuites/-/jsuites-5.13.5.tgz"
-  integrity sha512-cvkcpy/v5I3+IAcNPE4UP38PFCEfUQw9JI5NN61dlcXLwkD+2UTIOsRPvgMLeqI1eDWHL4AHfrbcE/+TFciUsw==
 
 jszip@^3.10.1:
   version "3.10.1"
