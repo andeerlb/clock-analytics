@@ -110,32 +110,26 @@ export default function PaymentExportTemplateEditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading]);
 
+  // Marking a row (or changing its color) only paints its role badge in the
+  // row-number gutter — see `rowBadges` below — it never touches the actual
+  // data cells' backgroundColor, so the user's own cell formatting in that
+  // row is left alone.
   function markSeparatorRow(row: number) {
     setSeparatorEnabled(true);
     setSeparatorRowIndex(row);
-    const existing = gridRef.current?.getRowBackgroundColor(row);
-    const color = existing ?? separatorColor;
-    setSeparatorColor(color);
-    gridRef.current?.setRowBackgroundColor(row, color);
   }
 
   function handleSeparatorColorChange(color: string) {
     setSeparatorColor(color);
-    if (separatorRowIndex !== null) gridRef.current?.setRowBackgroundColor(separatorRowIndex, color);
   }
 
   function markSubtotalRow(row: number) {
     setSubtotalEnabled(true);
     setSubtotalRowIndex(row);
-    const existing = gridRef.current?.getRowBackgroundColor(row);
-    const color = existing ?? subtotalColor;
-    setSubtotalColor(color);
-    gridRef.current?.setRowBackgroundColor(row, color);
   }
 
   function handleSubtotalColorChange(color: string) {
     setSubtotalColor(color);
-    if (subtotalRowIndex !== null) gridRef.current?.setRowBackgroundColor(subtotalRowIndex, color);
   }
 
   /** Right-click on a data cell. Formatting items (bold/italic/font/color) act on the whole current selection; structural items ("Inserir campo", agrupamento, SOMA shortcut, cor removal) always target exactly `row`/`col` — the cell actually clicked. */

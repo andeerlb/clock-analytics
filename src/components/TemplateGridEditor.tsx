@@ -616,6 +616,7 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
                 color: "var(--text-muted)",
                 padding: "0.25rem 0",
                 borderLeft: "1px solid var(--border)",
+                borderRight: c === colCount - 1 ? "1px solid var(--border)" : undefined,
               }}
             >
               {columnLetter(c)}
@@ -653,6 +654,7 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
                   alignItems: "center",
                   justifyContent: "center",
                   borderTop: "1px solid var(--border)",
+                  borderBottom: r === rowCount - 1 ? "1px solid var(--border)" : undefined,
                 }}
               >
                 {badge ? badge.label : r + 1}
@@ -697,6 +699,8 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
                     gridRow: `${r + 2} / span ${rowSpan}`,
                     borderTop: "1px solid var(--border)",
                     borderLeft: "1px solid var(--border)",
+                    borderRight: c + colSpan - 1 === colCount - 1 ? "1px solid var(--border)" : undefined,
+                    borderBottom: r + rowSpan - 1 === rowCount - 1 ? "1px solid var(--border)" : undefined,
                     outline: inRange ? "2px solid var(--accent)" : "none",
                     outlineOffset: -2,
                     background: cell.backgroundColor ?? "transparent",
