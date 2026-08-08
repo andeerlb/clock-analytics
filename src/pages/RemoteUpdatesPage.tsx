@@ -9,6 +9,7 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -121,6 +122,7 @@ export default function RemoteUpdatesPage() {
     checkingUrls,
     forceCheckUrl,
     forceCheckAll,
+    tickError,
   } = useRemoteFileUpdates();
 
   // Own loading flag for the global "Forçar verificação de todas" button —
@@ -156,6 +158,9 @@ export default function RemoteUpdatesPage() {
     () => new Map(trackedFiles.map((t) => [t.sourceUrl, t.lastCheckedAt])),
     [trackedFiles],
   );
+
+  /** Every tracked file whose most recent check failed — a top-of-page summary, so a failure isn't only visible to whoever scrolls down to that specific file's card. */
+  const erroredFiles = useMemo(() => trackedFiles.filter((t) => t.lastResult === "error"), [trackedFiles]);
 
   /** Same due-time math as the context's scheduler — mirrored here just for display. */
   function nextCheckAtFor(c: ReimportConfig): number | null {
@@ -313,6 +318,20 @@ export default function RemoteUpdatesPage() {
         ativada/desativada por conta. Aqui dá pra gerenciar tudo isso e ver o histórico completo.
       </p>
 
+      {tickError && (
+        <div className="error-box">
+          Falha ao verificar atualizações automaticamente: {tickError}
+        </div>
+      )}
+      {erroredFiles.length > 0 && (
+        <div className="error-box">
+          {erroredFiles.length === 1
+            ? `1 arquivo falhou na última verificação: ${erroredFiles[0].fileName}.`
+            : `${erroredFiles.length} arquivos falharam na última verificação: ${erroredFiles.map((f) => f.fileName).join(", ")}.`}{" "}
+          Veja os detalhes abaixo, em cada arquivo, ou no histórico.
+        </div>
+      )}
+
       <div className="card">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.6rem", flexWrap: "wrap" }}>
           <h3 style={{ margin: 0 }}>Arquivos rastreados</h3>
@@ -460,6 +479,16 @@ export default function RemoteUpdatesPage() {
                             type="button"
                             className="ghost"
                             style={{ marginLeft: "auto", padding: "0.15rem 0.5rem", fontSize: "0.75rem" }}
+                            onClick={() => navigate("/import/payments", { state: { autoReimportConfigId: c.id } })}
+                            title="Abre Importar Pagamentos com este arquivo e template já preenchidos e reprocessa agora, mesmo sem mudança detectada no servidor de origem"
+                          >
+                            <Upload size={12} style={{ marginRight: "0.3rem", verticalAlign: "-2px" }} />
+                            Reprocessar agora
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost"
+                            style={{ padding: "0.15rem 0.5rem", fontSize: "0.75rem" }}
                             onClick={() => forceCheckUrl(c.sourceUrl)}
                             disabled={checkingUrls.has(c.sourceUrl)}
                             title="Verifica este arquivo agora, ignorando o intervalo configurado"

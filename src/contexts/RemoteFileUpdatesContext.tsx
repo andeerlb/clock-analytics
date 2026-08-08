@@ -70,6 +70,23 @@ function isConfigDue(config: ReimportConfig, urlLastCheckedAt: string | null | u
   return now - parseSqliteDateTime(urlLastCheckedAt).getTime() >= effectiveMs;
 }
 
+/** Builds one config's `RemoteUpdateFlag` regardless of whether a remote change was actually detected — shared by `remoteUpdates` (filtered to changed + not dismissed) and `getReimportFlag` (used for an unconditional "Reprocessar agora"). */
+function buildReimportFlag(config: ReimportConfig, trackedFiles: TrackedPaymentUrl[]): RemoteUpdateFlag {
+  const t = trackedFiles.find((f) => f.sourceUrl === config.sourceUrl);
+  const { start, end } = resolveReimportPeriod(config);
+  return {
+    configId: config.id,
+    sourceUrl: config.sourceUrl,
+    fileName: t?.fileName ?? config.sourceUrl,
+    configLabel: resolveReimportConfigLabel(config),
+    templateId: config.templateId,
+    lastImportedAt: t?.importedAt ?? "",
+    resolvedPeriodStart: start,
+    resolvedPeriodEnd: end,
+    keepManualEdits: config.keepManualEdits,
+  };
+}
+
 interface RemoteFileUpdatesContextValue {
   remoteUpdates: RemoteUpdateFlag[];
   dismissRemoteUpdate: (configId: number) => void;
@@ -98,12 +115,23 @@ interface RemoteFileUpdatesContextValue {
   trackedFiles: TrackedPaymentUrl[];
   /** Every reimport config for every tracked URL — feeds the Verificação automática page (filter by `sourceUrl` per file) and the Sidebar's status indicator. */
   reimportConfigs: ReimportConfig[];
+  /** Builds a config's reimport flag on demand, regardless of whether a change was ever detected — the "Reprocessar agora" button's whole point. `null` if the config was deleted. */
+  getReimportFlag: (configId: number) => RemoteUpdateFlag | null;
+  /**
+   * Set when a tick's own bookkeeping (reading `trackedFiles`/`reimportConfigs`
+   * before deciding what's due) throws — distinct from a per-URL check
+   * failure, which is always captured via `logUrlCheckResult` regardless.
+   * Surfaced so this kind of failure isn't silently dropped just because it
+   * has no specific URL to attach a history entry to.
+   */
+  tickError: string | null;
 }
 
 const RemoteFileUpdatesContext = createContext<RemoteFileUpdatesContextValue | null>(null);
 
 export function RemoteFileUpdatesProvider({ children }: { children: ReactNode }) {
   const [dismissed, setDismissed] = useState<Set<number>>(new Set());
+  const [tickError, setTickError] = useState<string | null>(null);
   const [trackedFiles, setTrackedFiles] = useState<TrackedPaymentUrl[]>([]);
   const [reimportConfigs, setReimportConfigs] = useState<ReimportConfig[]>([]);
   // URLs with an HTTP check actually in flight — a Set (not one global
@@ -178,9 +206,15 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
       );
       const dueTracked = tracked.filter((t) => dueUrls.has(t.sourceUrl));
       if (dueTracked.length > 0) await runChecks(dueTracked);
-    } catch {
-      // silent — ambient, same treatment as the app's own update-checker;
-      // individual per-URL failures are already captured via logUrlCheckResult.
+      setTickError(null);
+    } catch (e) {
+      // Unlike a per-URL check failure (always captured via
+      // logUrlCheckResult, tied to that URL's own row/history), a failure
+      // here has no specific URL to attach a history entry to — this is the
+      // only place that kind of failure is visible at all, so it's kept
+      // (not discarded) for the Sidebar/Verificação automática page to
+      // surface.
+      setTickError(String(e instanceof Error ? e.message : e));
     }
   }, [runChecks]);
 
@@ -251,21 +285,13 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
   const changedUrls = new Set(trackedFiles.filter((t) => t.lastResult === "changed").map((t) => t.sourceUrl));
   const remoteUpdates: RemoteUpdateFlag[] = reimportConfigs
     .filter((c) => !c.checkDisabled && changedUrls.has(c.sourceUrl) && !dismissed.has(c.id))
-    .map((c) => {
-      const t = trackedFiles.find((f) => f.sourceUrl === c.sourceUrl);
-      const { start, end } = resolveReimportPeriod(c);
-      return {
-        configId: c.id,
-        sourceUrl: c.sourceUrl,
-        fileName: t?.fileName ?? c.sourceUrl,
-        configLabel: resolveReimportConfigLabel(c),
-        templateId: c.templateId,
-        lastImportedAt: t?.importedAt ?? "",
-        resolvedPeriodStart: start,
-        resolvedPeriodEnd: end,
-        keepManualEdits: c.keepManualEdits,
-      };
-    });
+    .map((c) => buildReimportFlag(c, trackedFiles));
+
+  /** Builds a config's reimport flag on demand, regardless of whether a change was ever detected — the "Reprocessar agora" button's whole point, unlike `remoteUpdates` which only ever holds configs with a pending detected change. `null` if the config no longer exists (deleted between the button rendering and being clicked). */
+  function getReimportFlag(configId: number): RemoteUpdateFlag | null {
+    const config = reimportConfigs.find((c) => c.id === configId);
+    return config ? buildReimportFlag(config, trackedFiles) : null;
+  }
 
   return (
     <RemoteFileUpdatesContext.Provider
@@ -284,6 +310,8 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
         forceCheckAll,
         trackedFiles,
         reimportConfigs,
+        getReimportFlag,
+        tickError,
       }}
     >
       {children}

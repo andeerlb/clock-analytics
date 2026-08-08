@@ -40,7 +40,7 @@ export default function Sidebar() {
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [remoteHovered, setRemoteHovered] = useState(false);
-  const { remoteUpdates, trackedFiles, reimportConfigs, checking } = useRemoteFileUpdates();
+  const { remoteUpdates, trackedFiles, reimportConfigs, checking, tickError } = useRemoteFileUpdates();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -59,7 +59,7 @@ export default function Sidebar() {
   // instead of inline text that has nowhere to go in a 220px sidebar.
   const activeConfigUrls = new Set(reimportConfigs.filter((c) => !c.checkDisabled).map((c) => c.sourceUrl));
   const hasActiveConfig = activeConfigUrls.size > 0;
-  const hasCheckError = trackedFiles.some((t) => activeConfigUrls.has(t.sourceUrl) && t.lastResult === "error");
+  const hasCheckError = tickError !== null || trackedFiles.some((t) => activeConfigUrls.has(t.sourceUrl) && t.lastResult === "error");
   const remoteStatus: RemoteStatus = checking
     ? "checking"
     : hasCheckError
@@ -163,7 +163,7 @@ export default function Sidebar() {
               )}
               {hasCheckError && (
                 <p style={{ fontSize: "0.78rem", margin: "0.4rem 0 0", color: "var(--danger)" }}>
-                  Falha em alguma verificação recente.
+                  {tickError ?? "Falha em alguma verificação recente."}
                 </p>
               )}
               <p className="muted" style={{ fontSize: "0.75rem", margin: "0.5rem 0 0" }}>

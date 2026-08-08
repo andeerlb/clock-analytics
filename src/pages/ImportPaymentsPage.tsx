@@ -258,7 +258,7 @@ export default function ImportPaymentsPage() {
   // themselves (see `removePath`) — otherwise the URL input would stay
   // stuck disabled with nothing left to reimport.
   const [isAutoReimport, setIsAutoReimport] = useState(false);
-  const { remoteUpdates, dismissRemoteUpdate, trackUrl, trackedFiles } = useRemoteFileUpdates();
+  const { dismissRemoteUpdate, trackUrl, trackedFiles, getReimportFlag } = useRemoteFileUpdates();
 
   const [fileResults, setFileResults] = useState<PaymentFileResult[]>(restored?.fileResults ?? []);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(restored?.selectedRows ?? new Set());
@@ -518,18 +518,22 @@ export default function ImportPaymentsPage() {
     await handleDownloadFromUrl(flag.sourceUrl, true, fullTemplate);
   }
 
-  // "Ir para Importar Pagamentos", clicked from a specific reimport config's
-  // banner on the Verificação automática page, passes that config's id
-  // through navigation state — the whole point is landing here with the
-  // reimport already running, not just on the right tab waiting for another
-  // click. `location.state` is cleared right away (`replace`) so this fires
-  // exactly once per navigation, not again on a later re-render or on
-  // browser back/forward landing back on this same history entry.
+  // "Ir para Importar Pagamentos"/"Reprocessar agora", clicked from a
+  // specific reimport config on the Verificação automática page, passes
+  // that config's id through navigation state — the whole point is landing
+  // here with the reimport already running, not just on the right tab
+  // waiting for another click. Built via `getReimportFlag` (not looked up
+  // in `remoteUpdates`) so this works the same whether or not a remote
+  // change was actually detected — "Reprocessar agora" deliberately
+  // reprocesses regardless. `location.state` is cleared right away
+  // (`replace`) so this fires exactly once per navigation, not again on a
+  // later re-render or on browser back/forward landing back on this same
+  // history entry.
   useEffect(() => {
     const configId = (location.state as { autoReimportConfigId?: number } | null)?.autoReimportConfigId;
     if (configId === undefined) return;
     navigate(location.pathname, { replace: true, state: null });
-    const flag = remoteUpdates.find((u) => u.configId === configId);
+    const flag = getReimportFlag(configId);
     if (flag) handleReimportFromUrl(flag);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
