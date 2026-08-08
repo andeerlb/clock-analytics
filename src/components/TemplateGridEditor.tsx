@@ -336,9 +336,14 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
     // Only the left button starts a drag-select — a right-click (which also
     // fires mousedown before its own contextmenu event) must never start
     // one, or moving the mouse while the context menu is still open keeps
-    // extending the selection into whatever's under the cursor.
+    // extending the selection into whatever's under the cursor. But a
+    // right-click landing INSIDE the current selection must leave it alone
+    // (same "don't collapse a range you right-clicked inside" rule the
+    // contextmenu handler applies) — collapsing here unconditionally would
+    // wipe the range before that handler ever got a chance to check it,
+    // since mousedown always fires before contextmenu.
     if (e.button !== 0) {
-      selectSingleCell(row, col);
+      if (!range || !cellInRange(range, row, col)) selectSingleCell(row, col);
       return;
     }
     // Shift+click extends from wherever the last plain click landed
@@ -580,7 +585,12 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
         ref={wrapperRef}
         tabIndex={0}
         onKeyDown={handleGridKeyDown}
-        style={{ overflow: "auto", outline: "none" }}
+        // A bounded height is what makes this the actual scrolling
+        // container — sticky headers stick relative to their nearest
+        // scrolling ancestor, so without a cap here a tall grid would just
+        // grow this div past the viewport and scroll the whole PAGE
+        // instead, taking the "sticky" header row/gutter along with it.
+        style={{ overflow: "auto", outline: "none", maxHeight: "70vh" }}
       >
         <div style={{ display: "grid", gridTemplateColumns: templateColumns, gridTemplateRows: templateRows, width: "max-content" }}>
           <div
