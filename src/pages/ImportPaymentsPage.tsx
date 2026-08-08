@@ -52,6 +52,7 @@ import {
   parseScheduleToMinutes,
   resolvePaymentRoute,
   resolvePaymentStatus,
+  safeDecodeFileName,
 } from "../lib/format";
 import {
   PAYMENT_SHIFT_STATUS_LABELS,
@@ -1228,7 +1229,7 @@ export default function ImportPaymentsPage() {
                         </div>
                         <div className="file-row-info">
                           <div className="file-name">
-                            {info?.fileName ?? p}
+                            {info?.fileName ? safeDecodeFileName(info.fileName) : p}
                             {/* Redundant once the URL is already shown, read-only, right above
                                 (the auto-reimport case) — only worth a hover hint here when
                                 this row is the only place the source URL shows at all. */}
@@ -1452,7 +1453,7 @@ export default function ImportPaymentsPage() {
                                 <input type="checkbox" disabled aria-label="Não disponível" />
                               </td>
                               <td colSpan={8}>
-                                <div className="file-name">{item.fileName}</div>
+                                <div className="file-name">{safeDecodeFileName(item.fileName)}</div>
                                 <div className="muted">{item.message}</div>
                               </td>
                               <td>
@@ -1696,7 +1697,7 @@ export default function ImportPaymentsPage() {
                       </div>
                       <div className="file-row-info">
                         <div className="file-name" title={f.fileName}>
-                          {f.fileName}
+                          {safeDecodeFileName(f.fileName)}
                         </div>
                         {f.sourceUrl && (
                           <button
