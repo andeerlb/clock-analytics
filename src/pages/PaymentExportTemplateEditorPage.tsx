@@ -2,7 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
-import TemplateGridEditor, { type RowBadge, type TemplateGridEditorHandle } from "../components/TemplateGridEditor";
+import TemplateGridEditor, {
+  FONT_FAMILIES,
+  FONT_SIZES,
+  type RowBadge,
+  type TemplateGridEditorHandle,
+} from "../components/TemplateGridEditor";
 import { createPaymentExportTemplate, getPaymentExportTemplate, updatePaymentExportTemplate } from "../lib/db";
 import { isBindableField } from "../lib/paymentExportGrid";
 import {
@@ -21,11 +26,19 @@ interface OpenContextMenu {
   items: ContextMenuItem[];
 }
 
-/** A labeled color swatch — the custom row a right-click row-menu shows once that row already holds the separator/SOMA role, so its color can be changed without leaving the menu. */
-function ColorSwatchRow({ color, onChange }: { color: string; onChange: (color: string) => void }) {
+/** A labeled color swatch — used both by the right-click row-menu (once a row already holds the separator/SOMA role, so its color can be changed without leaving the menu) and by the cell context menu's bulk "Cor de fundo"/"Cor do texto" rows. */
+function ColorSwatchRow({
+  label = "Cor",
+  color,
+  onChange,
+}: {
+  label?: string;
+  color: string;
+  onChange: (color: string) => void;
+}) {
   return (
     <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem" }}>
-      Cor
+      {label}
       <input
         type="color"
         value={color}
@@ -125,7 +138,7 @@ export default function PaymentExportTemplateEditorPage() {
     if (subtotalRowIndex !== null) gridRef.current?.setRowBackgroundColor(subtotalRowIndex, color);
   }
 
-  /** Right-click on a data cell — every action here targets exactly this cell, never a separately-tracked "selection" (see `TemplateGridEditor`'s own doc comment for why that matters). */
+  /** Right-click on a data cell. Formatting items (bold/italic/font/color) act on the whole current selection; structural items ("Inserir campo", agrupamento, SOMA shortcut, cor removal) always target exactly `row`/`col` — the cell actually clicked. */
   function handleCellContextMenu(
     row: number,
     col: number,
@@ -135,6 +148,15 @@ export default function PaymentExportTemplateEditorPage() {
     x: number,
     y: number,
   ) {
+    // Every formatting item below acts on the whole current selection (via
+    // `patchSelection`), not just this one right-clicked cell — so
+    // multi-selecting a range and right-clicking applies bold/italic/font/
+    // color to every cell in it at once, same as Excel/Sheets. A plain
+    // single-cell click is just a range of one, so this reads right either
+    // way. `anchor` is that range's top-left cell, used to pre-fill
+    // checkmarks/swatches with its current formatting.
+    const anchor = gridRef.current?.getAnchorCell() ?? null;
+
     const items: ContextMenuItem[] = [
       {
         label: "Inserir campo",
@@ -151,8 +173,25 @@ export default function PaymentExportTemplateEditorPage() {
           },
         })),
       },
-      { label: "Negrito", onClick: () => gridRef.current?.toggleCellBold(row, col) },
-      { label: "Itálico", onClick: () => gridRef.current?.toggleCellItalic(row, col) },
+      { separator: true },
+      { label: "Negrito", onClick: () => gridRef.current?.patchSelection({ bold: !anchor?.bold }) },
+      { label: "Itálico", onClick: () => gridRef.current?.patchSelection({ italic: !anchor?.italic }) },
+      {
+        label: "Fonte",
+        submenu: FONT_FAMILIES.map((f) => ({
+          label: f,
+          onClick: () => gridRef.current?.patchSelection({ fontFamily: f === "Calibri" ? null : f }),
+        })),
+      },
+      {
+        label: "Tamanho da fonte",
+        submenu: FONT_SIZES.map((s) => ({
+          label: String(s),
+          onClick: () => gridRef.current?.patchSelection({ fontSize: s === 11 ? null : s }),
+        })),
+      },
+      { render: () => <ColorSwatchRow label="Cor do texto" color={anchor?.fontColor ?? "#000000"} onChange={(c) => gridRef.current?.patchSelection({ fontColor: c })} /> },
+      { render: () => <ColorSwatchRow label="Cor de fundo" color={anchor?.backgroundColor ?? "#ffffff"} onChange={(c) => gridRef.current?.patchSelection({ backgroundColor: c })} /> },
     ];
 
     const exactField = value.trim().match(/^\{\{(\w+)\}\}$/)?.[1];
@@ -364,32 +403,26 @@ export default function PaymentExportTemplateEditorPage() {
 
       {error && <div className="error-box">{error}</div>}
 
-      <div className="import-layout">
-        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-          <TemplateGridEditor
-            ref={gridRef}
-            initialGrid={initialGrid}
-            rowBadges={rowBadges}
-            highlightExactValues={groupByHighlights}
-            onCellContextMenu={handleCellContextMenu}
-            onRowContextMenu={handleRowContextMenu}
-            onColumnContextMenu={handleColumnContextMenu}
-          />
-        </div>
+      <div className="field" style={{ maxWidth: 420, marginBottom: "1rem" }}>
+        <label>Nome do template</label>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Ex: Padaria e açougue santo amaro"
+        />
+      </div>
 
-        <div className="import-side">
-          <div className="card">
-            <div className="field" style={{ marginBottom: 0 }}>
-              <label>Nome do template</label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Ex: Padaria e açougue santo amaro"
-              />
-            </div>
-          </div>
-        </div>
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <TemplateGridEditor
+          ref={gridRef}
+          initialGrid={initialGrid}
+          rowBadges={rowBadges}
+          highlightExactValues={groupByHighlights}
+          onCellContextMenu={handleCellContextMenu}
+          onRowContextMenu={handleRowContextMenu}
+          onColumnContextMenu={handleColumnContextMenu}
+        />
       </div>
 
       {contextMenu && (

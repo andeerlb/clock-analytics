@@ -586,6 +586,14 @@ tr:last-child td {
   background: rgba(255, 255, 255, 0.05);
 }
 
+/* TemplateGridEditor data cells — an inset overlay instead of touching
+   `background` directly, so the hover feedback shows up on top of whatever
+   backgroundColor the cell already has (including "no color") without
+   fighting that inline style. */
+.template-grid-cell:hover {
+  box-shadow: inset 0 0 0 9999px rgba(255, 255, 255, 0.12);
+}
+
 .muted {
   color: var(--text-muted);
   font-size: 0.9rem;

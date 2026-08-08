@@ -20,6 +20,10 @@ export interface TemplateGridEditorHandle {
   toggleCellItalic: (row: number, col: number) => void;
   /** Applies an arbitrary patch to one cell — used for the right-click "Remover cor do texto"/"Remover cor de fundo" items (`{ fontColor: null }`/`{ backgroundColor: null }`), which don't fit any of the more specific methods above. */
   patchCell: (row: number, col: number, patch: Partial<TemplateGridCell>) => void;
+  /** Applies an arbitrary patch to every cell in the current selection (a no-op if nothing is selected) — how the right-click menu's bulk formatting items (cor de fundo/texto, fonte, tamanho, negrito, itálico) act on a multi-cell range instead of a single cell. */
+  patchSelection: (patch: Partial<TemplateGridCell>) => void;
+  /** The current selection's anchor cell (its top-left), or `null` if nothing is selected — used to read the "current" bold/italic/color/font state to show in the right-click menu before a bulk edit. */
+  getAnchorCell: () => TemplateGridCell | null;
   /** Paints every cell in `row` with `color` ("#rrggbb") — this is how a row visibly becomes "the separator"/"the SOMA row" in the sheet itself. */
   setRowBackgroundColor: (row: number, color: string) => void;
   /** The background color already on `row`'s first column, or `null` — used to pre-fill a color picker instead of always resetting to a default swatch. */
@@ -73,7 +77,7 @@ const GUTTER_WIDTH = 36;
 const MIN_COL_WIDTH = 30;
 const MIN_ROW_HEIGHT = 20;
 
-const FONT_FAMILIES = [
+export const FONT_FAMILIES = [
   "Calibri",
   "Arial",
   "Arial Black",
@@ -85,7 +89,7 @@ const FONT_FAMILIES = [
   "Trebuchet MS",
   "Comic Sans MS",
 ];
-const FONT_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 36];
+export const FONT_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 36];
 
 /** What the toolbar's "Limpar formatação" (Eraser) button resets a cell back to — every style property, `value` untouched. */
 const RESET_FORMAT_PATCH: Partial<TemplateGridCell> = {
@@ -394,6 +398,7 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
   const anchorMerge = range ? findMergeAt(grid.merges, range.r1, range.c1) : null;
   const existingMergeForRange = range && anchorMerge && rangesEqual(mergeToRange(anchorMerge), range) ? anchorMerge : null;
   const canMerge = Boolean(range && !rangeIsSingleCell(range));
+  const anchorCell = range ? grid.rows[range.r1]?.[range.c1] : null;
 
   function handleMergeClick() {
     if (!range) return;
@@ -427,6 +432,10 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
       toggleCellBold: (row, col) => updateCell(row, col, { bold: !grid.rows[row]?.[col]?.bold }),
       toggleCellItalic: (row, col) => updateCell(row, col, { italic: !grid.rows[row]?.[col]?.italic }),
       patchCell: (row, col, patch) => updateCell(row, col, patch),
+      patchSelection: (patch) => {
+        if (range) updateRange(range, patch);
+      },
+      getAnchorCell: () => anchorCell ?? null,
       setRowBackgroundColor: (row, color) => {
         setGrid((g) => ({
           ...g,
@@ -453,7 +462,6 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
   const colCount = grid.columnWidths.length;
   const templateColumns = `${GUTTER_WIDTH}px ${grid.columnWidths.map((w) => `${w}px`).join(" ")}`;
   const templateRows = `${HEADER_ROW_HEIGHT}px ${grid.rowHeights.map((h) => `${h}px`).join(" ")}`;
-  const anchorCell = range ? grid.rows[range.r1]?.[range.c1] : null;
 
   const coveredBy = new Map<string, TemplateGridMerge>();
   const anchorMergeAt = new Map<string, TemplateGridMerge>();
@@ -575,7 +583,17 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
         style={{ overflow: "auto", outline: "none" }}
       >
         <div style={{ display: "grid", gridTemplateColumns: templateColumns, gridTemplateRows: templateRows, width: "max-content" }}>
-          <div style={{ gridColumn: 1, gridRow: 1, background: "var(--card-bg-soft)" }} />
+          <div
+            style={{
+              gridColumn: 1,
+              gridRow: 1,
+              background: "var(--card-bg-soft)",
+              position: "sticky",
+              top: 0,
+              left: 0,
+              zIndex: 3,
+            }}
+          />
 
           {Array.from({ length: colCount }, (_, c) => (
             <div
@@ -589,7 +607,9 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
               style={{
                 gridColumn: c + 2,
                 gridRow: 1,
-                position: "relative",
+                position: "sticky",
+                top: 0,
+                zIndex: 2,
                 background: "var(--card-bg-soft)",
                 textAlign: "center",
                 fontSize: "0.75rem",
@@ -622,7 +642,9 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
                 style={{
                   gridColumn: 1,
                   gridRow: r + 2,
-                  position: "relative",
+                  position: "sticky",
+                  left: 0,
+                  zIndex: 2,
                   background: badge ? badge.color : "var(--card-bg-soft)",
                   color: badge ? "#111" : "var(--text-muted)",
                   fontSize: "0.72rem",
@@ -655,6 +677,7 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
               return (
                 <div
                   key={`${r},${c}`}
+                  className="template-grid-cell"
                   onMouseDown={(e) => handleCellMouseDown(r, c, e)}
                   onMouseEnter={() => handleCellMouseEnter(r, c)}
                   onDoubleClick={() => setEditingCell({ row: r, col: c })}
