@@ -1,11 +1,9 @@
-import { X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import TemplateGridEditor, { type RowBadge, type TemplateGridEditorHandle } from "../components/TemplateGridEditor";
 import { createPaymentExportTemplate, getPaymentExportTemplate, updatePaymentExportTemplate } from "../lib/db";
-import { columnLetter } from "../lib/format";
 import { isBindableField } from "../lib/paymentExportGrid";
 import {
   PAYMENT_EXPORT_BINDABLE_FIELD_LABELS,
@@ -52,7 +50,6 @@ export default function PaymentExportTemplateEditorPage() {
 
   const [detailRowIndex, setDetailRowIndex] = useState<number | null>(null);
   const [groupBy, setGroupBy] = useState<PaymentExportBindableField[]>([]);
-  const [groupByFieldToAdd, setGroupByFieldToAdd] = useState<string>("");
 
   const [separatorEnabled, setSeparatorEnabled] = useState(false);
   const [separatorRowIndex, setSeparatorRowIndex] = useState<number | null>(null);
@@ -60,9 +57,6 @@ export default function PaymentExportTemplateEditorPage() {
 
   const [subtotalEnabled, setSubtotalEnabled] = useState(false);
   const [subtotalRowIndex, setSubtotalRowIndex] = useState<number | null>(null);
-  const [subtotalLabelText, setSubtotalLabelText] = useState("SOMA");
-  const [subtotalLabelColumn, setSubtotalLabelColumn] = useState<number | null>(null);
-  const [subtotalSumColumn, setSubtotalSumColumn] = useState<number | null>(null);
   const [subtotalColor, setSubtotalColor] = useState("#facc15");
 
   const [contextMenu, setContextMenu] = useState<OpenContextMenu | null>(null);
@@ -79,9 +73,6 @@ export default function PaymentExportTemplateEditorPage() {
         setSeparatorRowIndex(t.config.separator?.rowIndex ?? null);
         setSubtotalEnabled(t.config.subtotal?.enabled ?? false);
         setSubtotalRowIndex(t.config.subtotal?.rowIndex ?? null);
-        setSubtotalLabelText(t.config.subtotal?.labelText ?? "SOMA");
-        setSubtotalLabelColumn(t.config.subtotal?.labelCellColumn ?? null);
-        setSubtotalSumColumn(t.config.subtotal?.sumCellColumn ?? null);
       })
       .catch((e) => setError(String(e instanceof Error ? e.message : e)))
       .finally(() => setLoading(false));
@@ -135,13 +126,29 @@ export default function PaymentExportTemplateEditorPage() {
   }
 
   /** Right-click on a data cell — every action here targets exactly this cell, never a separately-tracked "selection" (see `TemplateGridEditor`'s own doc comment for why that matters). */
-  function handleCellContextMenu(row: number, col: number, value: string, x: number, y: number) {
+  function handleCellContextMenu(
+    row: number,
+    col: number,
+    value: string,
+    backgroundColor: string | null,
+    fontColor: string | null,
+    x: number,
+    y: number,
+  ) {
     const items: ContextMenuItem[] = [
       {
         label: "Inserir campo",
         submenu: ALL_FIELDS.map((f) => ({
           label: PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[f],
-          onClick: () => gridRef.current?.setCellValue(row, col, `{{${f}}}`),
+          onClick: () => {
+            gridRef.current?.setCellValue(row, col, `{{${f}}}`);
+            // The very first field ever inserted, with no linha do turno
+            // marked yet, almost certainly means "this is the row that
+            // repeats" — saves the extra right-click-on-the-row-number
+            // step for the common case, without overriding a row the user
+            // already chose deliberately.
+            if (detailRowIndex === null) setDetailRowIndex(row);
+          },
         })),
       },
       { label: "Negrito", onClick: () => gridRef.current?.toggleCellBold(row, col) },
@@ -149,18 +156,53 @@ export default function PaymentExportTemplateEditorPage() {
     ];
 
     const exactField = value.trim().match(/^\{\{(\w+)\}\}$/)?.[1];
-    if (exactField && isBindableField(exactField) && !groupBy.includes(exactField)) {
+    if (exactField && isBindableField(exactField)) {
       items.push({ separator: true });
+      const alreadyGrouped = groupBy.includes(exactField);
       items.push({
-        label: `Agrupar por "${PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[exactField]}"`,
-        onClick: () => setGroupBy((prev) => [...prev, exactField]),
+        label: alreadyGrouped
+          ? `Remover "${PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[exactField]}" do agrupamento`
+          : `Agrupar por "${PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[exactField]}"`,
+        onClick: () =>
+          setGroupBy((prev) => (alreadyGrouped ? prev.filter((f) => f !== exactField) : [...prev, exactField])),
       });
     }
 
+    // The SOMA row has no separate "which column" config — whichever
+    // cell(s) hold the literal {{valorSoma}} token get the computed total
+    // at export time (same mechanism as the detail row's {{field}}
+    // tokens). Typing it by hand works too; this is just a shortcut.
     if (subtotalEnabled && subtotalRowIndex === row) {
       items.push({ separator: true });
-      items.push({ label: "Usar esta coluna como rótulo da SOMA", onClick: () => setSubtotalLabelColumn(col) });
-      items.push({ label: "Usar esta coluna como coluna da soma", onClick: () => setSubtotalSumColumn(col) });
+      items.push({ label: "Somar nessa coluna", onClick: () => gridRef.current?.setCellValue(row, col, "{{valorSoma}}") });
+    }
+
+    if (backgroundColor || fontColor) {
+      items.push({ separator: true });
+      if (fontColor) {
+        items.push({ label: "Remover cor do texto", onClick: () => gridRef.current?.patchCell(row, col, { fontColor: null }) });
+      }
+      if (backgroundColor) {
+        items.push({
+          label: "Remover cor de fundo",
+          onClick: () => gridRef.current?.patchCell(row, col, { backgroundColor: null }),
+        });
+      }
+    }
+
+    // Right-clicking INSIDE an already-selected multi-cell range (see
+    // TemplateGridEditor's own onContextMenu — it only collapses the
+    // selection down to this one cell when the click lands outside the
+    // current range) keeps that whole range selected, so this reads its
+    // real size instead of always seeing a 1x1 selection.
+    const rangeSize = gridRef.current?.getSelectionRangeSize();
+    const isMerged = gridRef.current?.isSelectionMerged() ?? false;
+    if (isMerged || (rangeSize && (rangeSize.rows > 1 || rangeSize.cols > 1))) {
+      items.push({ separator: true });
+      items.push({
+        label: isMerged ? "Desmesclar células" : "Mesclar células",
+        onClick: () => gridRef.current?.toggleMergeSelection(),
+      });
     }
 
     setContextMenu({ x, y, items });
@@ -171,9 +213,9 @@ export default function PaymentExportTemplateEditorPage() {
     const items: ContextMenuItem[] = [];
 
     if (detailRowIndex === row) {
-      items.push({ label: "Desmarcar linha de detalhe", onClick: () => setDetailRowIndex(null) });
+      items.push({ label: "Desmarcar linha do turno", onClick: () => setDetailRowIndex(null) });
     } else {
-      items.push({ label: "Marcar como Linha de Detalhe", onClick: () => setDetailRowIndex(row) });
+      items.push({ label: "Marcar como Linha do Turno", onClick: () => setDetailRowIndex(row) });
     }
 
     items.push({ separator: true });
@@ -207,15 +249,17 @@ export default function PaymentExportTemplateEditorPage() {
     setContextMenu({ x, y, items });
   }
 
-  function removeGroupByField(field: PaymentExportBindableField) {
-    setGroupBy((prev) => prev.filter((f) => f !== field));
-  }
-
-  function addGroupByField() {
-    if (!groupByFieldToAdd) return;
-    const field = groupByFieldToAdd as PaymentExportBindableField;
-    setGroupBy((prev) => (prev.includes(field) ? prev : [...prev, field]));
-    setGroupByFieldToAdd("");
+  /** Right-click on a column's letter header — fixed width (the default, whatever's set by dragging) vs. auto-fit to the longest value actually exported into that column. */
+  function handleColumnContextMenu(col: number, x: number, y: number) {
+    const autoFit = gridRef.current?.getColumnAutoFit(col) ?? false;
+    setContextMenu({
+      x,
+      y,
+      items: [
+        { label: autoFit ? "✓ Ajustar ao maior registro" : "Ajustar ao maior registro", onClick: () => gridRef.current?.setColumnAutoFit(col, true) },
+        { label: !autoFit ? "✓ Usar tamanho fixo" : "Usar tamanho fixo", onClick: () => gridRef.current?.setColumnAutoFit(col, false) },
+      ],
+    });
   }
 
   async function handleSave() {
@@ -225,15 +269,15 @@ export default function PaymentExportTemplateEditorPage() {
       return;
     }
     if (detailRowIndex === null) {
-      setError("Marque qual linha é a linha de detalhe (a que se repete por turno).");
+      setError("Marque qual linha é a linha do turno (a que se repete por turno).");
       return;
     }
     if (separatorEnabled && separatorRowIndex === null) {
       setError("Marque qual linha é a linha separadora, ou desative o separador.");
       return;
     }
-    if (subtotalEnabled && (subtotalRowIndex === null || subtotalLabelColumn === null || subtotalSumColumn === null)) {
-      setError("Marque a linha da SOMA e as colunas de rótulo/soma, ou desative a linha de SOMA.");
+    if (subtotalEnabled && subtotalRowIndex === null) {
+      setError("Marque qual linha é a linha de SOMA, ou desative a linha de SOMA.");
       return;
     }
     // Marking the same physical row for two roles is never intentional —
@@ -242,11 +286,11 @@ export default function PaymentExportTemplateEditorPage() {
     // {{tokens}} typed into what was meant to be the detail row, never
     // gets treated as such).
     if (separatorEnabled && separatorRowIndex === detailRowIndex) {
-      setError("A linha separadora não pode ser a mesma linha marcada como linha de detalhe.");
+      setError("A linha separadora não pode ser a mesma linha marcada como linha do turno.");
       return;
     }
     if (subtotalEnabled && subtotalRowIndex === detailRowIndex) {
-      setError("A linha de SOMA não pode ser a mesma linha marcada como linha de detalhe.");
+      setError("A linha de SOMA não pode ser a mesma linha marcada como linha do turno.");
       return;
     }
     if (separatorEnabled && subtotalEnabled && separatorRowIndex === subtotalRowIndex) {
@@ -254,23 +298,13 @@ export default function PaymentExportTemplateEditorPage() {
       return;
     }
 
-    const grid = gridRef.current?.getGrid() ?? { rows: [], columnWidths: [], rowHeights: [], merges: [] };
+    const grid = gridRef.current?.getGrid() ?? { rows: [], columnWidths: [], columnAutoFit: [], rowHeights: [], merges: [] };
     const config: PaymentExportTemplateConfig = {
       grid,
       detailRowIndex,
       groupBy,
       separator: separatorEnabled && separatorRowIndex !== null ? { enabled: true, rowIndex: separatorRowIndex } : null,
-      subtotal:
-        subtotalEnabled && subtotalRowIndex !== null && subtotalLabelColumn !== null && subtotalSumColumn !== null
-          ? {
-              enabled: true,
-              rowIndex: subtotalRowIndex,
-              labelCellColumn: subtotalLabelColumn,
-              labelText: subtotalLabelText.trim() || "SOMA",
-              sumField: "valor",
-              sumCellColumn: subtotalSumColumn,
-            }
-          : null,
+      subtotal: subtotalEnabled && subtotalRowIndex !== null ? { enabled: true, rowIndex: subtotalRowIndex } : null,
     };
 
     setBusy(true);
@@ -295,9 +329,14 @@ export default function PaymentExportTemplateEditorPage() {
     // Detail row badge is set last so it always wins if two roles were
     // (invalidly) left pointing at the same row while mid-edit — the
     // detail row is the one thing every template must have.
-    if (detailRowIndex !== null) map.set(detailRowIndex, { label: "D", color: DETAIL_BADGE_COLOR });
+    if (detailRowIndex !== null) map.set(detailRowIndex, { label: "T", color: DETAIL_BADGE_COLOR });
     return map;
   }, [detailRowIndex, separatorEnabled, separatorRowIndex, separatorColor, subtotalEnabled, subtotalRowIndex, subtotalColor]);
+
+  // Which exact cell values currently drive agrupamento — shown as a small
+  // marker directly on the grid cell instead of a side-panel list (see
+  // TemplateGridEditor's own `highlightExactValues`).
+  const groupByHighlights = useMemo(() => new Set(groupBy.map((f) => `{{${f}}}`)), [groupBy]);
 
   if (loading) {
     return (
@@ -307,8 +346,6 @@ export default function PaymentExportTemplateEditorPage() {
       </div>
     );
   }
-
-  const availableGroupByOptions = ALL_FIELDS.filter((f) => !groupBy.includes(f));
 
   return (
     <div>
@@ -321,7 +358,7 @@ export default function PaymentExportTemplateEditorPage() {
       </div>
       <p className="page-subtitle">
         Monte a planilha — texto, cor de fundo, negrito — e use o botão direito do mouse: numa
-        célula, pra inserir um campo; no número da linha, pra marcar seu papel (detalhe,
+        célula, pra inserir um campo; no número da linha, pra marcar seu papel (turno,
         separador, SOMA).
       </p>
 
@@ -333,8 +370,10 @@ export default function PaymentExportTemplateEditorPage() {
             ref={gridRef}
             initialGrid={initialGrid}
             rowBadges={rowBadges}
+            highlightExactValues={groupByHighlights}
             onCellContextMenu={handleCellContextMenu}
             onRowContextMenu={handleRowContextMenu}
+            onColumnContextMenu={handleColumnContextMenu}
           />
         </div>
 
@@ -349,85 +388,6 @@ export default function PaymentExportTemplateEditorPage() {
                 placeholder="Ex: Padaria e açougue santo amaro"
               />
             </div>
-          </div>
-
-          <div className="card">
-            <h3 style={{ marginTop: 0 }}>Agrupamento</h3>
-            <p className="muted" style={{ fontSize: "0.8rem" }}>
-              Um novo grupo (com separador/SOMA) começa sempre que um destes campos mudar, na
-              ordem abaixo.
-            </p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.6rem" }}>
-              {groupBy.length === 0 && (
-                <span className="muted" style={{ fontSize: "0.8rem" }}>
-                  Sem agrupamento.
-                </span>
-              )}
-              {groupBy.map((f) => (
-                <span
-                  key={f}
-                  className="badge neutral"
-                  style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}
-                >
-                  {PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[f]}
-                  <button
-                    type="button"
-                    className="link-button"
-                    onClick={() => removeGroupByField(f)}
-                    aria-label={`Remover ${PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[f]}`}
-                    style={{ padding: 0 }}
-                  >
-                    <X size={12} />
-                  </button>
-                </span>
-              ))}
-            </div>
-            <div className="field-row" style={{ marginBottom: 0 }}>
-              <select value={groupByFieldToAdd} onChange={(e) => setGroupByFieldToAdd(e.target.value)}>
-                <option value="">Adicionar campo...</option>
-                {availableGroupByOptions.map((f) => (
-                  <option key={f} value={f}>
-                    {PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[f]}
-                  </option>
-                ))}
-              </select>
-              <button type="button" className="ghost" onClick={addGroupByField} disabled={!groupByFieldToAdd}>
-                Adicionar
-              </button>
-            </div>
-            <p className="muted" style={{ fontSize: "0.75rem", marginTop: "0.5rem", marginBottom: 0 }}>
-              Ou clique com o botão direito numa célula que já tenha um campo inserido → "Agrupar
-              por este campo".
-            </p>
-          </div>
-
-          <div className="card">
-            <h3 style={{ marginTop: 0 }}>Papéis das linhas</h3>
-            <p className="muted" style={{ fontSize: "0.8rem" }}>
-              Marcados com o botão direito do mouse no número da linha.
-            </p>
-            <p style={{ margin: "0.5rem 0", fontSize: "0.85rem" }}>
-              <strong>Linha de detalhe:</strong>{" "}
-              {detailRowIndex !== null ? `linha ${detailRowIndex + 1}` : "não marcada"}
-            </p>
-            <p style={{ margin: "0.5rem 0", fontSize: "0.85rem" }}>
-              <strong>Linha separadora:</strong>{" "}
-              {separatorEnabled && separatorRowIndex !== null ? `linha ${separatorRowIndex + 1}` : "desativada"}
-            </p>
-            <p style={{ margin: "0.5rem 0", fontSize: "0.85rem" }}>
-              <strong>Linha de SOMA:</strong>{" "}
-              {subtotalEnabled && subtotalRowIndex !== null
-                ? `linha ${subtotalRowIndex + 1} — rótulo: ${
-                    subtotalLabelColumn !== null ? columnLetter(subtotalLabelColumn) : "não marcada"
-                  }, soma: ${subtotalSumColumn !== null ? columnLetter(subtotalSumColumn) : "não marcada"}`
-                : "desativada"}
-            </p>
-            {subtotalEnabled && (
-              <div className="field" style={{ marginTop: "0.6rem", marginBottom: 0 }}>
-                <label>Texto do rótulo da SOMA</label>
-                <input type="text" value={subtotalLabelText} onChange={(e) => setSubtotalLabelText(e.target.value)} />
-              </div>
-            )}
           </div>
         </div>
       </div>

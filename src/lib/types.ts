@@ -610,8 +610,16 @@ export interface TemplateGridMerge {
 export interface TemplateGridData {
   /** `rows[r][c]` — every row has the same length (`columnWidths.length`). */
   rows: TemplateGridCell[][];
-  /** Pixel width per column, same length as every row in `rows`. */
+  /** Pixel width per column, same length as every row in `rows`. Ignored at export time for a column where `columnAutoFit` is `true`. */
   columnWidths: number[];
+  /**
+   * Per-column: `true` = ignore `columnWidths[c]` at export time and size
+   * the real exported column to the longest actual value written into it
+   * ("ajustar ao maior registro"); `false` (the default) = strictly use
+   * `columnWidths[c]`. Toggled via right-click on the column letter header.
+   * Same length as `columnWidths`.
+   */
+  columnAutoFit: boolean[];
   /** Pixel height per row, same length as `rows`. */
   rowHeights: number[];
   merges: TemplateGridMerge[];
@@ -638,18 +646,22 @@ export interface PaymentExportTemplateConfig {
     /** Row index (within `grid.rows`) whose style is reused for the separator. */
     rowIndex: number;
   } | null;
-  /** An optional subtotal row at the end of each group, summing one numeric column. The sum is a plain computed number written at export time — never a live Excel formula. */
+  /**
+   * An optional subtotal row at the end of each group, summing every
+   * matching shift's `valor`. Written as a live `SUM(...)` Excel formula
+   * over the detail row's `{{valor}}` column (falls back to a precomputed
+   * static number if the detail row has no exact `{{valor}}` cell to
+   * reference). Unlike the detail row, there's no separate "which column"
+   * config: whichever cell(s) in this row contain the literal
+   * `{{valorSoma}}` token get the total (same mechanism `{{field}}` tokens
+   * use on the detail row — see `renderSumCell` in `paymentExportGrid.ts`);
+   * every other cell is static text, written as typed, exactly like the
+   * separator row.
+   */
   subtotal: {
     enabled: boolean;
-    /** Row index (within `grid.rows`) whose style is reused for the subtotal row. */
+    /** Row index (within `grid.rows`) whose content/style is reused for the subtotal row. */
     rowIndex: number;
-    /** 0-based column index the label ("SOMA" by default) is written into. */
-    labelCellColumn: number;
-    labelText: string;
-    /** Only "valor" is summable today — kept as a union (not a bare literal) so a second summable field can be added later without reshaping this. */
-    sumField: "valor";
-    /** 0-based column index the computed sum is written into. */
-    sumCellColumn: number;
   } | null;
 }
 

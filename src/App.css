@@ -555,19 +555,35 @@ tr:last-child td {
   outline-color: var(--accent);
 }
 
-/* The row-number/column-letter selector cells in TemplateGridEditor — a
-   hover brightness bump plus a solid down-arrow cursor (closest CSS can get
-   to Excel/Sheets' own "click to select the whole row/column" cursor,
-   which is a native bitmap cursor with no CSS equivalent). */
+/* The column-letter/row-number selector cells in TemplateGridEditor — a
+   hover brightness bump plus a solid arrow cursor (closest CSS can get to
+   Excel/Sheets' own "click to select the whole row/column" cursor, which is
+   a native bitmap cursor with no CSS equivalent) — pointing down for a
+   column (selects vertically) and right for a row (selects horizontally). */
 .template-grid-selector {
-  cursor:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Cpath d='M2 4 L12 4 L7 11 Z' fill='%23111827' stroke='white' stroke-width='1.2'/%3E%3C/svg%3E")
-      7 7,
-    pointer;
   transition: filter 0.1s ease;
 }
 .template-grid-selector:hover {
   filter: brightness(1.35);
+}
+.template-grid-selector--column {
+  cursor:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Cpath d='M2 4 L12 4 L7 11 Z' fill='%23111827' stroke='white' stroke-width='1.2'/%3E%3C/svg%3E")
+      7 7,
+    pointer;
+}
+.template-grid-selector--row {
+  cursor:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Cpath d='M4 2 L4 12 L11 7 Z' fill='%23111827' stroke='white' stroke-width='1.2'/%3E%3C/svg%3E")
+      7 7,
+    pointer;
+}
+
+/* TemplateGridEditor toolbar color swatches (ToolbarColorButton) — plain
+   <label> elements, so they need their own hover feedback instead of
+   inheriting .ghost's (used by the toolbar's plain icon buttons). */
+.template-grid-color-button:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .muted {

@@ -1,4 +1,4 @@
-import { Bold, Combine, Italic, PaintBucket, Type } from "lucide-react";
+import { Bold, Combine, Eraser, Italic, PaintBucket, Type } from "lucide-react";
 import {
   forwardRef,
   useEffect,
@@ -18,10 +18,21 @@ export interface TemplateGridEditorHandle {
   setCellValue: (row: number, col: number, value: string) => void;
   toggleCellBold: (row: number, col: number) => void;
   toggleCellItalic: (row: number, col: number) => void;
+  /** Applies an arbitrary patch to one cell — used for the right-click "Remover cor do texto"/"Remover cor de fundo" items (`{ fontColor: null }`/`{ backgroundColor: null }`), which don't fit any of the more specific methods above. */
+  patchCell: (row: number, col: number, patch: Partial<TemplateGridCell>) => void;
   /** Paints every cell in `row` with `color` ("#rrggbb") — this is how a row visibly becomes "the separator"/"the SOMA row" in the sheet itself. */
   setRowBackgroundColor: (row: number, color: string) => void;
   /** The background color already on `row`'s first column, or `null` — used to pre-fill a color picker instead of always resetting to a default swatch. */
   getRowBackgroundColor: (row: number) => string | null;
+  /** The current selection's size, or `null` if nothing is selected — lets the parent's right-click cell menu decide whether to offer "Mesclar células". */
+  getSelectionRangeSize: () => { rows: number; cols: number } | null;
+  /** Whether the current selection is exactly one existing merge (so the parent's menu can offer "Desmesclar" instead of "Mesclar"). */
+  isSelectionMerged: () => boolean;
+  /** Merges the current selection (if it spans more than one cell), or unmerges it (if it's already exactly one merge) — same action the toolbar's Mesclar/Desmesclar button performs. */
+  toggleMergeSelection: () => void;
+  /** `true` = ignore this column's fixed width at export time and size it to the longest actual value written into it; `false` = strictly use the fixed width (the default). */
+  setColumnAutoFit: (col: number, autoFit: boolean) => void;
+  getColumnAutoFit: (col: number) => boolean;
 }
 
 /** A small colored tag shown in a row's number gutter (e.g. "D" for the detail row) — makes the current layout legible without needing a side panel. */
@@ -35,10 +46,22 @@ interface TemplateGridEditorProps {
   initialGrid?: TemplateGridData | null;
   /** row index -> badge, for rows currently marked as a role (detail/separator/SOMA). */
   rowBadges?: Map<number, RowBadge>;
-  /** Fires on right-clicking a data cell — the parent owns building/rendering the actual `ContextMenu` (this component knows nothing about "campos"/"agrupamento", only the grid). */
-  onCellContextMenu?: (row: number, col: number, value: string, x: number, y: number) => void;
+  /** Fires on right-clicking a data cell — the parent owns building/rendering the actual `ContextMenu` (this component knows nothing about "campos"/"agrupamento", only the grid). `backgroundColor`/`fontColor` are that cell's own current values, so the parent can conditionally offer "Remover cor..." without a separate round-trip query. */
+  onCellContextMenu?: (
+    row: number,
+    col: number,
+    value: string,
+    backgroundColor: string | null,
+    fontColor: string | null,
+    x: number,
+    y: number,
+  ) => void;
   /** Fires on right-clicking a row's number gutter. */
   onRowContextMenu?: (row: number, x: number, y: number) => void;
+  /** Fires on right-clicking a column's letter header. */
+  onColumnContextMenu?: (col: number, x: number, y: number) => void;
+  /** Cell values (exact match, e.g. `"{{workDate}}"`) that should get a visual marker — used to show which cells currently drive agrupamento, without a separate side-panel list. Domain-agnostic on purpose (this component doesn't know what "agrupamento" means, just "highlight any cell whose value is exactly one of these"). */
+  highlightExactValues?: Set<string>;
 }
 
 const DEFAULT_ROWS = 24;
@@ -63,6 +86,16 @@ const FONT_FAMILIES = [
   "Comic Sans MS",
 ];
 const FONT_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 36];
+
+/** What the toolbar's "Limpar formatação" (Eraser) button resets a cell back to — every style property, `value` untouched. */
+const RESET_FORMAT_PATCH: Partial<TemplateGridCell> = {
+  backgroundColor: null,
+  fontColor: null,
+  bold: false,
+  italic: false,
+  fontFamily: null,
+  fontSize: null,
+};
 
 /** One selected rectangle of cells, normalized so `r1<=r2`/`c1<=c2` always holds — the single primitive every selection-driven feature (range highlight, bulk formatting, Delete-to-clear, merge, "select whole row/column") is built on. */
 interface CellRange {
@@ -107,14 +140,17 @@ function blankGrid(): TemplateGridData {
   return {
     rows: Array.from({ length: DEFAULT_ROWS }, () => Array.from({ length: DEFAULT_COLS }, blankCell)),
     columnWidths: Array.from({ length: DEFAULT_COLS }, () => DEFAULT_COL_WIDTH),
+    columnAutoFit: Array.from({ length: DEFAULT_COLS }, () => false),
     rowHeights: Array.from({ length: DEFAULT_ROWS }, () => DEFAULT_ROW_HEIGHT),
     merges: [],
   };
 }
 
-/** A saved grid may predate `rowHeights`/`merges`/italic/font family/font size (this feature is still being iterated on) — fills in sane defaults instead of crashing on the missing fields. */
+/** A saved grid may predate `columnAutoFit`/`rowHeights`/`merges`/italic/font family/font size (this feature is still being iterated on) — fills in sane defaults instead of crashing on the missing fields. */
 function normalizeGrid(g: TemplateGridData): TemplateGridData {
   const rowHeights = g.rowHeights?.length === g.rows.length ? g.rowHeights : g.rows.map(() => DEFAULT_ROW_HEIGHT);
+  const columnWidths = g.columnWidths ?? [];
+  const columnAutoFit = g.columnAutoFit?.length === columnWidths.length ? g.columnAutoFit : columnWidths.map(() => false);
   const rows = g.rows.map((row) =>
     row.map((cell) => ({
       value: cell.value ?? "",
@@ -126,7 +162,7 @@ function normalizeGrid(g: TemplateGridData): TemplateGridData {
       fontSize: cell.fontSize ?? null,
     })),
   );
-  return { rows, columnWidths: g.columnWidths ?? [], rowHeights, merges: g.merges ?? [] };
+  return { rows, columnWidths, columnAutoFit, rowHeights, merges: g.merges ?? [] };
 }
 
 /** One Google-Sheets-style toolbar color control: an icon with a thin color-swatch bar underneath, a native `<input type="color">` invisibly overlaid on top so the whole icon opens the OS color picker on click. */
@@ -145,6 +181,7 @@ function ToolbarColorButton({
 }) {
   return (
     <label
+      className="template-grid-color-button"
       style={{
         position: "relative",
         display: "flex",
@@ -165,7 +202,14 @@ function ToolbarColorButton({
         disabled={disabled}
         value={color}
         onChange={(e) => onChange(e.target.value)}
-        style={{ position: "absolute", inset: 0, opacity: 0, cursor: disabled ? "default" : "pointer" }}
+        // `<input type="color">` is a replaced element with its own
+        // intrinsic minimum size — `inset:0` alone only positions it, it
+        // does NOT shrink a native form control to fit a small container.
+        // Left unset, the (invisible, opacity:0) input renders at its
+        // normal native size and silently spills into whatever's next in
+        // the toolbar, stealing its clicks. Explicit width/height forces it
+        // to actually match this button's own small box.
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: disabled ? "default" : "pointer" }}
       />
     </label>
   );
@@ -186,7 +230,7 @@ function ToolbarColorButton({
  * `onCellContextMenu`/`onRowContextMenu`.
  */
 const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEditorProps>(function TemplateGridEditor(
-  { initialGrid, rowBadges, onCellContextMenu, onRowContextMenu },
+  { initialGrid, rowBadges, onCellContextMenu, onRowContextMenu, onColumnContextMenu, highlightExactValues },
   ref,
 ) {
   const [grid, setGrid] = useState<TemplateGridData>(() => (initialGrid ? normalizeGrid(initialGrid) : blankGrid()));
@@ -269,20 +313,42 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
       const needsCol = col === g.columnWidths.length - 1;
       if (!needsRow && !needsCol) return { ...g, rows };
       const columnWidths = needsCol ? [...g.columnWidths, DEFAULT_COL_WIDTH] : g.columnWidths;
+      const columnAutoFit = needsCol ? [...g.columnAutoFit, false] : g.columnAutoFit;
       const widenedRows = needsCol ? rows.map((r) => [...r, blankCell()]) : rows;
       const finalRows = needsRow ? [...widenedRows, Array.from({ length: columnWidths.length }, blankCell)] : widenedRows;
       const rowHeights = needsRow ? [...g.rowHeights, DEFAULT_ROW_HEIGHT] : g.rowHeights;
-      return { rows: finalRows, columnWidths, rowHeights, merges: g.merges };
+      return { rows: finalRows, columnWidths, columnAutoFit, rowHeights, merges: g.merges };
     });
   }
 
-  function handleCellMouseDown(row: number, col: number) {
-    dragAnchorRef.current = { row, col };
-    isDraggingRef.current = true;
-    wrapperRef.current?.focus();
+  /** Selects exactly one cell (or, if it's part of an existing merge, that merge's whole span) without starting a drag — used for right-clicks and other "just move the selection here" actions where extending on mouse-move would be wrong. */
+  function selectSingleCell(row: number, col: number) {
     const merge = findMergeAt(grid.merges, row, col);
     setRange(merge ? mergeToRange(merge) : { r1: row, c1: col, r2: row, c2: col });
     if (editingCell && (editingCell.row !== row || editingCell.col !== col)) setEditingCell(null);
+  }
+
+  function handleCellMouseDown(row: number, col: number, e: ReactMouseEvent) {
+    // Only the left button starts a drag-select — a right-click (which also
+    // fires mousedown before its own contextmenu event) must never start
+    // one, or moving the mouse while the context menu is still open keeps
+    // extending the selection into whatever's under the cursor.
+    if (e.button !== 0) {
+      selectSingleCell(row, col);
+      return;
+    }
+    // Shift+click extends from wherever the last plain click landed
+    // (dragAnchorRef, left untouched here) instead of starting a fresh
+    // drag — the standard "click A1, shift+click A2" range-select gesture.
+    if (e.shiftKey && dragAnchorRef.current) {
+      setRange(normalizeRange(dragAnchorRef.current, { row, col }));
+      setEditingCell(null);
+      return;
+    }
+    dragAnchorRef.current = { row, col };
+    isDraggingRef.current = true;
+    wrapperRef.current?.focus();
+    selectSingleCell(row, col);
   }
 
   function handleCellMouseEnter(row: number, col: number) {
@@ -360,6 +426,7 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
       setCellValue: (row, col, value) => setCellText(row, col, value),
       toggleCellBold: (row, col) => updateCell(row, col, { bold: !grid.rows[row]?.[col]?.bold }),
       toggleCellItalic: (row, col) => updateCell(row, col, { italic: !grid.rows[row]?.[col]?.italic }),
+      patchCell: (row, col, patch) => updateCell(row, col, patch),
       setRowBackgroundColor: (row, color) => {
         setGrid((g) => ({
           ...g,
@@ -367,12 +434,19 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
         }));
       },
       getRowBackgroundColor: (row) => grid.rows[row]?.[0]?.backgroundColor ?? null,
+      getSelectionRangeSize: () => (range ? { rows: range.r2 - range.r1 + 1, cols: range.c2 - range.c1 + 1 } : null),
+      isSelectionMerged: () => Boolean(existingMergeForRange),
+      toggleMergeSelection: () => handleMergeClick(),
+      setColumnAutoFit: (col, autoFit) => {
+        setGrid((g) => ({ ...g, columnAutoFit: g.columnAutoFit.map((v, i) => (i === col ? autoFit : v)) }));
+      },
+      getColumnAutoFit: (col) => grid.columnAutoFit[col] ?? false,
     }),
-    // Re-created whenever `grid` changes so every closure above reads fresh
-    // state — this is a small grid (tens of cells), re-creating the handle
-    // object on each change is not a real cost.
+    // Re-created whenever `grid`/`range` change so every closure above reads
+    // fresh state — this is a small grid (tens of cells), re-creating the
+    // handle object on each change is not a real cost.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [grid],
+    [grid, range],
   );
 
   const rowCount = grid.rows.length;
@@ -483,6 +557,16 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
         >
           <Combine size={14} />
         </button>
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => range && updateRange(range, RESET_FORMAT_PATCH)}
+          disabled={!range}
+          title="Limpar formatação (mantém o texto)"
+          style={{ padding: "0.4rem 0.55rem" }}
+        >
+          <Eraser size={14} />
+        </button>
       </div>
       <div
         ref={wrapperRef}
@@ -496,8 +580,12 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
           {Array.from({ length: colCount }, (_, c) => (
             <div
               key={`h${c}`}
-              className="template-grid-selector"
+              className="template-grid-selector template-grid-selector--column"
               onClick={() => selectColumn(c)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                onColumnContextMenu?.(c, e.clientX, e.clientY);
+              }}
               style={{
                 gridColumn: c + 2,
                 gridRow: 1,
@@ -524,7 +612,7 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
             return (
               <div
                 key={`g${r}`}
-                className="template-grid-selector"
+                className="template-grid-selector template-grid-selector--row"
                 onClick={() => selectRow(r)}
                 onContextMenu={(e) => {
                   e.preventDefault();
@@ -563,18 +651,25 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
               const colSpan = merge?.colSpan ?? 1;
               const inRange = range ? cellInRange(range, r, c) : false;
               const isEditing = editingCell?.row === r && editingCell?.col === c;
+              const isGrouped = highlightExactValues?.has(cell.value.trim()) ?? false;
               return (
                 <div
                   key={`${r},${c}`}
-                  onMouseDown={() => handleCellMouseDown(r, c)}
+                  onMouseDown={(e) => handleCellMouseDown(r, c, e)}
                   onMouseEnter={() => handleCellMouseEnter(r, c)}
                   onDoubleClick={() => setEditingCell({ row: r, col: c })}
                   onContextMenu={(e) => {
                     e.preventDefault();
-                    handleCellMouseDown(r, c);
-                    onCellContextMenu?.(r, c, cell.value, e.clientX, e.clientY);
+                    // Right-clicking inside the CURRENT selection keeps it
+                    // intact (so "Mesclar células" in the menu can act on
+                    // the whole thing) — only right-clicking outside it
+                    // collapses the selection down to just this cell.
+                    if (!range || !cellInRange(range, r, c)) selectSingleCell(r, c);
+                    onCellContextMenu?.(r, c, cell.value, cell.backgroundColor, cell.fontColor, e.clientX, e.clientY);
                   }}
+                  title={isGrouped ? "Usado no agrupamento" : undefined}
                   style={{
+                    position: "relative",
                     gridColumn: `${c + 2} / span ${colSpan}`,
                     gridRow: `${r + 2} / span ${rowSpan}`,
                     borderTop: "1px solid var(--border)",
@@ -587,6 +682,19 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
                     overflow: "hidden",
                   }}
                 >
+                  {isGrouped && (
+                    <span
+                      title="Usado no agrupamento"
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        height: 3,
+                        background: "#a78bfa",
+                      }}
+                    />
+                  )}
                   {isEditing ? (
                     <input
                       ref={inputRef}
