@@ -463,11 +463,33 @@ fn header_str(headers: &reqwest::header::HeaderMap, name: reqwest::header::Heade
     headers.get(name).and_then(|v| v.to_str().ok()).map(|s| s.to_string())
 }
 
+/// Minimal percent-decoding ("%20" -> space, "%C3%A7" -> "ç") — both a URL's
+/// own path segments (`url::Url::path_segments()` yields them still
+/// encoded, per the RFC) and the RFC 5987 `filename*=UTF-8''...` form need
+/// this reversed before the name is fit for display; not worth a whole
+/// crate dependency just for a filename.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+}
+
 /// Best-effort filename from `Content-Disposition: attachment;
-/// filename="..."` (the common shape for "direct download" links) — no
-/// percent-decoding of the RFC 5987 `filename*=UTF-8''...` form, just
-/// enough to strip the prefix/quoting. Falls through to the URL's last
-/// path segment, then a synthesized default, if this doesn't match.
+/// filename="..."` (the common shape for "direct download" links). Falls
+/// through to the URL's last path segment, then a synthesized default, if
+/// this doesn't match.
 fn filename_from_content_disposition(header: Option<&str>) -> Option<String> {
     let header = header?;
     for part in header.split(';') {
@@ -478,6 +500,7 @@ fn filename_from_content_disposition(header: Option<&str>) -> Option<String> {
         // right there, before ever reaching the `filename=`/`filename*=`
         // part later in the same header. `continue` instead, so a
         // non-matching part just skips to the next one.
+        let is_rfc5987 = part.starts_with("filename*=");
         let Some(value) = part
             .strip_prefix("filename*=")
             .map(|v| v.trim_start_matches("UTF-8''").trim_start_matches("utf-8''"))
@@ -487,7 +510,7 @@ fn filename_from_content_disposition(header: Option<&str>) -> Option<String> {
         };
         let cleaned = value.trim_matches('"').trim();
         if !cleaned.is_empty() {
-            return Some(cleaned.to_string());
+            return Some(if is_rfc5987 { percent_decode(cleaned) } else { cleaned.to_string() });
         }
     }
     None
@@ -495,7 +518,7 @@ fn filename_from_content_disposition(header: Option<&str>) -> Option<String> {
 
 fn filename_from_url(url: &reqwest::Url) -> Option<String> {
     let last = url.path_segments()?.next_back()?;
-    (!last.trim().is_empty()).then(|| last.to_string())
+    (!last.trim().is_empty()).then(|| percent_decode(last))
 }
 
 #[derive(Debug, Clone, Serialize)]

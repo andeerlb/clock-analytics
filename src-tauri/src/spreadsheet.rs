@@ -17,13 +17,45 @@ fn is_csv(path: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Translates the handful of calamine errors a user might plausibly hit
+/// into a plain Portuguese message instead of calamine's own English
+/// wording — most of its error variants are XML/numeric-parsing minutiae
+/// nobody but us could act on anyway, but "worksheet not found" (a
+/// template mapped against a sheet name the actual file doesn't have —
+/// wrong file picked, or the sheet got renamed) and "won't open" (commonly
+/// a file still open in Excel, per calamine's own `XlsxError::Io` doc
+/// comment) are both things a user hits routinely and can act on once the
+/// message actually says so. Anything else falls back to calamine's own
+/// text — still readable, if more technical — rather than hiding an
+/// unexpected error behind a generic "algo deu errado".
+fn friendly_calamine_error(e: calamine::Error) -> String {
+    use calamine::Error;
+    match e {
+        Error::Xlsx(calamine::XlsxError::WorksheetNotFound(name))
+        | Error::Xls(calamine::XlsError::WorksheetNotFound(name))
+        | Error::Xlsb(calamine::XlsbError::WorksheetNotFound(name))
+        | Error::Ods(calamine::OdsError::WorksheetNotFound(name)) => format!(
+            "A aba \"{name}\" esperada por este template não foi encontrada no arquivo — confira se é o arquivo certo ou se a aba não foi renomeada."
+        ),
+        Error::Io(io_err) => format!(
+            "Não foi possível abrir o arquivo — confira se ele não está aberto em outro programa (como o Excel) e tente novamente. ({io_err})"
+        ),
+        other => other.to_string(),
+    }
+}
+
+/// Same idea as `friendly_calamine_error`, for the csv-reading path.
+fn friendly_csv_error(e: csv::Error) -> String {
+    format!("Não foi possível ler o arquivo como CSV — confira se o delimitador selecionado está certo. ({e})")
+}
+
 /// Sheet names in an xlsx/xls/ods workbook — empty for csv (no concept of
 /// sheets), so the frontend can key "show tabs?" off `sheets.is_empty()`.
 pub fn list_sheets(path: &str) -> Result<Vec<String>, String> {
     if is_csv(path) {
         return Ok(Vec::new());
     }
-    let workbook = open_workbook_auto(path).map_err(|e| e.to_string())?;
+    let workbook = open_workbook_auto(path).map_err(friendly_calamine_error)?;
     Ok(workbook.sheet_names())
 }
 
@@ -84,20 +116,20 @@ pub fn preview(
             .has_headers(false)
             .flexible(true)
             .from_path(path)
-            .map_err(|e| e.to_string())?;
+            .map_err(friendly_csv_error)?;
         let rows = reader
             .records()
             .take(max_rows as usize)
             .map(|r| r.map(|record| record.iter().map(|f| f.to_string()).collect()))
             .collect::<Result<Vec<Vec<String>>, _>>()
-            .map_err(|e| e.to_string())?;
+            .map_err(friendly_csv_error)?;
         return Ok(SpreadsheetPreview {
             rows,
             delimiter: Some((delim_byte as char).to_string()),
         });
     }
 
-    let mut workbook = open_workbook_auto(path).map_err(|e| e.to_string())?;
+    let mut workbook = open_workbook_auto(path).map_err(friendly_calamine_error)?;
     let sheet_name = match sheet {
         Some(name) => name.to_string(),
         None => workbook
@@ -108,7 +140,7 @@ pub fn preview(
     };
     let range = workbook
         .worksheet_range(&sheet_name)
-        .map_err(|e| e.to_string())?;
+        .map_err(friendly_calamine_error)?;
     let rows = range
         .rows()
         .take(max_rows as usize)
@@ -213,12 +245,12 @@ pub fn apply_template(
             .has_headers(false)
             .flexible(true)
             .from_path(path)
-            .map_err(|e| e.to_string())?;
+            .map_err(friendly_csv_error)?;
 
         let mut out = Vec::new();
         for (i, record) in reader.records().enumerate() {
             let row_number = (i + 1) as u32;
-            let record = record.map_err(|e| e.to_string())?;
+            let record = record.map_err(friendly_csv_error)?;
             let fields: HashMap<String, String> = group
                 .field_mappings
                 .iter()
@@ -243,7 +275,7 @@ pub fn apply_template(
         return Ok(out);
     }
 
-    let mut workbook = open_workbook_auto(path).map_err(|e| e.to_string())?;
+    let mut workbook = open_workbook_auto(path).map_err(friendly_calamine_error)?;
     let mut out = Vec::new();
     for group in groups {
         let mapped_indices: std::collections::HashSet<usize> = group
@@ -254,7 +286,7 @@ pub fn apply_template(
         for sheet_name in &group.sheet_names {
             let range = workbook
                 .worksheet_range(sheet_name)
-                .map_err(|e| e.to_string())?;
+                .map_err(friendly_calamine_error)?;
             for (i, row) in range.rows().enumerate() {
                 let row_number = (i + 1) as u32;
                 let fields: HashMap<String, String> = group

@@ -123,6 +123,23 @@ export function fileNameFromPath(path: string): string {
 }
 
 /**
+ * A URL-sourced filename that's already percent-decoded on the Rust side
+ * (see `percent_decode` in commands.rs) comes through untouched — this is
+ * only for rows logged before that fix existed, where "%20"/"%C3%A7" got
+ * stored as literal text in `source_files.file_name`. `decodeURIComponent`
+ * throws on a malformed sequence (e.g. a lone "%" in a name that was never
+ * URL-encoded to begin with), so this falls back to the original string
+ * rather than showing an error in place of a filename.
+ */
+export function safeDecodeFileName(name: string): string {
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
+}
+
+/**
  * "2026-08-04-153042" — sortable, filesystem-safe (no colons) local
  * timestamp for a default file name, so generating a zip more than once in
  * the same session doesn't collide with the previous one and prompt to
