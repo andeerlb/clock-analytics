@@ -10,6 +10,7 @@ import {
   FileText,
   FolderOpen,
   Info,
+  Link2,
   ListOrdered,
   Pencil,
   Plus,
@@ -25,6 +26,7 @@ import {
 import { useEffect, useState } from "react";
 import {
   addRecentPaymentFile,
+  downloadPaymentFileFromUrl,
   listRecentPaymentFiles,
   listSpreadsheetSheets,
   pickPaymentFile,
@@ -202,6 +204,9 @@ export default function PaymentTemplateWizard({
 
   const [recentFiles, setRecentFiles] = useState<string[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [urlInput, setUrlInput] = useState("");
+  const [urlDownloading, setUrlDownloading] = useState(false);
+  const [urlError, setUrlError] = useState<string | null>(null);
 
   const isEditing = target !== null && target !== "new";
   const steps: WizardStep[] = isEditing ? ["mapping", "details"] : ["file", "mapping", "details"];
@@ -416,6 +421,22 @@ export default function PaymentTemplateWizard({
       .then(() => listRecentPaymentFiles())
       .then(setRecentFiles)
       .catch(() => {});
+  }
+
+  /** "Baixar por URL" in the Arquivo step — same direct-download-link download `Importar Pagamentos`'s URL tab uses, just to get a sample file for the mapping instead of an actual import. The downloaded copy's local path already carries the right extension (see `download_payment_file_from_url` in commands.rs), so `selectFile` picks it up exactly like a locally-chosen file from here on. */
+  async function handleDownloadFromUrl() {
+    const targetUrl = urlInput.trim();
+    if (!targetUrl) return;
+    setUrlError(null);
+    setUrlDownloading(true);
+    try {
+      const result = await downloadPaymentFileFromUrl(targetUrl);
+      await selectFile(result.path);
+    } catch (e) {
+      setUrlError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setUrlDownloading(false);
+    }
   }
 
   async function handlePickFile() {
@@ -987,6 +1008,41 @@ export default function PaymentTemplateWizard({
                   <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
                   Selecionar arquivo
                 </button>
+              </div>
+
+              <div className="glass-panel" style={{ marginTop: "1rem" }}>
+                <h4 className="glass-panel-heading" style={{ fontSize: "0.85rem" }}>
+                  <Link2 size={16} />
+                  Ou baixar por URL
+                </h4>
+                <p className="glass-panel-desc">
+                  Link de download direto e anônimo (sem exigir login) para um arquivo Excel
+                  (.xlsx/.xls) ou OpenDocument (.ods).
+                </p>
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <input
+                    type="url"
+                    className="glass-input"
+                    placeholder="https://exemplo.com/arquivo.xlsx"
+                    value={urlInput}
+                    onChange={(e) => setUrlInput(e.target.value)}
+                    disabled={urlDownloading}
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={handleDownloadFromUrl}
+                    disabled={!urlInput.trim() || urlDownloading}
+                  >
+                    {urlDownloading ? "Baixando..." : "Baixar arquivo"}
+                  </button>
+                </div>
+                {urlError && (
+                  <div className="error-box" style={{ marginTop: "0.6rem" }}>
+                    {urlError}
+                  </div>
+                )}
               </div>
             </div>
 

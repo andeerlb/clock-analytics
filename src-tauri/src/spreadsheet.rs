@@ -49,6 +49,25 @@ fn friendly_csv_error(e: csv::Error) -> String {
     format!("Não foi possível ler o arquivo como CSV — confira se o delimitador selecionado está certo. ({e})")
 }
 
+/// Finds the sheet in `available` that a template's saved `wanted` name
+/// refers to — exact match first, then falling back to one that treats
+/// spaces and underscores as interchangeable. A template's `sheet_names`
+/// were captured from whatever copy of the file built its mapping; a later
+/// import can be reading a *different* copy of "the same" spreadsheet
+/// (e.g. one fetched by URL vs. one downloaded by hand through a browser),
+/// and some sources — OneDrive/SharePoint exports in particular — aren't
+/// perfectly consistent about which of the two characters a sheet name
+/// with a space actually round-trips as. `None` if nothing matches even
+/// loosely, meaning the sheet is genuinely missing/renamed.
+fn resolve_sheet_name<'a>(wanted: &str, available: &'a [String]) -> Option<&'a str> {
+    if let Some(exact) = available.iter().find(|s| s.as_str() == wanted) {
+        return Some(exact);
+    }
+    let normalize = |s: &str| s.replace(['_', ' '], "\u{0}");
+    let wanted_norm = normalize(wanted);
+    available.iter().find(|s| normalize(s) == wanted_norm).map(|s| s.as_str())
+}
+
 /// Sheet names in an xlsx/xls/ods workbook — empty for csv (no concept of
 /// sheets), so the frontend can key "show tabs?" off `sheets.is_empty()`.
 pub fn list_sheets(path: &str) -> Result<Vec<String>, String> {
@@ -276,6 +295,7 @@ pub fn apply_template(
     }
 
     let mut workbook = open_workbook_auto(path).map_err(friendly_calamine_error)?;
+    let available_sheets = workbook.sheet_names();
     let mut out = Vec::new();
     for group in groups {
         let mapped_indices: std::collections::HashSet<usize> = group
@@ -284,8 +304,15 @@ pub fn apply_template(
             .filter_map(|(letter, _)| column_index(letter))
             .collect();
         for sheet_name in &group.sheet_names {
+            let resolved_name = resolve_sheet_name(sheet_name, &available_sheets)
+                .ok_or_else(|| {
+                    format!(
+                        "A aba \"{sheet_name}\" esperada por este template não foi encontrada no arquivo — confira se é o arquivo certo ou se a aba não foi renomeada."
+                    )
+                })?
+                .to_string();
             let range = workbook
-                .worksheet_range(sheet_name)
+                .worksheet_range(&resolved_name)
                 .map_err(friendly_calamine_error)?;
             for (i, row) in range.rows().enumerate() {
                 let row_number = (i + 1) as u32;
