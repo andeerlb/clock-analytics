@@ -137,28 +137,59 @@ export function pxToExcelWidth(px: number): number {
   return Math.max(4, Math.round((px - 5) / 7));
 }
 
-/** Copies one template row (values + per-cell background/text color/bold) into the workbook at `destRowNumber` (1-based), optionally substituting each cell's text via `renderCell`. Used for the static header block (identity mapping, no substitution) and for every repeated detail/separator/subtotal row. */
+/** Excel row height is in points, not pixels — `px * 0.75` is the standard 96dpi-screen-px-to-point conversion, same rough-approximation spirit as `pxToExcelWidth`. */
+export function pxToExcelPoints(px: number): number {
+  if (!px || Number.isNaN(px)) return 15;
+  return Math.max(6, Math.round(px * 0.75));
+}
+
+export interface WriteTemplateRowOptions {
+  /** Substitutes each cell's raw text — used for repeating detail/separator/subtotal rows; omitted for the static header block, which is written verbatim. */
+  renderCell?: (colIndex: number, rawValue: string) => string | number;
+  /**
+   * Only true for the static header block (written once, at its real
+   * unshifted row). A repeating detail/separator/subtotal row caps every
+   * merge anchored on it to its own single row (colSpan only, rowSpan
+   * forced to 1) — a merge that spanned rows would bleed into whatever the
+   * next repeated record writes on the following row.
+   */
+  honorRowSpan?: boolean;
+}
+
+/** Copies one template row (values, per-cell background/text color/bold/italic/font, and any merge anchored on it) into the workbook at `destRowNumber` (1-based). Used for the static header block (identity mapping, no substitution) and for every repeated detail/separator/subtotal row. */
 export function writeTemplateRow(
   sheet: ExcelJS.Worksheet,
   grid: TemplateGridData,
   templateRowIndex: number,
   destRowNumber: number,
-  renderCell?: (colIndex: number, rawValue: string) => string | number,
+  options: WriteTemplateRowOptions = {},
 ) {
   const templateRow = grid.rows[templateRowIndex] ?? [];
   const destRow = sheet.getRow(destRowNumber);
+  const rowHeight = grid.rowHeights?.[templateRowIndex];
+  if (rowHeight) destRow.height = pxToExcelPoints(rowHeight);
+
   templateRow.forEach((templateCell, c) => {
-    const value = renderCell ? renderCell(c, templateCell.value) : templateCell.value;
+    const value = options.renderCell ? options.renderCell(c, templateCell.value) : templateCell.value;
     const destCell = destRow.getCell(c + 1);
     destCell.value = value === "" ? null : value;
     if (templateCell.backgroundColor) {
       destCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: hexToArgb(templateCell.backgroundColor) } };
     }
-    if (templateCell.bold || templateCell.fontColor) {
+    if (templateCell.bold || templateCell.italic || templateCell.fontColor || templateCell.fontFamily || templateCell.fontSize) {
       destCell.font = {
         bold: templateCell.bold || undefined,
+        italic: templateCell.italic || undefined,
         color: templateCell.fontColor ? { argb: hexToArgb(templateCell.fontColor) } : undefined,
+        name: templateCell.fontFamily ?? undefined,
+        size: templateCell.fontSize ?? undefined,
       };
     }
   });
+
+  for (const merge of grid.merges ?? []) {
+    if (merge.row !== templateRowIndex) continue;
+    const rowSpan = options.honorRowSpan ? merge.rowSpan : 1;
+    sheet.mergeCells(destRowNumber, merge.col + 1, destRowNumber + rowSpan - 1, merge.col + merge.colSpan);
+  }
 }

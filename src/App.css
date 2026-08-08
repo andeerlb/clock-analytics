@@ -555,6 +555,21 @@ tr:last-child td {
   outline-color: var(--accent);
 }
 
+/* The row-number/column-letter selector cells in TemplateGridEditor — a
+   hover brightness bump plus a solid down-arrow cursor (closest CSS can get
+   to Excel/Sheets' own "click to select the whole row/column" cursor,
+   which is a native bitmap cursor with no CSS equivalent). */
+.template-grid-selector {
+  cursor:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Cpath d='M2 4 L12 4 L7 11 Z' fill='%23111827' stroke='white' stroke-width='1.2'/%3E%3C/svg%3E")
+      7 7,
+    pointer;
+  transition: filter 0.1s ease;
+}
+.template-grid-selector:hover {
+  filter: brightness(1.35);
+}
+
 .muted {
   color: var(--text-muted);
   font-size: 0.9rem;

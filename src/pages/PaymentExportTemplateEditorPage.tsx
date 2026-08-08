@@ -145,6 +145,7 @@ export default function PaymentExportTemplateEditorPage() {
         })),
       },
       { label: "Negrito", onClick: () => gridRef.current?.toggleCellBold(row, col) },
+      { label: "Itálico", onClick: () => gridRef.current?.toggleCellItalic(row, col) },
     ];
 
     const exactField = value.trim().match(/^\{\{(\w+)\}\}$/)?.[1];
@@ -253,7 +254,7 @@ export default function PaymentExportTemplateEditorPage() {
       return;
     }
 
-    const grid = gridRef.current?.getGrid() ?? { rows: [], columnWidths: [] };
+    const grid = gridRef.current?.getGrid() ?? { rows: [], columnWidths: [], rowHeights: [], merges: [] };
     const config: PaymentExportTemplateConfig = {
       grid,
       detailRowIndex,

@@ -582,7 +582,7 @@ export const PAYMENT_EXPORT_BINDABLE_FIELD_LABELS: Record<PaymentExportBindableF
   employeeName: "Colaborador",
 };
 
-/** One cell in a `TemplateGridData` — deliberately minimal: text + background/text color + bold, nothing else (no formulas, no merges, no borders). */
+/** One cell in a `TemplateGridData` — deliberately minimal: text, background/text color, bold/italic, font family/size, nothing else (no formulas, no borders). */
 export interface TemplateGridCell {
   value: string;
   /** "#rrggbb", or `null` for no fill. */
@@ -590,6 +590,20 @@ export interface TemplateGridCell {
   /** "#rrggbb", or `null` for the sheet's default text color. */
   fontColor: string | null;
   bold: boolean;
+  italic: boolean;
+  /** e.g. "Arial" — `null` means the sheet default ("Calibri"). */
+  fontFamily: string | null;
+  /** Points, e.g. 11 — `null` means the sheet default (11). */
+  fontSize: number | null;
+}
+
+/** One merged block of cells, anchored at its top-left — see `TemplateGridData.merges`. */
+export interface TemplateGridMerge {
+  row: number;
+  col: number;
+  /** Both >= 1; a 1x1 "merge" never actually gets created (the UI only offers merging a range of more than one cell). */
+  rowSpan: number;
+  colSpan: number;
 }
 
 /** The whole hand-built grid a `PaymentExportTemplateConfig` is designed on — see `src/components/TemplateGridEditor.tsx`. */
@@ -598,6 +612,9 @@ export interface TemplateGridData {
   rows: TemplateGridCell[][];
   /** Pixel width per column, same length as every row in `rows`. */
   columnWidths: number[];
+  /** Pixel height per row, same length as `rows`. */
+  rowHeights: number[];
+  merges: TemplateGridMerge[];
 }
 
 /**
