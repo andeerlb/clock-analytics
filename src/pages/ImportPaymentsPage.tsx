@@ -140,6 +140,8 @@ interface PaymentPreviewRow {
   matchedShiftId: number | null;
   /** Whether that matched row was a deliberate manual action (editar valor/fazer pagamento/voltar para pendente), not an import — combined with the `keepManualEdits` setting, this decides whether the row can even be selected for reprocessing. */
   matchedEditedManually: boolean;
+  /** Whether the match was only found by walking the matched shift's history — its own Local/Função/Horário/Data have since been hand-edited away from what's still in this file (see `findDuplicatePaymentShifts`). Only meaningful alongside `matchedEditedManually`. */
+  matchedIdentityChanged: boolean;
 }
 
 function buildExtraData(row: PaymentPreviewRow): Record<string, string> {
@@ -677,6 +679,7 @@ export default function ImportPaymentsPage() {
               // Filled in below, once `findDuplicatePaymentShifts` has actually run against the batch.
               matchedShiftId: null,
               matchedEditedManually: false,
+              matchedIdentityChanged: false,
             };
 
             // No fixed header row anymore — a physical row is only "real
@@ -771,6 +774,7 @@ export default function ImportPaymentsPage() {
         dbCheckCandidates[i].category = "duplicate";
         dbCheckCandidates[i].matchedShiftId = match.shiftId;
         dbCheckCandidates[i].matchedEditedManually = match.editedManually;
+        dbCheckCandidates[i].matchedIdentityChanged = match.identityChanged;
       });
 
       const defaultSelected = new Set<number>();
@@ -859,6 +863,7 @@ export default function ImportPaymentsPage() {
         dbCheckTargets[i].category = "duplicate";
         dbCheckTargets[i].matchedShiftId = match.shiftId;
         dbCheckTargets[i].matchedEditedManually = match.editedManually;
+        dbCheckTargets[i].matchedIdentityChanged = match.identityChanged;
       });
     }
 
@@ -931,6 +936,7 @@ export default function ImportPaymentsPage() {
       dbCheckTargets[i].category = "duplicate";
       dbCheckTargets[i].matchedShiftId = match.shiftId;
       dbCheckTargets[i].matchedEditedManually = match.editedManually;
+      dbCheckTargets[i].matchedIdentityChanged = match.identityChanged;
     });
 
     setSelectedRows((prev) => {
@@ -1589,7 +1595,7 @@ export default function ImportPaymentsPage() {
                                 disabled={!canSelect}
                                 title={
                                   protectedByManualEdit
-                                    ? "Este turno foi atualizado manualmente e está protegido contra reprocessamento — desative em Configurações → Zona de risco → Pagamentos para permitir."
+                                    ? 'Este turno foi atualizado manualmente e está protegido contra reprocessamento — desative "Manter registros atualizados manualmente" acima para permitir.'
                                     : undefined
                                 }
                                 aria-label={`Selecionar linha ${row.rowNumber}`}
@@ -1647,10 +1653,14 @@ export default function ImportPaymentsPage() {
                                 (protectedByManualEdit ? (
                                   <span
                                     className="badge info"
-                                    title="Todas as colunas batem com um turno já salvo, mas esse turno foi atualizado manualmente — reprocessar não vai sobrescrevê-lo."
+                                    title={
+                                      row.matchedIdentityChanged
+                                        ? "Esse turno foi atualizado manualmente (Data/Local/Função/Horário não batem mais com esta planilha) — reprocessar não vai sobrescrevê-lo."
+                                        : "Todas as colunas batem com um turno já salvo, mas esse turno foi atualizado manualmente — reprocessar não vai sobrescrevê-lo."
+                                    }
                                   >
                                     <AlertTriangle size={13} />
-                                    Editado manualmente — mantido
+                                    {row.matchedIdentityChanged ? "Dados alterados manualmente — mantido" : "Editado manualmente — mantido"}
                                   </span>
                                 ) : selectedRows.has(index) ? (
                                   <span className="badge warn">
@@ -1658,7 +1668,14 @@ export default function ImportPaymentsPage() {
                                     Será reprocessado
                                   </span>
                                 ) : (
-                                  <span className="badge overwrite" title="Todas as colunas batem com um turno já salvo. Marque a linha para reprocessar (importar de novo).">
+                                  <span
+                                    className="badge overwrite"
+                                    title={
+                                      row.matchedIdentityChanged
+                                        ? "Esse turno foi atualizado manualmente (Data/Local/Função/Horário não batem mais com esta planilha). Marque a linha para reprocessar (importar de novo) mesmo assim."
+                                        : "Todas as colunas batem com um turno já salvo. Marque a linha para reprocessar (importar de novo)."
+                                    }
+                                  >
                                     <AlertTriangle size={13} />
                                     Já importado
                                   </span>

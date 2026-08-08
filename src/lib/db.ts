@@ -2260,6 +2260,15 @@ export interface DuplicatePaymentShiftMatch {
   shiftId: number;
   /** Whether that head row was a deliberate manual action (see the transition functions above) rather than an import — the caller uses this to refuse to supersede it (unless `payment_settings.keep_manual_edits` is off). */
   editedManually: boolean;
+  /**
+   * True when the match was only found by walking history — the *head*
+   * row's own Local/Função/Horário/Data no longer equal the candidate's,
+   * because a manual edit changed one of them after this shift was
+   * imported (see the big comment below). The caller uses this to warn
+   * that "reprocessar" would overwrite data that now differs from the file,
+   * not just a status/valor.
+   */
+  identityChanged: boolean;
 }
 
 /**
@@ -2269,10 +2278,21 @@ export interface DuplicatePaymentShiftMatch {
  * and local but a different horário, is a plausible second real shift, not
  * a duplicate). An exact match is unambiguous, so the caller offers it as
  * "reprocessar" rather than a "possível duplicata" needing a judgment call.
- * Only ever matches a *head* row (`HEAD_SHIFT_CONDITION`) — a shift that's
- * been paid/reverted/edited more than once has several rows sharing this
- * same identity, and only the current one is what a reprocess would
- * actually be superseding.
+ *
+ * A plain "does the candidate match some head row's CURRENT columns" query
+ * misses one real case: `editPaymentShift` can change Local/Função/Horário
+ * (or Data) by hand, which is exactly the identity this function matches
+ * on — after that edit, the head row's identity no longer equals what's
+ * still sitting in the source file, so a plain query would treat the
+ * reimported row as brand new and create a second, disconnected shift
+ * instead of recognizing "this is the same turno, someone corrected it by
+ * hand." So this also walks forward from any HISTORICAL row (not just the
+ * head) that matches the candidate's identity, via `previous_shift_id`, to
+ * find whichever head it eventually became — same append-only chain
+ * `getPaymentShiftHistory` walks, just forward instead of backward. Every
+ * row reachable that way was necessarily produced by one of the manual
+ * transition functions above (only those ever set `previous_shift_id`), so
+ * landing on a head this way always means `editedManually` is true for it.
  */
 export async function findDuplicatePaymentShifts(
   rows: {
@@ -2288,16 +2308,44 @@ export async function findDuplicatePaymentShifts(
   const matches = new Map<number, DuplicatePaymentShiftMatch>();
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
-    const existing = await db.select<{ id: number; editedManually: number }[]>(
-      `SELECT ps.id, ps.edited_manually AS editedManually FROM payment_shifts ps
-       WHERE ps.employee_id = $1 AND ps.work_date = $2 AND ps.local = $3 AND ps.role = $4
-         AND IFNULL(ps.schedule_start_minutes, -1) = IFNULL($5, -1)
-         AND IFNULL(ps.schedule_end_minutes, -1) = IFNULL($6, -1)
-         AND ${HEAD_SHIFT_CONDITION}`,
+    const existing = await db.select<
+      {
+        id: number;
+        editedManually: number;
+        currentWorkDate: string;
+        currentLocal: string;
+        currentRole: string;
+        currentScheduleStart: number | null;
+        currentScheduleEnd: number | null;
+      }[]
+    >(
+      `WITH RECURSIVE lineage(id) AS (
+         SELECT ps.id FROM payment_shifts ps
+         WHERE ps.employee_id = $1 AND ps.work_date = $2 AND ps.local = $3 AND ps.role = $4
+           AND IFNULL(ps.schedule_start_minutes, -1) = IFNULL($5, -1)
+           AND IFNULL(ps.schedule_end_minutes, -1) = IFNULL($6, -1)
+         UNION ALL
+         SELECT next_ps.id FROM payment_shifts next_ps
+         JOIN lineage ON next_ps.previous_shift_id = lineage.id
+       )
+       SELECT ps.id, ps.edited_manually AS editedManually,
+              ps.work_date AS currentWorkDate, ps.local AS currentLocal, ps.role AS currentRole,
+              ps.schedule_start_minutes AS currentScheduleStart, ps.schedule_end_minutes AS currentScheduleEnd
+       FROM payment_shifts ps
+       WHERE ps.id IN (SELECT id FROM lineage) AND ${HEAD_SHIFT_CONDITION}
+       ORDER BY ps.id DESC
+       LIMIT 1`,
       [r.employeeId, r.workDate, r.local, r.role, r.scheduleStartMinutes, r.scheduleEndMinutes],
     );
     if (existing.length > 0) {
-      matches.set(i, { shiftId: existing[0].id, editedManually: Boolean(existing[0].editedManually) });
+      const head = existing[0];
+      const identityChanged =
+        head.currentWorkDate !== r.workDate ||
+        head.currentLocal !== r.local ||
+        head.currentRole !== r.role ||
+        (head.currentScheduleStart ?? null) !== r.scheduleStartMinutes ||
+        (head.currentScheduleEnd ?? null) !== r.scheduleEndMinutes;
+      matches.set(i, { shiftId: head.id, editedManually: Boolean(head.editedManually), identityChanged });
     }
   }
   return matches;
