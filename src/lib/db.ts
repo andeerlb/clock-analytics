@@ -1550,7 +1550,7 @@ export async function listUrlCheckLog(query: {
   return { rows, total };
 }
 
-export type CheckDiffKind = "field" | "new-shift" | "error";
+export type CheckDiffKind = "field" | "new-shift" | "unresolved" | "error";
 
 export interface CheckDiffRow {
   id: number;

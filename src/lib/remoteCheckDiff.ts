@@ -54,12 +54,19 @@ function candidateDedupKey(
  * writing to `payment_shifts`. The actual import stays 100% manual, through
  * the normal "Reprocessar agora" flow.
  *
- * A single bad row is just skipped, same as the real import does (skipped
- * date, unresolved route, colaborador não encontrado — none of those have
- * an existing record to diff against anyway). This function throws only for
- * a whole-config failure (deleted template, unreadable/corrupt file) — the
- * caller turns that into one `change_kind: 'error'` diff entry instead of
- * letting it take down every other config's check for the same URL.
+ * A row whose "data" column doesn't parse is just skipped, same as the real
+ * import does — that's a title/header/footer row, not real data. A row
+ * whose ROTA or COLABORADOR doesn't resolve is different: it IS real data
+ * (it has a date within período), it just can't be matched against
+ * `payment_shifts` — reported as `change_kind: 'unresolved'` rather than
+ * silently dropped, precisely so an edit that breaks the name/route match
+ * (a typo, a name that no longer matches any cadastro) still shows up as
+ * something changed instead of the check quietly reporting "sem mudança"
+ * while a real, unresolvable difference sits in the file. This function
+ * throws only for a whole-config failure (deleted template, unreadable/
+ * corrupt file) — the caller turns that into one `change_kind: 'error'`
+ * diff entry instead of letting it take down every other config's check
+ * for the same URL.
  */
 export async function computeReimportDiff(config: ReimportConfig, downloadedPath: string): Promise<CheckDiffInput[]> {
   const template = await getPaymentTemplate(config.templateId);
@@ -75,24 +82,76 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
   const { start: periodStart, end: periodEnd } = resolveReimportPeriod(config);
   const configLabel = resolveReimportConfigLabel(config);
 
+  function unresolvedEntry(
+    row: AppliedPaymentRow,
+    workDate: string,
+    schedule: { startMinutes: number; endMinutes: number } | null,
+    message: string,
+  ): CheckDiffInput {
+    return {
+      configId: config.id,
+      configLabel,
+      changeKind: "unresolved",
+      matchedShiftId: null,
+      employeeId: null,
+      // Not a resolved colaborador — the raw "nome" text is shown as-is so
+      // the card is still identifiable, even though it isn't an employeeId.
+      employeeName: row.fields.nome || null,
+      workDate,
+      local: row.fields.local ?? null,
+      role: row.fields.funcao ?? null,
+      scheduleStartMinutes: schedule?.startMinutes ?? null,
+      scheduleEndMinutes: schedule?.endMinutes ?? null,
+      sheetName: row.sheetName,
+      rowNumber: row.rowNumber,
+      columnLetter: null,
+      fieldName: null,
+      oldValue: null,
+      newValue: null,
+      message,
+    };
+  }
+
   const candidates: ParsedCandidate[] = [];
+  const unresolvedEntries: CheckDiffInput[] = [];
   for (const row of applied) {
     const workDateRaw = row.fields.data ?? "";
     const workDate = workDateRaw ? parseDateWithFormat(workDateRaw, template.dateFormat) : null;
     if (!workDate) continue;
     if ((periodStart && workDate < periodStart) || (periodEnd && workDate > periodEnd)) continue;
 
+    const parsedSchedule = parseScheduleToMinutes(row.fields.horario ?? "");
+
     const route = resolvePaymentRoute(template.rules, row.fields);
-    if (!route) continue;
+    if (!route) {
+      unresolvedEntries.push(
+        unresolvedEntry(
+          row,
+          workDate,
+          parsedSchedule,
+          "Nenhuma regra de rota bateu com esta linha — não dá pra saber a qual cliente/empresa ela pertence.",
+        ),
+      );
+      continue;
+    }
 
     const employee = await findEmployeeByAttempts(route.clientId, route.companyId, template.identifierPriority, {
       cpf: row.fields.cpf || null,
       matricula: row.fields.matricula || null,
       nome: row.fields.nome || null,
     });
-    if (!employee) continue;
+    if (!employee) {
+      unresolvedEntries.push(
+        unresolvedEntry(
+          row,
+          workDate,
+          parsedSchedule,
+          `Colaborador não encontrado para "${row.fields.nome || "(nome vazio)"}".`,
+        ),
+      );
+      continue;
+    }
 
-    const parsedSchedule = parseScheduleToMinutes(row.fields.horario ?? "");
     candidates.push({
       employeeId: employee.id,
       employeeName: employee.name,
@@ -217,5 +276,5 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
     }
   });
 
-  return entries;
+  return [...unresolvedEntries, ...entries];
 }

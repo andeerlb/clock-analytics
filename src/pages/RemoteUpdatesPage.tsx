@@ -60,7 +60,9 @@ function diffFieldLabel(fieldName: string | null, columnLetter: string | null): 
 }
 
 /** Same identity a deep check matched a record by (employee+data+local+função+horário) — used only to group this one check's diff rows into one card per changed record, not to look anything up. */
+/** `'unresolved'` rows have no `employeeId` at all (that's the whole point — the file's colaborador/rota didn't match anything) — grouped by their own row/aba instead, so two different unmatched rows never collapse into one card just because they share null identity fields. */
 function diffIdentityKey(r: CheckDiffRow): string {
+  if (r.employeeId === null) return `unresolved:${r.sheetName ?? ""}:${r.rowNumber ?? ""}`;
   return `${r.employeeId}|${r.workDate}|${r.local}|${r.role}|${r.scheduleStartMinutes}|${r.scheduleEndMinutes}`;
 }
 
@@ -69,9 +71,13 @@ function diffIdentityKey(r: CheckDiffRow): string {
  * reimport config, then by the specific record that changed within it, one
  * small card per record with a GitHub-diff-style before/after per field.
  * `change_kind: 'new-shift'` records (no existing match at all) get their
- * own "Possível novo turno" card instead of a field diff; `'error'` entries
- * (a whole config or the whole URL's deep pass failing) render as compact
- * error lines, separate from the field changes.
+ * own "Possível novo turno" card instead of a field diff; `'unresolved'`
+ * records (a route or colaborador that didn't match anything — e.g. a typo
+ * in the name column) get their own warning card with why, so a change that
+ * can't be matched to anything still shows up as a change instead of
+ * silently vanishing from the diff; `'error'` entries (a whole config or the
+ * whole URL's deep pass failing) render as compact error lines, separate
+ * from the field changes.
  */
 function CheckDiffPanel({ rows }: { rows: CheckDiffRow[] }) {
   const byConfig = new Map<string, CheckDiffRow[]>();
@@ -110,18 +116,19 @@ function CheckDiffPanel({ rows }: { rows: CheckDiffRow[] }) {
             {Array.from(byIdentity.entries()).map(([idKey, entries]) => {
               const first = entries[0];
               const isNew = first.changeKind === "new-shift";
+              const isUnresolved = first.changeKind === "unresolved";
               return (
                 <div
                   key={idKey}
                   style={{
-                    border: `1px solid ${isNew ? "var(--accent)" : "var(--border-soft)"}`,
+                    border: `1px solid ${isNew ? "var(--accent)" : isUnresolved ? "var(--warning)" : "var(--border-soft)"}`,
                     borderRadius: 8,
                     padding: "0.5rem 0.7rem",
                     marginBottom: "0.4rem",
                   }}
                 >
                   <div style={{ fontSize: "0.82rem", fontWeight: 500 }}>
-                    {first.employeeName ?? "—"}
+                    {first.employeeName ?? "(nome vazio)"}
                     {first.workDate ? ` — ${formatDateAbbrevYY(first.workDate)}` : ""}
                     {" · "}
                     {first.local || "—"} / {first.role || "—"}
@@ -136,6 +143,20 @@ function CheckDiffPanel({ rows }: { rows: CheckDiffRow[] }) {
                     <span className="badge ok" style={{ marginTop: "0.35rem", display: "inline-flex" }}>
                       Possível novo turno
                     </span>
+                  ) : isUnresolved ? (
+                    <div
+                      style={{
+                        marginTop: "0.35rem",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.35rem",
+                        fontSize: "0.78rem",
+                        color: "var(--warning)",
+                      }}
+                    >
+                      <AlertTriangle size={13} style={{ flexShrink: 0 }} />
+                      {first.message}
+                    </div>
                   ) : (
                     <div style={{ marginTop: "0.35rem", display: "flex", flexDirection: "column", gap: "0.3rem" }}>
                       {entries.map((e, i) => (
