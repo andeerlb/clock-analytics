@@ -9,6 +9,7 @@ import {
   Database,
   FileCheck2,
   FolderOpen,
+  Minimize2,
   RefreshCw,
   Sparkles,
   Trash2,
@@ -23,8 +24,10 @@ import {
   checkPopplerStatus,
   clearImportsDir,
   deletePaths,
+  getCloseToTray,
   getStorageUsage,
   openAppDataDir,
+  setCloseToTray,
   setPopplerDir,
 } from "../lib/api";
 import { clearAllData, findRedundantOriginals, markOriginalsRemoved, vacuumDatabase } from "../lib/db";
@@ -67,6 +70,10 @@ export default function SettingsPage() {
   const [popplerDirInput, setPopplerDirInput] = useState("");
   const [popplerSaving, setPopplerSaving] = useState(false);
   const [popplerError, setPopplerError] = useState<string | null>(null);
+
+  const [closeToTray, setCloseToTrayState] = useState(false);
+  const [closeToTraySaving, setCloseToTraySaving] = useState(false);
+  const [closeToTrayError, setCloseToTrayError] = useState<string | null>(null);
 
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
@@ -118,6 +125,9 @@ export default function SettingsPage() {
   useEffect(() => {
     refreshStorage();
     refreshPopplerStatus();
+    getCloseToTray()
+      .then(setCloseToTrayState)
+      .catch((e) => setCloseToTrayError(String(e)));
     getVersion().then(setAppVersion);
     // Passive check on load — best-effort like the Sidebar's, any failure
     // here just means the update badge doesn't show up; the user still has
@@ -173,6 +183,19 @@ export default function SettingsPage() {
       setPopplerError(String(e));
     } finally {
       setPopplerSaving(false);
+    }
+  }
+
+  async function handleCloseToTrayChange(enabled: boolean) {
+    setCloseToTrayError(null);
+    setCloseToTraySaving(true);
+    try {
+      await setCloseToTray(enabled);
+      setCloseToTrayState(enabled);
+    } catch (e) {
+      setCloseToTrayError(String(e));
+    } finally {
+      setCloseToTraySaving(false);
     }
   }
 
@@ -267,6 +290,36 @@ export default function SettingsPage() {
       </p>
 
       {error && <div className="error-box">{error}</div>}
+
+      <div className="card">
+        <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <Minimize2 size={18} />
+          Geral
+        </h3>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: "0.6rem", cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={closeToTray}
+            disabled={closeToTraySaving}
+            onChange={(e) => handleCloseToTrayChange(e.target.checked)}
+            style={{ marginTop: "0.2rem" }}
+          />
+          <span>
+            Minimizar na bandeja ao fechar
+            <div className="muted" style={{ fontSize: "0.85rem", marginTop: "0.2rem" }}>
+              Em vez de encerrar o PontoScan, o botão de fechar da janela só esconde o app — ele
+              continua rodando em segundo plano (ícone na bandeja do sistema), mantendo ativas as
+              verificações automáticas de arquivos (Importar Pagamentos → Verificação automática).
+              Pra encerrar de verdade, use "Sair" no menu do ícone da bandeja.
+            </div>
+          </span>
+        </label>
+        {closeToTrayError && (
+          <div className="error-box" style={{ marginTop: "0.8rem" }}>
+            {closeToTrayError}
+          </div>
+        )}
+      </div>
 
       <div className="card">
         <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>

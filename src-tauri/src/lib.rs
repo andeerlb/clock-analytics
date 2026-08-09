@@ -10,6 +10,64 @@ mod settings;
 mod spreadsheet;
 mod storage;
 
+use tauri::{
+    image::Image,
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager, WindowEvent,
+};
+
+/// Shows and focuses the main window — shared by the tray menu's "Abrir
+/// PontoScan" item and a left-click on the tray icon itself.
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// The two tray icon variants `commands::set_tray_status` swaps between —
+/// precomputed once at startup (drawing the badge per pixel is cheap, but
+/// there's no reason to redo it every time the check state changes) and
+/// kept in managed state alongside the `TrayIcon` handle itself, since nothing
+/// else needs to reach either one.
+pub(crate) struct TrayIcons {
+    pub(crate) normal: Image<'static>,
+    pub(crate) attention: Image<'static>,
+}
+
+/// Draws a solid-color circular badge over the bottom-right corner of
+/// `base` — cheap enough (a plain per-pixel distance check, no image crate
+/// needed) to just do it freehand on the already-decoded RGBA buffer
+/// instead of shipping a second icon asset to keep in sync with the first.
+fn with_attention_badge(base: &Image<'_>) -> Image<'static> {
+    let width = base.width();
+    let height = base.height();
+    let mut rgba = base.rgba().to_vec();
+
+    // ~38% of the icon's shorter side — big enough to read at 16px tray
+    // scale, small enough to leave the app icon recognizable underneath.
+    let radius = (width.min(height) as f32 * 0.38) as i32;
+    let cx = width as i32 - radius - 1;
+    let cy = height as i32 - radius - 1;
+    let r2 = radius * radius;
+    // Solid, fully opaque orange-red — reads as "status", not "brand", at
+    // this scale.
+    let badge: [u8; 4] = [237, 85, 45, 255];
+
+    for y in 0..height as i32 {
+        for x in 0..width as i32 {
+            let dx = x - cx;
+            let dy = y - cy;
+            if dx * dx + dy * dy <= r2 {
+                let idx = ((y as u32 * width + x as u32) * 4) as usize;
+                rgba[idx..idx + 4].copy_from_slice(&badge);
+            }
+        }
+    }
+    Image::new_owned(rgba, width, height)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -18,11 +76,78 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_sql::Builder::default()
                 .add_migrations(db::DB_URL, db::migrations())
                 .build(),
         )
+        .setup(|app| {
+            // Always present (regardless of the "Minimizar na bandeja ao
+            // fechar" setting) — it's the only way back once a close has
+            // been turned into a hide, and a "Sair" that actually quits.
+            let show_item = MenuItem::with_id(app, "show", "Abrir PontoScan", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+            // `.to_owned()` (not just `.clone()`) — `default_window_icon()`
+            // borrows from `app`, whose lifetime doesn't outlive this
+            // closure, but `TrayIcons` below needs a `'static` `Image` to
+            // be stored in managed state.
+            let normal_icon = app.default_window_icon().map(|icon| icon.clone().to_owned());
+
+            let mut tray = TrayIconBuilder::new().menu(&menu).tooltip("PontoScan");
+            if let Some(icon) = &normal_icon {
+                tray = tray.icon(icon.clone());
+            }
+            let tray = tray
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => show_main_window(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                        show_main_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+            app.manage(tray);
+
+            // Only set up if the app actually has a default icon to badge —
+            // `set_tray_status` no-ops via `app.try_state()` when this was
+            // never managed, same as any other "nothing to do" case.
+            if let Some(normal) = normal_icon {
+                let attention = with_attention_badge(&normal);
+                app.manage(TrayIcons { normal, attention });
+            }
+
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // "Minimizar na bandeja ao fechar" (Configurações) — re-read
+            // fresh off disk on every close request (not cached at
+            // startup) so toggling the setting takes effect immediately,
+            // without restarting the app. Only the main window matters
+            // here; every other window in this app is a modal-ish child
+            // that should just close normally.
+            if window.label() != "main" {
+                return;
+            }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let close_to_tray = window
+                    .app_handle()
+                    .path()
+                    .app_data_dir()
+                    .ok()
+                    .map(|dir| settings::load(&dir).close_to_tray)
+                    .unwrap_or(false);
+                if close_to_tray {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::list_providers,
             commands::hash_files,
@@ -47,6 +172,9 @@ pub fn run() {
             commands::add_recent_payment_file,
             commands::download_payment_file_from_url,
             commands::check_remote_payment_file,
+            commands::get_close_to_tray,
+            commands::set_close_to_tray,
+            commands::set_tray_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

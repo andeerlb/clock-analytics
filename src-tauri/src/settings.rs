@@ -20,6 +20,24 @@ pub struct AppSettings {
     /// from before this field existed still parse.
     #[serde(default)]
     pub recent_payment_files: Vec<String>,
+
+    /// "Minimizar na bandeja ao fechar" (Configurações) — when true, closing
+    /// the main window hides it into the system tray instead of quitting,
+    /// so the periodic remote-file checks (`RemoteFileUpdatesContext.tsx`)
+    /// keep running in the background. Read fresh from disk on every close
+    /// request (see `lib.rs`), not cached at startup, so toggling this
+    /// takes effect immediately without restarting the app. Defaults to
+    /// `true` — both for a brand-new install (`AppSettings::default()`
+    /// below) and for a settings.json written before this field existed
+    /// (`#[serde(default = "default_true")]`, since a bare `#[serde(default)]`
+    /// on a `bool` would resolve to `bool::default()` = `false`, not this
+    /// struct's own default).
+    #[serde(default = "default_true")]
+    pub close_to_tray: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -27,6 +45,7 @@ impl Default for AppSettings {
         AppSettings {
             poppler_dir: None,
             recent_payment_files: Vec::new(),
+            close_to_tray: true,
         }
     }
 }

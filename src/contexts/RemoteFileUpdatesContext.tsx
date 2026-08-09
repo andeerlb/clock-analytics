@@ -1,5 +1,7 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { checkRemotePaymentFile, deletePaths, downloadPaymentFileFromUrl } from "../lib/api";
+import { checkRemotePaymentFile, deletePaths, downloadPaymentFileFromUrl, setTrayStatus } from "../lib/api";
 import {
   copyCheckDiffs,
   createReimportConfig as createReimportConfigDb,
@@ -68,6 +70,48 @@ export interface RemoteUpdateFlag {
  * tick on refocus for the same reason.
  */
 const TICK_INTERVAL_MS = 60_000;
+
+// Asked once per app session (not once per tick) — `isPermissionGranted`/
+// `requestPermission` are themselves cheap, but there's no reason to pester
+// the OS every minute once the user has answered (or not) the very first
+// time. A denial just means `notifyFileChanged` below silently no-ops
+// forever after (`isPermissionGranted` keeps returning false) — never
+// re-prompted, same as any other OS permission.
+let notificationPermissionRequested = false;
+
+async function ensureNotificationPermission() {
+  if (notificationPermissionRequested) return;
+  notificationPermissionRequested = true;
+  try {
+    if (!(await isPermissionGranted())) await requestPermission();
+  } catch {
+    // Best-effort — worst case, notifications just never fire.
+  }
+}
+
+/**
+ * Fires an OS notification for a freshly CONFIRMED real change (called only
+ * from the fresh-deep-pass branch of `runOne`, never the cached-signature
+ * replay — that would otherwise re-notify every tick for as long as a
+ * change sits unaddressed). Skipped while the window is focused — if the
+ * user is already looking at the app, the in-app "Mudou" badge (Sidebar/
+ * Verificação automática) is enough; the OS notification is for when
+ * they're not (minimized, in the tray, or on another app — see "Minimizar
+ * na bandeja ao fechar" in Configurações, which is what keeps this tick
+ * loop running at all once the window is hidden).
+ */
+async function notifyFileChanged(fileName: string) {
+  try {
+    if (!(await isPermissionGranted())) return;
+    if (await getCurrentWindow().isFocused()) return;
+    await sendNotification({
+      title: "PontoScan",
+      body: `${fileName} mudou desde a última verificação.`,
+    });
+  } catch {
+    // Best-effort — a failed OS notification shouldn't affect the check itself.
+  }
+}
 
 function isConfigDue(config: ReimportConfig, urlLastCheckedAt: string | null | undefined, now: number): boolean {
   if (config.checkDisabled) return false;
@@ -353,6 +397,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
               effectiveResult,
               checkLogId,
             );
+            if (effectiveResult === "changed") await notifyFileChanged(t.fileName);
           }
         } finally {
           checkingUrlsRef.current.delete(t.sourceUrl);
@@ -413,6 +458,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
   }, [trackedFiles, runChecks]);
 
   useEffect(() => {
+    ensureNotificationPermission();
     tick();
     const interval = setInterval(tick, TICK_INTERVAL_MS);
     function onVisibilityChange() {
@@ -472,6 +518,36 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
   const remoteUpdates: RemoteUpdateFlag[] = reimportConfigs
     .filter((c) => !c.checkDisabled && changedUrls.has(c.sourceUrl) && !dismissed.has(c.id))
     .map((c) => buildReimportFlag(c, trackedFiles));
+
+  // Mirrors the same "Mudou"/erro state the Sidebar/Verificação automática
+  // page already show, onto the tray icon — the one place that's still
+  // visible once the window is hidden/minimized (see "Minimizar na bandeja
+  // ao fechar" in Configurações). `changedUrls.size` (not
+  // `remoteUpdates.length`) so dismissing one of several configs on the
+  // same still-changed URL doesn't flip the tray back to normal — the URL
+  // itself is still unaddressed.
+  const trayAttention = changedUrls.size > 0 || tickError !== null || trackedFiles.some((t) => t.lastResult === "error");
+  useEffect(() => {
+    const parts: string[] = [];
+    if (changedUrls.size > 0) {
+      parts.push(`${changedUrls.size} arquivo${changedUrls.size > 1 ? "s" : ""} com mudança`);
+    }
+    if (tickError !== null || trackedFiles.some((t) => t.lastResult === "error")) {
+      parts.push("erro na verificação");
+    }
+    const tooltip = parts.length > 0 ? `PontoScan — ${parts.join(", ")}` : "PontoScan";
+    setTrayStatus(trayAttention, tooltip).catch(() => {
+      // Best-effort — a platform without tray support (or the icon never
+      // having been set up, e.g. no default app icon) shouldn't affect
+      // anything else the app does.
+    });
+    // `trackedFiles` is a fresh array every tick (`refreshTrackedState`), so
+    // this re-sets the tray on every tick regardless of whether anything
+    // about it actually changed — harmless (the native call is cheap and
+    // idempotent), and simpler than trying to diff it by hand just to skip
+    // a no-op call.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trayAttention, changedUrls.size, tickError, trackedFiles]);
 
   /** Builds a config's reimport flag on demand, regardless of whether a change was ever detected — the "Reprocessar agora" button's whole point, unlike `remoteUpdates` which only ever holds configs with a pending detected change. `null` if the config no longer exists (deleted between the button rendering and being clicked). */
   function getReimportFlag(configId: number): RemoteUpdateFlag | null {

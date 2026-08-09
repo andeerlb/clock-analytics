@@ -802,6 +802,48 @@ pub fn set_poppler_dir(app: AppHandle, dir: Option<String>) -> Result<PopplerSta
     Ok(poppler_status(current.poppler_dir))
 }
 
+/// Checked on Configurações' mount, to show the toggle's current state.
+#[tauri::command]
+pub fn get_close_to_tray(app: AppHandle) -> Result<bool, String> {
+    Ok(load_settings(&app)?.close_to_tray)
+}
+
+/// Saves "Minimizar na bandeja ao fechar" — the actual close-vs-hide
+/// decision is made in `lib.rs`'s `CloseRequested` handler, which reads
+/// this same setting fresh off disk every time, so there's nothing else to
+/// wire up here for the change to take effect immediately.
+#[tauri::command]
+pub fn set_close_to_tray(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let mut current = settings::load(&data_dir);
+    current.close_to_tray = enabled;
+    settings::save(&data_dir, &current)
+}
+
+/// Swaps the tray icon between its normal and "atenção" (badged) variants
+/// and updates its tooltip — called from `RemoteFileUpdatesContext.tsx`
+/// whenever the aggregate check state (any pending "Mudou", or a check
+/// error) changes, so the tray reflects it even while the window is
+/// hidden/minimized. Both the `TrayIcon` handle and the two `Image`s it
+/// swaps between are precomputed once in `lib.rs`'s `.setup()` — this just
+/// looks them up and applies. A no-op (not an error) if either piece of
+/// state was never managed, e.g. the app has no default icon to badge in
+/// the first place — nothing useful to do, but not worth failing a
+/// background check over.
+#[tauri::command]
+pub fn set_tray_status(app: AppHandle, attention: bool, tooltip: String) -> Result<(), String> {
+    let Some(tray) = app.try_state::<tauri::tray::TrayIcon>() else {
+        return Ok(());
+    };
+    let Some(icons) = app.try_state::<crate::TrayIcons>() else {
+        return Ok(());
+    };
+    let icon = if attention { &icons.attention } else { &icons.normal };
+    tray.set_icon(Some(icon.clone())).map_err(|e| e.to_string())?;
+    tray.set_tooltip(Some(tooltip)).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 const MAX_RECENT_PAYMENT_FILES: usize = 5;
 
 /// Recently-picked payment template sample file paths, newest first — a

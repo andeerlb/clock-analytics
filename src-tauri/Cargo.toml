@@ -18,7 +18,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# "tray-icon": the "Minimizar na bandeja ao fechar" setting (Configurações)
+# needs a real tray icon to hide the window into — off by default upstream
+# since it pulls in extra platform deps (e.g. libayatana-appindicator on
+# Linux) that not every app wants.
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -35,6 +39,9 @@ calamine = { version = "0.36.1", features = ["dates"] }
 csv = "1.4.0"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# OS notification when a background check finds a real change while the
+# window is hidden/unfocused — see RemoteFileUpdatesContext.tsx.
+tauri-plugin-notification = "2"
 # Anonymous direct-download of a payment spreadsheet by URL, and the cheap
 # HEAD-based "did it change" check — rustls-no-provider (not reqwest's own
 # `rustls` feature) to reuse the same rustls+ring stack tauri-plugin-updater

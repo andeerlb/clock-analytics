@@ -220,6 +220,21 @@ export function setPopplerDir(dir: string | null): Promise<PopplerStatus> {
   return invoke("set_poppler_dir", { dir });
 }
 
+/** Whether "Minimizar na bandeja ao fechar" is on — checked on Configurações' mount. */
+export function getCloseToTray(): Promise<boolean> {
+  return invoke("get_close_to_tray");
+}
+
+/** Saves "Minimizar na bandeja ao fechar" — takes effect on the next close, no restart needed. */
+export function setCloseToTray(enabled: boolean): Promise<void> {
+  return invoke("set_close_to_tray", { enabled });
+}
+
+/** Swaps the tray icon (normal/"atenção" badge) and tooltip — reflects the aggregate check state even while the window is hidden. */
+export function setTrayStatus(attention: boolean, tooltip: string): Promise<void> {
+  return invoke("set_tray_status", { attention, tooltip });
+}
+
 /** Recently-picked payment template sample file paths, newest first — dead paths already filtered out. */
 export function listRecentPaymentFiles(): Promise<string[]> {
   return invoke("list_recent_payment_files");

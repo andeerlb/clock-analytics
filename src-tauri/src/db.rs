@@ -340,5 +340,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0056_payment_shift_source_position.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 57,
+            description: "backfill payment_shifts.source_row_number/source_sheet_name from extra_data's old 'linha de origem'/'aba de origem' text for every row imported before 0056 — otherwise the deep-check position fallback finds nothing for any pre-existing shift",
+            sql: include_str!("../migrations/0057_backfill_payment_shift_source_position.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -149,14 +149,18 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
       nome: row.fields.nome || null,
     });
     if (!employee) {
-      unresolvedEntries.push(
-        unresolvedEntry(
-          row,
-          workDate,
-          parsedSchedule,
-          `Colaborador não encontrado para "${row.fields.nome || "(nome vazio)"}".`,
-        ),
-      );
+      // Doesn't resolve to a colaborador on its own — but this same
+      // row/aba of this same URL may have belonged to someone on a
+      // previous import (see `findPaymentShiftByPosition`). Not treated as
+      // a match (an unmatched row stays `unresolved`, never silently
+      // reassigned to a guessed employee) — just surfaced in the message,
+      // since a broken name match is the single most likely reason a row
+      // that used to resolve suddenly stops resolving.
+      const positional = await findPaymentShiftByPosition(config.sourceUrl, row.sheetName, row.rowNumber);
+      const message = positional
+        ? `Colaborador não encontrado para "${row.fields.nome || "(nome vazio)"}" — nesta posição (${row.sheetName ? `aba ${row.sheetName}, ` : ""}linha ${row.rowNumber}) havia antes um turno de "${positional.employeeName}".`
+        : `Colaborador não encontrado para "${row.fields.nome || "(nome vazio)"}".`;
+      unresolvedEntries.push(unresolvedEntry(row, workDate, parsedSchedule, message));
       continue;
     }
 

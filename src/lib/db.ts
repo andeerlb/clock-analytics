@@ -2558,6 +2558,7 @@ export async function findDuplicatePaymentShifts(
 export interface PositionMatchedShift {
   shiftId: number;
   employeeId: number;
+  employeeName: string;
   workDate: string;
   local: string;
   role: string;
@@ -2574,16 +2575,21 @@ type PositionMatchedShiftRaw = Omit<PositionMatchedShift, "extraData" | "editedM
 };
 
 /**
- * Fallback for the deep-check diff (`remoteCheckDiff.ts`) when a candidate
- * row has no `findDuplicatePaymentShifts` identity match — the exact
- * scenario where an edit in the file to a row's OWN identity field
- * (local/função/horário/data) makes it look like a brand-new shift instead
- * of an edit of an existing one. Finds whichever *current* head shift used
- * to sit at this same row/aba of this same URL's most recent prior import,
- * via `source_row_number`/`source_sheet_name` (indexed) joined through
- * `source_file_id` to `source_files.source_url` — not by matching file
- * identity, which by definition just changed (that's why this URL's HEAD
- * check flagged it as different content in the first place).
+ * Fallback for the deep-check diff (`remoteCheckDiff.ts`), used two ways:
+ * (1) a candidate row with no `findDuplicatePaymentShifts` identity match —
+ * an edit in the file to the row's OWN identity field (local/função/
+ * horário/data) makes it look like a brand-new shift instead of an edit of
+ * an existing one; (2) a row whose COLABORADOR couldn't even be resolved
+ * (CPF/matrícula/nome all missed) — there `employeeName` lets the caller
+ * enrich the "colaborador não encontrado" message with who used to be here,
+ * without the diff silently guessing that's who it still is.
+ *
+ * Finds whichever *current* head shift used to sit at this same row/aba of
+ * this same URL's most recent prior import, via `source_row_number`/
+ * `source_sheet_name` (indexed) joined through `source_file_id` to
+ * `source_files.source_url` — not by matching file identity, which by
+ * definition just changed (that's why this URL's HEAD check flagged it as
+ * different content in the first place).
  *
  * Same head rule as `findDuplicatePaymentShifts` (`STRUCTURAL_HEAD_CONDITION`,
  * not `HEAD_SHIFT_CONDITION`) — a soft-deleted chain's head is still worth
@@ -2596,11 +2602,12 @@ export async function findPaymentShiftByPosition(
 ): Promise<PositionMatchedShift | null> {
   const db = await getDb();
   const rows = await db.select<PositionMatchedShiftRaw[]>(
-    `SELECT ps.id AS shiftId, ps.employee_id AS employeeId, ps.work_date AS workDate,
+    `SELECT ps.id AS shiftId, ps.employee_id AS employeeId, e.name AS employeeName, ps.work_date AS workDate,
             ps.local, ps.role,
             ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
             ps.status, ps.extra_data AS extraData, ps.edited_manually AS editedManually
      FROM payment_shifts ps
+     JOIN employees e ON e.id = ps.employee_id
      JOIN source_files sf ON sf.id = ps.source_file_id
      WHERE sf.source_url = $1
        AND IFNULL(ps.source_sheet_name, '') = IFNULL($2, '')
