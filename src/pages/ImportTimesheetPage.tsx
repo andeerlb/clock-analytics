@@ -63,6 +63,7 @@ type PreviewRow =
 
 const PREVIEW_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+const PATHS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 export default function ImportTimesheetPage() {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
@@ -71,6 +72,8 @@ export default function ImportTimesheetPage() {
   const [clientId, setClientId] = useState("");
   const [companyId, setCompanyId] = useState("");
   const [paths, setPaths] = useState<string[]>([]);
+  const [pathsPage, setPathsPage] = useState(0);
+  const [pathsPageSize, setPathsPageSize] = useState(PATHS_PAGE_SIZE_OPTIONS[0]);
   const [fileStatuses, setFileStatuses] = useState<Map<string, FileStatus>>(new Map());
   const [forceReprocess, setForceReprocess] = useState<Set<string>>(new Set());
   const [fileResults, setFileResults] = useState<FileParseResult[]>([]);
@@ -157,12 +160,14 @@ export default function ImportTimesheetPage() {
 
   function addPaths(newPaths: string[]) {
     setPaths((prev) => Array.from(new Set([...prev, ...newPaths])));
+    setPathsPage(0);
     cancelPreview();
     setSuccessMessage(null);
   }
 
   function removePath(path: string) {
     setPaths((prev) => prev.filter((p) => p !== path));
+    setPathsPage(0);
   }
 
   function cancelPreview() {
@@ -208,6 +213,12 @@ export default function ImportTimesheetPage() {
     }
     addPaths(selected);
   }
+
+  const pathsPageCount = Math.max(1, Math.ceil(paths.length / pathsPageSize));
+  const pagedPaths = useMemo(
+    () => paths.slice(pathsPage * pathsPageSize, pathsPage * pathsPageSize + pathsPageSize),
+    [paths, pathsPage, pathsPageSize],
+  );
 
   const eligiblePaths = useMemo(
     () => paths.filter((p) => !fileStatuses.get(p)?.duplicate || forceReprocess.has(p)),
@@ -521,7 +532,7 @@ export default function ImportTimesheetPage() {
 
           {paths.length > 0 && (
             <div className="file-list">
-              {paths.map((p) => {
+              {pagedPaths.map((p) => {
                 const status = fileStatuses.get(p);
                 return (
                   <div className="file-row" key={p}>
@@ -592,6 +603,23 @@ export default function ImportTimesheetPage() {
                 );
               })}
             </div>
+          )}
+          {paths.length > PATHS_PAGE_SIZE_OPTIONS[0] && (
+            <Pagination
+              page={pathsPage}
+              pageCount={pathsPageCount}
+              onPageChange={setPathsPage}
+              rangeLabel={`Mostrando ${pathsPage * pathsPageSize + 1} a ${Math.min(
+                paths.length,
+                pathsPage * pathsPageSize + pathsPageSize,
+              )} de ${paths.length}`}
+              pageSize={pathsPageSize}
+              pageSizeOptions={PATHS_PAGE_SIZE_OPTIONS}
+              onPageSizeChange={(size) => {
+                setPathsPageSize(size);
+                setPathsPage(0);
+              }}
+            />
           )}
           {duplicateCount > 0 && (
             <p className="muted" style={{ textAlign: "center", marginTop: "0.75rem" }}>

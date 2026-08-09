@@ -117,6 +117,7 @@ type DisplayRow =
 
 const PREVIEW_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+const PATHS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 export default function ImportEmployeesPage() {
   const navigate = useNavigate();
@@ -133,6 +134,8 @@ export default function ImportEmployeesPage() {
   const [nameSearch, setNameSearch] = useState("");
 
   const [paths, setPaths] = useState<string[]>([]);
+  const [pathsPage, setPathsPage] = useState(0);
+  const [pathsPageSize, setPathsPageSize] = useState(PATHS_PAGE_SIZE_OPTIONS[0]);
   const [fileHashes, setFileHashes] = useState<Map<string, { hash: string; fileName: string }>>(new Map());
 
   const [fileResults, setFileResults] = useState<EmployeeFileResult[]>([]);
@@ -246,13 +249,21 @@ export default function ImportEmployeesPage() {
 
   function addPaths(newPaths: string[]) {
     setPaths((prev) => Array.from(new Set([...prev, ...newPaths])));
+    setPathsPage(0);
     cancelPreview();
     setSuccessMessage(null);
   }
 
   function removePath(path: string) {
     setPaths((prev) => prev.filter((p) => p !== path));
+    setPathsPage(0);
   }
+
+  const pathsPageCount = Math.max(1, Math.ceil(paths.length / pathsPageSize));
+  const pagedPaths = useMemo(
+    () => paths.slice(pathsPage * pathsPageSize, pathsPage * pathsPageSize + pathsPageSize),
+    [paths, pathsPage, pathsPageSize],
+  );
 
   function cancelPreview() {
     setFileResults([]);
@@ -663,7 +674,7 @@ export default function ImportEmployeesPage() {
 
               {paths.length > 0 && (
                 <div className="file-list">
-                  {paths.map((p) => {
+                  {pagedPaths.map((p) => {
                     const info = fileHashes.get(p);
                     return (
                       <div className="file-row" key={p}>
@@ -688,6 +699,23 @@ export default function ImportEmployeesPage() {
                     );
                   })}
                 </div>
+              )}
+              {paths.length > PATHS_PAGE_SIZE_OPTIONS[0] && (
+                <Pagination
+                  page={pathsPage}
+                  pageCount={pathsPageCount}
+                  onPageChange={setPathsPage}
+                  rangeLabel={`Mostrando ${pathsPage * pathsPageSize + 1} a ${Math.min(
+                    paths.length,
+                    pathsPage * pathsPageSize + pathsPageSize,
+                  )} de ${paths.length}`}
+                  pageSize={pathsPageSize}
+                  pageSizeOptions={PATHS_PAGE_SIZE_OPTIONS}
+                  onPageSizeChange={(size) => {
+                    setPathsPageSize(size);
+                    setPathsPage(0);
+                  }}
+                />
               )}
             </div>
 
