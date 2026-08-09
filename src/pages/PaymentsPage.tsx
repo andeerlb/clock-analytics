@@ -426,6 +426,23 @@ function EditableSchedule({
 }
 
 /**
+ * The "extras" badge/modal shows a turno's unmapped columns AND its import
+ * provenance (arquivo/aba/linha de origem) together, same as before these
+ * were split into real columns (`sourceFileName`/`sourceSheetName`/
+ * `sourceRowNumber`) for `findPaymentShiftByPosition` to index — this just
+ * puts them back together for display. `null` when there's nothing at all
+ * to show (a manually-created shift with no import origin and no unmapped
+ * columns).
+ */
+function displayExtraData(s: PaymentShiftRow): Record<string, string> | null {
+  const merged: Record<string, string> = { ...s.extraData };
+  if (s.sourceFileName) merged["arquivo de origem"] = s.sourceFileName;
+  if (s.sourceSheetName) merged["aba de origem"] = s.sourceSheetName;
+  if (s.sourceRowNumber !== null) merged["linha de origem"] = String(s.sourceRowNumber);
+  return Object.keys(merged).length > 0 ? merged : null;
+}
+
+/**
  * One turno's cells (Data through Ações) — shared between the flat table
  * (which prepends Colaborador/Cliente/Empresa via `identity`) and a grouped
  * row's expanded turno table (no `identity`, since that's already the
@@ -579,20 +596,23 @@ function ShiftRow({
       )}
       {col("extras") && (
         <td>
-          {s.extraData && Object.keys(s.extraData).length > 0 ? (
-            <button
-              type="button"
-              className="badge neutral"
-              style={{ border: "none", cursor: "pointer" }}
-              onClick={() => onViewExtra(s.extraData!)}
-              title="Ver colunas não mapeadas lidas do arquivo"
-            >
-              <Info size={12} />
-              {Object.keys(s.extraData).length}
-            </button>
-          ) : (
-            <span className="muted">—</span>
-          )}
+          {(() => {
+            const extra = displayExtraData(s);
+            return extra ? (
+              <button
+                type="button"
+                className="badge neutral"
+                style={{ border: "none", cursor: "pointer" }}
+                onClick={() => onViewExtra(extra)}
+                title="Ver colunas não mapeadas lidas do arquivo"
+              >
+                <Info size={12} />
+                {Object.keys(extra).length}
+              </button>
+            ) : (
+              <span className="muted">—</span>
+            );
+          })()}
         </td>
       )}
       <td>

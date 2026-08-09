@@ -2555,6 +2555,66 @@ export async function findDuplicatePaymentShifts(
   return matches;
 }
 
+export interface PositionMatchedShift {
+  shiftId: number;
+  employeeId: number;
+  workDate: string;
+  local: string;
+  role: string;
+  scheduleStartMinutes: number | null;
+  scheduleEndMinutes: number | null;
+  status: PaymentShiftStatus;
+  extraData: Record<string, string> | null;
+  editedManually: boolean;
+}
+
+type PositionMatchedShiftRaw = Omit<PositionMatchedShift, "extraData" | "editedManually"> & {
+  extraData: string | null;
+  editedManually: number;
+};
+
+/**
+ * Fallback for the deep-check diff (`remoteCheckDiff.ts`) when a candidate
+ * row has no `findDuplicatePaymentShifts` identity match — the exact
+ * scenario where an edit in the file to a row's OWN identity field
+ * (local/função/horário/data) makes it look like a brand-new shift instead
+ * of an edit of an existing one. Finds whichever *current* head shift used
+ * to sit at this same row/aba of this same URL's most recent prior import,
+ * via `source_row_number`/`source_sheet_name` (indexed) joined through
+ * `source_file_id` to `source_files.source_url` — not by matching file
+ * identity, which by definition just changed (that's why this URL's HEAD
+ * check flagged it as different content in the first place).
+ *
+ * Same head rule as `findDuplicatePaymentShifts` (`STRUCTURAL_HEAD_CONDITION`,
+ * not `HEAD_SHIFT_CONDITION`) — a soft-deleted chain's head is still worth
+ * surfacing to the diff, not silently skipped.
+ */
+export async function findPaymentShiftByPosition(
+  sourceUrl: string,
+  sheetName: string | null,
+  rowNumber: number,
+): Promise<PositionMatchedShift | null> {
+  const db = await getDb();
+  const rows = await db.select<PositionMatchedShiftRaw[]>(
+    `SELECT ps.id AS shiftId, ps.employee_id AS employeeId, ps.work_date AS workDate,
+            ps.local, ps.role,
+            ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
+            ps.status, ps.extra_data AS extraData, ps.edited_manually AS editedManually
+     FROM payment_shifts ps
+     JOIN source_files sf ON sf.id = ps.source_file_id
+     WHERE sf.source_url = $1
+       AND IFNULL(ps.source_sheet_name, '') = IFNULL($2, '')
+       AND ps.source_row_number = $3
+       AND ${STRUCTURAL_HEAD_CONDITION}
+     ORDER BY ps.id DESC
+     LIMIT 1`,
+    [sourceUrl, sheetName, rowNumber],
+  );
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  return { ...r, extraData: r.extraData ? JSON.parse(r.extraData) : null, editedManually: Boolean(r.editedManually) };
+}
+
 export interface PaymentShiftInput {
   employeeId: number;
   templateId: number | null;
@@ -2570,6 +2630,9 @@ export interface PaymentShiftInput {
   extraData: Record<string, string> | null;
   /** Set when this row reprocesses an existing "duplicate" match (see `findDuplicatePaymentShifts`) — links back to it via `previous_shift_id`, so this new row becomes the current one and the old one is frozen as history instead of the two coexisting as unrelated rows. `null` for a brand-new shift. */
   previousShiftId: number | null;
+  /** This row's position (row number + aba) in the source file — `null` for a row with no import origin. Indexed columns, unlike `extraData`, so `findPaymentShiftByPosition` can look them up cheaply. */
+  sourceRowNumber: number | null;
+  sourceSheetName: string | null;
 }
 
 /** Bulk-inserts shifts — `valor` and any further `pago` transition still happen in a later step. Never sets `edited_manually` — that's exclusively for the manual transition functions above, never for anything import-originated. */
@@ -2579,8 +2642,9 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
     await db.execute(
       `INSERT INTO payment_shifts
          (employee_id, template_id, source_file_id, local, work_date, role,
-          schedule_start_minutes, schedule_end_minutes, status, extra_data, previous_shift_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          schedule_start_minutes, schedule_end_minutes, status, extra_data, previous_shift_id,
+          source_row_number, source_sheet_name)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
       [
         r.employeeId,
         r.templateId,
@@ -2593,6 +2657,8 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
         r.status,
         r.extraData ? JSON.stringify(r.extraData) : null,
         r.previousShiftId,
+        r.sourceRowNumber,
+        r.sourceSheetName,
       ],
     );
   }
@@ -2976,7 +3042,8 @@ export async function listPaymentShiftsFlat(
   const from = `FROM payment_shifts ps
     JOIN employees e ON e.id = ps.employee_id
     JOIN clients cl ON cl.id = e.client_id
-    JOIN companies c ON c.id = e.company_id`;
+    JOIN companies c ON c.id = e.company_id
+    LEFT JOIN source_files sf ON sf.id = ps.source_file_id`;
   const whereClause = `WHERE ${conditions.join(" AND ")}`;
 
   const countRows = await db.select<{ count: number }[]>(`SELECT COUNT(*) AS count ${from} ${whereClause}`, params);
@@ -3003,12 +3070,15 @@ const PAYMENT_SHIFT_SELECT_COLUMNS = `
   ps.schedule_end_minutes AS scheduleEndMinutes,
   ps.status, ps.error_message AS errorMessage, ps.amount, ps.imported_at AS importedAt,
   ps.previous_shift_id AS previousShiftId, ps.extra_data AS extraData,
-  ps.edited_manually AS editedManually
+  ps.edited_manually AS editedManually,
+  ps.source_row_number AS sourceRowNumber, ps.source_sheet_name AS sourceSheetName,
+  sf.file_name AS sourceFileName
 `;
 
 const PAYMENT_SHIFT_FROM_CLAUSE = `
   FROM payment_shifts ps
   JOIN employees e ON e.id = ps.employee_id
+  LEFT JOIN source_files sf ON sf.id = ps.source_file_id
 `;
 
 type PaymentShiftRowRaw = Omit<PaymentShiftRow, "extraData" | "editedManually"> & {
@@ -3063,6 +3133,7 @@ export async function listPaymentShiftsForGroup(
      FROM payment_shifts ps
      JOIN employees e ON e.id = ps.employee_id
      JOIN companies c ON c.id = e.company_id
+     LEFT JOIN source_files sf ON sf.id = ps.source_file_id
      WHERE ${conditions.join(" AND ")}
      ORDER BY ps.work_date, ps.id`,
     params,
@@ -3098,6 +3169,8 @@ interface PaymentShiftCoreFields {
   /** Raw JSON string as stored (or NULL) — passed straight through into the new row, not re-parsed, since a status transition never changes what was in the original file. */
   extraData: string | null;
   status: PaymentShiftStatus;
+  sourceRowNumber: number | null;
+  sourceSheetName: string | null;
 }
 
 /** Shared by every status-transition function below — the fields that always carry over unchanged into the new row. */
@@ -3106,7 +3179,8 @@ async function readPaymentShiftCoreFields(db: Database, shiftId: number): Promis
     `SELECT employee_id AS employeeId, template_id AS templateId, source_file_id AS sourceFileId,
             local, work_date AS workDate, role,
             schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes,
-            extra_data AS extraData, status
+            extra_data AS extraData, status,
+            source_row_number AS sourceRowNumber, source_sheet_name AS sourceSheetName
      FROM payment_shifts WHERE id = $1`,
     [shiftId],
   );
@@ -3132,8 +3206,9 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
   const result = await db.execute(
     `INSERT INTO payment_shifts
        (employee_id, template_id, source_file_id, local, work_date, role,
-        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pago', $9, $10, $11, 1)`,
+        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
+        source_row_number, source_sheet_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pago', $9, $10, $11, 1, $12, $13)`,
     [
       s.employeeId,
       s.templateId,
@@ -3146,6 +3221,8 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
       amount,
       shiftId,
       s.extraData,
+      s.sourceRowNumber,
+      s.sourceSheetName,
     ],
   );
   return result.lastInsertId as number;
@@ -3166,8 +3243,9 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
   const result = await db.execute(
     `INSERT INTO payment_shifts
        (employee_id, template_id, source_file_id, local, work_date, role,
-        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pendente', NULL, $9, $10, 1)`,
+        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
+        source_row_number, source_sheet_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pendente', NULL, $9, $10, 1, $11, $12)`,
     [
       s.employeeId,
       s.templateId,
@@ -3179,6 +3257,8 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
       s.scheduleEndMinutes,
       shiftId,
       s.extraData,
+      s.sourceRowNumber,
+      s.sourceSheetName,
     ],
   );
   return result.lastInsertId as number;
@@ -3217,8 +3297,9 @@ export async function editPaymentShift(
   const result = await db.execute(
     `INSERT INTO payment_shifts
        (employee_id, template_id, source_file_id, local, work_date, role,
-        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1)`,
+        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
+        source_row_number, source_sheet_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, $13, $14)`,
     [
       s.employeeId,
       s.templateId,
@@ -3232,6 +3313,8 @@ export async function editPaymentShift(
       fields.amount,
       shiftId,
       s.extraData,
+      s.sourceRowNumber,
+      s.sourceSheetName,
     ],
   );
   return result.lastInsertId as number;

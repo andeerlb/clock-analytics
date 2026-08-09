@@ -2,12 +2,14 @@ import { applyPaymentTemplate, type AppliedPaymentRow } from "./api";
 import {
   findDuplicatePaymentShifts,
   findEmployeeByAttempts,
+  findPaymentShiftByPosition,
   getPaymentShiftsByIds,
   getPaymentTemplate,
   type CheckDiffInput,
   type ReimportConfig,
 } from "./db";
 import {
+  formatMinutesAsTime,
   parseDateWithFormat,
   parseScheduleToMinutes,
   resolvePaymentRoute,
@@ -15,6 +17,12 @@ import {
   resolveReimportConfigLabel,
   resolveReimportPeriod,
 } from "./format";
+
+/** "08:00–17:00", or "—" when there's no schedule at all — same shape `oldValue`/`newValue` need to be in (plain display text), not raw minutes. */
+function formatScheduleRange(startMinutes: number | null, endMinutes: number | null): string {
+  if (startMinutes === null || endMinutes === null) return "—";
+  return `${formatMinutesAsTime(startMinutes)}–${formatMinutesAsTime(endMinutes)}`;
+}
 
 /**
  * Synthetic `extra_data` keys `ImportPaymentsPage.buildExtraData` injects on
@@ -209,12 +217,74 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
     };
   }
 
+  interface CurrentShift {
+    shiftId: number;
+    workDate: string;
+    local: string;
+    role: string;
+    scheduleStartMinutes: number | null;
+    scheduleEndMinutes: number | null;
+    status: string;
+    extraData: Record<string, string> | null;
+  }
+
   const entries: CheckDiffInput[] = [];
-  deduped.forEach((c, i) => {
+  for (let i = 0; i < deduped.length; i++) {
+    const c = deduped[i];
     const match = matches.get(i);
-    if (!match) {
-      // No existing head for this identity at all — a possible new shift,
-      // not a field-level edit of something already imported.
+
+    // A soft-deleted or manually-edited head is diffed the same as any
+    // other match — this reports "what changed in the file", not a
+    // judgment call about whether to overwrite a deliberate manual action
+    // (that's `keepManualEdits`'s job, enforced only at actual reimport
+    // time in `ImportPaymentsPage`).
+    let current: CurrentShift | null = null;
+    // Only set when `current` came from the position fallback below — the
+    // one case where the row's OWN identity fields (data/local/função/
+    // horário) are worth diffing too, since that's exactly what made the
+    // identity match miss it in the first place.
+    let reportIdentityFieldChanges = false;
+
+    if (match) {
+      const matched = currentById.get(match.shiftId);
+      if (matched) {
+        current = {
+          shiftId: match.shiftId,
+          workDate: matched.workDate,
+          local: matched.local,
+          role: matched.role,
+          scheduleStartMinutes: matched.scheduleStartMinutes,
+          scheduleEndMinutes: matched.scheduleEndMinutes,
+          status: matched.status,
+          extraData: matched.extraData,
+        };
+      }
+    } else {
+      // No identity match — before concluding this is a brand-new shift,
+      // check whether some OTHER shift used to sit at this exact row/aba
+      // of this same URL (see `findPaymentShiftByPosition`'s doc comment).
+      // Catches the case an identity match structurally can't: the file
+      // edited local/função/horário/data on a row that was already
+      // imported, which changes its identity out from under the old match.
+      const positional = await findPaymentShiftByPosition(config.sourceUrl, c.sheetName, c.rowNumber);
+      if (positional) {
+        current = {
+          shiftId: positional.shiftId,
+          workDate: positional.workDate,
+          local: positional.local,
+          role: positional.role,
+          scheduleStartMinutes: positional.scheduleStartMinutes,
+          scheduleEndMinutes: positional.scheduleEndMinutes,
+          status: positional.status,
+          extraData: positional.extraData,
+        };
+        reportIdentityFieldChanges = true;
+      }
+    }
+
+    if (!current) {
+      // No existing head for this identity OR this position — a genuinely
+      // new shift, not an edit of something already imported.
       entries.push({
         ...identityBase(c),
         changeKind: "new-shift",
@@ -225,29 +295,37 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
         newValue: null,
         message: null,
       });
-      return;
+      continue;
     }
 
-    // A soft-deleted or manually-edited head is diffed the same as any
-    // other match — this reports "what changed in the file", not a
-    // judgment call about whether to overwrite a deliberate manual action
-    // (that's `keepManualEdits`'s job, enforced only at actual reimport
-    // time in `ImportPaymentsPage`).
-    const current = currentById.get(match.shiftId);
-    if (!current) return;
-
-    if (current.status !== c.status) {
+    const shift = current;
+    function fieldDiff(fieldName: string, oldValue: string, newValue: string) {
       entries.push({
         ...identityBase(c),
         changeKind: "field",
-        matchedShiftId: match.shiftId,
+        matchedShiftId: shift.shiftId,
         columnLetter: null,
-        fieldName: "status",
-        oldValue: current.status,
-        newValue: c.status,
+        fieldName,
+        oldValue,
+        newValue,
         message: null,
       });
     }
+
+    if (reportIdentityFieldChanges) {
+      if (shift.workDate !== c.workDate) fieldDiff("data", shift.workDate, c.workDate);
+      if (shift.local !== c.local) fieldDiff("local", shift.local, c.local);
+      if (shift.role !== c.role) fieldDiff("função", shift.role, c.role);
+      if (shift.scheduleStartMinutes !== c.scheduleStartMinutes || shift.scheduleEndMinutes !== c.scheduleEndMinutes) {
+        fieldDiff(
+          "horário",
+          formatScheduleRange(shift.scheduleStartMinutes, shift.scheduleEndMinutes),
+          formatScheduleRange(c.scheduleStartMinutes, c.scheduleEndMinutes),
+        );
+      }
+    }
+
+    if (shift.status !== c.status) fieldDiff("status", shift.status, c.status);
 
     // Only the columns the template currently leaves unmapped are
     // comparable this way — if the template's mapping changed since this
@@ -255,7 +333,7 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
     // is in `currentExtra`) might not be anymore (won't be in
     // `freshExtra`), or vice versa; that shows up as one side missing
     // rather than a false "changed", which is the safer failure mode.
-    const currentExtra = current.extraData ?? {};
+    const currentExtra = shift.extraData ?? {};
     const freshExtra = c.extraFields ?? {};
     const extraKeys = new Set([...Object.keys(currentExtra), ...Object.keys(freshExtra)]);
     for (const key of extraKeys) {
@@ -266,7 +344,7 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
       entries.push({
         ...identityBase(c),
         changeKind: "field",
-        matchedShiftId: match.shiftId,
+        matchedShiftId: shift.shiftId,
         columnLetter: key,
         fieldName: `extra:${key}`,
         oldValue,
@@ -274,7 +352,7 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
         message: null,
       });
     }
-  });
+  }
 
   return [...unresolvedEntries, ...entries];
 }

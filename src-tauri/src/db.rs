@@ -334,5 +334,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0055_deep_check_log_id.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 56,
+            description: "add payment_shifts.source_row_number/source_sheet_name (indexed) — promoted out of extra_data so the deep-check diff can look up 'what shift used to sit at this row/aba' when an identity-field edit breaks the usual identity match",
+            sql: include_str!("../migrations/0056_payment_shift_source_position.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

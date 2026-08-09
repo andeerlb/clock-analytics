@@ -527,6 +527,11 @@ export interface PaymentShiftRow {
   extraData: Record<string, string> | null;
   /** True when this row was created by a deliberate user action on the Pagamentos detail page (editar valor, fazer pagamento, voltar para pendente) rather than an import — a reprocessed import match refuses to supersede one of these unless "Manter registros atualizados manualmente" is off (see `PaymentSettings`). */
   editedManually: boolean;
+  /** This row's position in the original source file — `null` for a row that isn't from an import (a manual "Fazer pagamento"/"Editar valor" row carries its source shift's own position forward, same as `extraData`). Indexed, unlike `extraData`, so the deep-check diff's position-based fallback match can look it up (see `findPaymentShiftByPosition`). */
+  sourceRowNumber: number | null;
+  sourceSheetName: string | null;
+  /** Joined from `source_files.file_name` via `sourceFileId` — not a column on `payment_shifts` itself. `null` when the shift has no `sourceFileId` (or that source file was since removed). */
+  sourceFileName: string | null;
 }
 
 /** One row per (colaborador, competência) — the Pagamentos list. */

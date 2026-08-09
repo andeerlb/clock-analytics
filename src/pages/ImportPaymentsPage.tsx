@@ -151,14 +151,18 @@ interface PaymentPreviewRow {
   matchedIdentityChanged: boolean;
 }
 
-function buildExtraData(row: PaymentPreviewRow): Record<string, string> {
-  const extraData: Record<string, string> = {
-    ...row.extraFields,
-    "arquivo de origem": row.fileName,
-    "linha de origem": String(row.rowNumber),
-  };
-  if (row.sheetName) extraData["aba de origem"] = row.sheetName;
-  return extraData;
+/**
+ * Only the template's genuinely unmapped columns — row position/aba/arquivo
+ * used to be stuffed in here too (as "linha de origem"/"aba de origem"/
+ * "arquivo de origem" text), but that made them unqueryable JSON. They're
+ * real, indexed columns now (`PaymentShiftInput.sourceRowNumber`/
+ * `sourceSheetName`, and `sourceFileId` for the file itself) — still shown
+ * in the same "extra" modal on the Pagamentos screen, just reconstructed
+ * from those columns at read time instead of stored here (see
+ * `PaymentsPage.tsx`'s `displayExtraData`).
+ */
+function buildExtraData(row: PaymentPreviewRow): Record<string, string> | null {
+  return Object.keys(row.extraFields).length > 0 ? row.extraFields : null;
 }
 
 /** Applies one `findDuplicatePaymentShifts` result to its row — shared by every place that runs the check (initial processing, "vincular colaborador", "cadastrar colaborador"), so the "deleted" vs "duplicate" split can't drift between them. */
@@ -1055,6 +1059,8 @@ export default function ImportPaymentsPage() {
           scheduleEndMinutes: row.scheduleEndMinutes,
           status: row.paymentStatus,
           extraData: buildExtraData(row),
+          sourceRowNumber: row.rowNumber,
+          sourceSheetName: row.sheetName,
           // "duplicate"/"deleted" rows are reprocessing an existing shift, not
           // creating an independent new one — links this new row back to the
           // current one it supersedes (see `findDuplicatePaymentShifts`), same

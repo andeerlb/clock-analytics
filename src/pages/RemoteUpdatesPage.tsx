@@ -52,9 +52,17 @@ const RESULT_BADGE: Record<UrlCheckResult, { className: string; label: string; i
 
 const LOG_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
-/** "status" -> "Status"; "extra:C" -> "Coluna C" — there's no human header label for an unmapped column, only the raw letter it came from (see `remoteCheckDiff.ts`). */
+/** "status" -> "Status"; "extra:C" -> "Coluna C" — there's no human header label for an unmapped column, only the raw letter it came from (see `remoteCheckDiff.ts`). "data"/"local"/"função"/"horário" are the identity-field diffs the position-based fallback match reports (see `findPaymentShiftByPosition`), when the file edits a row's own identity instead of just its status/extras. */
+const IDENTITY_FIELD_LABELS: Record<string, string> = {
+  status: "Status",
+  data: "Data",
+  local: "Local",
+  função: "Função",
+  horário: "Horário",
+};
+
 function diffFieldLabel(fieldName: string | null, columnLetter: string | null): string {
-  if (fieldName === "status") return "Status";
+  if (fieldName && IDENTITY_FIELD_LABELS[fieldName]) return IDENTITY_FIELD_LABELS[fieldName];
   if (columnLetter) return `Coluna ${columnLetter}`;
   return fieldName ?? "Campo";
 }
