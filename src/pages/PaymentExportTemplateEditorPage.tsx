@@ -189,6 +189,58 @@ export default function PaymentExportTemplateEditorPage() {
       },
       { render: () => <ColorSwatchRow label="Cor do texto" color={anchor?.fontColor ?? "#000000"} onChange={(c) => gridRef.current?.patchSelection({ fontColor: c })} /> },
       { render: () => <ColorSwatchRow label="Cor de fundo" color={anchor?.backgroundColor ?? "#ffffff"} onChange={(c) => gridRef.current?.patchSelection({ backgroundColor: c })} /> },
+      {
+        label: "Alinhamento horizontal",
+        submenu: [
+          { label: "Esquerda", onClick: () => gridRef.current?.patchSelection({ horizontalAlign: "left" }) },
+          { label: "Centralizado", onClick: () => gridRef.current?.patchSelection({ horizontalAlign: "center" }) },
+          { label: "Direita", onClick: () => gridRef.current?.patchSelection({ horizontalAlign: "right" }) },
+          { label: "Justificado", onClick: () => gridRef.current?.patchSelection({ horizontalAlign: "justify" }) },
+        ],
+      },
+      {
+        label: "Alinhamento vertical",
+        submenu: [
+          { label: "Topo", onClick: () => gridRef.current?.patchSelection({ verticalAlign: "top" }) },
+          { label: "Meio", onClick: () => gridRef.current?.patchSelection({ verticalAlign: "middle" }) },
+          { label: "Base", onClick: () => gridRef.current?.patchSelection({ verticalAlign: "bottom" }) },
+        ],
+      },
+      {
+        label: "Borda",
+        // Uses a fixed 1px sólida preta brush — the toolbar's own "Bordas"
+        // button (with pattern/thickness/color pickers) is where a
+        // different look is chosen; this is just the same quick
+        // position shortcuts available without leaving the cell menu.
+        submenu: [
+          { label: "Todas", onClick: () => gridRef.current?.applyBorderToSelection("all", { width: 1, pattern: "solid", color: "#000000" }) },
+          {
+            label: "Internas",
+            onClick: () => gridRef.current?.applyBorderToSelection("inner", { width: 1, pattern: "solid", color: "#000000" }),
+          },
+          {
+            label: "Contorno",
+            onClick: () => gridRef.current?.applyBorderToSelection("outline", { width: 1, pattern: "solid", color: "#000000" }),
+          },
+          { label: "Topo", onClick: () => gridRef.current?.applyBorderToSelection("top", { width: 1, pattern: "solid", color: "#000000" }) },
+          {
+            label: "Direita",
+            onClick: () => gridRef.current?.applyBorderToSelection("right", { width: 1, pattern: "solid", color: "#000000" }),
+          },
+          {
+            label: "Baixo",
+            onClick: () => gridRef.current?.applyBorderToSelection("bottom", { width: 1, pattern: "solid", color: "#000000" }),
+          },
+          {
+            label: "Esquerda",
+            onClick: () => gridRef.current?.applyBorderToSelection("left", { width: 1, pattern: "solid", color: "#000000" }),
+          },
+          {
+            label: "Nenhuma",
+            onClick: () => gridRef.current?.applyBorderToSelection("none", { width: 1, pattern: "solid", color: "#000000" }),
+          },
+        ],
+      },
     ];
 
     const exactField = value.trim().match(/^\{\{(\w+)\}\}$/)?.[1];

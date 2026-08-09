@@ -1,4 +1,20 @@
-import { Bold, ChevronDown, Combine, Eraser, Italic, PaintBucket, Type } from "lucide-react";
+import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  AlignVerticalJustifyCenter,
+  AlignVerticalJustifyEnd,
+  AlignVerticalJustifyStart,
+  Bold,
+  ChevronDown,
+  Combine,
+  Eraser,
+  Grid3x3,
+  Italic,
+  PaintBucket,
+  Type,
+  type LucideIcon,
+} from "lucide-react";
 import {
   forwardRef,
   useEffect,
@@ -10,7 +26,36 @@ import {
   type ReactNode,
 } from "react";
 import { columnLetter } from "../lib/format";
-import type { TemplateGridCell, TemplateGridData, TemplateGridMerge } from "../lib/types";
+import type {
+  CellBorderSide,
+  CellHorizontalAlign,
+  CellVerticalAlign,
+  TemplateGridCell,
+  TemplateGridCellBorder,
+  TemplateGridData,
+  TemplateGridMerge,
+} from "../lib/types";
+
+/**
+ * Which side(s) a border toolbar/menu action paints, always relative to the
+ * SELECTION's own edges (not each individual cell's) — "left" only paints
+ * the selection's leftmost column, "outline" only its outer rectangle,
+ * "inner"/"innerHorizontal"/"innerVertical" only the lines BETWEEN cells
+ * inside it, same distinction Excel/Sheets' own border-position grid makes.
+ * "all" paints every side of every cell (outer rectangle + every inner
+ * line); "none" clears every side of every cell.
+ */
+export type BorderApplyKind =
+  | "all"
+  | "inner"
+  | "innerHorizontal"
+  | "innerVertical"
+  | "outline"
+  | "top"
+  | "right"
+  | "bottom"
+  | "left"
+  | "none";
 
 export interface TemplateGridEditorHandle {
   /** The current grid state — meant to be persisted as-is and passed back as `initialGrid` later (see `PaymentExportTemplateConfig.grid`). */
@@ -37,6 +82,8 @@ export interface TemplateGridEditorHandle {
   /** `true` = ignore this column's fixed width at export time and size it to the longest actual value written into it; `false` = strictly use the fixed width (the default). */
   setColumnAutoFit: (col: number, autoFit: boolean) => void;
   getColumnAutoFit: (col: number) => boolean;
+  /** Same border-painting logic the toolbar's own border menu uses, exposed so the parent's cell context menu can offer the same actions without duplicating the per-cell-vs-outline logic. `brush: null` clears the sides `kind` targets instead of painting them. No-op if nothing is selected. */
+  applyBorderToSelection: (kind: BorderApplyKind, brush: CellBorderSide | null) => void;
 }
 
 /** A small colored tag shown in a row's number gutter (e.g. "D" for the detail row) — makes the current layout legible without needing a side panel. */
@@ -105,6 +152,9 @@ export const FONT_FAMILIES = [
 ];
 export const FONT_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 36];
 
+/** No border on any side — the shape every cell starts with, and what "Nenhuma" (border menu) / "Limpar formatação" reset a cell's `border` back to. */
+const NO_BORDER = { top: null, right: null, bottom: null, left: null };
+
 /** What the toolbar's "Limpar formatação" (Eraser) button resets a cell back to — every style property, `value` untouched. */
 const RESET_FORMAT_PATCH: Partial<TemplateGridCell> = {
   backgroundColor: null,
@@ -113,6 +163,9 @@ const RESET_FORMAT_PATCH: Partial<TemplateGridCell> = {
   italic: false,
   fontFamily: null,
   fontSize: null,
+  border: NO_BORDER,
+  horizontalAlign: null,
+  verticalAlign: null,
 };
 
 /** One selected rectangle of cells, normalized so `r1<=r2`/`c1<=c2` always holds — the single primitive every selection-driven feature (range highlight, bulk formatting, Delete-to-clear, merge, "select whole row/column") is built on. */
@@ -151,7 +204,18 @@ function partiallyOverlaps(range: CellRange, m: TemplateGridMerge): boolean {
 }
 
 function blankCell(): TemplateGridCell {
-  return { value: "", backgroundColor: null, fontColor: null, bold: false, italic: false, fontFamily: null, fontSize: null };
+  return {
+    value: "",
+    backgroundColor: null,
+    fontColor: null,
+    bold: false,
+    italic: false,
+    fontFamily: null,
+    fontSize: null,
+    border: { ...NO_BORDER },
+    horizontalAlign: null,
+    verticalAlign: null,
+  };
 }
 
 function blankGrid(): TemplateGridData {
@@ -183,6 +247,9 @@ function normalizeGrid(g: TemplateGridData): TemplateGridData {
       italic: cell.italic ?? false,
       fontFamily: cell.fontFamily ?? null,
       fontSize: cell.fontSize ?? null,
+      border: cell.border ?? { ...NO_BORDER },
+      horizontalAlign: cell.horizontalAlign ?? null,
+      verticalAlign: cell.verticalAlign ?? null,
     })),
   );
   return { rows, columnWidths, columnAutoFit, rowHeights, merges: g.merges ?? [] };
@@ -235,6 +302,427 @@ function ToolbarColorButton({
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: disabled ? "default" : "pointer" }}
       />
     </label>
+  );
+}
+
+const BORDER_PATTERN_OPTIONS: Array<{ value: CellBorderSide["pattern"]; label: string }> = [
+  { value: "solid", label: "Sólida" },
+  { value: "dashed", label: "Tracejada" },
+  { value: "dotted", label: "Pontilhada" },
+  { value: "double", label: "Dupla" },
+];
+
+/** `CellBorderSide` -> the CSS `border-*` shorthand value it renders as — `undefined` (not `"none"`) so it falls back to the grid's own default line color/width instead of erasing it. */
+function borderSideToCss(side: CellBorderSide | null): string | undefined {
+  if (!side) return undefined;
+  return `${side.width}px ${side.pattern} ${side.color}`;
+}
+
+/** A 16x16 icon depicting which lines of a 2x2 cell block `kind` paints — every icon shares the same faint base grid (what's already there) with the lines `kind` would add/keep drawn bold on top, the same visual language Excel/Sheets' own border-position picker uses. "none" instead shows the base grid struck through, since it doesn't "add" anything. */
+function BorderPositionIcon({ kind }: { kind: BorderApplyKind }) {
+  const BASE: Array<[number, number, number, number]> = [
+    [1, 1, 15, 1],
+    [1, 15, 15, 15],
+    [1, 1, 1, 15],
+    [15, 1, 15, 15],
+    [1, 8, 15, 8],
+    [8, 1, 8, 15],
+  ];
+  const HIGHLIGHT: Record<Exclude<BorderApplyKind, "none">, Array<[number, number, number, number]>> = {
+    all: BASE,
+    inner: [
+      [1, 8, 15, 8],
+      [8, 1, 8, 15],
+    ],
+    innerHorizontal: [[1, 8, 15, 8]],
+    innerVertical: [[8, 1, 8, 15]],
+    outline: [
+      [1, 1, 15, 1],
+      [1, 15, 15, 15],
+      [1, 1, 1, 15],
+      [15, 1, 15, 15],
+    ],
+    top: [[1, 1, 15, 1]],
+    bottom: [[1, 15, 15, 15]],
+    left: [[1, 1, 1, 15]],
+    right: [[15, 1, 15, 15]],
+  };
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16">
+      {BASE.map(([x1, y1, x2, y2], i) => (
+        <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--text-muted)" strokeWidth={1} opacity={0.4} />
+      ))}
+      {kind === "none" ? (
+        <line x1={1} y1={1} x2={15} y2={15} stroke="var(--danger)" strokeWidth={1.5} />
+      ) : (
+        HIGHLIGHT[kind].map(([x1, y1, x2, y2], i) => (
+          <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="currentColor" strokeWidth={1.75} />
+        ))
+      )}
+    </svg>
+  );
+}
+
+const BORDER_POSITION_GRID: Array<{ kind: BorderApplyKind; title: string }> = [
+  { kind: "all", title: "Todas as bordas" },
+  { kind: "inner", title: "Bordas internas" },
+  { kind: "innerHorizontal", title: "Bordas horizontais internas" },
+  { kind: "innerVertical", title: "Bordas verticais internas" },
+  { kind: "outline", title: "Borda externa" },
+  { kind: "top", title: "Borda superior" },
+  { kind: "right", title: "Borda direita" },
+  { kind: "bottom", title: "Borda inferior" },
+  { kind: "left", title: "Borda esquerda" },
+  { kind: "none", title: "Sem borda" },
+];
+
+/**
+ * The toolbar's Excel/Sheets-style "Bordas" control: a small popover with
+ * the current pattern/thickness/color "brush" on top and a 5x2 icon grid of
+ * where to paint it below (Todas/Interna/Interna H/Interna V/Externa/
+ * Topo/Direita/Baixo/Esquerda/Nenhuma). Deliberately doesn't reuse
+ * `ToolbarColorButton` — a border action needs a brush chosen (or at least
+ * defaulted) before a position icon does anything, whereas every other
+ * color button applies the instant the OS picker changes. Thickness is a
+ * free number (not a "fina/média/grossa" preset) per how this app's own
+ * grid already treats every other size (row height, column width, font
+ * size) — see `CellBorderSide.width`'s own doc comment for how that maps
+ * back onto Excel's fixed named border weights at export time.
+ */
+function borderSidesEqual(a: CellBorderSide | null, b: CellBorderSide | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.width === b.width && a.pattern === b.pattern && a.color === b.color;
+}
+
+/**
+ * Whether a given position icon should render "active" for `border` —
+ * derived straight from the anchor cell's own sides (not the popover's
+ * local brush state) so it stays correct even without opening the popover.
+ * "all" only lights up when all four sides are actually the SAME brush
+ * (not just all non-null) — and whenever "all" is active, the four
+ * individual side icons deliberately don't also light up, so "Todas" reads
+ * as one state instead of five icons all claiming the same thing at once.
+ * `inner`/`innerHorizontal`/`innerVertical`/`outline` are range-level
+ * concepts (they depend on where a cell sits within a multi-cell
+ * selection, not on one cell's sides in isolation), so they're never shown
+ * as active.
+ */
+function isBorderPositionActive(kind: BorderApplyKind, border: TemplateGridCellBorder | null): boolean {
+  if (!border) return false;
+  const { top, right, bottom, left } = border;
+  const allUniform = Boolean(top) && borderSidesEqual(top, right) && borderSidesEqual(right, bottom) && borderSidesEqual(bottom, left);
+  switch (kind) {
+    case "all":
+      return allUniform;
+    case "none":
+      return !top && !right && !bottom && !left;
+    case "top":
+      return Boolean(top) && !allUniform;
+    case "right":
+      return Boolean(right) && !allUniform;
+    case "bottom":
+      return Boolean(bottom) && !allUniform;
+    case "left":
+      return Boolean(left) && !allUniform;
+    default:
+      return false;
+  }
+}
+
+/** Which single side `isBorderPositionActive` actually checked to call `kind` active — used to compare against a freshly-typed brush so re-clicking an active position can tell "same brush again" (remove) apart from "I changed the width/color, apply that instead" (update). `null` for kinds with no single representative side. */
+function sideForKind(kind: BorderApplyKind, border: TemplateGridCellBorder | null): CellBorderSide | null {
+  if (!border) return null;
+  switch (kind) {
+    case "all":
+    case "top":
+      return border.top;
+    case "right":
+      return border.right;
+    case "bottom":
+      return border.bottom;
+    case "left":
+      return border.left;
+    default:
+      return null;
+  }
+}
+
+/** For a single cell, "Interna"/"Interna H"/"Interna V"/"Contorno" aren't distinct actions — a 1-cell selection has no inside, so those degenerate to exactly "Nenhuma"/"Nenhuma"/"Nenhuma"/"Todas" respectively. Disabled in that case (same as Excel/Sheets' own border menu) instead of left clickable-but-confusing, since clicking "Contorno" would otherwise light up "Todas" — a different icon than the one actually clicked. */
+const RANGE_ONLY_KINDS: BorderApplyKind[] = ["inner", "innerHorizontal", "innerVertical", "outline"];
+
+function BorderMenu({
+  disabled,
+  anchorBorder,
+  isSingleCell,
+  onApply,
+  onLiveUpdate,
+}: {
+  disabled: boolean;
+  /** The current selection's anchor cell's own border — used to pre-fill the brush and highlight which positions are already set on it, reopen to reopen, the same "reflect what's already there" pattern the bold/italic/color controls already follow. `null` when nothing is selected, or when the selection spans more than one cell (see `RANGE_ONLY_KINDS`'s own doc comment). */
+  anchorBorder: TemplateGridCellBorder | null;
+  /** Whether the current selection is exactly one cell — see `RANGE_ONLY_KINDS`. */
+  isSingleCell: boolean;
+  /** `brush: null` clears the sides `kind` targets instead of painting them — how clicking an already-active position a second time removes it. */
+  onApply: (kind: BorderApplyKind, brush: CellBorderSide | null) => void;
+  /** Fired on every pattern/thickness/color edit (not just on a position click) — restyles whatever border already exists on the selection with the new brush immediately, same as the color/font-size controls elsewhere in this toolbar apply the moment their value changes rather than waiting for a separate confirmation. */
+  onLiveUpdate: (brush: CellBorderSide) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pattern, setPattern] = useState<CellBorderSide["pattern"]>("solid");
+  // Kept as free-typed text, not a clamped number, so that clearing the
+  // field to type a fresh value (an empty string, briefly unparseable)
+  // doesn't get silently snapped back to "1" by a controlled input on every
+  // keystroke — see `apply`'s own clamping, which only happens once, when
+  // the value is actually used.
+  const [widthText, setWidthText] = useState("1");
+  const [color, setColor] = useState("#000000");
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocMouseDown(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [open]);
+
+  // Re-reads whatever's already on the selection every time the popover
+  // opens, so reopening it on a cell that already has a border shows that
+  // border's own pattern/thickness/color instead of always resetting to the
+  // same default brush.
+  useEffect(() => {
+    if (!open) return;
+    const existing = anchorBorder?.top ?? anchorBorder?.right ?? anchorBorder?.bottom ?? anchorBorder?.left ?? null;
+    if (existing) {
+      setPattern(existing.pattern);
+      setWidthText(String(existing.width));
+      setColor(existing.color);
+    }
+    // Only re-sync at the moment it opens — once open, the fields are the
+    // user's own to edit, not something that should jump around under them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  function clampWidth(text: string): number {
+    const parsed = Number(text);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.max(1, Math.min(12, parsed)) : 1;
+  }
+
+  function apply(kind: BorderApplyKind) {
+    const brush: CellBorderSide = { width: clampWidth(widthText), pattern, color };
+
+    // Clicking a position that's already active on the selection WITH THE
+    // SAME brush removes it — lets "click it again" work as an undo without
+    // a separate trip to "Nenhuma". But if the user changed the
+    // pattern/thickness/color first, that's a request to UPDATE the border
+    // to the new brush, not to clear it — comparing against the brush
+    // actually on the cell (not just "is this position active at all") is
+    // what tells those two apart. Only meaningful for the positions
+    // `isBorderPositionActive` can actually judge in isolation
+    // (all/top/right/bottom/left); "none" is already a no-op either way, and
+    // inner/innerHorizontal/innerVertical/outline never report active (see
+    // that function's own doc comment), so they always just paint.
+    if (kind !== "none" && isBorderPositionActive(kind, anchorBorder)) {
+      const current = sideForKind(kind, anchorBorder);
+      if (current && borderSidesEqual(current, brush)) {
+        onApply(kind, null);
+        setOpen(false);
+        return;
+      }
+    }
+    onApply(kind, brush);
+    setOpen(false);
+  }
+
+  return (
+    <div ref={menuRef} style={{ position: "relative" }}>
+      <button
+        type="button"
+        className="ghost"
+        onClick={() => setOpen((o) => !o)}
+        disabled={disabled}
+        title="Borda"
+        style={{ display: "inline-flex", alignItems: "center", padding: "0.4rem 0.55rem" }}
+      >
+        <Grid3x3 size={14} />
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            marginTop: "0.25rem",
+            zIndex: 20,
+            background: "var(--card-bg)",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            padding: "0.5rem",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
+            width: "14rem",
+          }}
+        >
+          <div style={{ display: "flex", gap: "0.35rem", marginBottom: "0.4rem" }}>
+            <select
+              value={pattern}
+              onChange={(e) => {
+                const next = e.target.value as CellBorderSide["pattern"];
+                setPattern(next);
+                onLiveUpdate({ width: clampWidth(widthText), pattern: next, color });
+              }}
+              style={{ fontSize: "0.78rem", flex: 1, minWidth: 0 }}
+              title="Estilo da linha"
+            >
+              {BORDER_PATTERN_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <input
+              type="number"
+              min={1}
+              max={12}
+              value={widthText}
+              onChange={(e) => {
+                const text = e.target.value;
+                setWidthText(text);
+                // Skip the live update while the field is transiently
+                // unparseable (e.g. momentarily empty between keystrokes) —
+                // clamping it here the way `apply`/`clampWidth` do for a
+                // real submit would silently snap it to 1 mid-edit, the
+                // exact "field fights you while typing" bug this same
+                // field used to have.
+                const parsed = Number(text);
+                if (Number.isFinite(parsed) && parsed > 0) {
+                  onLiveUpdate({ width: Math.max(1, Math.min(12, parsed)), pattern, color });
+                }
+              }}
+              title="Espessura (px)"
+              className="template-grid-number-input"
+              style={{ fontSize: "0.78rem", width: "2.6rem", flexShrink: 0 }}
+            />
+            <input
+              type="color"
+              value={color}
+              onChange={(e) => {
+                const next = e.target.value;
+                setColor(next);
+                onLiveUpdate({ width: clampWidth(widthText), pattern, color: next });
+              }}
+              title="Cor da borda"
+              style={{ width: "1.8rem", height: "1.8rem", padding: 0, flexShrink: 0 }}
+            />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "0.15rem" }}>
+            {BORDER_POSITION_GRID.map((b) => {
+              const rangeOnlyDisabled = isSingleCell && RANGE_ONLY_KINDS.includes(b.kind);
+              return (
+                <button
+                  key={b.kind}
+                  type="button"
+                  className="ghost"
+                  onClick={() => apply(b.kind)}
+                  disabled={rangeOnlyDisabled}
+                  title={rangeOnlyDisabled ? `${b.title} (só faz sentido com mais de uma célula selecionada)` : b.title}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: "0.3rem",
+                    opacity: rangeOnlyDisabled ? 0.35 : 1,
+                  }}
+                >
+                  <BorderPositionIcon kind={b.kind} />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A compact "current state icon + chevron" toolbar button that expands into
+ * a row of icon options on click — how the toolbar's horizontal/vertical
+ * alignment controls stay one small button each instead of three
+ * permanently-visible ones, matching Google Sheets' own alignment buttons.
+ */
+function AlignMenu<T extends string>({
+  disabled,
+  title,
+  currentIcon: CurrentIcon,
+  options,
+}: {
+  disabled: boolean;
+  title: string;
+  currentIcon: LucideIcon;
+  options: Array<{ value: T; icon: LucideIcon; title: string; active: boolean; onClick: () => void }>;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocMouseDown(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [open]);
+
+  return (
+    <div ref={menuRef} style={{ position: "relative" }}>
+      <button
+        type="button"
+        className="ghost"
+        onClick={() => setOpen((o) => !o)}
+        disabled={disabled}
+        title={title}
+        style={{ display: "inline-flex", alignItems: "center", gap: "0.1rem", padding: "0.4rem 0.4rem" }}
+      >
+        <CurrentIcon size={14} />
+        <ChevronDown size={10} />
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            marginTop: "0.25rem",
+            zIndex: 20,
+            background: "var(--card-bg)",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            padding: "0.3rem",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
+            display: "flex",
+            gap: "0.15rem",
+          }}
+        >
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              className="ghost"
+              onClick={() => {
+                o.onClick();
+                setOpen(false);
+              }}
+              title={o.title}
+              aria-pressed={o.active}
+              style={{ padding: "0.35rem 0.5rem", outline: o.active ? "2px solid var(--accent)" : "none", outlineOffset: -2 }}
+            >
+              <o.icon size={14} />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -329,6 +817,111 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
       rows: g.rows.map((row, ri) =>
         ri < r.r1 || ri > r.r2 ? row : row.map((cell, ci) => (ci < r.c1 || ci > r.c2 ? cell : { ...cell, ...patch })),
       ),
+    }));
+  }
+
+  /**
+   * Paints (or clears) borders across every cell in `r` per `kind`. Unlike
+   * `updateRange`, this can't apply one flat patch to every cell — every
+   * `kind` besides "all"/"none" depends on where a given cell sits relative
+   * to the SELECTION's own edges (e.g. "left" only touches column `r.c1`,
+   * "inner" touches every side except those on the selection's outer
+   * rectangle), so each cell's border is computed individually instead.
+   * `brush: null` clears the sides `kind` targets instead of painting them
+   * — same per-side logic either way, just assigning `null` instead of a
+   * brush object, which is how the border menu implements "click an
+   * already-active position again to remove it".
+   */
+  function applyBorderToRange(r: CellRange, kind: BorderApplyKind, brush: CellBorderSide | null) {
+    setGrid((g) => ({
+      ...g,
+      rows: g.rows.map((row, ri) => {
+        if (ri < r.r1 || ri > r.r2) return row;
+        return row.map((cell, ci) => {
+          if (ci < r.c1 || ci > r.c2) return cell;
+          if (kind === "none") return { ...cell, border: { ...NO_BORDER } };
+          const border = { ...cell.border };
+          const isTop = ri === r.r1;
+          const isBottom = ri === r.r2;
+          const isLeft = ci === r.c1;
+          const isRight = ci === r.c2;
+          switch (kind) {
+            case "all":
+              border.top = brush;
+              border.right = brush;
+              border.bottom = brush;
+              border.left = brush;
+              break;
+            case "inner":
+              if (!isTop) border.top = brush;
+              if (!isBottom) border.bottom = brush;
+              if (!isLeft) border.left = brush;
+              if (!isRight) border.right = brush;
+              break;
+            case "innerHorizontal":
+              if (!isTop) border.top = brush;
+              if (!isBottom) border.bottom = brush;
+              break;
+            case "innerVertical":
+              if (!isLeft) border.left = brush;
+              if (!isRight) border.right = brush;
+              break;
+            case "outline":
+              if (isTop) border.top = brush;
+              if (isBottom) border.bottom = brush;
+              if (isLeft) border.left = brush;
+              if (isRight) border.right = brush;
+              break;
+            case "top":
+              if (isTop) border.top = brush;
+              break;
+            case "bottom":
+              if (isBottom) border.bottom = brush;
+              break;
+            case "left":
+              if (isLeft) border.left = brush;
+              break;
+            case "right":
+              if (isRight) border.right = brush;
+              break;
+          }
+          return { ...cell, border };
+        });
+      }),
+    }));
+  }
+
+  /**
+   * Re-paints whichever sides ALREADY have a border in `r` with `brush`,
+   * leaving sides that don't have one alone — how editing pattern/
+   * thickness/color in the border menu updates an already-applied border
+   * live, the instant you change the field, the same way the color swatches
+   * elsewhere in this toolbar apply on change instead of needing a second
+   * click. A cell with no border at all is left untouched (there's nothing
+   * here yet to restyle — that's what the position icons in the menu are
+   * for), so this is safe to call on every keystroke without accidentally
+   * painting a border where the user never asked for one.
+   */
+  function remapBorderBrush(r: CellRange, brush: CellBorderSide) {
+    setGrid((g) => ({
+      ...g,
+      rows: g.rows.map((row, ri) => {
+        if (ri < r.r1 || ri > r.r2) return row;
+        return row.map((cell, ci) => {
+          if (ci < r.c1 || ci > r.c2) return cell;
+          const { top, right, bottom, left } = cell.border;
+          if (!top && !right && !bottom && !left) return cell;
+          return {
+            ...cell,
+            border: {
+              top: top ? brush : null,
+              right: right ? brush : null,
+              bottom: bottom ? brush : null,
+              left: left ? brush : null,
+            },
+          };
+        });
+      }),
     }));
   }
 
@@ -580,6 +1173,9 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
         setGrid((g) => ({ ...g, columnAutoFit: g.columnAutoFit.map((v, i) => (i === col ? autoFit : v)) }));
       },
       getColumnAutoFit: (col) => grid.columnAutoFit[col] ?? false,
+      applyBorderToSelection: (kind, brush) => {
+        if (range) applyBorderToRange(range, kind, brush);
+      },
     }),
     // Re-created whenever `grid`/`range` change so every closure above reads
     // fresh state — this is a small grid (tens of cells), re-creating the
@@ -679,6 +1275,84 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
           disabled={!range}
           color={anchorCell?.backgroundColor ?? "#ffffff"}
           onChange={(color) => range && updateRange(range, { backgroundColor: color })}
+        />
+        <BorderMenu
+          disabled={!range}
+          // Only meaningful for a single selected cell — for a multi-cell
+          // range, "Contorno"/"Interna"/etc. only ever paint SOME of the
+          // anchor cell's own 4 sides (e.g. just its top+left, since it's
+          // one corner of a bigger rectangle), and showing that as if the
+          // user had individually clicked "Topo"/"Esquerda" would be
+          // actively misleading about what they actually did.
+          anchorBorder={range && rangeIsSingleCell(range) ? (anchorCell?.border ?? null) : null}
+          isSingleCell={Boolean(range && rangeIsSingleCell(range))}
+          onApply={(kind, brush) => range && applyBorderToRange(range, kind, brush)}
+          onLiveUpdate={(brush) => range && remapBorderBrush(range, brush)}
+        />
+        <span style={{ width: 1, alignSelf: "stretch", background: "var(--border)", margin: "0 0.15rem" }} />
+        <AlignMenu<CellHorizontalAlign>
+          disabled={!range}
+          title="Alinhamento horizontal"
+          currentIcon={
+            anchorCell?.horizontalAlign === "center" ? AlignCenter : anchorCell?.horizontalAlign === "right" ? AlignRight : AlignLeft
+          }
+          options={[
+            {
+              value: "left",
+              icon: AlignLeft,
+              title: "Alinhar à esquerda",
+              active: (anchorCell?.horizontalAlign ?? "left") === "left",
+              onClick: () => range && updateRange(range, { horizontalAlign: null }),
+            },
+            {
+              value: "center",
+              icon: AlignCenter,
+              title: "Centralizar",
+              active: anchorCell?.horizontalAlign === "center",
+              onClick: () => range && updateRange(range, { horizontalAlign: "center" }),
+            },
+            {
+              value: "right",
+              icon: AlignRight,
+              title: "Alinhar à direita",
+              active: anchorCell?.horizontalAlign === "right",
+              onClick: () => range && updateRange(range, { horizontalAlign: "right" }),
+            },
+          ]}
+        />
+        <AlignMenu<CellVerticalAlign>
+          disabled={!range}
+          title="Alinhamento vertical"
+          currentIcon={
+            anchorCell?.verticalAlign === "top"
+              ? AlignVerticalJustifyStart
+              : anchorCell?.verticalAlign === "bottom"
+                ? AlignVerticalJustifyEnd
+                : AlignVerticalJustifyCenter
+          }
+          options={[
+            {
+              value: "top",
+              icon: AlignVerticalJustifyStart,
+              title: "Alinhar ao topo",
+              active: anchorCell?.verticalAlign === "top",
+              onClick: () => range && updateRange(range, { verticalAlign: "top" }),
+            },
+            {
+              value: "middle",
+              icon: AlignVerticalJustifyCenter,
+              title: "Alinhar ao meio",
+              active: (anchorCell?.verticalAlign ?? "middle") === "middle",
+              onClick: () => range && updateRange(range, { verticalAlign: null }),
+            },
+            {
+              value: "bottom",
+              icon: AlignVerticalJustifyEnd,
+              title: "Alinhar à base",
+              active: anchorCell?.verticalAlign === "bottom",
+              onClick: () => range && updateRange(range, { verticalAlign: "bottom" }),
+            },
+          ]}
         />
         <button
           type="button"
@@ -888,6 +1562,7 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
               const groupedTitle = [isGrouped && "Usado no agrupamento", isSecondaryGrouped && "Usado no agrupamento da SOMA"]
                 .filter(Boolean)
                 .join(" / ");
+              const hasCustomBorder = Boolean(cell.border.top || cell.border.right || cell.border.bottom || cell.border.left);
               return (
                 <div
                   key={`${r},${c}`}
@@ -907,17 +1582,29 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
                   title={groupedTitle || undefined}
                   style={{
                     position: "relative",
+                    // Adjacent grid cells each draw their own border right up
+                    // to the shared pixel boundary between them — with every
+                    // cell at the same (implicit) stacking order, whichever
+                    // one is LATER in DOM order (i.e. the cell below/to the
+                    // right) paints last and silently covers the earlier
+                    // cell's line at that shared edge. A cell with a custom
+                    // border needs to win that fight regardless of its
+                    // position, or its own right/bottom sides render UNDER
+                    // its neighbors' plain default gridlines and never show.
+                    zIndex: hasCustomBorder ? 1 : undefined,
                     gridColumn: `${c + 2} / span ${colSpan}`,
                     gridRow: `${r + 2} / span ${rowSpan}`,
-                    borderTop: "1px solid var(--border)",
-                    borderLeft: "1px solid var(--border)",
-                    borderRight: c + colSpan - 1 === colCount - 1 ? "1px solid var(--border)" : undefined,
-                    borderBottom: r + rowSpan - 1 === rowCount - 1 ? "1px solid var(--border)" : undefined,
+                    borderTop: borderSideToCss(cell.border.top) ?? "1px solid var(--border)",
+                    borderLeft: borderSideToCss(cell.border.left) ?? "1px solid var(--border)",
+                    borderRight:
+                      borderSideToCss(cell.border.right) ?? (c + colSpan - 1 === colCount - 1 ? "1px solid var(--border)" : undefined),
+                    borderBottom:
+                      borderSideToCss(cell.border.bottom) ?? (r + rowSpan - 1 === rowCount - 1 ? "1px solid var(--border)" : undefined),
                     outline: inRange ? "2px solid var(--accent)" : "none",
                     outlineOffset: -2,
                     background: cell.backgroundColor ?? "transparent",
                     display: "flex",
-                    alignItems: "center",
+                    alignItems: cell.verticalAlign === "top" ? "flex-start" : cell.verticalAlign === "bottom" ? "flex-end" : "center",
                     overflow: "hidden",
                   }}
                 >
@@ -974,17 +1661,21 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
                         fontFamily: cell.fontFamily ?? "inherit",
                         fontSize: cell.fontSize ? `${cell.fontSize}pt` : "inherit",
                         color: cell.fontColor ?? "inherit",
+                        textAlign: cell.horizontalAlign ?? "left",
                       }}
                     />
                   ) : (
                     <span
                       style={{
+                        width: "100%",
+                        minWidth: 0,
                         padding: "0 0.35rem",
                         fontWeight: cell.bold ? 700 : 400,
                         fontStyle: cell.italic ? "italic" : "normal",
                         fontFamily: cell.fontFamily ?? "inherit",
                         fontSize: cell.fontSize ? `${cell.fontSize}pt` : "inherit",
                         color: cell.fontColor ?? "inherit",
+                        textAlign: cell.horizontalAlign ?? "left",
                         overflow: "hidden",
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",

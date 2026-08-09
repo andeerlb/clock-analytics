@@ -1,6 +1,6 @@
 import type ExcelJS from "exceljs";
 import { columnLetter, formatDateSlash, formatMinutesAsTime, shiftDurationMinutes } from "./format";
-import { PAYMENT_SHIFT_STATUS_LABELS, type PaymentExportBindableField, type TemplateGridData } from "./types";
+import { PAYMENT_SHIFT_STATUS_LABELS, type CellBorderSide, type PaymentExportBindableField, type TemplateGridData } from "./types";
 import type { PaymentShiftReportRow } from "./db";
 
 /**
@@ -184,6 +184,28 @@ function hexToArgb(hex: string): string {
   return "FF" + hex.replace("#", "").toUpperCase();
 }
 
+/**
+ * `CellBorderSide` -> the shape ExcelJS's `destCell.border.{top,right,bottom,left}`
+ * wants. The editor's own `width` is a free px number (see that field's own
+ * doc comment), but real `.xlsx` borders only support Excel's fixed set of
+ * named weights — this rounds the chosen width down to the nearest of
+ * "thin"/"medium"/"thick" (Excel's own rough visual steps: 1px, 2-3px,
+ * 4px+). `pattern` picks the border's dash motif independently: "double" is
+ * its own named style regardless of width (Excel has no "double medium"),
+ * "dashed"/"dotted" likewise ignore width (`.xlsx` has no numeric dash
+ * width), and "solid" is the only pattern where width actually changes
+ * which named style gets written.
+ */
+function borderSideToExcel(side: CellBorderSide | null): ExcelJS.Border | undefined {
+  if (!side) return undefined;
+  const argb = hexToArgb(side.color);
+  if (side.pattern === "double") return { style: "double", color: { argb } };
+  if (side.pattern === "dashed") return { style: "dashed", color: { argb } };
+  if (side.pattern === "dotted") return { style: "dotted", color: { argb } };
+  const style: ExcelJS.BorderStyle = side.width >= 4 ? "thick" : side.width >= 2 ? "medium" : "thin";
+  return { style, color: { argb } };
+}
+
 /** Excel's column width unit is "characters of the default font", not pixels — the grid editor's own widths are pixels, so this is an approximate conversion (Excel's own rule of thumb: `(pixels - 5) / 7`), not a pixel-perfect match. */
 export function pxToExcelWidth(px: number): number {
   if (!px || Number.isNaN(px)) return 12;
@@ -266,6 +288,24 @@ export function writeTemplateRow(
         size: templateCell.fontSize ?? undefined,
       };
     }
+    const border = templateCell.border;
+    if (border && (border.top || border.right || border.bottom || border.left)) {
+      destCell.border = {
+        top: borderSideToExcel(border.top),
+        right: borderSideToExcel(border.right),
+        bottom: borderSideToExcel(border.bottom),
+        left: borderSideToExcel(border.left),
+      };
+    }
+    // `vertical` always defaults to "middle" (not left unset, which ExcelJS/
+    // Excel would render as bottom-aligned) so the exported file matches
+    // what the template editor has always shown — every cell there is
+    // vertically centered by default, see `TemplateGridCell.verticalAlign`'s
+    // own doc comment.
+    destCell.alignment = {
+      horizontal: templateCell.horizontalAlign ?? undefined,
+      vertical: templateCell.verticalAlign ?? "middle",
+    };
   });
 
   for (const merge of grid.merges ?? []) {

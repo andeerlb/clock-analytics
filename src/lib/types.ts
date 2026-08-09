@@ -582,7 +582,32 @@ export const PAYMENT_EXPORT_BINDABLE_FIELD_LABELS: Record<PaymentExportBindableF
   employeeName: "Colaborador",
 };
 
-/** One cell in a `TemplateGridData` — deliberately minimal: text, background/text color, bold/italic, font family/size, nothing else (no formulas, no borders). */
+/** A border line's dash pattern — independent of its thickness (see `CellBorderSide.width`). "double" is its own pattern (not a thickness) because that's how Excel itself models it: a fixed two-line motif, not a thick single line. */
+export type CellBorderPattern = "solid" | "dashed" | "dotted" | "double";
+
+/** One side of a cell's border. `null` (on `TemplateGridCellBorder`) means "no border on this side" — distinct from "not set" (there's no third state; a cell either has a visible border on a given side or it doesn't). */
+export interface CellBorderSide {
+  /** Free-form px thickness (not a "thin/medium/thick" preset) — approximated back to the nearest of Excel's own named border weights at export time, see `borderSideToExcel` in `paymentExportGrid.ts`. */
+  width: number;
+  pattern: CellBorderPattern;
+  /** "#rrggbb". */
+  color: string;
+}
+
+export interface TemplateGridCellBorder {
+  top: CellBorderSide | null;
+  right: CellBorderSide | null;
+  bottom: CellBorderSide | null;
+  left: CellBorderSide | null;
+}
+
+/** Horizontal text alignment. `null` = default (left-reading, same as leaving it unset in Excel). */
+export type CellHorizontalAlign = "left" | "center" | "right" | "justify";
+
+/** Vertical text alignment. `null` = the grid's own default, which is vertically centered (unlike a fresh Excel cell, which defaults to bottom) — chosen to match how every cell has always rendered in `TemplateGridEditor`, so old templates don't visually shift once this field exists. */
+export type CellVerticalAlign = "top" | "middle" | "bottom";
+
+/** One cell in a `TemplateGridData` — text, background/text color, bold/italic, font family/size, per-side border, and horizontal/vertical alignment. */
 export interface TemplateGridCell {
   value: string;
   /** "#rrggbb", or `null` for no fill. */
@@ -595,6 +620,11 @@ export interface TemplateGridCell {
   fontFamily: string | null;
   /** Points, e.g. 11 — `null` means the sheet default (11). */
   fontSize: number | null;
+  border: TemplateGridCellBorder;
+  /** `null` = default (left-reading). */
+  horizontalAlign: CellHorizontalAlign | null;
+  /** `null` = default (vertically centered — see `CellVerticalAlign`'s own doc comment). */
+  verticalAlign: CellVerticalAlign | null;
 }
 
 /** One merged block of cells, anchored at its top-left — see `TemplateGridData.merges`. */
