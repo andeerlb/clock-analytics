@@ -7,6 +7,7 @@ import {
   Eye,
   FileText,
   FolderOpen,
+  History,
   Link2,
   PlusCircle,
   Search,
@@ -19,6 +20,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
 import DateRangePicker from "../components/DateRangePicker";
+import Drawer from "../components/Drawer";
 import EmployeePicker from "../components/EmployeePicker";
 import Pagination from "../components/Pagination";
 import { useRemoteFileUpdates, type RemoteUpdateFlag } from "../contexts/RemoteFileUpdatesContext";
@@ -136,8 +138,12 @@ interface PaymentPreviewRow {
   unresolvedRoute: boolean;
   /** The route's resolved client, if any — `null` unless a routing rule matched. Kept on the row (not just used transiently) so a "colaborador não encontrado" row's "vincular colaborador" picker knows which client to search within. */
   resolvedClientId: number | null;
+  /** Display name for `resolvedClientId`, straight from the matched rule — `null` alongside it. */
+  resolvedClientName: string | null;
   /** The route's resolved company, alongside `resolvedClientId` — same routing rule, so "Cadastrar colaborador" can hand off exactly which client/empresa this row already resolved to, instead of leaving them to pick blind. */
   resolvedCompanyId: number | null;
+  /** Display name for `resolvedCompanyId`, straight from the matched rule — `null` alongside it. */
+  resolvedCompanyName: string | null;
   /** Resolved from the template's status rules, falling back to `"pendente"` when none match (or none are configured) — see `resolvePaymentStatus`. */
   paymentStatus: PaymentShiftStatus;
   /** Every non-blank column the template left unmapped on this row — kept for history/audit instead of discarded. */
@@ -292,6 +298,7 @@ export default function ImportPaymentsPage() {
 
   const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
   const [recentFilesTotal, setRecentFilesTotal] = useState(0);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const [historyPage, setHistoryPage] = useState(0);
   const [historyPageSize, setHistoryPageSize] = useState(HISTORY_PAGE_SIZE_OPTIONS[0]);
@@ -729,7 +736,9 @@ export default function ImportPaymentsPage() {
                 isDuplicate: false,
                 unresolvedRoute: false,
                 resolvedClientId: null,
+                resolvedClientName: null,
                 resolvedCompanyId: null,
+                resolvedCompanyName: null,
                 category: "skipped",
               });
               continue;
@@ -764,7 +773,9 @@ export default function ImportPaymentsPage() {
               isDuplicate: false,
               unresolvedRoute: !route,
               resolvedClientId: route?.clientId ?? null,
+              resolvedClientName: route?.clientName ?? null,
               resolvedCompanyId: route?.companyId ?? null,
+              resolvedCompanyName: route?.companyName ?? null,
               category: !route ? "unresolved-route" : !employee ? "not-found" : "valid",
             });
           }
@@ -1149,10 +1160,16 @@ export default function ImportPaymentsPage() {
       </Link>
       <div className="page-header">
         <h2>Importar pagamentos</h2>
-        <button type="button" className="secondary" onClick={() => navigate("/import/payments/templates")}>
-          <Settings2 size={15} style={{ marginRight: "0.4rem" }} />
-          Gerenciar templates
-        </button>
+        <div style={{ display: "flex", gap: "0.6rem" }}>
+          <button type="button" className="outline" onClick={() => setHistoryOpen(true)}>
+            <History size={15} style={{ marginRight: "0.4rem" }} />
+            Histórico
+          </button>
+          <button type="button" className="secondary" onClick={() => navigate("/import/payments/templates")}>
+            <Settings2 size={15} style={{ marginRight: "0.4rem" }} />
+            Gerenciar templates
+          </button>
+        </div>
       </div>
       <p className="page-subtitle">
         Aplique um template já cadastrado a um arquivo de pagamentos (CSV, Excel ou ODS) e
@@ -1162,51 +1179,53 @@ export default function ImportPaymentsPage() {
       {error && <div className="error-box">{error}</div>}
       {successMessage && <div className="success-box">{successMessage}</div>}
 
-      <div className="import-layout">
+      <div className="import-layout" style={{ display: "block" }}>
         <div className="import-main">
           <div className="card">
-            <div className="field" style={{ maxWidth: "24rem", marginBottom: "1.2rem" }}>
-              <label htmlFor="payment-template">Template</label>
-              <select
-                id="payment-template"
-                value={templateId}
-                onChange={(e) => setTemplateId(e.target.value)}
-                disabled={templates.length === 0}
-              >
-                <option value="">Selecione um template</option>
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-              {templates.length === 0 ? (
-                <p className="field-hint">
-                  Nenhum template disponível.{" "}
-                  <Link to="/import/payments/templates">Cadastre um template</Link>.
-                </p>
-              ) : (
-                <p className="field-hint">
-                  Como as colunas do arquivo serão lidas, e as regras que decidem a Empresa/Cliente
-                  de cada linha.
-                </p>
-              )}
-            </div>
+            <div className="field-row" style={{ marginBottom: "1.2rem" }}>
+              <div className="field" style={{ flex: "1 1 280px", maxWidth: "24rem" }}>
+                <label htmlFor="payment-template">Template</label>
+                <select
+                  id="payment-template"
+                  value={templateId}
+                  onChange={(e) => setTemplateId(e.target.value)}
+                  disabled={templates.length === 0}
+                >
+                  <option value="">Selecione um template</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+                {templates.length === 0 ? (
+                  <p className="field-hint">
+                    Nenhum template disponível.{" "}
+                    <Link to="/import/payments/templates">Cadastre um template</Link>.
+                  </p>
+                ) : (
+                  <p className="field-hint">
+                    Como as colunas do arquivo serão lidas, e as regras que decidem a Empresa/Cliente
+                    de cada linha.
+                  </p>
+                )}
+              </div>
 
-            <div className="field" style={{ maxWidth: "24rem", marginBottom: "1.2rem" }}>
-              <label>Período (opcional)</label>
-              <DateRangePicker
-                startValue={periodStart}
-                endValue={periodEnd}
-                onChange={(start, end) => {
-                  setPeriodStart(start);
-                  setPeriodEnd(end);
-                }}
-              />
-              <p className="field-hint">
-                Filtra pela coluna de data do template. Deixe em branco para processar o relatório
-                inteiro.
-              </p>
+              <div className="field" style={{ flex: "1 1 240px", maxWidth: "24rem" }}>
+                <label>Período (opcional)</label>
+                <DateRangePicker
+                  startValue={periodStart}
+                  endValue={periodEnd}
+                  onChange={(start, end) => {
+                    setPeriodStart(start);
+                    setPeriodEnd(end);
+                  }}
+                />
+                <p className="field-hint">
+                  Filtra pela coluna de data do template. Deixe em branco para processar o relatório
+                  inteiro.
+                </p>
+              </div>
             </div>
 
             <div className="field" style={{ maxWidth: "28rem", marginBottom: "1.2rem" }}>
@@ -1568,6 +1587,8 @@ export default function ImportPaymentsPage() {
                         </th>
                         <th>Linha</th>
                         <th>Colaborador</th>
+                        <th>Empresa</th>
+                        <th>Cliente</th>
                         <th>Local</th>
                         <th>Data</th>
                         <th>Função</th>
@@ -1580,7 +1601,7 @@ export default function ImportPaymentsPage() {
                     <tbody>
                       {previewRows.length === 0 && rowFilter !== "all" && (
                         <tr>
-                          <td colSpan={10} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
+                          <td colSpan={12} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
                             Nenhuma linha nesta categoria.
                           </td>
                         </tr>
@@ -1592,7 +1613,7 @@ export default function ImportPaymentsPage() {
                               <td className="checkbox-cell">
                                 <input type="checkbox" disabled aria-label="Não disponível" />
                               </td>
-                              <td colSpan={8}>
+                              <td colSpan={10}>
                                 <div className="file-name">{safeDecodeFileName(item.fileName)}</div>
                                 <div className="muted">{item.message}</div>
                               </td>
@@ -1649,6 +1670,8 @@ export default function ImportPaymentsPage() {
                                 </span>
                               )}
                             </td>
+                            <td>{row.resolvedCompanyName ?? <span className="muted">—</span>}</td>
+                            <td>{row.resolvedClientName ?? <span className="muted">—</span>}</td>
                             <td>{row.local}</td>
                             <td>
                               {row.workDate ? (
@@ -1813,10 +1836,9 @@ export default function ImportPaymentsPage() {
           )}
         </div>
 
-        <div className="import-side">
-          <div className="card">
-            <h3 style={{ marginTop: 0 }}>Histórico de importações</h3>
+      </div>
 
+      <Drawer open={historyOpen} onClose={() => setHistoryOpen(false)} title="Histórico de importações">
             {!(recentFilesTotal === 0 && !historySearch.trim()) && (
               <div className="field" style={{ marginBottom: "0.8rem" }}>
                 <div style={{ position: "relative" }}>
@@ -1930,9 +1952,7 @@ export default function ImportPaymentsPage() {
                 maxPageButtons={3}
               />
             )}
-          </div>
-        </div>
-      </div>
+      </Drawer>
 
       {confirmFullImport && (
         <ConfirmModal

@@ -510,20 +510,32 @@ export function resolvePaymentRoute(
     values: string[];
     caseInsensitive: boolean;
     companyId: number;
+    companyName: string;
     clientId: number;
+    clientName: string;
   }[],
   fields: Record<string, string>,
-): { companyId: number; clientId: number } | null {
+): { companyId: number; companyName: string; clientId: number; clientName: string } | null {
   for (const rule of rules) {
     if (rule.kind === "else") {
-      return { companyId: rule.companyId, clientId: rule.clientId };
+      return {
+        companyId: rule.companyId,
+        companyName: rule.companyName,
+        clientId: rule.clientId,
+        clientName: rule.clientName,
+      };
     }
     const raw = rule.field ? fields[rule.field] : undefined;
     if (!raw) continue;
     const fold = (s: string) => (rule.caseInsensitive ? s.toLowerCase() : s);
     const normalized = fold(raw.trim());
     if (rule.values.some((v) => fold(v.trim()) === normalized)) {
-      return { companyId: rule.companyId, clientId: rule.clientId };
+      return {
+        companyId: rule.companyId,
+        companyName: rule.companyName,
+        clientId: rule.clientId,
+        clientName: rule.clientName,
+      };
     }
   }
   return null;
