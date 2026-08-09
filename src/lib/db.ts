@@ -1237,6 +1237,8 @@ export interface TrackedPaymentUrl {
   lastDeepCheckAt: string | null;
   /** What the last deep check actually found for this exact signature — 'changed' only when a real field/new-shift diff turned up, 'unchanged' when it ran clean and found nothing, 'error' when it couldn't finish. This, not the header check, is what a check attempt logs as its `result` (see `RemoteFileUpdatesContext.runChecks`) — a header-only "changed" against an already-deep-checked signature reuses this instead of re-downloading to say the same thing again. */
   lastDeepCheckResult: UrlCheckResult | null;
+  /** The `source_url_check_log.id` whose `source_url_check_diffs` rows are the cached ones above — a check that reuses this signature's verdict copies those same diff rows onto its own id (see `copyCheckDiffs`), so its own "Detalhes" is never blank just because the download/parse itself was skipped. */
+  lastDeepCheckLogId: number | null;
 }
 
 /**
@@ -1265,7 +1267,8 @@ export async function listTrackedPaymentUrls(): Promise<TrackedPaymentUrl[]> {
        sus.last_deep_check_last_modified AS lastDeepCheckLastModified,
        sus.last_deep_check_content_length AS lastDeepCheckContentLength,
        sus.last_deep_check_at AS lastDeepCheckAt,
-       sus.last_deep_check_result AS lastDeepCheckResult
+       sus.last_deep_check_result AS lastDeepCheckResult,
+       sus.last_deep_check_log_id AS lastDeepCheckLogId
      FROM (
        SELECT *, ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY imported_at DESC) AS rn
        FROM source_files
@@ -1634,14 +1637,40 @@ export async function markDeepCheckSignature(
   lastModified: string | null,
   contentLength: number | null,
   result: UrlCheckResult,
+  checkLogId: number,
 ): Promise<void> {
   const db = await getDb();
   await db.execute(
     `UPDATE source_url_settings
      SET last_deep_check_etag = $2, last_deep_check_last_modified = $3, last_deep_check_content_length = $4,
-         last_deep_check_result = $5, last_deep_check_at = datetime('now')
+         last_deep_check_result = $5, last_deep_check_log_id = $6, last_deep_check_at = datetime('now')
      WHERE source_url = $1`,
-    [sourceUrl, etag, lastModified, contentLength, result],
+    [sourceUrl, etag, lastModified, contentLength, result, checkLogId],
+  );
+}
+
+/**
+ * Copies one check's diff rows onto another check_log_id, verbatim — used
+ * when a check reuses an already-known deep-check verdict for the same
+ * remote signature (see `RemoteFileUpdatesContext.runChecks`) instead of
+ * re-downloading/re-parsing just to arrive at the same rows again. Every
+ * check attempt's history is meant to show what it found, even when what it
+ * found is "the same thing as last time" — this is how a cached "Mudou"
+ * still gets its own expandable diff detail instead of a blank "—".
+ */
+export async function copyCheckDiffs(fromCheckLogId: number, toCheckLogId: number): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO source_url_check_diffs
+       (check_log_id, config_id, config_label, change_kind, matched_shift_id, employee_id, employee_name,
+        work_date, local, role, schedule_start_minutes, schedule_end_minutes, sheet_name, row_number,
+        column_letter, field_name, old_value, new_value, message)
+     SELECT $2, config_id, config_label, change_kind, matched_shift_id, employee_id, employee_name,
+            work_date, local, role, schedule_start_minutes, schedule_end_minutes, sheet_name, row_number,
+            column_letter, field_name, old_value, new_value, message
+     FROM source_url_check_diffs
+     WHERE check_log_id = $1`,
+    [fromCheckLogId, toCheckLogId],
   );
 }
 

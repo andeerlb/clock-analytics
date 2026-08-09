@@ -14,7 +14,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
@@ -549,9 +549,20 @@ export default function ImportPaymentsPage() {
   // (`replace`) so this fires exactly once per navigation, not again on a
   // later re-render or on browser back/forward landing back on this same
   // history entry.
+  //
+  // `handledAutoReimportState` guards against React StrictMode's dev-only
+  // double-invoke of this same effect body — the `replace` navigate above
+  // is itself async (its cleared state doesn't land until a LATER render),
+  // so without this guard both invocations still see the same non-null
+  // `configId` and each downloads/adds the file, producing a duplicate
+  // entry in `paths`. A ref (not state) survives across the double-invoke
+  // and persists across renders, so it's checked BEFORE doing anything.
+  const handledAutoReimportState = useRef<unknown>(undefined);
   useEffect(() => {
+    if (location.state === handledAutoReimportState.current) return;
     const configId = (location.state as { autoReimportConfigId?: number } | null)?.autoReimportConfigId;
     if (configId === undefined) return;
+    handledAutoReimportState.current = location.state;
     navigate(location.pathname, { replace: true, state: null });
     const flag = getReimportFlag(configId);
     if (flag) handleReimportFromUrl(flag);

@@ -328,5 +328,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0054_deep_check_drives_result.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 55,
+            description: "add source_url_settings.last_deep_check_log_id — a check that reuses the cached deep-check verdict now copies that run's diff rows onto its own check_log_id too, so Detalhes is never blank just because the download/parse was skipped",
+            sql: include_str!("../migrations/0055_deep_check_log_id.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
