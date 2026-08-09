@@ -1,0 +1,11 @@
+-- The header check (ETag/Last-Modified/Content-Length) only ever decides
+-- WHEN to look closer — on its own it's noisy (a host can hand out a new
+-- ETag without any content that matters actually changing). The
+-- "Resultado" column a check logs now reflects the deep diff's own verdict
+-- instead: a fresh deep pass sets this to what it actually found
+-- ('changed' only when a real field/new-shift diff turned up, 'unchanged'
+-- when it ran clean and found nothing, 'error' when it couldn't finish), and
+-- a later check against that SAME remote signature reuses this value
+-- directly instead of re-downloading/re-parsing just to log the same
+-- "changed" again forever (see RemoteFileUpdatesContext.runChecks).
+ALTER TABLE source_url_settings ADD COLUMN last_deep_check_result TEXT;

@@ -189,21 +189,26 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
    * calls — e.g. a force-click landing mid-tick — never double-check the
    * same URL), so it's safe to call from more than one place at once.
    *
-   * For each URL: (1) the cheap header check, always — logged regardless of
-   * outcome; (2) IF that came back "changed" AND the remote signature
-   * differs from the one the last deep check already ran against
-   * (`TrackedPaymentUrl.lastDeepCheck*` — NOT `sourceEtag`/etc., which only
-   * update on an actual saved reimport), download the file once and run
-   * every active `ReimportConfig` for that URL through `computeReimportDiff`
-   * — never writing to payment_shifts, only recording what changed (see
-   * `remoteCheckDiff.ts`). This is what stops an unreimported "changed" file
-   * from being re-downloaded and re-parsed every tick indefinitely. A
-   * per-config failure (deleted template, parse error) or a whole-URL one
-   * (the download itself failing) becomes a single `change_kind: 'error'`
-   * diff entry instead of derailing every other config/URL in this batch.
-   * Each URL leaves `checkingUrls` as soon as ITS OWN work (header + any
-   * deep pass) finishes, not when the whole batch does — a slow deep pass
-   * on one URL shouldn't keep an unrelated fast URL showing "Verificando...".
+   * For each URL: (1) the cheap header check, always. This ONLY decides
+   * whether to look closer — on its own it's noisy (a host can hand out a
+   * new ETag without any content that matters actually changing), so it
+   * never gets logged as the check's `result` by itself. (2) When the
+   * header says "changed" and the remote signature differs from the one
+   * the last deep check already ran against (`TrackedPaymentUrl.lastDeepCheck*`
+   * — NOT `sourceEtag`/etc., which only update on an actual saved
+   * reimport), download the file once and run every active `ReimportConfig`
+   * for that URL through `computeReimportDiff` (never writing to
+   * payment_shifts — see `remoteCheckDiff.ts`). What THAT finds is what gets
+   * logged: 'changed' only if a real field/new-shift diff turned up,
+   * 'unchanged' if it ran clean and found nothing, 'error' if it couldn't
+   * finish. (3) A later check against that SAME signature reuses this
+   * verdict (`lastDeepCheckResult`) instead of re-downloading just to log
+   * the same thing again — this is what stops an unreimported "changed"
+   * file from being re-parsed every tick indefinitely, and what stops a
+   * confirmed-empty diff from being reported as "Mudou" forever. Each URL
+   * leaves `checkingUrls` as soon as ITS OWN work (header + any deep pass)
+   * finishes, not when the whole batch does — a slow deep pass on one URL
+   * shouldn't keep an unrelated fast URL showing "Verificando...".
    */
   const runChecks = useCallback(
     async (targets: TrackedPaymentUrl[]) => {
@@ -231,8 +236,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
       async function runOne(t: TrackedPaymentUrl) {
         try {
           let headerResult: UrlCheckResult;
-          let current: { etag: string | null; lastModified: string | null; contentLength: number | null } | null = null;
-          let checkLogId: number;
+          let current: { etag: string | null; lastModified: string | null; contentLength: number | null };
           try {
             const check = await checkRemotePaymentFile(
               t.sourceUrl,
@@ -242,27 +246,45 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
             );
             headerResult = check.changed === true ? "changed" : check.changed === false ? "unchanged" : "unknown";
             current = check.current;
-            checkLogId = await logUrlCheckResult(t.sourceUrl, t.fileName, headerResult, null);
           } catch (e) {
             const message = String(e instanceof Error ? e.message : e);
             await logUrlCheckResult(t.sourceUrl, t.fileName, "error", message);
             return;
           }
 
-          if (headerResult !== "changed" || !current) return;
+          if (headerResult !== "changed") {
+            // Nothing to look closer at — the header itself is the whole
+            // story here.
+            await logUrlCheckResult(t.sourceUrl, t.fileName, headerResult, null);
+            return;
+          }
+
+          const configs = activeConfigsByUrl.get(t.sourceUrl) ?? [];
+          if (configs.length === 0) {
+            // No reimport config to diff against — nothing to verify
+            // deeper, so the header's own word is all there is to log.
+            await logUrlCheckResult(t.sourceUrl, t.fileName, "changed", null);
+            return;
+          }
 
           const signatureChanged =
             current.etag !== t.lastDeepCheckEtag ||
             current.lastModified !== t.lastDeepCheckLastModified ||
             current.contentLength !== t.lastDeepCheckContentLength;
-          if (!signatureChanged) return;
 
-          const configs = activeConfigsByUrl.get(t.sourceUrl) ?? [];
-          if (configs.length === 0) return;
+          if (!signatureChanged) {
+            // Already deep-checked this exact remote version — reuse that
+            // verdict instead of re-downloading/re-parsing for nothing.
+            await logUrlCheckResult(t.sourceUrl, t.fileName, t.lastDeepCheckResult ?? "changed", null);
+            return;
+          }
 
+          const entries: CheckDiffInput[] = [];
+          let wholeUrlErrorMessage: string | null = null;
+          let downloadSucceeded = false;
           try {
             const downloaded = await downloadPaymentFileFromUrl(t.sourceUrl);
-            const entries: CheckDiffInput[] = [];
+            downloadSucceeded = true;
             for (const config of configs) {
               try {
                 entries.push(...(await computeReimportDiff(config, downloaded.path)));
@@ -276,12 +298,29 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
                 );
               }
             }
-            await saveCheckDiffs(checkLogId, entries);
-            await markDeepCheckSignature(t.sourceUrl, current.etag, current.lastModified, current.contentLength);
           } catch (e) {
-            await saveCheckDiffs(checkLogId, [
-              errorDiffEntry(null, "", String(e instanceof Error ? e.message : e)),
-            ]);
+            wholeUrlErrorMessage = String(e instanceof Error ? e.message : e);
+          }
+
+          const hasRealChange = entries.some((e) => e.changeKind !== "error");
+          const hasConfigErrors = entries.some((e) => e.changeKind === "error");
+          const effectiveResult: UrlCheckResult = wholeUrlErrorMessage
+            ? "error"
+            : hasRealChange
+              ? "changed"
+              : hasConfigErrors
+                ? "error"
+                : "unchanged";
+
+          const checkLogId = await logUrlCheckResult(t.sourceUrl, t.fileName, effectiveResult, wholeUrlErrorMessage);
+          await saveCheckDiffs(checkLogId, entries);
+          // A failed DOWNLOAD isn't cached as "checked" — a transient
+          // network blip should be retried next tick, not stuck showing
+          // 'error' forever until the header changes again. A per-config
+          // failure (bad template) is real and persistent, so that case
+          // still gets cached the same as a clean result.
+          if (downloadSucceeded) {
+            await markDeepCheckSignature(t.sourceUrl, current.etag, current.lastModified, current.contentLength, effectiveResult);
           }
         } finally {
           checkingUrlsRef.current.delete(t.sourceUrl);

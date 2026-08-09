@@ -1235,6 +1235,8 @@ export interface TrackedPaymentUrl {
   lastDeepCheckLastModified: string | null;
   lastDeepCheckContentLength: number | null;
   lastDeepCheckAt: string | null;
+  /** What the last deep check actually found for this exact signature — 'changed' only when a real field/new-shift diff turned up, 'unchanged' when it ran clean and found nothing, 'error' when it couldn't finish. This, not the header check, is what a check attempt logs as its `result` (see `RemoteFileUpdatesContext.runChecks`) — a header-only "changed" against an already-deep-checked signature reuses this instead of re-downloading to say the same thing again. */
+  lastDeepCheckResult: UrlCheckResult | null;
 }
 
 /**
@@ -1262,7 +1264,8 @@ export async function listTrackedPaymentUrls(): Promise<TrackedPaymentUrl[]> {
        sus.last_deep_check_etag AS lastDeepCheckEtag,
        sus.last_deep_check_last_modified AS lastDeepCheckLastModified,
        sus.last_deep_check_content_length AS lastDeepCheckContentLength,
-       sus.last_deep_check_at AS lastDeepCheckAt
+       sus.last_deep_check_at AS lastDeepCheckAt,
+       sus.last_deep_check_result AS lastDeepCheckResult
      FROM (
        SELECT *, ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY imported_at DESC) AS rn
        FROM source_files
@@ -1624,20 +1627,21 @@ export async function listCheckDiffs(checkLogId: number): Promise<CheckDiffRow[]
   );
 }
 
-/** Records the remote signature a deep check (download+parse+diff) just ran against, so `RemoteFileUpdatesContext.runChecks` doesn't repeat that work every tick while the user hasn't reimported yet. */
+/** Records the remote signature a deep check (download+parse+diff) just ran against, and what it actually found (`result`) — so `RemoteFileUpdatesContext.runChecks` doesn't repeat that work every tick while the user hasn't reimported yet, and a later "changed"-per-header check against the same signature can log the SAME diff-driven verdict instead of re-asserting the raw header result. */
 export async function markDeepCheckSignature(
   sourceUrl: string,
   etag: string | null,
   lastModified: string | null,
   contentLength: number | null,
+  result: UrlCheckResult,
 ): Promise<void> {
   const db = await getDb();
   await db.execute(
     `UPDATE source_url_settings
      SET last_deep_check_etag = $2, last_deep_check_last_modified = $3, last_deep_check_content_length = $4,
-         last_deep_check_at = datetime('now')
+         last_deep_check_result = $5, last_deep_check_at = datetime('now')
      WHERE source_url = $1`,
-    [sourceUrl, etag, lastModified, contentLength],
+    [sourceUrl, etag, lastModified, contentLength, result],
   );
 }
 

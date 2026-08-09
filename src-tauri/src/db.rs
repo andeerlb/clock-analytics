@@ -322,5 +322,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0053_source_url_check_diffs.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 54,
+            description: "add source_url_settings.last_deep_check_result — the deep diff, not the header check, now decides what a check's Resultado column shows",
+            sql: include_str!("../migrations/0054_deep_check_drives_result.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
