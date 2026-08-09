@@ -272,10 +272,15 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
             current.lastModified !== t.lastDeepCheckLastModified ||
             current.contentLength !== t.lastDeepCheckContentLength;
 
-          if (!signatureChanged) {
-            // Already deep-checked this exact remote version — reuse that
-            // verdict instead of re-downloading/re-parsing for nothing.
-            await logUrlCheckResult(t.sourceUrl, t.fileName, t.lastDeepCheckResult ?? "changed", null);
+          // Reuse the cached verdict only when there IS one — a signature
+          // recorded before `last_deep_check_result` existed (or by some
+          // future migration that adds a signature field without a verdict)
+          // leaves it `null`; treating that as "changed" by default would
+          // wedge the URL permanently, since a matching signature means a
+          // fresh pass would never run again to actually compute one. Fall
+          // through to a real pass instead whenever there's nothing to reuse.
+          if (!signatureChanged && t.lastDeepCheckResult !== null) {
+            await logUrlCheckResult(t.sourceUrl, t.fileName, t.lastDeepCheckResult, null);
             return;
           }
 
