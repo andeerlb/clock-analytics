@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  AlertTriangle,
   Building2,
   CheckCircle2,
   ChevronDown,
@@ -44,6 +45,7 @@ import {
   getPaymentVisibleColumns,
   listClients,
   listCompanies,
+  listLatestFieldDiffsForShifts,
   listPaymentExportTemplates,
   listPaymentShiftSummaries,
   listPaymentShiftsFlat,
@@ -57,9 +59,11 @@ import {
   type ListPaymentShiftSummariesQuery,
   type PaymentShiftFlatRow,
   type PaymentShiftGroupRow,
+  type ShiftFieldDiffRow,
 } from "../lib/db";
 import {
   centsMaskToAmount,
+  diffFieldLabel,
   formatCentsMask,
   formatCurrencyBRL,
   formatDate,
@@ -118,6 +122,40 @@ const ALL_COLUMN_IDS = FLAT_COLUMNS.map((c) => c.id);
 const DEFAULT_VISIBLE_COLUMN_IDS = ALL_COLUMN_IDS.filter((id) => id !== "importado");
 const IDENTITY_COLUMN_IDS = new Set(["colaborador", "cliente", "empresa"]);
 const TURNO_COLUMNS = FLAT_COLUMNS.filter((c) => !IDENTITY_COLUMN_IDS.has(c.id));
+
+/** Which `FLAT_COLUMNS` cell a `source_url_check_diffs.field_name` belongs to — see `computeReimportDiff` (remoteCheckDiff.ts) for the fixed set of field names it ever produces. */
+function diffColumnId(fieldName: string | null): string | null {
+  switch (fieldName) {
+    case "status":
+      return "status";
+    case "data":
+      return "data";
+    case "local":
+      return "local";
+    case "função":
+      return "funcao";
+    case "horário":
+      return "horario";
+    default:
+      return fieldName?.startsWith("extra:") ? "extras" : null;
+  }
+}
+
+/** Small warning icon a cell shows when the last automatic verification found this exact field different from the source file — hover for the old→new value and when it was found. Purely informational, reflects whatever `listLatestFieldDiffsForShifts` last returned; never triggers a check itself. */
+function ChangedFieldBadge({ diffs }: { diffs: ShiftFieldDiffRow[] }) {
+  if (diffs.length === 0) return null;
+  const title = diffs
+    .map(
+      (d) =>
+        `${diffFieldLabel(d.fieldName, d.columnLetter)}: "${d.oldValue ?? "—"}" → "${d.newValue ?? "—"}" (verificado em ${formatDateTimeAbbrevYY(d.checkedAt)})`,
+    )
+    .join("\n");
+  return (
+    <span className="badge warn" style={{ marginLeft: "0.35rem", padding: "0.1rem 0.3rem" }} title={title}>
+      <AlertTriangle size={11} />
+    </span>
+  );
+}
 
 /** "2026-02" -> "fev/2026" */
 function formatCompetencia(competencia: string): string {
@@ -459,6 +497,7 @@ function ShiftRow({
   identity,
   company,
   visibleColumns,
+  changes,
   onCommitField,
   onPay,
   onRevert,
@@ -472,12 +511,14 @@ function ShiftRow({
   identity?: { employeeName: string; companyName: string; clientName: string };
   company: CompanyDetail | null;
   visibleColumns: Set<string>;
+  /** What the last automatic verification found different for this shift (if anything) — see `listLatestFieldDiffsForShifts`. */
+  changes: ShiftFieldDiffRow[];
   onCommitField: (shift: PaymentShiftRow, groupRef: GroupRef, patch: ShiftFieldPatch) => void;
   onPay: (shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) => void;
   onRevert: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
   onDelete: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
   onViewHistory: (shiftId: number, companyId: number) => void;
-  onViewExtra: (data: Record<string, string>) => void;
+  onViewExtra: (data: Record<string, string>, sourceUrl: string | null) => void;
 }) {
   const badge = STATUS_BADGE[s.status];
   const BadgeIcon = badge.icon;
@@ -498,9 +539,12 @@ function ShiftRow({
   const canEdit = s.status === "pendente" || s.status === "erro";
   const col = (id: string) => visibleColumns.has(id);
   const patch = (p: ShiftFieldPatch) => onCommitField(s, groupRef, p);
+  const changesFor = (columnId: string) => changes.filter((c) => diffColumnId(c.fieldName) === columnId);
+  /** Not tied to any one column — the last automatic verification didn't find this shift's record at all in the source, in any row (see `computeReimportDiff`'s `change_kind: 'removed'`). */
+  const removedDiff = changes.find((c) => c.changeKind === "removed");
 
   return (
-    <tr>
+    <tr style={removedDiff ? { background: "var(--danger-soft)" } : undefined}>
       {identity && col("colaborador") && (
         <td>
           <div className="person-cell">
@@ -514,16 +558,19 @@ function ShiftRow({
       {col("data") && (
         <td>
           <EditableDateCell editable={canEdit} value={s.workDate} display={formatDateAbbrevYY(s.workDate)} onCommit={(v) => patch({ workDate: v })} />
+          <ChangedFieldBadge diffs={changesFor("data")} />
         </td>
       )}
       {col("local") && (
         <td>
           <EditableCell editable={canEdit} value={s.local} display={s.local} onCommit={(v) => patch({ local: v })} />
+          <ChangedFieldBadge diffs={changesFor("local")} />
         </td>
       )}
       {col("funcao") && (
         <td>
           <EditableCell editable={canEdit} value={s.role} display={s.role} onCommit={(v) => patch({ role: v })} />
+          <ChangedFieldBadge diffs={changesFor("funcao")} />
         </td>
       )}
       {col("horario") && (
@@ -554,6 +601,7 @@ function ShiftRow({
               })
             }
           />
+          <ChangedFieldBadge diffs={changesFor("horario")} />
         </td>
       )}
       {col("horas") && <td>{duration !== null ? formatMinutesAsTime(duration) : "—"}</td>}
@@ -573,6 +621,7 @@ function ShiftRow({
             <BadgeIcon size={13} />
             {badge.label}
           </span>
+          <ChangedFieldBadge diffs={changesFor("status")} />
           {s.editedManually && (
             <span
               className="badge info"
@@ -603,7 +652,7 @@ function ShiftRow({
                 type="button"
                 className="badge neutral"
                 style={{ border: "none", cursor: "pointer" }}
-                onClick={() => onViewExtra(extra)}
+                onClick={() => onViewExtra(extra, s.sourceUrl)}
                 title="Ver colunas não mapeadas lidas do arquivo"
               >
                 <Info size={12} />
@@ -613,9 +662,21 @@ function ShiftRow({
               <span className="muted">—</span>
             );
           })()}
+          <ChangedFieldBadge diffs={changesFor("extras")} />
         </td>
       )}
       <td>
+        {removedDiff && (
+          <div style={{ marginBottom: "0.35rem", display: "flex", alignItems: "center", gap: "0.35rem" }}>
+            <span
+              className="badge warn"
+              title={`Não encontrado na leitura mais recente do arquivo (verificado em ${formatDateTimeAbbrevYY(removedDiff.checkedAt)}) — pode ter sido removido na fonte. Use "Remover" para marcar como excluído no sistema.`}
+            >
+              <AlertTriangle size={11} />
+              Removido na fonte?
+            </span>
+          </div>
+        )}
         {(s.status === "pendente" || s.status === "erro") && (
           <button type="button" className="secondary" onClick={() => onPay(s, companyId, groupRef)}>
             Fazer pagamento
@@ -713,6 +774,8 @@ export default function PaymentsPage() {
   const [companiesById, setCompaniesById] = useState<Map<number, CompanyDetail>>(new Map());
   const fetchedCompanyIds = useRef<Set<number>>(new Set());
 
+  const [shiftDiffs, setShiftDiffs] = useState<Map<number, ShiftFieldDiffRow[]>>(new Map());
+
   const [payingShift, setPayingShift] = useState<{ shift: PaymentShiftRow; companyId: number; groupRef: GroupRef } | null>(null);
   const [paying, setPaying] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
@@ -724,7 +787,9 @@ export default function PaymentsPage() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [inlineEditError, setInlineEditError] = useState<string | null>(null);
   const [viewingHistory, setViewingHistory] = useState<{ shiftId: number; companyId: number } | null>(null);
-  const [viewingExtraData, setViewingExtraData] = useState<Record<string, string> | null>(null);
+  const [viewingExtraData, setViewingExtraData] = useState<{ data: Record<string, string>; sourceUrl: string | null } | null>(
+    null,
+  );
 
   useEffect(() => {
     Promise.all([listCompanies(), listClients()]).then(([companyRows, clientRows]) => {
@@ -750,6 +815,23 @@ export default function PaymentsPage() {
         fetched.forEach((c) => next.set(c.id, c));
         return next;
       });
+    });
+  }
+
+  /** Refreshed on every load of `flatRows`/a group's rows, not cached long-term like `companiesById` — the background verification keeps running while this page is open, so what it last found can change out from under an already-loaded row. */
+  async function refreshShiftDiffs(ids: number[]) {
+    const uniqueIds = Array.from(new Set(ids));
+    if (uniqueIds.length === 0) return;
+    const rows = await listLatestFieldDiffsForShifts(uniqueIds);
+    setShiftDiffs((prev) => {
+      const next = new Map(prev);
+      for (const id of uniqueIds) next.delete(id);
+      for (const row of rows) {
+        const list = next.get(row.shiftId) ?? [];
+        list.push(row);
+        next.set(row.shiftId, list);
+      }
+      return next;
     });
   }
 
@@ -781,6 +863,7 @@ export default function PaymentsPage() {
     setFlatRows(rows);
     setFlatTotal(total);
     ensureCompaniesLoaded(rows.map((r) => r.companyId));
+    refreshShiftDiffs(rows.map((r) => r.id));
   }
 
   async function refetchSummaries() {
@@ -792,6 +875,7 @@ export default function PaymentsPage() {
   async function refetchGroup(employeeId: number, competencia: string) {
     const rows = await listPaymentShiftsForGroup(employeeId, competencia, baseQuery());
     setGroupRows((prev) => new Map(prev).set(groupKey(employeeId, competencia), rows));
+    refreshShiftDiffs(rows.map((r) => r.id));
   }
 
   // The table itself — filtered and paginated in SQL, not in memory.
@@ -856,6 +940,7 @@ export default function PaymentsPage() {
         .then((rows) => {
           setGroupRows((prev) => new Map(prev).set(key, rows));
           ensureCompaniesLoaded([s.companyId]);
+          refreshShiftDiffs(rows.map((r) => r.id));
         })
         .finally(() => {
           setLoadingGroups((prev) => {
@@ -1414,12 +1499,13 @@ export default function PaymentsPage() {
                                             groupRef={{ employeeId: s.employeeId, competencia: s.competencia }}
                                             company={companiesById.get(s.companyId) ?? null}
                                             visibleColumns={visibleColumns}
+                                            changes={shiftDiffs.get(r.id) ?? []}
                                             onCommitField={commitField}
                                             onPay={(shift, companyId, groupRef) => setPayingShift({ shift, companyId, groupRef })}
                                             onRevert={(shift, groupRef) => setRevertingShift({ shift, groupRef })}
                                             onDelete={(shift, groupRef) => setDeletingShift({ shift, groupRef })}
                                             onViewHistory={(shiftId, companyId) => setViewingHistory({ shiftId, companyId })}
-                                            onViewExtra={setViewingExtraData}
+                                            onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
                                           />
                                         ))}
                                       </tbody>
@@ -1476,12 +1562,13 @@ export default function PaymentsPage() {
                       identity={{ employeeName: r.employeeName, companyName: r.companyName, clientName: r.clientName }}
                       company={companiesById.get(r.companyId) ?? null}
                       visibleColumns={visibleColumns}
+                      changes={shiftDiffs.get(r.id) ?? []}
                       onCommitField={commitField}
                       onPay={(shift, companyId, groupRef) => setPayingShift({ shift, companyId, groupRef })}
                       onRevert={(shift, groupRef) => setRevertingShift({ shift, groupRef })}
                       onDelete={(shift, groupRef) => setDeletingShift({ shift, groupRef })}
                       onViewHistory={(shiftId, companyId) => setViewingHistory({ shiftId, companyId })}
-                      onViewExtra={setViewingExtraData}
+                      onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
                     />
                   ))}
                 </tbody>
@@ -1510,6 +1597,7 @@ export default function PaymentsPage() {
         <ConfirmPaymentModal
           shift={payingShift.shift}
           suggestedAmount={shiftValueFor(payingShift.shift, payingShift.companyId)}
+          changes={shiftDiffs.get(payingShift.shift.id) ?? []}
           busy={paying}
           error={payError}
           onConfirm={handleConfirmPayment}
@@ -1556,7 +1644,11 @@ export default function PaymentsPage() {
         company={viewingHistory ? companiesById.get(viewingHistory.companyId) ?? null : null}
         onClose={() => setViewingHistory(null)}
       />
-      <ExtraColumnsModal data={viewingExtraData} onClose={() => setViewingExtraData(null)} />
+      <ExtraColumnsModal
+        data={viewingExtraData?.data ?? null}
+        sourceUrl={viewingExtraData?.sourceUrl ?? null}
+        onClose={() => setViewingExtraData(null)}
+      />
 
       <PdfViewerModal
         path={viewerPath}

@@ -3,7 +3,6 @@ import {
   AlertCircle,
   AlertTriangle,
   CheckCircle2,
-  ChevronDown,
   ChevronRight,
   FileText,
   HelpCircle,
@@ -13,11 +12,12 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
 import DateRangePicker from "../components/DateRangePicker";
+import Drawer from "../components/Drawer";
 import Pagination from "../components/Pagination";
 import {
   useRemoteFileUpdates,
@@ -27,14 +27,18 @@ import {
 } from "../contexts/RemoteFileUpdatesContext";
 import {
   DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES,
+  deletePaymentShift,
+  listCheckDiffCountsByLogIds,
   listCheckDiffs,
   listPaymentTemplates,
   listUrlCheckLog,
   type CheckDiffRow,
+  type CheckLogConfigDiffCount,
   type UrlCheckLogEntry,
   type UrlCheckResult,
 } from "../lib/db";
 import {
+  diffFieldLabel,
   formatCountdown,
   formatDateAbbrevYY,
   formatDateTimeAbbrevYY,
@@ -52,21 +56,6 @@ const RESULT_BADGE: Record<UrlCheckResult, { className: string; label: string; i
 
 const LOG_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
-/** "status" -> "Status"; "extra:C" -> "Coluna C" — there's no human header label for an unmapped column, only the raw letter it came from (see `remoteCheckDiff.ts`). "data"/"local"/"função"/"horário" are the identity-field diffs the position-based fallback match reports (see `findPaymentShiftByPosition`), when the file edits a row's own identity instead of just its status/extras. */
-const IDENTITY_FIELD_LABELS: Record<string, string> = {
-  status: "Status",
-  data: "Data",
-  local: "Local",
-  função: "Função",
-  horário: "Horário",
-};
-
-function diffFieldLabel(fieldName: string | null, columnLetter: string | null): string {
-  if (fieldName && IDENTITY_FIELD_LABELS[fieldName]) return IDENTITY_FIELD_LABELS[fieldName];
-  if (columnLetter) return `Coluna ${columnLetter}`;
-  return fieldName ?? "Campo";
-}
-
 /** Same identity a deep check matched a record by (employee+data+local+função+horário) — used only to group this one check's diff rows into one card per changed record, not to look anything up. */
 /** `'unresolved'` rows have no `employeeId` at all (that's the whole point — the file's colaborador/rota didn't match anything) — grouped by their own row/aba instead, so two different unmatched rows never collapse into one card just because they share null identity fields. */
 function diffIdentityKey(r: CheckDiffRow): string {
@@ -75,9 +64,12 @@ function diffIdentityKey(r: CheckDiffRow): string {
 }
 
 /**
- * The expanded detail under a "Histórico de verificações" row — grouped by
- * reimport config, then by the specific record that changed within it, one
- * small card per record with a GitHub-diff-style before/after per field.
+ * The Drawer detail for one "Histórico de verificações" row — grouped by
+ * the specific record that changed, one small card per record with a
+ * GitHub-diff-style before/after per field. `rows` is already scoped to a
+ * single (check, config) pair by the caller (see `openLogDetail`) — no
+ * config-level grouping here, since the history table itself never merges
+ * more than one config into a single row anymore (each row IS one config).
  * `change_kind: 'new-shift'` records (no existing match at all) get their
  * own "Possível novo turno" card instead of a field diff; `'unresolved'`
  * records (a route or colaborador that didn't match anything — e.g. a typo
@@ -87,118 +79,147 @@ function diffIdentityKey(r: CheckDiffRow): string {
  * whole URL's deep pass failing) render as compact error lines, separate
  * from the field changes.
  */
-function CheckDiffPanel({ rows }: { rows: CheckDiffRow[] }) {
-  const byConfig = new Map<string, CheckDiffRow[]>();
-  for (const r of rows) {
-    const key = r.configId !== null ? String(r.configId) : "__url__";
-    const list = byConfig.get(key) ?? [];
+function CheckDiffPanel({
+  rows,
+  markingShiftId,
+  markedShiftIds,
+  onMarkDeleted,
+}: {
+  rows: CheckDiffRow[];
+  /** The one shift currently being soft-deleted via "Marcar como excluído" (disables just that card's button) — `null` when nothing's in flight. */
+  markingShiftId: number | null;
+  /** Shifts already marked this session — swaps that card's button for a confirmation instead of re-fetching the whole log to notice the same thing. */
+  markedShiftIds: Set<number>;
+  onMarkDeleted: (shiftId: number) => void;
+}) {
+  const errors = rows.filter((r) => r.changeKind === "error");
+  const changes = rows.filter((r) => r.changeKind !== "error");
+  const byIdentity = new Map<string, CheckDiffRow[]>();
+  for (const r of changes) {
+    const idKey = diffIdentityKey(r);
+    const list = byIdentity.get(idKey) ?? [];
     list.push(r);
-    byConfig.set(key, list);
+    byIdentity.set(idKey, list);
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.9rem" }}>
-      {Array.from(byConfig.entries()).map(([key, configRows]) => {
-        const label = configRows[0].configLabel || "Verificação geral";
-        const errors = configRows.filter((r) => r.changeKind === "error");
-        const changes = configRows.filter((r) => r.changeKind !== "error");
-        const byIdentity = new Map<string, CheckDiffRow[]>();
-        for (const r of changes) {
-          const idKey = diffIdentityKey(r);
-          const list = byIdentity.get(idKey) ?? [];
-          list.push(r);
-          byIdentity.set(idKey, list);
-        }
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+      {errors.map((e, i) => (
+        <div
+          key={`err-${i}`}
+          className="error-box"
+          style={{ fontSize: "0.78rem", padding: "0.45rem 0.7rem", marginBottom: "0.4rem" }}
+        >
+          {e.message}
+        </div>
+      ))}
+      {Array.from(byIdentity.entries()).map(([idKey, entries]) => {
+        const first = entries[0];
+        const isNew = first.changeKind === "new-shift";
+        const isUnresolved = first.changeKind === "unresolved";
+        const isRemoved = first.changeKind === "removed";
         return (
-          <div key={key}>
-            <div style={{ fontWeight: 600, fontSize: "0.82rem", marginBottom: "0.45rem" }}>{label}</div>
-            {errors.map((e, i) => (
-              <div
-                key={`err-${i}`}
-                className="error-box"
-                style={{ fontSize: "0.78rem", padding: "0.45rem 0.7rem", marginBottom: "0.4rem" }}
-              >
-                {e.message}
+          <div
+            key={idKey}
+            style={{
+              border: `1px solid ${isNew ? "var(--accent)" : isUnresolved ? "var(--warning)" : isRemoved ? "var(--danger)" : "var(--border-soft)"}`,
+              borderRadius: 8,
+              padding: "0.5rem 0.7rem",
+              marginBottom: "0.4rem",
+            }}
+          >
+            <div style={{ fontSize: "0.82rem", fontWeight: 500 }}>
+              {first.employeeName ?? "(nome vazio)"}
+              {first.workDate ? ` — ${formatDateAbbrevYY(first.workDate)}` : ""}
+              {" · "}
+              {first.local || "—"} / {first.role || "—"}
+            </div>
+            {(first.sheetName || first.rowNumber !== null) && (
+              <div className="muted" style={{ fontSize: "0.72rem" }}>
+                {first.sheetName ? `aba ${first.sheetName}, ` : ""}
+                {first.rowNumber !== null ? `linha ${first.rowNumber}` : ""}
               </div>
-            ))}
-            {Array.from(byIdentity.entries()).map(([idKey, entries]) => {
-              const first = entries[0];
-              const isNew = first.changeKind === "new-shift";
-              const isUnresolved = first.changeKind === "unresolved";
-              return (
+            )}
+            {isNew ? (
+              <span className="badge ok" style={{ marginTop: "0.35rem", display: "inline-flex" }}>
+                Possível novo turno
+              </span>
+            ) : isUnresolved ? (
+              <div
+                style={{
+                  marginTop: "0.35rem",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.35rem",
+                  fontSize: "0.78rem",
+                  color: "var(--warning)",
+                }}
+              >
+                <AlertTriangle size={13} style={{ flexShrink: 0 }} />
+                {first.message}
+              </div>
+            ) : isRemoved ? (
+              <div style={{ marginTop: "0.35rem" }}>
                 <div
-                  key={idKey}
                   style={{
-                    border: `1px solid ${isNew ? "var(--accent)" : isUnresolved ? "var(--warning)" : "var(--border-soft)"}`,
-                    borderRadius: 8,
-                    padding: "0.5rem 0.7rem",
-                    marginBottom: "0.4rem",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.35rem",
+                    fontSize: "0.78rem",
+                    color: "var(--danger)",
                   }}
                 >
-                  <div style={{ fontSize: "0.82rem", fontWeight: 500 }}>
-                    {first.employeeName ?? "(nome vazio)"}
-                    {first.workDate ? ` — ${formatDateAbbrevYY(first.workDate)}` : ""}
-                    {" · "}
-                    {first.local || "—"} / {first.role || "—"}
-                  </div>
-                  {(first.sheetName || first.rowNumber !== null) && (
-                    <div className="muted" style={{ fontSize: "0.72rem" }}>
-                      {first.sheetName ? `aba ${first.sheetName}, ` : ""}
-                      {first.rowNumber !== null ? `linha ${first.rowNumber}` : ""}
-                    </div>
-                  )}
-                  {isNew ? (
-                    <span className="badge ok" style={{ marginTop: "0.35rem", display: "inline-flex" }}>
-                      Possível novo turno
+                  <Trash2 size={13} style={{ flexShrink: 0 }} />
+                  Não encontrado na leitura mais recente do arquivo — pode ter sido removido na fonte.
+                </div>
+                {first.matchedShiftId !== null &&
+                  (markedShiftIds.has(first.matchedShiftId) ? (
+                    <span className="badge neutral" style={{ marginTop: "0.35rem", display: "inline-flex" }}>
+                      Marcado como excluído
                     </span>
-                  ) : isUnresolved ? (
-                    <div
+                  ) : (
+                    <button
+                      type="button"
+                      className="ghost"
+                      style={{ marginTop: "0.35rem", fontSize: "0.76rem", padding: "0.25rem 0.5rem" }}
+                      disabled={markingShiftId === first.matchedShiftId}
+                      onClick={() => onMarkDeleted(first.matchedShiftId!)}
+                    >
+                      {markingShiftId === first.matchedShiftId ? "Marcando…" : "Marcar como excluído"}
+                    </button>
+                  ))}
+              </div>
+            ) : (
+              <div style={{ marginTop: "0.35rem", display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                {entries.map((e, i) => (
+                  <div key={i} style={{ fontSize: "0.78rem" }}>
+                    <span className="muted">{diffFieldLabel(e.fieldName, e.columnLetter)}: </span>
+                    <span
                       style={{
-                        marginTop: "0.35rem",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "0.35rem",
-                        fontSize: "0.78rem",
-                        color: "var(--warning)",
+                        background: "var(--danger-soft)",
+                        color: "var(--danger)",
+                        textDecoration: "line-through",
+                        padding: "0.05rem 0.35rem",
+                        borderRadius: 4,
                       }}
                     >
-                      <AlertTriangle size={13} style={{ flexShrink: 0 }} />
-                      {first.message}
-                    </div>
-                  ) : (
-                    <div style={{ marginTop: "0.35rem", display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-                      {entries.map((e, i) => (
-                        <div key={i} style={{ fontSize: "0.78rem" }}>
-                          <span className="muted">{diffFieldLabel(e.fieldName, e.columnLetter)}: </span>
-                          <span
-                            style={{
-                              background: "var(--danger-soft)",
-                              color: "var(--danger)",
-                              textDecoration: "line-through",
-                              padding: "0.05rem 0.35rem",
-                              borderRadius: 4,
-                            }}
-                          >
-                            {e.oldValue || "(vazio)"}
-                          </span>
-                          {" → "}
-                          <span
-                            style={{
-                              background: "var(--success-soft)",
-                              color: "var(--success)",
-                              padding: "0.05rem 0.35rem",
-                              borderRadius: 4,
-                            }}
-                          >
-                            {e.newValue || "(vazio)"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                      {e.oldValue || "(vazio)"}
+                    </span>
+                    {" → "}
+                    <span
+                      style={{
+                        background: "var(--success-soft)",
+                        color: "var(--success)",
+                        padding: "0.05rem 0.35rem",
+                        borderRadius: 4,
+                      }}
+                    >
+                      {e.newValue || "(vazio)"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })}
@@ -462,33 +483,32 @@ export default function RemoteUpdatesPage() {
   const [logPageSize, setLogPageSize] = useState(LOG_PAGE_SIZE_OPTIONS[0]);
   const [logUrlFilter, setLogUrlFilter] = useState("");
 
-  // Expanded "N alterações" detail per check-log row — several can be open
-  // at once (not one-at-a-time like the config-edit forms above), so
-  // different checks can be compared side by side. Diffs are fetched lazily
-  // on first expand and cached, since most rows have none at all.
-  const [expandedLogIds, setExpandedLogIds] = useState<Set<number>>(new Set());
-  const [diffsByLogId, setDiffsByLogId] = useState<Map<number, CheckDiffRow[]>>(new Map());
-  const [loadingDiffLogIds, setLoadingDiffLogIds] = useState<Set<number>>(new Set());
+  // Per-(check, config) diff counts for the currently loaded page of
+  // `logEntries` — one check covers every active config for a URL at once
+  // (see `RemoteFileUpdatesContext.runChecks`), but this page always shows
+  // one history ROW per config, so it needs each config's own count, not
+  // just `logEntries`' combined total (see `displayRows` below).
+  const [diffCountsByLogId, setDiffCountsByLogId] = useState<Map<number, CheckLogConfigDiffCount[]>>(new Map());
 
-  async function toggleLogRow(entry: UrlCheckLogEntry) {
-    const isExpanded = expandedLogIds.has(entry.id);
-    setExpandedLogIds((prev) => {
-      const next = new Set(prev);
-      if (isExpanded) next.delete(entry.id);
-      else next.add(entry.id);
-      return next;
-    });
-    if (isExpanded || diffsByLogId.has(entry.id)) return;
-    setLoadingDiffLogIds((prev) => new Set(prev).add(entry.id));
+  // The Drawer's own diff detail — fetched lazily per check-log id (shared
+  // across however many config-rows that one check unrolls into, filtered
+  // per row when displayed) and cached, since most checks have none at all.
+  const [diffsByLogId, setDiffsByLogId] = useState<Map<number, CheckDiffRow[]>>(new Map());
+  const [loadingDiffLogId, setLoadingDiffLogId] = useState<number | null>(null);
+
+  // "Marcar como excluído" on a 'removed' diff card — same soft-delete
+  // `deletePaymentShift` uses on the Pagamentos table's own "Remover"
+  // button, just reachable straight from the check that found it missing.
+  const [markingDeletedShiftId, setMarkingDeletedShiftId] = useState<number | null>(null);
+  const [markedDeletedShiftIds, setMarkedDeletedShiftIds] = useState<Set<number>>(new Set());
+
+  async function handleMarkShiftDeleted(shiftId: number) {
+    setMarkingDeletedShiftId(shiftId);
     try {
-      const rows = await listCheckDiffs(entry.id);
-      setDiffsByLogId((prev) => new Map(prev).set(entry.id, rows));
+      await deletePaymentShift(shiftId);
+      setMarkedDeletedShiftIds((prev) => new Set(prev).add(shiftId));
     } finally {
-      setLoadingDiffLogIds((prev) => {
-        const next = new Set(prev);
-        next.delete(entry.id);
-        return next;
-      });
+      setMarkingDeletedShiftId(null);
     }
   }
 
@@ -497,6 +517,15 @@ export default function RemoteUpdatesPage() {
       ({ rows, total }) => {
         setLogEntries(rows);
         setLogTotal(total);
+        listCheckDiffCountsByLogIds(rows.map((r) => r.id)).then((counts) => {
+          const byLogId = new Map<number, CheckLogConfigDiffCount[]>();
+          for (const c of counts) {
+            const list = byLogId.get(c.checkLogId) ?? [];
+            list.push(c);
+            byLogId.set(c.checkLogId, list);
+          }
+          setDiffCountsByLogId(byLogId);
+        });
       },
     );
     // `trackedFiles` changes once per check cycle — re-pulling the log
@@ -519,6 +548,89 @@ export default function RemoteUpdatesPage() {
       setLogPage(0);
     }
   }, [logUrlFilter, urlOptions]);
+
+  interface CheckLogDisplayRow {
+    key: string;
+    entry: UrlCheckLogEntry;
+    configId: number | null;
+    /** The live config, when it still exists — drives Template/Período from current settings (a config can be edited/deleted since this check ran). `null` for a since-deleted config or a whole-URL entry, which fall back to `configLabel` (the snapshot `source_url_check_diffs.config_label` took at the time). */
+    config: ReimportConfig | null;
+    configLabel: string;
+    diffCount: number;
+  }
+
+  /**
+   * Unrolls each check-log entry into one row PER reimport config it
+   * covered — never a single row combining several configs' templates/
+   * períodos together (that's exactly what made it impossible to tell which
+   * template an inconsistency came from). A config that produced diffs but
+   * has since been edited/deleted still gets its own row, via the diff
+   * rows' own `configLabel` snapshot instead of a live join.
+   */
+  const displayRows = useMemo<CheckLogDisplayRow[]>(() => {
+    const out: CheckLogDisplayRow[] = [];
+    for (const entry of logEntries) {
+      const configsForEntry = reimportConfigs.filter((c) => c.sourceUrl === entry.sourceUrl);
+      const counts = diffCountsByLogId.get(entry.id) ?? [];
+      const countByConfigId = new Map<number, number>();
+      let generalCount = 0;
+      for (const c of counts) {
+        if (c.configId === null) generalCount += c.diffCount;
+        else countByConfigId.set(c.configId, (countByConfigId.get(c.configId) ?? 0) + c.diffCount);
+      }
+
+      const seenConfigIds = new Set<number>();
+      for (const c of configsForEntry) {
+        seenConfigIds.add(c.id);
+        out.push({
+          key: `${entry.id}:${c.id}`,
+          entry,
+          configId: c.id,
+          config: c,
+          configLabel: c.templateName ?? "Template removido",
+          diffCount: countByConfigId.get(c.id) ?? 0,
+        });
+      }
+      for (const c of counts) {
+        if (c.configId === null || seenConfigIds.has(c.configId)) continue;
+        out.push({
+          key: `${entry.id}:${c.configId}`,
+          entry,
+          configId: c.configId,
+          config: null,
+          configLabel: c.configLabel || "Configuração removida",
+          diffCount: c.diffCount,
+        });
+      }
+      if (generalCount > 0 || (configsForEntry.length === 0 && counts.length === 0)) {
+        out.push({
+          key: `${entry.id}:general`,
+          entry,
+          configId: null,
+          config: null,
+          configLabel: generalCount > 0 ? "Verificação geral" : "—",
+          diffCount: generalCount,
+        });
+      }
+    }
+    return out;
+  }, [logEntries, reimportConfigs, diffCountsByLogId]);
+
+  const [drawerRow, setDrawerRow] = useState<CheckLogDisplayRow | null>(null);
+  const isLoadingDrawerDiff = drawerRow !== null && loadingDiffLogId === drawerRow.entry.id;
+  const drawerDiffRows = drawerRow ? (diffsByLogId.get(drawerRow.entry.id) ?? []).filter((r) => r.configId === drawerRow.configId) : [];
+
+  async function openLogDetail(row: CheckLogDisplayRow) {
+    setDrawerRow(row);
+    if (diffsByLogId.has(row.entry.id)) return;
+    setLoadingDiffLogId(row.entry.id);
+    try {
+      const rows = await listCheckDiffs(row.entry.id);
+      setDiffsByLogId((prev) => new Map(prev).set(row.entry.id, rows));
+    } finally {
+      setLoadingDiffLogId((id) => (id === row.entry.id ? null : id));
+    }
+  }
 
   return (
     <div>
@@ -997,84 +1109,68 @@ export default function RemoteUpdatesPage() {
               <table>
                 <thead>
                   <tr>
-                    <th style={{ whiteSpace: "nowrap" }}>Quando</th>
+                    <th style={{ whiteSpace: "nowrap" }}>Verificou em</th>
+                    <th>Período</th>
+                    <th>Template</th>
                     <th style={{ maxWidth: 260 }}>Arquivo</th>
                     <th style={{ whiteSpace: "nowrap" }}>Resultado</th>
-                    <th>Template</th>
-                    <th>Período</th>
                     <th>Detalhes</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {logEntries.map((entry) => {
-                    const badge = RESULT_BADGE[entry.result];
+                  {displayRows.map((row) => {
+                    const badge = RESULT_BADGE[row.entry.result];
                     const BadgeIcon = badge.icon;
-                    // A check is per-URL, but each URL can have several
-                    // reimport configs (see the "Arquivos rastreados" card
-                    // above) — every one of them shares this same check, so
-                    // this row lists all of their templates/períodos
-                    // side-by-side (paired by position) rather than picking
-                    // just one. Read against the CURRENT configs, not a
-                    // historical snapshot — a config edited/removed since
-                    // this check ran shows as it is now.
-                    const configsForEntry = reimportConfigs.filter((c) => c.sourceUrl === entry.sourceUrl);
-                    const hasDiffs = entry.diffCount > 0;
-                    const isExpanded = expandedLogIds.has(entry.id);
-                    const isLoadingDiff = loadingDiffLogIds.has(entry.id);
+                    const hasDiffs = row.diffCount > 0;
+                    const isOpen = drawerRow?.key === row.key;
                     return (
-                      <Fragment key={entry.id}>
-                        <tr>
-                          <td style={{ whiteSpace: "nowrap" }}>{formatDateTimeAbbrevYY(entry.checkedAt, true)}</td>
-                          <td
-                            style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                            title={entry.fileName}
+                      <tr key={row.key}>
+                        <td style={{ whiteSpace: "nowrap" }}>{formatDateTimeAbbrevYY(row.entry.checkedAt, true)}</td>
+                        <td className="muted" style={{ fontSize: "0.8rem", whiteSpace: "nowrap" }}>
+                          {row.config ? formatResolvedPreview(resolveReimportPeriod(row.config)) : "—"}
+                        </td>
+                        <td className="muted" style={{ fontSize: "0.8rem" }}>
+                          {row.config ? (row.config.templateName ?? "Template removido") : row.configLabel}
+                        </td>
+                        <td style={{ maxWidth: 260 }}>
+                          <button
+                            type="button"
+                            className="link-button"
+                            onClick={() => openUrl(row.entry.sourceUrl)}
+                            title={row.entry.sourceUrl}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "0.3rem",
+                              maxWidth: "100%",
+                            }}
                           >
-                            {entry.fileName}
-                          </td>
-                          <td>
-                            <span className={badge.className}>
-                              <BadgeIcon size={13} />
-                              {badge.label}
+                            <Link2 size={12} style={{ flexShrink: 0 }} />
+                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {row.entry.fileName}
                             </span>
-                          </td>
-                          <td className="muted" style={{ fontSize: "0.8rem" }}>
-                            {configsForEntry.length > 0
-                              ? configsForEntry.map((c) => c.templateName ?? "Template removido").join(", ")
-                              : "—"}
-                          </td>
-                          <td className="muted" style={{ fontSize: "0.8rem", whiteSpace: "nowrap" }}>
-                            {configsForEntry.length > 0
-                              ? configsForEntry.map((c) => formatResolvedPreview(resolveReimportPeriod(c))).join(", ")
-                              : "—"}
-                          </td>
-                          <td className="muted" style={{ fontSize: "0.8rem" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-                              <span>{entry.message ?? "—"}</span>
-                              {hasDiffs && (
-                                <button
-                                  type="button"
-                                  className={`count-chip chip-filter${isExpanded ? " active" : ""}`}
-                                  onClick={() => toggleLogRow(entry)}
-                                  style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem" }}
-                                >
-                                  {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                                  {entry.diffCount === 1 ? "1 alteração" : `${entry.diffCount} alterações`}
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                        {isExpanded && (
-                          <tr>
-                            <td colSpan={6} style={{ background: "var(--card-bg)", padding: "0.8rem 1rem" }}>
-                              {isLoadingDiff && <p className="muted" style={{ margin: 0 }}>Carregando detalhes...</p>}
-                              {!isLoadingDiff && (
-                                <CheckDiffPanel rows={diffsByLogId.get(entry.id) ?? []} />
-                              )}
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
+                          </button>
+                        </td>
+                        <td>
+                          <span className={badge.className}>
+                            <BadgeIcon size={13} />
+                            {badge.label}
+                          </span>
+                        </td>
+                        <td className="muted" style={{ fontSize: "0.8rem" }}>
+                          {(hasDiffs || row.entry.message) && (
+                            <button
+                              type="button"
+                              className={`count-chip chip-filter${isOpen ? " active" : ""}`}
+                              onClick={() => openLogDetail(row)}
+                              style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem" }}
+                            >
+                              <ChevronRight size={12} />
+                              {hasDiffs ? (row.diffCount === 1 ? "1 alteração" : `${row.diffCount} alterações`) : "Erro"}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
                     );
                   })}
                 </tbody>
@@ -1120,6 +1216,27 @@ export default function RemoteUpdatesPage() {
           error={untrackError}
         />
       )}
+
+      <Drawer
+        open={drawerRow !== null}
+        onClose={() => setDrawerRow(null)}
+        title={drawerRow ? `${drawerRow.configLabel} — ${formatDateTimeAbbrevYY(drawerRow.entry.checkedAt, true)}` : ""}
+      >
+        {drawerRow?.entry.message && (
+          <div className="error-box" style={{ fontSize: "0.82rem" }}>
+            {drawerRow.entry.message}
+          </div>
+        )}
+        {isLoadingDrawerDiff && <p className="muted" style={{ margin: 0 }}>Carregando detalhes...</p>}
+        {!isLoadingDrawerDiff && (
+          <CheckDiffPanel
+            rows={drawerDiffRows}
+            markingShiftId={markingDeletedShiftId}
+            markedShiftIds={markedDeletedShiftIds}
+            onMarkDeleted={handleMarkShiftDeleted}
+          />
+        )}
+      </Drawer>
     </div>
   );
 }

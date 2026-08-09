@@ -1,3 +1,5 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { Link2 } from "lucide-react";
 import { useEffect } from "react";
 
 /**
@@ -8,10 +10,13 @@ import { useEffect } from "react";
  */
 export default function ExtraColumnsModal({
   data,
+  sourceUrl,
   onClose,
 }: {
   /** `null` keeps the modal unmounted/closed. */
   data: Record<string, string> | null;
+  /** Only set when this shift came from a tracked URL import — turns the "Arquivo de origem" row into a link to it. A locally-picked file has no URL to link to, so that row just stays plain text. */
+  sourceUrl: string | null;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -74,7 +79,20 @@ export default function ExtraColumnsModal({
             <span className="muted" style={{ fontSize: "0.85rem" }}>
               {labelFor(letter)}
             </span>
-            <span style={{ textAlign: "right" }}>{value}</span>
+            {letter === "arquivo de origem" && sourceUrl ? (
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => openUrl(sourceUrl)}
+                title={sourceUrl}
+                style={{ display: "flex", alignItems: "center", gap: "0.3rem", textAlign: "right" }}
+              >
+                <Link2 size={12} style={{ flexShrink: 0 }} />
+                {value}
+              </button>
+            ) : (
+              <span style={{ textAlign: "right" }}>{value}</span>
+            )}
           </div>
         ))}
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1.2rem" }}>

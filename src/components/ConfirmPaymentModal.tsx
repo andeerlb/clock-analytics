@@ -1,5 +1,14 @@
+import { AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
-import { centsMaskToAmount, formatCentsMask, formatDate, formatMinutesAsTime } from "../lib/format";
+import type { ShiftFieldDiffRow } from "../lib/db";
+import {
+  centsMaskToAmount,
+  diffFieldLabel,
+  formatCentsMask,
+  formatDate,
+  formatDateTimeAbbrevYY,
+  formatMinutesAsTime,
+} from "../lib/format";
 import type { PaymentShiftRow } from "../lib/types";
 
 /**
@@ -11,6 +20,7 @@ import type { PaymentShiftRow } from "../lib/types";
 export default function ConfirmPaymentModal({
   shift,
   suggestedAmount,
+  changes,
   busy,
   error,
   onConfirm,
@@ -19,6 +29,8 @@ export default function ConfirmPaymentModal({
   shift: PaymentShiftRow;
   /** The company rules' computed estimate, or `null` when no rule matched — either way, still editable before confirming. */
   suggestedAmount: number | null;
+  /** What the last automatic verification found different for this shift, if anything (see `listLatestFieldDiffsForShifts`) — purely informational, shown so the change isn't missed right before paying; confirming never re-checks the source itself. */
+  changes: ShiftFieldDiffRow[];
   busy: boolean;
   error?: string | null;
   onConfirm: (amount: number) => void;
@@ -64,6 +76,24 @@ export default function ConfirmPaymentModal({
           Isso cria um novo registro com status "Pago". O registro atual não será alterado, ficando disponível como
           histórico.
         </p>
+        {changes.length > 0 && (
+          <div className="warning-box">
+            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 600, fontSize: "0.85rem" }}>
+              <AlertTriangle size={14} />
+              Mudança encontrada na fonte desde a importação
+            </div>
+            <div style={{ marginTop: "0.4rem", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              {changes.map((c, i) => (
+                <div key={i} style={{ fontSize: "0.8rem" }}>
+                  {diffFieldLabel(c.fieldName, c.columnLetter)}: <s>{c.oldValue ?? "—"}</s> → <strong>{c.newValue ?? "—"}</strong>
+                </div>
+              ))}
+            </div>
+            <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.3rem" }}>
+              Verificado em {formatDateTimeAbbrevYY(changes[0].checkedAt)}
+            </div>
+          </div>
+        )}
         <div className="field">
           <label htmlFor="confirm-payment-amount">Valor</label>
           <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>

@@ -113,6 +113,29 @@ async function notifyFileChanged(fileName: string) {
   }
 }
 
+/**
+ * Same three host patterns `normalize_office_share_url` (`commands.rs`)
+ * special-cases for OneDrive/SharePoint's cookie-based anonymous-share-link
+ * redemption. A plain HEAD (`check_remote_payment_file`) doesn't reliably
+ * walk that same redemption chain a real download's GET does — in practice
+ * its ETag/Last-Modified/Content-Length routinely stay identical across an
+ * actual content change on these hosts, which silently starves BOTH the
+ * cheap "did the header change" verdict AND the deep-check signature cache
+ * below (`t.lastDeepCheck*`) — a real edit on OneDrive can sit reported as
+ * "Sem mudança" forever, only ever caught by "Reprocessar agora" (which
+ * always does a real GET). For these hosts specifically, neither shortcut
+ * is trusted: every due check just always runs the real download+diff.
+ */
+function isUnreliableHeaderHost(sourceUrl: string): boolean {
+  let host: string;
+  try {
+    host = new URL(sourceUrl).hostname;
+  } catch {
+    return false;
+  }
+  return host === "1drv.ms" || host === "onedrive.live.com" || host.endsWith(".sharepoint.com");
+}
+
 function isConfigDue(config: ReimportConfig, urlLastCheckedAt: string | null | undefined, now: number): boolean {
   if (config.checkDisabled) return false;
   if (!urlLastCheckedAt) return true;
@@ -257,6 +280,12 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
    * `checkingUrls` as soon as ITS OWN work (header + any deep pass)
    * finishes, not when the whole batch does — a slow deep pass on one URL
    * shouldn't keep an unrelated fast URL showing "Verificando...".
+   *
+   * Exception to both (2) and (3) above: `isUnreliableHeaderHost` (OneDrive/
+   * SharePoint) — for those, a "changed" verdict is never trusted to mean
+   * "changed" AND an "unchanged"/matching-signature verdict is never trusted
+   * to mean "unchanged" either, so every due check for one of these URLs
+   * always runs the real download+diff, same as "Reprocessar agora".
    */
   const runChecks = useCallback(
     async (targets: TrackedPaymentUrl[]) => {
@@ -300,7 +329,12 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
             return;
           }
 
-          if (headerResult !== "changed") {
+          // OneDrive/SharePoint's HEAD response can't be trusted to reflect
+          // a real content change (see `isUnreliableHeaderHost`) — for those
+          // hosts, "unchanged" from the header isn't taken at its word.
+          const unreliableHeader = isUnreliableHeaderHost(t.sourceUrl);
+
+          if (headerResult !== "changed" && !unreliableHeader) {
             // Nothing to look closer at — the header itself is the whole
             // story here.
             await logUrlCheckResult(t.sourceUrl, t.fileName, headerResult, null);
@@ -310,12 +344,21 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
           const configs = activeConfigsByUrl.get(t.sourceUrl) ?? [];
           if (configs.length === 0) {
             // No reimport config to diff against — nothing to verify
-            // deeper, so the header's own word is all there is to log.
-            await logUrlCheckResult(t.sourceUrl, t.fileName, "changed", null);
+            // deeper, so the header's own word is all there is to log
+            // (whatever it actually was — forcing "changed" here would be
+            // asserting something no check actually confirmed).
+            await logUrlCheckResult(t.sourceUrl, t.fileName, headerResult, null);
             return;
           }
 
+          // Same distrust extends to the deep-check signature cache below —
+          // it's built from this same unreliable HEAD data, so a host that
+          // can't be trusted to report "changed" can't be trusted to report
+          // "matches what I last deep-checked" either. Every due check for
+          // these hosts runs the real download+diff, same as "Reprocessar
+          // agora" already does.
           const signatureChanged =
+            unreliableHeader ||
             current.etag !== t.lastDeepCheckEtag ||
             current.lastModified !== t.lastDeepCheckLastModified ||
             current.contentLength !== t.lastDeepCheckContentLength;

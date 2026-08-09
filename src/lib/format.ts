@@ -231,6 +231,29 @@ export function formatCountdown(ms: number): string {
 }
 
 /**
+ * "status" -> "Status"; "extra:C" -> "Coluna C" — there's no human header
+ * label for an unmapped column, only the raw letter it came from (see
+ * `remoteCheckDiff.ts`). "data"/"local"/"função"/"horário" are the identity-
+ * field diffs the position-based fallback match reports (see
+ * `findPaymentShiftByPosition`), when the file edits a row's own identity
+ * instead of just its status/extras. Shared by the Verificação automática
+ * page's diff detail and the Pagamentos page's per-row change flag.
+ */
+const DIFF_FIELD_LABELS: Record<string, string> = {
+  status: "Status",
+  data: "Data",
+  local: "Local",
+  função: "Função",
+  horário: "Horário",
+};
+
+export function diffFieldLabel(fieldName: string | null, columnLetter: string | null): string {
+  if (fieldName && DIFF_FIELD_LABELS[fieldName]) return DIFF_FIELD_LABELS[fieldName];
+  if (columnLetter) return `Coluna ${columnLetter}`;
+  return fieldName ?? "Campo";
+}
+
+/**
  * A reimport config's actual Período, right now — fixed configs just
  * return their stored bounds; relative ones resolve fresh against today
  * ("início = hoje - N dias"), so the same config gives a different range

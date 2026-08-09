@@ -38,9 +38,12 @@ import {
 import {
   addEmployeeAlias,
   DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES,
+  deletePaymentShift,
   findDuplicatePaymentShifts,
   findEmployeeByAttempts,
+  findPaymentShiftByPosition,
   getPaymentTemplate,
+  listHeadShiftsForSourceUrl,
   listImportFiles,
   listPaymentTemplates,
   logSourceFile,
@@ -49,6 +52,7 @@ import {
   type DuplicatePaymentShiftMatch,
   type EmployeeRow,
   type PaymentShiftInput,
+  type SourceUrlHeadShift,
 } from "../lib/db";
 import {
   fileNameFromPath,
@@ -302,6 +306,26 @@ export default function ImportPaymentsPage() {
   const [previewPageSize, setPreviewPageSize] = useState(restored?.previewPageSize ?? PREVIEW_PAGE_SIZE_OPTIONS[0]);
   const [processedKeepManualEdits, setProcessedKeepManualEdits] = useState<boolean | null>(null);
 
+  // The inverse of "excluído" (a file row whose match was soft-deleted in
+  // the system): shifts that are still very much alive in the system, on
+  // record as having come from this exact URL/período, but that this read
+  // of the file didn't land on at all — not just one row among many, but
+  // NO row. Only ever populated for a URL-based import (see `handleProcess`)
+  // — a locally-picked file has no stable identity to compare a past import
+  // against.
+  const [missingSourceShifts, setMissingSourceShifts] = useState<(SourceUrlHeadShift & { sourceUrl: string })[]>([]);
+  const [markingMissingShiftId, setMarkingMissingShiftId] = useState<number | null>(null);
+
+  async function handleMarkMissingShiftDeleted(shiftId: number) {
+    setMarkingMissingShiftId(shiftId);
+    try {
+      await deletePaymentShift(shiftId);
+      setMissingSourceShifts((prev) => prev.filter((m) => m.shiftId !== shiftId));
+    } finally {
+      setMarkingMissingShiftId(null);
+    }
+  }
+
   const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
   const [recentFilesTotal, setRecentFilesTotal] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -417,6 +441,7 @@ export default function ImportPaymentsPage() {
     setPreviewPage(0);
     setRowFilter("all");
     setNameSearch("");
+    setMissingSourceShifts([]);
   }
 
   function reset() {
@@ -849,12 +874,52 @@ export default function ImportPaymentsPage() {
         if (r.category === "valid") defaultSelected.add(i);
       });
 
+      // Missing-from-file detection — the inverse of "excluído", only
+      // meaningful for a URL-based import (a locally-picked file has no
+      // stable identity to compare a past import against). Runs once every
+      // row's own duplicate/deleted match is known (`allRows` above already
+      // has `matchedShiftId` filled in by `applyDuplicateMatch`).
+      const urlsInBatch = Array.from(
+        new Set(results.map((r) => urlSourceByPath.get(r.path)?.url).filter((u): u is string => Boolean(u))),
+      );
+      const missingRows: (SourceUrlHeadShift & { sourceUrl: string })[] = [];
+      if (urlsInBatch.length > 0) {
+        const accountedForIds = new Set<number>();
+        for (const r of allRows) {
+          if (r.matchedShiftId !== null) accountedForIds.add(r.matchedShiftId);
+        }
+        // A "novo" row (no duplicate match at all) might still be an EDIT of
+        // an existing shift's own identity (data/local/função/horário)
+        // rather than a genuinely new one — same position-based fallback the
+        // automatic deep check uses (`findPaymentShiftByPosition`), so that
+        // case isn't double-reported as both "novo" and "sumiu da fonte".
+        for (const result of results) {
+          const url = urlSourceByPath.get(result.path)?.url;
+          if (!url) continue;
+          for (const r of result.rows) {
+            if (r.category !== "valid" || !r.workDate) continue;
+            const positional = await findPaymentShiftByPosition(url, r.sheetName, r.rowNumber);
+            if (positional) accountedForIds.add(positional.shiftId);
+          }
+        }
+        const expectedSheetNames = new Set(selectedTemplate.groups.flatMap((g) => g.sheetNames));
+        for (const url of urlsInBatch) {
+          const heads = await listHeadShiftsForSourceUrl(url, periodStart || null, periodEnd || null);
+          for (const h of heads) {
+            if (accountedForIds.has(h.shiftId)) continue;
+            if (expectedSheetNames.size > 0 && !expectedSheetNames.has(h.sheetName ?? "")) continue;
+            missingRows.push({ ...h, sourceUrl: url });
+          }
+        }
+      }
+
       setFileResults(results);
       setSelectedRows(defaultSelected);
         setProcessedKeepManualEdits(keepManualEdits);
       setPreviewPage(0);
       setRowFilter("all");
       setNameSearch("");
+      setMissingSourceShifts(missingRows);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -1499,6 +1564,58 @@ export default function ImportPaymentsPage() {
                   </div>
                 </div>
               </div>
+
+              {missingSourceShifts.length > 0 && (
+                <div className="warning-box">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 600, fontSize: "0.85rem" }}>
+                    <AlertTriangle size={14} />
+                    {missingSourceShifts.length} turno(s) que estavam neste arquivo não aparecem mais nesta leitura
+                  </div>
+                  <p className="muted" style={{ fontSize: "0.8rem", marginTop: "0.3rem" }}>
+                    Esses turnos já foram importados dessa mesma fonte antes, mas nenhuma linha da leitura atual bate
+                    com eles — pode ser que a linha tenha sido removida no arquivo. Revise e marque como excluído se
+                    for o caso.
+                  </p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginTop: "0.5rem" }}>
+                    {missingSourceShifts.map((m) => (
+                      <div
+                        key={m.shiftId}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: "0.6rem",
+                          fontSize: "0.8rem",
+                          padding: "0.35rem 0",
+                          borderTop: "1px solid rgba(251, 191, 36, 0.25)",
+                        }}
+                      >
+                        <div>
+                          <strong>{m.employeeName}</strong> — {formatDate(m.workDate)} · {m.local || "—"} /{" "}
+                          {m.role || "—"}
+                          {m.scheduleStartMinutes !== null && m.scheduleEndMinutes !== null && (
+                            <>
+                              {" · "}
+                              {formatMinutesAsTime(m.scheduleStartMinutes)} –{" "}
+                              {formatMinutesAsTime(m.scheduleEndMinutes)}
+                            </>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="ghost"
+                          style={{ fontSize: "0.76rem", padding: "0.25rem 0.5rem", flexShrink: 0 }}
+                          disabled={markingMissingShiftId === m.shiftId}
+                          onClick={() => handleMarkMissingShiftDeleted(m.shiftId)}
+                        >
+                          <Trash2 size={12} style={{ verticalAlign: "-1px", marginRight: "0.3rem" }} />
+                          {markingMissingShiftId === m.shiftId ? "Marcando…" : "Marcar como excluído"}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="card table-card">
                 <div className="table-toolbar">

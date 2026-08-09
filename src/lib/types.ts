@@ -532,6 +532,8 @@ export interface PaymentShiftRow {
   sourceSheetName: string | null;
   /** Joined from `source_files.file_name` via `sourceFileId` — not a column on `payment_shifts` itself. `null` when the shift has no `sourceFileId` (or that source file was since removed). */
   sourceFileName: string | null;
+  /** Joined from `source_files.source_url` — only set when this shift came from a tracked URL import; `null` for a locally-picked file (or no import origin at all). */
+  sourceUrl: string | null;
 }
 
 /** One row per (colaborador, competência) — the Pagamentos list. */

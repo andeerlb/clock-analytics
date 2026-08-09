@@ -5,6 +5,7 @@ import {
   findPaymentShiftByPosition,
   getPaymentShiftsByIds,
   getPaymentTemplate,
+  listHeadShiftsForSourceUrl,
   type CheckDiffInput,
   type ReimportConfig,
 } from "./db";
@@ -122,6 +123,13 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
 
   const candidates: ParsedCandidate[] = [];
   const unresolvedEntries: CheckDiffInput[] = [];
+  // Every existing shift this parse actually accounted for (matched by
+  // identity, by position, or explained by an 'unresolved' row sitting at
+  // its old position) — whatever's left in `listHeadShiftsForSourceUrl`
+  // afterward is a shift this file USED to have but this read didn't have
+  // anywhere at all (see the 'removed' pass below), not just one whose
+  // fields didn't change.
+  const accountedForIds = new Set<number>();
   for (const row of applied) {
     const workDateRaw = row.fields.data ?? "";
     const workDate = workDateRaw ? parseDateWithFormat(workDateRaw, template.dateFormat) : null;
@@ -157,6 +165,7 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
       // since a broken name match is the single most likely reason a row
       // that used to resolve suddenly stops resolving.
       const positional = await findPaymentShiftByPosition(config.sourceUrl, row.sheetName, row.rowNumber);
+      if (positional) accountedForIds.add(positional.shiftId);
       const message = positional
         ? `Colaborador não encontrado para "${row.fields.nome || "(nome vazio)"}" — nesta posição (${row.sheetName ? `aba ${row.sheetName}, ` : ""}linha ${row.rowNumber}) havia antes um turno de "${positional.employeeName}".`
         : `Colaborador não encontrado para "${row.fields.nome || "(nome vazio)"}".`;
@@ -303,6 +312,7 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
     }
 
     const shift = current;
+    accountedForIds.add(shift.shiftId);
     function fieldDiff(fieldName: string, oldValue: string, newValue: string) {
       entries.push({
         ...identityBase(c),
@@ -329,7 +339,12 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
       }
     }
 
-    if (shift.status !== c.status) fieldDiff("status", shift.status, c.status);
+    // "pago" is a payment-workflow state "Fazer pagamento" sets from inside
+    // the app — the source file has no column that could ever resolve to
+    // it (see `resolvePaymentStatus`), so comparing a paid shift's status
+    // against the file would flag literally every payment ever made as a
+    // "mudança", which isn't a real signal about the file at all.
+    if (shift.status !== "pago" && shift.status !== c.status) fieldDiff("status", shift.status, c.status);
 
     // Only the columns the template currently leaves unmapped are
     // comparable this way — if the template's mapping changed since this
@@ -356,6 +371,40 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
         message: null,
       });
     }
+  }
+
+  // The inverse of "excluído" (a file row whose match was soft-deleted in
+  // the system, flagged by `ImportPaymentsPage`'s duplicate-match check):
+  // here the system's record is still very much alive, but nothing in this
+  // read of the file landed on it. Scoped to this config's own template
+  // sheets — with an empty `sheetNames` (CSV, or any template with only
+  // sheet-less groups) that scoping is meaningless, so every head shift for
+  // the URL/período is in play instead.
+  const expectedSheetNames = new Set(template.groups.flatMap((g) => g.sheetNames));
+  const existingHeads = await listHeadShiftsForSourceUrl(config.sourceUrl, periodStart, periodEnd);
+  for (const h of existingHeads) {
+    if (accountedForIds.has(h.shiftId)) continue;
+    if (expectedSheetNames.size > 0 && !expectedSheetNames.has(h.sheetName ?? "")) continue;
+    entries.push({
+      configId: config.id,
+      configLabel,
+      changeKind: "removed",
+      matchedShiftId: h.shiftId,
+      employeeId: h.employeeId,
+      employeeName: h.employeeName,
+      workDate: h.workDate,
+      local: h.local,
+      role: h.role,
+      scheduleStartMinutes: h.scheduleStartMinutes,
+      scheduleEndMinutes: h.scheduleEndMinutes,
+      sheetName: h.sheetName,
+      rowNumber: h.rowNumber,
+      columnLetter: null,
+      fieldName: null,
+      oldValue: null,
+      newValue: null,
+      message: "Este turno não foi encontrado na leitura mais recente do arquivo — pode ter sido removido na fonte.",
+    });
   }
 
   return [...unresolvedEntries, ...entries];

@@ -1550,7 +1550,7 @@ export async function listUrlCheckLog(query: {
   return { rows, total };
 }
 
-export type CheckDiffKind = "field" | "new-shift" | "unresolved" | "error";
+export type CheckDiffKind = "field" | "new-shift" | "unresolved" | "error" | "removed";
 
 export interface CheckDiffRow {
   id: number;
@@ -1627,6 +1627,77 @@ export async function listCheckDiffs(checkLogId: number): Promise<CheckDiffRow[]
      WHERE check_log_id = $1
      ORDER BY id`,
     [checkLogId],
+  );
+}
+
+export interface CheckLogConfigDiffCount {
+  checkLogId: number;
+  /** `null` for a diff not tied to any one reimport config (e.g. a whole-URL failure) — see `CheckDiffRow.configId`. */
+  configId: number | null;
+  configLabel: string;
+  diffCount: number;
+}
+
+/**
+ * Per-(check, config) diff counts for a batch of check-log ids — one check
+ * covers every active reimport config for a URL at once (see
+ * `RemoteFileUpdatesContext.runChecks`), but the Verificação automática
+ * page shows one history ROW per config regardless (never merging several
+ * configs' template/período/detalhes into a single combined row — a
+ * mismatch found there needs to point at exactly one template, unambiguously),
+ * so it needs each config's own count instead of just the total.
+ */
+export async function listCheckDiffCountsByLogIds(checkLogIds: number[]): Promise<CheckLogConfigDiffCount[]> {
+  if (checkLogIds.length === 0) return [];
+  const db = await getDb();
+  const placeholders = checkLogIds.map((_, i) => `$${i + 1}`).join(", ");
+  return db.select<CheckLogConfigDiffCount[]>(
+    `SELECT check_log_id AS checkLogId, config_id AS configId, config_label AS configLabel, COUNT(*) AS diffCount
+     FROM source_url_check_diffs
+     WHERE check_log_id IN (${placeholders})
+     GROUP BY check_log_id, config_id, config_label`,
+    checkLogIds,
+  );
+}
+
+export interface ShiftFieldDiffRow {
+  shiftId: number;
+  checkLogId: number;
+  checkedAt: string;
+  configLabel: string;
+  /** 'field' — this shift's own field changed in the source; 'removed' — this shift's record wasn't found at all in the latest read of the source (see `computeReimportDiff`'s `change_kind: 'removed'`). Never any other kind — those don't carry a `matchedShiftId`. */
+  changeKind: "field" | "removed";
+  fieldName: string | null;
+  columnLetter: string | null;
+  oldValue: string | null;
+  newValue: string | null;
+}
+
+/**
+ * For each given `payment_shifts.id`, what the automatic background
+ * verification most recently found for it — a field that changed, or the
+ * whole record missing from the file entirely (see `computeReimportDiff`) —
+ * scoped to each row's own source URL's LATEST check (`l.id = MAX(...)` per
+ * `source_url`), so a change that was later reimported/edited away, or
+ * superseded by a newer check that found the file back in sync, doesn't
+ * linger here forever. Used by `PaymentsPage` to flag a row/column the last
+ * automatic check found different, without re-checking anything itself.
+ */
+export async function listLatestFieldDiffsForShifts(shiftIds: number[]): Promise<ShiftFieldDiffRow[]> {
+  if (shiftIds.length === 0) return [];
+  const db = await getDb();
+  const placeholders = shiftIds.map((_, i) => `$${i + 1}`).join(", ");
+  return db.select<ShiftFieldDiffRow[]>(
+    `SELECT d.matched_shift_id AS shiftId, d.check_log_id AS checkLogId, l.checked_at AS checkedAt,
+            d.config_label AS configLabel, d.change_kind AS changeKind, d.field_name AS fieldName,
+            d.column_letter AS columnLetter, d.old_value AS oldValue, d.new_value AS newValue
+     FROM source_url_check_diffs d
+     JOIN source_url_check_log l ON l.id = d.check_log_id
+     WHERE d.change_kind IN ('field', 'removed')
+       AND d.matched_shift_id IN (${placeholders})
+       AND l.id = (SELECT MAX(l2.id) FROM source_url_check_log l2 WHERE l2.source_url = l.source_url)
+     ORDER BY d.matched_shift_id, d.id`,
+    shiftIds,
   );
 }
 
@@ -2622,6 +2693,60 @@ export async function findPaymentShiftByPosition(
   return { ...r, extraData: r.extraData ? JSON.parse(r.extraData) : null, editedManually: Boolean(r.editedManually) };
 }
 
+export interface SourceUrlHeadShift {
+  shiftId: number;
+  employeeId: number;
+  employeeName: string;
+  workDate: string;
+  local: string;
+  role: string;
+  scheduleStartMinutes: number | null;
+  scheduleEndMinutes: number | null;
+  status: PaymentShiftStatus;
+  sheetName: string | null;
+  rowNumber: number | null;
+}
+
+/**
+ * Every current (head, non-deleted) shift ever imported from this exact
+ * source URL, optionally bounded to a período — the mirror image of
+ * `findPaymentShiftByPosition` (which answers "what's at this ONE position"
+ * instead of "everything"). Used by the deep check
+ * (`remoteCheckDiff.ts`'s `computeReimportDiff`, `change_kind: 'removed'`)
+ * and the manual reimport preview (`ImportPaymentsPage`) to find shifts that
+ * are no longer represented by ANY row in a fresh parse of the file — the
+ * inverse of the existing "excluído" detection (a file row whose match was
+ * soft-deleted in the system), which only ever catches the file-still-has-it
+ * direction.
+ */
+export async function listHeadShiftsForSourceUrl(
+  sourceUrl: string,
+  periodStart: string | null,
+  periodEnd: string | null,
+): Promise<SourceUrlHeadShift[]> {
+  const db = await getDb();
+  const conditions = ["sf.source_url = $1", HEAD_SHIFT_CONDITION];
+  const params: string[] = [sourceUrl];
+  if (periodStart) {
+    params.push(periodStart);
+    conditions.push(`ps.work_date >= $${params.length}`);
+  }
+  if (periodEnd) {
+    params.push(periodEnd);
+    conditions.push(`ps.work_date <= $${params.length}`);
+  }
+  return db.select<SourceUrlHeadShift[]>(
+    `SELECT ps.id AS shiftId, ps.employee_id AS employeeId, e.name AS employeeName, ps.work_date AS workDate,
+            ps.local, ps.role, ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
+            ps.status, ps.source_sheet_name AS sheetName, ps.source_row_number AS rowNumber
+     FROM payment_shifts ps
+     JOIN employees e ON e.id = ps.employee_id
+     JOIN source_files sf ON sf.id = ps.source_file_id
+     WHERE ${conditions.join(" AND ")}`,
+    params,
+  );
+}
+
 export interface PaymentShiftInput {
   employeeId: number;
   templateId: number | null;
@@ -3079,7 +3204,7 @@ const PAYMENT_SHIFT_SELECT_COLUMNS = `
   ps.previous_shift_id AS previousShiftId, ps.extra_data AS extraData,
   ps.edited_manually AS editedManually,
   ps.source_row_number AS sourceRowNumber, ps.source_sheet_name AS sourceSheetName,
-  sf.file_name AS sourceFileName
+  sf.file_name AS sourceFileName, sf.source_url AS sourceUrl
 `;
 
 const PAYMENT_SHIFT_FROM_CLAUSE = `
