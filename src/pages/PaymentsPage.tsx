@@ -37,6 +37,7 @@ import PdfViewerModal from "../components/PdfViewerModal";
 import ScheduleTimeFilterDropdown from "../components/ScheduleTimeFilterDropdown";
 import ShiftHistoryModal from "../components/ShiftHistoryModal";
 import { PAYMENTS_PAGE_SIZE_OPTIONS, usePaymentsFilters } from "../contexts/FiltersContext";
+import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { revealInFileManager } from "../lib/api";
 import {
   deletePaymentShift,
@@ -745,6 +746,7 @@ export default function PaymentsPage() {
     selectedExportTemplateId,
     setSelectedExportTemplateId,
   } = usePaymentsFilters();
+  const { trackedFiles } = useRemoteFileUpdates();
 
   const [summaries, setSummaries] = useState<PaymentShiftSummaryRow[]>([]);
   const [summariesTotal, setSummariesTotal] = useState(0);
@@ -834,6 +836,23 @@ export default function PaymentsPage() {
       return next;
     });
   }
+
+  // `trackedFiles` is a fresh array every time a background check batch
+  // finishes (`RemoteFileUpdatesContext.refreshTrackedState`, run after
+  // every scheduled tick or forced check) — reacting to it here is what
+  // makes a change the automatic verification finds show up on an
+  // already-open Pagamentos page without the user touching a filter or
+  // reloading. Only re-fetches the diff annotations for whatever's already
+  // on screen, never the shift rows themselves — the check is read-only by
+  // design (see `computeReimportDiff`), so there's never new shift data to
+  // pull, only a possibly-updated verdict on existing rows.
+  useEffect(() => {
+    const visibleIds = grouped
+      ? Array.from(groupRows.values()).flatMap((rows) => rows.map((r) => r.id))
+      : flatRows.map((r) => r.id);
+    refreshShiftDiffs(visibleIds);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trackedFiles]);
 
   function toggleColumn(id: string) {
     setVisibleColumns((prev) => {
