@@ -59,6 +59,9 @@ export interface PaymentsFilters {
   setPage: Dispatch<SetStateAction<number>>;
   pageSize: number;
   setPageSize: (v: number) => void;
+  /** The "Exportar Excel" template picker — a string id (or "" for none chosen), same as every other filter here: survives navigating away and back, unlike the component-local `useState` it replaced. */
+  selectedExportTemplateId: string;
+  setSelectedExportTemplateId: Dispatch<SetStateAction<string>>;
 }
 
 const LibraryFiltersContext = createContext<LibraryFilters | null>(null);
@@ -127,6 +130,7 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
   const [paymentsGrouped, setPaymentsGrouped] = useState(false);
   const [paymentsPage, setPaymentsPage] = useState(0);
   const [paymentsPageSize, setPaymentsPageSize] = useState(PAYMENTS_PAGE_SIZE_OPTIONS[0]);
+  const [paymentsSelectedExportTemplateId, setPaymentsSelectedExportTemplateId] = useState("");
 
   const payments: PaymentsFilters = {
     search: paymentsSearch,
@@ -153,6 +157,8 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
     setPage: setPaymentsPage,
     pageSize: paymentsPageSize,
     setPageSize: setPaymentsPageSize,
+    selectedExportTemplateId: paymentsSelectedExportTemplateId,
+    setSelectedExportTemplateId: setPaymentsSelectedExportTemplateId,
   };
 
   return (

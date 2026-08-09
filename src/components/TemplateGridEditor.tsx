@@ -66,6 +66,8 @@ interface TemplateGridEditorProps {
   onColumnContextMenu?: (col: number, x: number, y: number) => void;
   /** Cell values (exact match, e.g. `"{{workDate}}"`) that should get a visual marker — used to show which cells currently drive agrupamento, without a separate side-panel list. Domain-agnostic on purpose (this component doesn't know what "agrupamento" means, just "highlight any cell whose value is exactly one of these"). */
   highlightExactValues?: Set<string>;
+  /** Same idea as `highlightExactValues`, rendered as a second, differently-positioned/colored marker — lets two independent groupings (e.g. turno vs. SOMA) be told apart on a cell that's marked by both. */
+  secondaryHighlightExactValues?: Set<string>;
 }
 
 const DEFAULT_ROWS = 24;
@@ -234,7 +236,15 @@ function ToolbarColorButton({
  * `onCellContextMenu`/`onRowContextMenu`.
  */
 const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEditorProps>(function TemplateGridEditor(
-  { initialGrid, rowBadges, onCellContextMenu, onRowContextMenu, onColumnContextMenu, highlightExactValues },
+  {
+    initialGrid,
+    rowBadges,
+    onCellContextMenu,
+    onRowContextMenu,
+    onColumnContextMenu,
+    highlightExactValues,
+    secondaryHighlightExactValues,
+  },
   ref,
 ) {
   const [grid, setGrid] = useState<TemplateGridData>(() => (initialGrid ? normalizeGrid(initialGrid) : blankGrid()));
@@ -686,6 +696,10 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
               const inRange = range ? cellInRange(range, r, c) : false;
               const isEditing = editingCell?.row === r && editingCell?.col === c;
               const isGrouped = highlightExactValues?.has(cell.value.trim()) ?? false;
+              const isSecondaryGrouped = secondaryHighlightExactValues?.has(cell.value.trim()) ?? false;
+              const groupedTitle = [isGrouped && "Usado no agrupamento", isSecondaryGrouped && "Usado no agrupamento da SOMA"]
+                .filter(Boolean)
+                .join(" / ");
               return (
                 <div
                   key={`${r},${c}`}
@@ -702,7 +716,7 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
                     if (!range || !cellInRange(range, r, c)) selectSingleCell(r, c);
                     onCellContextMenu?.(r, c, cell.value, cell.backgroundColor, cell.fontColor, e.clientX, e.clientY);
                   }}
-                  title={isGrouped ? "Usado no agrupamento" : undefined}
+                  title={groupedTitle || undefined}
                   style={{
                     position: "relative",
                     gridColumn: `${c + 2} / span ${colSpan}`,
@@ -729,6 +743,19 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
                         bottom: 0,
                         height: 3,
                         background: "#a78bfa",
+                      }}
+                    />
+                  )}
+                  {isSecondaryGrouped && (
+                    <span
+                      title="Usado no agrupamento da SOMA"
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        right: 0,
+                        top: 0,
+                        height: 3,
+                        background: "#2dd4bf",
                       }}
                     />
                   )}

@@ -63,6 +63,8 @@ export default function PaymentExportTemplateEditorPage() {
 
   const [detailRowIndex, setDetailRowIndex] = useState<number | null>(null);
   const [groupBy, setGroupBy] = useState<PaymentExportBindableField[]>([]);
+  /** Independent from `groupBy` — see `PaymentExportTemplateConfig.subtotalGroupBy`'s own doc comment. Initialized to mirror `groupBy` (old behavior: one SOMA per turno-group) and only diverges once the user explicitly toggles a field via the cell context menu. */
+  const [subtotalGroupBy, setSubtotalGroupBy] = useState<PaymentExportBindableField[]>([]);
 
   const [separatorEnabled, setSeparatorEnabled] = useState(false);
   const [separatorRowIndex, setSeparatorRowIndex] = useState<number | null>(null);
@@ -82,6 +84,7 @@ export default function PaymentExportTemplateEditorPage() {
         setInitialGrid(t.config.grid);
         setDetailRowIndex(t.config.detailRowIndex);
         setGroupBy(t.config.groupBy);
+        setSubtotalGroupBy(t.config.subtotalGroupBy ?? t.config.groupBy);
         setSeparatorEnabled(t.config.separator?.enabled ?? false);
         setSeparatorRowIndex(t.config.separator?.rowIndex ?? null);
         setSubtotalEnabled(t.config.subtotal?.enabled ?? false);
@@ -199,6 +202,24 @@ export default function PaymentExportTemplateEditorPage() {
         onClick: () =>
           setGroupBy((prev) => (alreadyGrouped ? prev.filter((f) => f !== exactField) : [...prev, exactField])),
       });
+      // Independent from the turno grouping above — lets a SOMA total a
+      // wider (or narrower) group than the detail rows it's summing, e.g.
+      // a single "soma geral" for the whole export while the turno rows
+      // themselves still break per colaborador. Offered whenever there's a
+      // SOMA row at all, not just while right-clicking it, since the field
+      // being toggled lives on a detail-row cell, not the SOMA row itself.
+      if (subtotalEnabled) {
+        const alreadySubtotalGrouped = subtotalGroupBy.includes(exactField);
+        items.push({
+          label: alreadySubtotalGrouped
+            ? `Remover "${PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[exactField]}" do agrupamento da SOMA`
+            : `Agrupar SOMA por "${PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[exactField]}"`,
+          onClick: () =>
+            setSubtotalGroupBy((prev) =>
+              alreadySubtotalGrouped ? prev.filter((f) => f !== exactField) : [...prev, exactField],
+            ),
+        });
+      }
     }
 
     // The SOMA row has no separate "which column" config — whichever
@@ -336,6 +357,7 @@ export default function PaymentExportTemplateEditorPage() {
       grid,
       detailRowIndex,
       groupBy,
+      subtotalGroupBy,
       separator: separatorEnabled && separatorRowIndex !== null ? { enabled: true, rowIndex: separatorRowIndex } : null,
       subtotal: subtotalEnabled && subtotalRowIndex !== null ? { enabled: true, rowIndex: subtotalRowIndex } : null,
     };
@@ -347,7 +369,19 @@ export default function PaymentExportTemplateEditorPage() {
       } else {
         await createPaymentExportTemplate({ name: name.trim(), config });
       }
-      navigate("/payments/export-templates");
+      // A plain push here would leave this editor page as a dangling
+      // history entry between the list and itself, so the list's own
+      // "Voltar" (a bare `navigate(-1)`, see `BackButton`) would land right
+      // back on this editor instead of wherever the list itself was reached
+      // from. Going back one entry instead (same fallback rule
+      // `BackButton` uses) lands on the list's own original entry, keeping
+      // history exactly as deep as it was before this editor was opened —
+      // `replace` alone would still leave one extra hop behind.
+      if ((window.history.state?.idx ?? 0) > 0) {
+        navigate(-1);
+      } else {
+        navigate("/payments/export-templates", { replace: true });
+      }
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -370,6 +404,10 @@ export default function PaymentExportTemplateEditorPage() {
   // marker directly on the grid cell instead of a side-panel list (see
   // TemplateGridEditor's own `highlightExactValues`).
   const groupByHighlights = useMemo(() => new Set(groupBy.map((f) => `{{${f}}}`)), [groupBy]);
+  const subtotalGroupByHighlights = useMemo(
+    () => new Set(subtotalGroupBy.map((f) => `{{${f}}}`)),
+    [subtotalGroupBy],
+  );
 
   if (loading) {
     return (
@@ -413,6 +451,7 @@ export default function PaymentExportTemplateEditorPage() {
           initialGrid={initialGrid}
           rowBadges={rowBadges}
           highlightExactValues={groupByHighlights}
+          secondaryHighlightExactValues={subtotalGroupByHighlights}
           onCellContextMenu={handleCellContextMenu}
           onRowContextMenu={handleRowContextMenu}
           onColumnContextMenu={handleColumnContextMenu}

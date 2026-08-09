@@ -647,22 +647,39 @@ export interface PaymentExportTemplateConfig {
     rowIndex: number;
   } | null;
   /**
-   * An optional subtotal row at the end of each group, summing every
-   * matching shift's `valor`. Written as a live `SUM(...)` Excel formula
-   * over the detail row's `{{valor}}` column (falls back to a precomputed
-   * static number if the detail row has no exact `{{valor}}` cell to
-   * reference). Unlike the detail row, there's no separate "which column"
-   * config: whichever cell(s) in this row contain the literal
-   * `{{valorSoma}}` token get the total (same mechanism `{{field}}` tokens
-   * use on the detail row — see `renderSumCell` in `paymentExportGrid.ts`);
-   * every other cell is static text, written as typed, exactly like the
-   * separator row.
+   * An optional subtotal row, summing every matching shift's `valor`.
+   * Written as a live `SUM(...)` Excel formula over the detail row's
+   * `{{valor}}` column (falls back to a precomputed static number if the
+   * detail row has no exact `{{valor}}` cell to reference). Unlike the
+   * detail row, there's no separate "which column" config: whichever
+   * cell(s) in this row contain the literal `{{valorSoma}}` token get the
+   * total (same mechanism `{{field}}` tokens use on the detail row — see
+   * `renderSumCell` in `paymentExportGrid.ts`); every other cell is static
+   * text, written as typed, exactly like the separator row.
    */
   subtotal: {
     enabled: boolean;
     /** Row index (within `grid.rows`) whose content/style is reused for the subtotal row. */
     rowIndex: number;
   } | null;
+  /**
+   * Which grouping the SOMA row breaks on — independent of `groupBy` (the
+   * *turno* grouping), so a SOMA can total each turno-group individually
+   * (set this equal to `groupBy`) or roll up several turno-groups into one
+   * wider total, down to a single grand total for everything (`[]`). A
+   * detail-row group can never straddle a SOMA group boundary — rows are
+   * sorted by this grouping first, `groupBy` second, so every SOMA group is
+   * a contiguous run of one or more whole turno-groups.
+   *
+   * `undefined` only for templates saved before this field existed — treated
+   * exactly like the pre-existing behavior, one SOMA per turno-group, by
+   * falling back to `groupBy` wherever this is read (see
+   * `paymentExport.ts`). A template saved through the editor always writes
+   * this explicitly (even when it happens to equal `groupBy`), so the
+   * ambiguity is only ever a legacy-data concern, never something the UI
+   * itself produces going forward.
+   */
+  subtotalGroupBy?: PaymentExportBindableField[];
 }
 
 /** One row per saved payment export template — the list view. */

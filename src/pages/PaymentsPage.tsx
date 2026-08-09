@@ -661,6 +661,8 @@ export default function PaymentsPage() {
     setPage,
     pageSize,
     setPageSize,
+    selectedExportTemplateId,
+    setSelectedExportTemplateId,
   } = usePaymentsFilters();
 
   const [summaries, setSummaries] = useState<PaymentShiftSummaryRow[]>([]);
@@ -677,7 +679,6 @@ export default function PaymentsPage() {
   const [viewerPath, setViewerPath] = useState<string | null>(null);
 
   const [exportTemplates, setExportTemplates] = useState<PaymentExportTemplateListRow[]>([]);
-  const [selectedExportTemplateId, setSelectedExportTemplateId] = useState("");
   const [generatingExport, setGeneratingExport] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [revealingExport, setRevealingExport] = useState(false);
