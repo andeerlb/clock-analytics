@@ -2,19 +2,24 @@ import {
   AlertCircle,
   AlertTriangle,
   ArrowLeft,
+  Building2,
   CheckCircle2,
   Eye,
   FileText,
   FolderOpen,
+  History,
   ListChecks,
   PlusCircle,
   Search,
   Settings2,
+  Users,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Avatar from "../components/Avatar";
+import Drawer from "../components/Drawer";
+import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
 import { applyPaymentTemplate, hashPaymentFile, pickPaymentFiles, type AppliedPaymentRow } from "../lib/api";
 import {
@@ -76,6 +81,17 @@ interface EmployeePreviewRow {
   cpfRaw: string;
   matriculaRaw: string;
   nameRaw: string;
+  /**
+   * Which cliente+empresa pair this preview instance targets — one physical
+   * spreadsheet row produces one `EmployeePreviewRow` per valid pair
+   * selected (see `validPairs`), so the same colaborador can be checked
+   * (and imported) into several empresas independently. `null` only for
+   * category "skipped", since those never reach the per-pair lookup.
+   */
+  pairClientId: number | null;
+  pairClientName: string | null;
+  pairCompanyId: number | null;
+  pairCompanyName: string | null;
   /** Set only for category "duplicate" — the already-registered employee found via `findEmployeeByAttempts`. */
   match: EmployeeRow | null;
   category: RowCategory;
@@ -103,8 +119,8 @@ export default function ImportEmployeesPage() {
   const [selectedTemplate, setSelectedTemplate] = useState<EmployeeTemplateRow | null>(null);
 
   const [clients, setClients] = useState<ClientRow[]>([]);
-  const [clientId, setClientId] = useState("");
-  const [companyId, setCompanyId] = useState("");
+  const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
+  const [selectedCompanyIds, setSelectedCompanyIds] = useState<Set<string>>(new Set());
 
   const [rowFilter, setRowFilter] = useState<RowFilter>("all");
   const [nameSearch, setNameSearch] = useState("");
@@ -119,6 +135,7 @@ export default function ImportEmployeesPage() {
 
   const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
   const [recentFilesTotal, setRecentFilesTotal] = useState(0);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const [historyPage, setHistoryPage] = useState(0);
   const [historyPageSize, setHistoryPageSize] = useState(HISTORY_PAGE_SIZE_OPTIONS[0]);
@@ -176,24 +193,49 @@ export default function ImportEmployeesPage() {
     };
   }, [templateId]);
 
-  // `clients` has one row per (client, company) link, so grab the first
-  // match just for the client's own identity (name/cnpj) — those are the
-  // same across every row for a given client.
-  const selectedClient = useMemo(() => clients.find((c) => String(c.id) === clientId) ?? null, [clients, clientId]);
+  // `clients` has one row per (client, company) link — deduplicated option
+  // lists for the two multi-selects below.
+  const clientOptions = useMemo(() => {
+    const seen = new Map<number, ClientRow>();
+    for (const c of clients) if (!seen.has(c.id)) seen.set(c.id, c);
+    return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [clients]);
 
-  // Every company the selected client is linked to — this is what the
-  // "Empresa" select offers, since a client can be tied to more than one.
-  const clientCompanies = useMemo(() => clients.filter((c) => String(c.id) === clientId), [clients, clientId]);
+  const companyOptions = useMemo(() => {
+    const seen = new Map<number, string>();
+    for (const c of clients) if (!seen.has(c.companyId)) seen.set(c.companyId, c.companyName);
+    return Array.from(seen.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [clients]);
 
-  // Auto-select the company when the client only has one; otherwise force
-  // an explicit choice (and clear any stale choice from a previous client).
-  useEffect(() => {
-    if (clientCompanies.length === 1) {
-      setCompanyId(String(clientCompanies[0].companyId));
-    } else {
-      setCompanyId("");
-    }
-  }, [clientCompanies]);
+  function toggleClient(id: string) {
+    setSelectedClientIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleCompany(id: string) {
+    setSelectedCompanyIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // The only combinations actually valid to import into — every selected
+  // cliente crossed with every selected empresa, kept only where that exact
+  // link already exists (a cliente can be tied to some empresas and not
+  // others). Everything downstream (preview, save) is driven off this, not
+  // off the raw selections, so an invalid combo is never silently used.
+  const validPairs = useMemo(() => {
+    if (selectedClientIds.size === 0 || selectedCompanyIds.size === 0) return [];
+    return clients.filter((c) => selectedClientIds.has(String(c.id)) && selectedCompanyIds.has(String(c.companyId)));
+  }, [clients, selectedClientIds, selectedCompanyIds]);
 
   function addPaths(newPaths: string[]) {
     setPaths((prev) => Array.from(new Set([...prev, ...newPaths])));
@@ -310,7 +352,7 @@ export default function ImportEmployeesPage() {
   const historyPageCount = Math.max(1, Math.ceil(recentFilesTotal / historyPageSize));
 
   async function handleProcess() {
-    if (!selectedTemplate || !selectedClient) return;
+    if (!selectedTemplate || validPairs.length === 0) return;
     setError(null);
     setBusy(true);
     try {
@@ -359,16 +401,36 @@ export default function ImportEmployeesPage() {
 
             const cpfDigits = cpfRaw ? normalizeCpf(cpfRaw) : "";
             if (cpfDigits.length !== 11 || !nameRaw.trim()) {
-              rows.push({ ...base, match: null, category: "skipped" });
+              rows.push({
+                ...base,
+                pairClientId: null,
+                pairClientName: null,
+                pairCompanyId: null,
+                pairCompanyName: null,
+                match: null,
+                category: "skipped",
+              });
               continue;
             }
 
-            const match = await findEmployeeByAttempts(selectedClient.id, Number(companyId), selectedTemplate.identifierPriority, {
-              cpf: cpfRaw,
-              matricula: matriculaRaw || null,
-              nome: nameRaw || null,
-            });
-            rows.push({ ...base, match, category: match ? "duplicate" : "valid" });
+            // One row per valid cliente+empresa pair — the same colaborador
+            // is checked (and later importable) independently in each.
+            for (const pair of validPairs) {
+              const match = await findEmployeeByAttempts(pair.id, pair.companyId, selectedTemplate.identifierPriority, {
+                cpf: cpfRaw,
+                matricula: matriculaRaw || null,
+                nome: nameRaw || null,
+              });
+              rows.push({
+                ...base,
+                pairClientId: pair.id,
+                pairClientName: pair.name,
+                pairCompanyId: pair.companyId,
+                pairCompanyName: pair.companyName,
+                match,
+                category: match ? "duplicate" : "valid",
+              });
+            }
           }
           results.push({ fileHash, fileName, rows, error: null });
         } catch (e) {
@@ -376,14 +438,16 @@ export default function ImportEmployeesPage() {
         }
       }
 
-      // Within this same batch, two "valid" rows sharing a CPF are the same
-      // colaborador repeated in the source file — only the first stays
-      // importable.
+      // Within this same batch, two "valid" rows sharing a CPF **for the
+      // same cliente+empresa pair** are the same colaborador repeated in the
+      // source file — only the first stays importable. Scoped per pair (not
+      // globally) since the same physical row intentionally repeats once per
+      // selected pair, and that repetition isn't a file error.
       const allRows = results.flatMap((r) => r.rows);
       const seenCpf = new Set<string>();
       for (const r of allRows) {
         if (r.category !== "valid") continue;
-        const key = normalizeCpf(r.cpfRaw);
+        const key = `${r.pairClientId}:${r.pairCompanyId}:${normalizeCpf(r.cpfRaw)}`;
         if (seenCpf.has(key)) {
           r.category = "duplicate-in-file";
         } else {
@@ -409,7 +473,7 @@ export default function ImportEmployeesPage() {
   }
 
   async function handleSave() {
-    if (!selectedTemplate || !selectedClient || !companyId) return;
+    if (!selectedTemplate || validPairs.length === 0) return;
     setBusy(true);
     setError(null);
     setSuccessMessage(null);
@@ -436,8 +500,8 @@ export default function ImportEmployeesPage() {
         const row = employeeRows[i];
         if (row.category !== "valid") continue;
         importRows.push({
-          clientId: selectedClient.id,
-          companyId: Number(companyId),
+          clientId: row.pairClientId!,
+          companyId: row.pairCompanyId!,
           name: row.nameRaw.trim(),
           cpf: row.cpfRaw,
           matricula: row.matriculaRaw.trim() || null,
@@ -471,24 +535,30 @@ export default function ImportEmployeesPage() {
       </Link>
       <div className="page-header">
         <h2>Importar colaboradores</h2>
-        <button type="button" className="secondary" onClick={() => navigate("/import/employees/templates")}>
-          <Settings2 size={15} style={{ marginRight: "0.4rem" }} />
-          Gerenciar templates
-        </button>
+        <div style={{ display: "flex", gap: "0.6rem" }}>
+          <button type="button" className="outline" onClick={() => setHistoryOpen(true)}>
+            <History size={15} style={{ marginRight: "0.4rem" }} />
+            Histórico
+          </button>
+          <button type="button" className="secondary" onClick={() => navigate("/import/employees/templates")}>
+            <Settings2 size={15} style={{ marginRight: "0.4rem" }} />
+            Gerenciar templates
+          </button>
+        </div>
       </div>
       <p className="page-subtitle">
         Aplique um template já cadastrado a um arquivo de colaboradores (CSV, Excel ou ODS) e
-        cadastre cada linha para o cliente selecionado.
+        cadastre cada linha nos clientes/empresas selecionados.
       </p>
 
       {error && <div className="error-box">{error}</div>}
       {successMessage && <div className="success-box">{successMessage}</div>}
 
-      <div className="import-layout">
+      <div className="import-layout" style={{ display: "block" }}>
         <div className="import-main">
           <div className="card">
             <div className="field-row" style={{ marginBottom: "1.2rem" }}>
-              <div className="field" style={{ flex: "1 1 220px" }}>
+              <div className="field" style={{ minWidth: "220px", maxWidth: "320px" }}>
                 <label htmlFor="employee-template">Template</label>
                 <select
                   id="employee-template"
@@ -503,59 +573,49 @@ export default function ImportEmployeesPage() {
                     </option>
                   ))}
                 </select>
-                {templates.length === 0 ? (
+                {templates.length === 0 && (
                   <p className="field-hint">
                     Nenhum template disponível.{" "}
                     <Link to="/import/employees/templates">Cadastre um template</Link>.
                   </p>
-                ) : (
-                  <p className="field-hint">Como as colunas do arquivo serão lidas.</p>
                 )}
               </div>
-              <div className="field" style={{ flex: "1 1 220px" }}>
-                <label htmlFor="employee-client">Cliente</label>
-                <select
-                  id="employee-client"
-                  value={clientId}
-                  onChange={(e) => setClientId(e.target.value)}
-                  disabled={clients.length === 0}
-                >
-                  <option value="">Selecione um cliente</option>
-                  {clients.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-                {clients.length === 0 ? (
+              <div className="field">
+                <label>Cliente</label>
+                <MultiSelectDropdown
+                  options={clientOptions.map((c) => ({ id: String(c.id), label: c.name }))}
+                  selected={selectedClientIds}
+                  onToggle={toggleClient}
+                  onSelectAll={() => setSelectedClientIds(new Set(clientOptions.map((c) => String(c.id))))}
+                  onSelectNone={() => setSelectedClientIds(new Set())}
+                  icon={Users}
+                  allLabel="Todos os clientes"
+                  noneLabel="Nenhum cliente"
+                />
+                {clients.length === 0 && (
                   <p className="field-hint">
                     Nenhum cliente cadastrado. <Link to="/clients">Cadastre um cliente</Link> antes de
                     importar.
                   </p>
-                ) : (
-                  <p className="field-hint">Os colaboradores importados ficam vinculados a ele.</p>
                 )}
               </div>
-              <div className="field" style={{ flex: "1 1 180px" }}>
-                <label htmlFor="employee-company">Empresa</label>
-                <select
-                  id="employee-company"
-                  value={companyId}
-                  onChange={(e) => setCompanyId(e.target.value)}
-                  disabled={clientCompanies.length <= 1}
-                >
-                  {clientCompanies.length !== 1 && <option value="">Selecione uma empresa</option>}
-                  {clientCompanies.map((c) => (
-                    <option key={c.companyId} value={c.companyId}>
-                      {c.companyName}
-                    </option>
-                  ))}
-                </select>
-                <p className="field-hint">
-                  {clientCompanies.length > 1
-                    ? "Esse cliente está vinculado a mais de uma empresa — escolha uma."
-                    : "Definida automaticamente pelo cliente selecionado."}
-                </p>
+              <div className="field">
+                <label>Empresa</label>
+                <MultiSelectDropdown
+                  options={companyOptions.map((c) => ({ id: String(c.id), label: c.name }))}
+                  selected={selectedCompanyIds}
+                  onToggle={toggleCompany}
+                  onSelectAll={() => setSelectedCompanyIds(new Set(companyOptions.map((c) => String(c.id))))}
+                  onSelectNone={() => setSelectedCompanyIds(new Set())}
+                  icon={Building2}
+                  allLabel="Todas as empresas"
+                  noneLabel="Nenhuma empresa"
+                />
+                {selectedClientIds.size > 0 && selectedCompanyIds.size > 0 && validPairs.length === 0 && (
+                  <p className="field-hint">
+                    Nenhum dos clientes selecionados está vinculado a nenhuma das empresas selecionadas.
+                  </p>
+                )}
               </div>
             </div>
 
@@ -616,7 +676,7 @@ export default function ImportEmployeesPage() {
             <div className="card-footer">
               <button
                 type="button"
-                disabled={paths.length === 0 || !templateId || !clientId || !companyId || busy}
+                disabled={paths.length === 0 || !templateId || validPairs.length === 0 || busy}
                 onClick={handleProcess}
               >
                 {busy ? "Processando..." : `Processar ${paths.length || ""} arquivo(s)`}
@@ -759,13 +819,15 @@ export default function ImportEmployeesPage() {
                         <th>CPF</th>
                         <th>Matrícula</th>
                         <th>Nome</th>
+                        <th>Cliente</th>
+                        <th>Empresa</th>
                         <th>Status</th>
                       </tr>
                     </thead>
                     <tbody>
                       {previewRows.length === 0 && rowFilter !== "all" && (
                         <tr>
-                          <td colSpan={6} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
+                          <td colSpan={8} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
                             Nenhuma linha nesta categoria.
                           </td>
                         </tr>
@@ -777,7 +839,7 @@ export default function ImportEmployeesPage() {
                               <td className="checkbox-cell">
                                 <input type="checkbox" disabled aria-label="Não disponível" />
                               </td>
-                              <td colSpan={4}>
+                              <td colSpan={6}>
                                 <div className="file-name">{item.fileName}</div>
                                 <div className="muted">{item.message}</div>
                               </td>
@@ -816,6 +878,8 @@ export default function ImportEmployeesPage() {
                                 {row.nameRaw || "—"}
                               </div>
                             </td>
+                            <td>{row.pairClientName ?? <span className="muted">—</span>}</td>
+                            <td>{row.pairCompanyName ?? <span className="muted">—</span>}</td>
                             <td>
                               {row.category === "valid" && (
                                 <span className="badge ok">
@@ -881,10 +945,9 @@ export default function ImportEmployeesPage() {
           )}
         </div>
 
-        <div className="import-side">
-          <div className="card">
-            <h3 style={{ marginTop: 0 }}>Histórico de importações</h3>
+      </div>
 
+      <Drawer open={historyOpen} onClose={() => setHistoryOpen(false)} title="Histórico de importações">
             {!(recentFilesTotal === 0 && !historySearch.trim()) && (
               <div className="field" style={{ marginBottom: "0.8rem" }}>
                 <div style={{ position: "relative" }}>
@@ -970,9 +1033,7 @@ export default function ImportEmployeesPage() {
                 maxPageButtons={3}
               />
             )}
-          </div>
-        </div>
-      </div>
+      </Drawer>
     </div>
   );
 }

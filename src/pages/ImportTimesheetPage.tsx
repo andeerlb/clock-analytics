@@ -7,6 +7,7 @@ import {
   Eye,
   FileText,
   FolderOpen,
+  History,
   Lightbulb,
   PlusCircle,
   RotateCcw,
@@ -18,6 +19,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Avatar from "../components/Avatar";
+import Drawer from "../components/Drawer";
 import Pagination from "../components/Pagination";
 import PdfViewerModal from "../components/PdfViewerModal";
 import { hashFiles, listProviders, parseImport, pickPdfFiles } from "../lib/api";
@@ -78,6 +80,7 @@ export default function ImportTimesheetPage() {
   const [previewPageSize, setPreviewPageSize] = useState(PREVIEW_PAGE_SIZE_OPTIONS[0]);
   const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
   const [recentFilesTotal, setRecentFilesTotal] = useState(0);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const [historyPage, setHistoryPage] = useState(0);
   const [historyPageSize, setHistoryPageSize] = useState(HISTORY_PAGE_SIZE_OPTIONS[0]);
@@ -209,6 +212,15 @@ export default function ImportTimesheetPage() {
     () => clients.find((c) => String(c.id) === clientId) ?? null,
     [clients, clientId],
   );
+
+  // Deduplicated by client id, just for the "Cliente" select's options —
+  // `clients` itself stays one-row-per-(client,company) since that's what
+  // `clientCompanies`/the auto-select effect below need.
+  const clientOptions = useMemo(() => {
+    const seen = new Map<number, ClientRow>();
+    for (const c of clients) if (!seen.has(c.id)) seen.set(c.id, c);
+    return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [clients]);
 
   // Every company the selected client is linked to — this is what the
   // "Empresa" select offers, since a client can be tied to more than one.
@@ -406,6 +418,10 @@ export default function ImportTimesheetPage() {
       </Link>
       <div className="page-header">
         <h2>Importar espelhos de ponto</h2>
+        <button type="button" className="outline" onClick={() => setHistoryOpen(true)}>
+          <History size={15} style={{ marginRight: "0.4rem" }} />
+          Histórico
+        </button>
       </div>
       <p className="page-subtitle">
         Faça o upload dos arquivos PDF fornecidos pelo seu provedor de ponto para extrair os
@@ -415,7 +431,7 @@ export default function ImportTimesheetPage() {
       {error && <div className="error-box">{error}</div>}
       {successMessage && <div className="success-box">{successMessage}</div>}
 
-      <div className="import-layout">
+      <div className="import-layout" style={{ display: "block" }}>
       <div className="import-main">
       <div className="card">
         <div className="field-row" style={{ marginBottom: "1.2rem" }}>
@@ -428,7 +444,7 @@ export default function ImportTimesheetPage() {
               disabled={clients.length === 0}
             >
               <option value="">Selecione um cliente</option>
-              {clients.map((c) => (
+              {clientOptions.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
                 </option>
@@ -758,10 +774,9 @@ export default function ImportTimesheetPage() {
       )}
       </div>
 
-      <div className="import-side">
-        <div className="card">
-          <h3 style={{ marginTop: 0 }}>Histórico de importações</h3>
+      </div>
 
+      <Drawer open={historyOpen} onClose={() => setHistoryOpen(false)} title="Histórico de importações">
           {!(recentFilesTotal === 0 && !historySearch.trim()) && (
             <div className="field" style={{ marginBottom: "0.8rem" }}>
               <div style={{ position: "relative" }}>
@@ -860,9 +875,9 @@ export default function ImportTimesheetPage() {
               maxPageButtons={3}
             />
           )}
-        </div>
+      </Drawer>
 
-        <div className="tip-row">
+      <div className="tip-row">
           <div className="tip-card">
             <div className="tip-card-icon" style={{ background: "rgba(245, 158, 11, 0.15)" }}>
               <Lightbulb size={16} color="#fbbf24" />
@@ -888,8 +903,6 @@ export default function ImportTimesheetPage() {
             </div>
           </div>
         </div>
-      </div>
-      </div>
 
       <PdfViewerModal
         path={viewerFile?.originalPdfPath ?? null}
