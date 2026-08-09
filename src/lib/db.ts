@@ -1307,6 +1307,12 @@ export interface ReimportConfig {
   checkIntervalMinutes: number;
   /** Whether an automatic reimport through THIS config skips a "duplicate" match that was edited manually (Fazer pagamento/Editar valor/Voltar para pendente) instead of superseding it — captured from the checkbox on Importar Pagamentos when the config was created, editable afterward like every other field here. See `findDuplicatePaymentShifts`/`ImportPaymentsPage.handleSave` for where this is actually enforced. */
   keepManualEdits: boolean;
+  /** "Atualizar registros automaticamente" — when on, the background check writes a found change straight to `payment_shifts` (via `computeReimportDiff`'s `autoApply` option) instead of only leaving it as a pending diff for manual review on the Pagamentos page. Independent of `keepManualEdits`, which only governs the MANUAL reimport flow in `ImportPaymentsPage`. */
+  autoApplyEnabled: boolean;
+  /** Only consulted when `autoApplyEnabled` — whether auto-apply is still allowed to overwrite a shift that was hand-edited (`edited_manually`) but not paid. Defaults on: auto-apply is trusted to resync a hand-edited-but-unpaid shift unless explicitly told not to. */
+  autoApplyOverwriteManualEdits: boolean;
+  /** Only consulted when `autoApplyEnabled` — whether auto-apply is allowed to overwrite a shift that's already `status: 'pago'`. Defaults off: a paid shift's fields are never touched automatically unless explicitly opted in (see `computeReimportDiff`'s existing rule that a paid shift's `status` itself is never diffed either way). */
+  autoApplyOverwritePaid: boolean;
 }
 
 /** Pre-filled in the "Adicionar configuração" form on the Verificação automática page — the user can change it, but a value is always required. */
@@ -1322,7 +1328,13 @@ export const DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES = 5;
 export async function listReimportConfigs(): Promise<ReimportConfig[]> {
   const db = await getDb();
   const rawRows = await db.select<
-    (Omit<ReimportConfig, "checkDisabled" | "keepManualEdits"> & { checkDisabled: number; keepManualEdits: number })[]
+    (Omit<ReimportConfig, "checkDisabled" | "keepManualEdits" | "autoApplyEnabled" | "autoApplyOverwriteManualEdits" | "autoApplyOverwritePaid"> & {
+      checkDisabled: number;
+      keepManualEdits: number;
+      autoApplyEnabled: number;
+      autoApplyOverwriteManualEdits: number;
+      autoApplyOverwritePaid: number;
+    })[]
   >(
     `SELECT
        c.id, c.source_url AS sourceUrl, c.label,
@@ -1331,12 +1343,22 @@ export async function listReimportConfigs(): Promise<ReimportConfig[]> {
        c.period_start AS periodStart, c.period_end AS periodEnd,
        c.start_offset_days AS startOffsetDays, c.end_offset_days AS endOffsetDays,
        c.check_disabled AS checkDisabled, c.check_interval_minutes AS checkIntervalMinutes,
-       c.keep_manual_edits AS keepManualEdits
+       c.keep_manual_edits AS keepManualEdits,
+       c.auto_apply_enabled AS autoApplyEnabled,
+       c.auto_apply_overwrite_manual_edits AS autoApplyOverwriteManualEdits,
+       c.auto_apply_overwrite_paid AS autoApplyOverwritePaid
      FROM source_url_reimport_configs c
      LEFT JOIN payment_templates pt ON pt.id = c.template_id
      ORDER BY c.created_at`,
   );
-  return rawRows.map((r) => ({ ...r, checkDisabled: Boolean(r.checkDisabled), keepManualEdits: Boolean(r.keepManualEdits) }));
+  return rawRows.map((r) => ({
+    ...r,
+    checkDisabled: Boolean(r.checkDisabled),
+    keepManualEdits: Boolean(r.keepManualEdits),
+    autoApplyEnabled: Boolean(r.autoApplyEnabled),
+    autoApplyOverwriteManualEdits: Boolean(r.autoApplyOverwriteManualEdits),
+    autoApplyOverwritePaid: Boolean(r.autoApplyOverwritePaid),
+  }));
 }
 
 export interface ReimportConfigInput {
@@ -1350,14 +1372,19 @@ export interface ReimportConfigInput {
   endOffsetDays: number | null;
   checkIntervalMinutes: number;
   keepManualEdits: boolean;
+  autoApplyEnabled: boolean;
+  autoApplyOverwriteManualEdits: boolean;
+  autoApplyOverwritePaid: boolean;
 }
 
 export async function createReimportConfig(input: ReimportConfigInput): Promise<number> {
   const db = await getDb();
   const result = await db.execute(
     `INSERT INTO source_url_reimport_configs
-       (source_url, label, template_id, date_mode, period_start, period_end, start_offset_days, end_offset_days, check_interval_minutes, keep_manual_edits)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+       (source_url, label, template_id, date_mode, period_start, period_end, start_offset_days, end_offset_days,
+        check_interval_minutes, keep_manual_edits, auto_apply_enabled, auto_apply_overwrite_manual_edits,
+        auto_apply_overwrite_paid)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
     [
       input.sourceUrl,
       input.label,
@@ -1369,6 +1396,9 @@ export async function createReimportConfig(input: ReimportConfigInput): Promise<
       input.endOffsetDays,
       input.checkIntervalMinutes,
       input.keepManualEdits ? 1 : 0,
+      input.autoApplyEnabled ? 1 : 0,
+      input.autoApplyOverwriteManualEdits ? 1 : 0,
+      input.autoApplyOverwritePaid ? 1 : 0,
     ],
   );
   return result.lastInsertId as number;
@@ -1384,7 +1414,8 @@ export async function updateReimportConfig(
     `UPDATE source_url_reimport_configs SET
        label = $2, date_mode = $3, period_start = $4, period_end = $5,
        start_offset_days = $6, end_offset_days = $7, check_interval_minutes = $8,
-       keep_manual_edits = $9, updated_at = datetime('now')
+       keep_manual_edits = $9, auto_apply_enabled = $10, auto_apply_overwrite_manual_edits = $11,
+       auto_apply_overwrite_paid = $12, updated_at = datetime('now')
      WHERE id = $1`,
     [
       id,
@@ -1396,6 +1427,9 @@ export async function updateReimportConfig(
       input.endOffsetDays,
       input.checkIntervalMinutes,
       input.keepManualEdits ? 1 : 0,
+      input.autoApplyEnabled ? 1 : 0,
+      input.autoApplyOverwriteManualEdits ? 1 : 0,
+      input.autoApplyOverwritePaid ? 1 : 0,
     ],
   );
 }
@@ -1467,6 +1501,12 @@ export async function trackUrlForAutoReimport(
     startOffsetDays: null,
     endOffsetDays: null,
     checkIntervalMinutes: DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES,
+    // Auto-apply is an explicit opt-in, turned on later from the
+    // Verificação automática page — tracking a URL for the first time never
+    // enables unattended writes as a side effect.
+    autoApplyEnabled: false,
+    autoApplyOverwriteManualEdits: true,
+    autoApplyOverwritePaid: false,
     keepManualEdits,
   });
 }
@@ -1573,9 +1613,17 @@ export interface CheckDiffRow {
   oldValue: string | null;
   newValue: string | null;
   message: string | null;
+  /** Whether this diff was already written to `payment_shifts` — by unattended auto-apply, or a manual "Aceitar" (see `computeReimportDiff`'s `AutoApplyOptions`) — vs. still pending review. Only ever `true` for `changeKind: 'field' | 'removed'`, the only kinds a write ever applies to. */
+  applied: boolean;
 }
 
 export type CheckDiffInput = Omit<CheckDiffRow, "id" | "checkLogId">;
+
+type CheckDiffRowRaw = Omit<CheckDiffRow, "applied"> & { applied: number };
+
+function parseCheckDiffRow(r: CheckDiffRowRaw): CheckDiffRow {
+  return { ...r, applied: Boolean(r.applied) };
+}
 
 /** Bulk-inserts the deep-check diff for one check attempt — see `computeReimportDiff` (`remoteCheckDiff.ts`) for how these are produced. */
 export async function saveCheckDiffs(checkLogId: number, entries: CheckDiffInput[]): Promise<void> {
@@ -1586,8 +1634,8 @@ export async function saveCheckDiffs(checkLogId: number, entries: CheckDiffInput
       `INSERT INTO source_url_check_diffs
          (check_log_id, config_id, config_label, change_kind, matched_shift_id, employee_id, employee_name,
           work_date, local, role, schedule_start_minutes, schedule_end_minutes, sheet_name, row_number,
-          column_letter, field_name, old_value, new_value, message)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+          column_letter, field_name, old_value, new_value, message, applied)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
       [
         checkLogId,
         e.configId,
@@ -1608,6 +1656,7 @@ export async function saveCheckDiffs(checkLogId: number, entries: CheckDiffInput
         e.oldValue,
         e.newValue,
         e.message,
+        e.applied ? 1 : 0,
       ],
     );
   }
@@ -1616,18 +1665,19 @@ export async function saveCheckDiffs(checkLogId: number, entries: CheckDiffInput
 /** Lazily fetched when a check-log row is expanded in the UI — most rows have none. */
 export async function listCheckDiffs(checkLogId: number): Promise<CheckDiffRow[]> {
   const db = await getDb();
-  return db.select<CheckDiffRow[]>(
+  const rows = await db.select<CheckDiffRowRaw[]>(
     `SELECT id, check_log_id AS checkLogId, config_id AS configId, config_label AS configLabel,
             change_kind AS changeKind, matched_shift_id AS matchedShiftId, employee_id AS employeeId,
             employee_name AS employeeName, work_date AS workDate, local, role,
             schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes,
             sheet_name AS sheetName, row_number AS rowNumber, column_letter AS columnLetter,
-            field_name AS fieldName, old_value AS oldValue, new_value AS newValue, message
+            field_name AS fieldName, old_value AS oldValue, new_value AS newValue, message, applied
      FROM source_url_check_diffs
      WHERE check_log_id = $1
      ORDER BY id`,
     [checkLogId],
   );
+  return rows.map(parseCheckDiffRow);
 }
 
 export interface CheckLogConfigDiffCount {
@@ -1664,6 +1714,8 @@ export interface ShiftFieldDiffRow {
   shiftId: number;
   checkLogId: number;
   checkedAt: string;
+  /** Which reimport config found this — needed by the "Aceitar" action (Pagamentos) to know which config's URL/template to re-download and apply against. `null` for a diff not tied to any one config. */
+  configId: number | null;
   configLabel: string;
   /** 'field' — this shift's own field changed in the source; 'removed' — this shift's record wasn't found at all in the latest read of the source (see `computeReimportDiff`'s `change_kind: 'removed'`). Never any other kind — those don't carry a `matchedShiftId`. */
   changeKind: "field" | "removed";
@@ -1671,7 +1723,13 @@ export interface ShiftFieldDiffRow {
   columnLetter: string | null;
   oldValue: string | null;
   newValue: string | null;
+  /** Only ever set for `changeKind: 'removed'` — the "não encontrado.../excluído automaticamente" explanation shown in the review Drawer. */
+  message: string | null;
+  /** Already written to `payment_shifts` (unattended auto-apply) vs. still pending review/accept — see `CheckDiffRow.applied`. */
+  applied: boolean;
 }
+
+type ShiftFieldDiffRowRaw = Omit<ShiftFieldDiffRow, "applied"> & { applied: number };
 
 /**
  * For each given `payment_shifts.id`, what the automatic background
@@ -1687,10 +1745,11 @@ export async function listLatestFieldDiffsForShifts(shiftIds: number[]): Promise
   if (shiftIds.length === 0) return [];
   const db = await getDb();
   const placeholders = shiftIds.map((_, i) => `$${i + 1}`).join(", ");
-  return db.select<ShiftFieldDiffRow[]>(
+  const rows = await db.select<ShiftFieldDiffRowRaw[]>(
     `SELECT d.matched_shift_id AS shiftId, d.check_log_id AS checkLogId, l.checked_at AS checkedAt,
-            d.config_label AS configLabel, d.change_kind AS changeKind, d.field_name AS fieldName,
-            d.column_letter AS columnLetter, d.old_value AS oldValue, d.new_value AS newValue
+            d.config_id AS configId, d.config_label AS configLabel, d.change_kind AS changeKind,
+            d.field_name AS fieldName, d.column_letter AS columnLetter, d.old_value AS oldValue,
+            d.new_value AS newValue, d.message, d.applied
      FROM source_url_check_diffs d
      JOIN source_url_check_log l ON l.id = d.check_log_id
      WHERE d.change_kind IN ('field', 'removed')
@@ -1699,6 +1758,32 @@ export async function listLatestFieldDiffsForShifts(shiftIds: number[]): Promise
      ORDER BY d.matched_shift_id, d.id`,
     shiftIds,
   );
+  return rows.map((r) => ({ ...r, applied: Boolean(r.applied) }));
+}
+
+/**
+ * Same "latest check per source_url" scoping as `listLatestFieldDiffsForShifts`,
+ * but for EVERY shift in the system, not a specific set — feeds the global
+ * "bolinha" indicator (`PendingChangesBall`), which needs to know about a
+ * change regardless of whether the affected turno happens to be on screen
+ * right now.
+ */
+export async function listAllLatestShiftDiffs(): Promise<CheckDiffRow[]> {
+  const db = await getDb();
+  const rows = await db.select<CheckDiffRowRaw[]>(
+    `SELECT d.id, d.check_log_id AS checkLogId, d.config_id AS configId, d.config_label AS configLabel,
+            d.change_kind AS changeKind, d.matched_shift_id AS matchedShiftId, d.employee_id AS employeeId,
+            d.employee_name AS employeeName, d.work_date AS workDate, d.local, d.role,
+            d.schedule_start_minutes AS scheduleStartMinutes, d.schedule_end_minutes AS scheduleEndMinutes,
+            d.sheet_name AS sheetName, d.row_number AS rowNumber, d.column_letter AS columnLetter,
+            d.field_name AS fieldName, d.old_value AS oldValue, d.new_value AS newValue, d.message, d.applied
+     FROM source_url_check_diffs d
+     JOIN source_url_check_log l ON l.id = d.check_log_id
+     WHERE d.change_kind IN ('field', 'removed')
+       AND l.id = (SELECT MAX(l2.id) FROM source_url_check_log l2 WHERE l2.source_url = l.source_url)
+     ORDER BY d.id DESC`,
+  );
+  return rows.map(parseCheckDiffRow);
 }
 
 /** Records the remote signature a deep check (download+parse+diff) just ran against, and what it actually found (`result`) — so `RemoteFileUpdatesContext.runChecks` doesn't repeat that work every tick while the user hasn't reimported yet, and a later "changed"-per-header check against the same signature can log the SAME diff-driven verdict instead of re-asserting the raw header result. */
@@ -1735,10 +1820,10 @@ export async function copyCheckDiffs(fromCheckLogId: number, toCheckLogId: numbe
     `INSERT INTO source_url_check_diffs
        (check_log_id, config_id, config_label, change_kind, matched_shift_id, employee_id, employee_name,
         work_date, local, role, schedule_start_minutes, schedule_end_minutes, sheet_name, row_number,
-        column_letter, field_name, old_value, new_value, message)
+        column_letter, field_name, old_value, new_value, message, applied)
      SELECT $2, config_id, config_label, change_kind, matched_shift_id, employee_id, employee_name,
             work_date, local, role, schedule_start_minutes, schedule_end_minutes, sheet_name, row_number,
-            column_letter, field_name, old_value, new_value, message
+            column_letter, field_name, old_value, new_value, message, applied
      FROM source_url_check_diffs
      WHERE check_log_id = $1`,
     [fromCheckLogId, toCheckLogId],
@@ -2705,7 +2790,11 @@ export interface SourceUrlHeadShift {
   status: PaymentShiftStatus;
   sheetName: string | null;
   rowNumber: number | null;
+  /** Needed by `computeReimportDiff`'s auto-apply gate for `change_kind: 'removed'` — same manual-edit protection a matched 'field' diff already checks. */
+  editedManually: boolean;
 }
+
+type SourceUrlHeadShiftRaw = Omit<SourceUrlHeadShift, "editedManually"> & { editedManually: number };
 
 /**
  * Every current (head, non-deleted) shift ever imported from this exact
@@ -2735,16 +2824,18 @@ export async function listHeadShiftsForSourceUrl(
     params.push(periodEnd);
     conditions.push(`ps.work_date <= $${params.length}`);
   }
-  return db.select<SourceUrlHeadShift[]>(
+  const rows = await db.select<SourceUrlHeadShiftRaw[]>(
     `SELECT ps.id AS shiftId, ps.employee_id AS employeeId, e.name AS employeeName, ps.work_date AS workDate,
             ps.local, ps.role, ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
-            ps.status, ps.source_sheet_name AS sheetName, ps.source_row_number AS rowNumber
+            ps.status, ps.source_sheet_name AS sheetName, ps.source_row_number AS rowNumber,
+            ps.edited_manually AS editedManually
      FROM payment_shifts ps
      JOIN employees e ON e.id = ps.employee_id
      JOIN source_files sf ON sf.id = ps.source_file_id
      WHERE ${conditions.join(" AND ")}`,
     params,
   );
+  return rows.map((r) => ({ ...r, editedManually: Boolean(r.editedManually) }));
 }
 
 export interface PaymentShiftInput {
@@ -3303,6 +3394,8 @@ interface PaymentShiftCoreFields {
   status: PaymentShiftStatus;
   sourceRowNumber: number | null;
   sourceSheetName: string | null;
+  /** Only read by `applyAutoSyncedFieldUpdate` (to preserve a paid shift's recorded amount across an auto-synced field fix) — every other caller of `readPaymentShiftCoreFields` supplies its own `amount` explicitly instead of carrying this one over. */
+  amount: number | null;
 }
 
 /** Shared by every status-transition function below — the fields that always carry over unchanged into the new row. */
@@ -3312,7 +3405,7 @@ async function readPaymentShiftCoreFields(db: Database, shiftId: number): Promis
             local, work_date AS workDate, role,
             schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes,
             extra_data AS extraData, status,
-            source_row_number AS sourceRowNumber, source_sheet_name AS sourceSheetName
+            source_row_number AS sourceRowNumber, source_sheet_name AS sourceSheetName, amount
      FROM payment_shifts WHERE id = $1`,
     [shiftId],
   );
@@ -3447,6 +3540,78 @@ export async function editPaymentShift(
       s.extraData,
       s.sourceRowNumber,
       s.sourceSheetName,
+    ],
+  );
+  return result.lastInsertId as number;
+}
+
+/**
+ * The auto-apply counterpart to `editPaymentShift` — same append-only
+ * pattern (new row, `previous_shift_id` linked back to `shiftId`), but for
+ * `computeReimportDiff`'s `AutoApplyOptions` writing a change it found
+ * straight to the database instead of leaving it pending for manual review.
+ * Two deliberate differences from `editPaymentShift`:
+ *
+ * 1. No `status === 'pago'` guard — the caller (`computeReimportDiff`) is
+ *    what decides whether touching a paid shift's fields is allowed
+ *    (`autoApplyOverwritePaid`), so this stays purely mechanical. `status`
+ *    itself is still a caller-supplied field here (unlike `editPaymentShift`,
+ *    which always carries the old status forward) since a field-diff sync
+ *    can legitimately change it — except a paid shift's status is never
+ *    part of a diff in the first place (see `computeReimportDiff`), so in
+ *    practice a 'pago' row's status always comes back as 'pago' here too.
+ * 2. `amount` is read from the CURRENT row and carried forward untouched,
+ *    never overwritten — auto-apply only ever syncs fields the source file
+ *    actually encodes (data/local/função/horário/extras/status), and the
+ *    paid amount is not one of them (see `savePaymentShifts`, which has no
+ *    `amount` column at all — this is the one write path that has to be
+ *    careful not to repeat that gap for an ALREADY-paid shift).
+ *
+ * `edited_manually` is left `0` (unlike every manual transition, which sets
+ * it `1`) — this row's data still authoritatively comes from the tracked
+ * file, not a human decision, so it stays eligible for a future auto-apply
+ * or manual reimport to correct again, instead of being permanently
+ * "protected" the way a genuine manual edit is.
+ */
+export async function applyAutoSyncedFieldUpdate(
+  shiftId: number,
+  fields: {
+    workDate: string;
+    local: string;
+    role: string;
+    scheduleStartMinutes: number | null;
+    scheduleEndMinutes: number | null;
+    status: PaymentShiftStatus;
+    extraData: Record<string, string> | null;
+  },
+  sourceFileId: number,
+  sourceRowNumber: number | null,
+  sourceSheetName: string | null,
+): Promise<number> {
+  const db = await getDb();
+  const s = await readPaymentShiftCoreFields(db, shiftId);
+
+  const result = await db.execute(
+    `INSERT INTO payment_shifts
+       (employee_id, template_id, source_file_id, local, work_date, role,
+        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data,
+        edited_manually, source_row_number, source_sheet_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0, $13, $14)`,
+    [
+      s.employeeId,
+      s.templateId,
+      sourceFileId,
+      fields.local,
+      fields.workDate,
+      fields.role,
+      fields.scheduleStartMinutes,
+      fields.scheduleEndMinutes,
+      fields.status,
+      s.amount,
+      shiftId,
+      fields.extraData ? JSON.stringify(fields.extraData) : null,
+      sourceRowNumber,
+      sourceSheetName,
     ],
   );
   return result.lastInsertId as number;

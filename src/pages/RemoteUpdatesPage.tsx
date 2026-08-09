@@ -15,6 +15,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import BackButton from "../components/BackButton";
+import ChangeDiffPanel from "../components/ChangeDiffPanel";
 import ConfirmModal from "../components/ConfirmModal";
 import DateRangePicker from "../components/DateRangePicker";
 import Drawer from "../components/Drawer";
@@ -38,7 +39,6 @@ import {
   type UrlCheckResult,
 } from "../lib/db";
 import {
-  diffFieldLabel,
   formatCountdown,
   formatDateAbbrevYY,
   formatDateTimeAbbrevYY,
@@ -56,177 +56,6 @@ const RESULT_BADGE: Record<UrlCheckResult, { className: string; label: string; i
 
 const LOG_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
-/** Same identity a deep check matched a record by (employee+data+local+função+horário) — used only to group this one check's diff rows into one card per changed record, not to look anything up. */
-/** `'unresolved'` rows have no `employeeId` at all (that's the whole point — the file's colaborador/rota didn't match anything) — grouped by their own row/aba instead, so two different unmatched rows never collapse into one card just because they share null identity fields. */
-function diffIdentityKey(r: CheckDiffRow): string {
-  if (r.employeeId === null) return `unresolved:${r.sheetName ?? ""}:${r.rowNumber ?? ""}`;
-  return `${r.employeeId}|${r.workDate}|${r.local}|${r.role}|${r.scheduleStartMinutes}|${r.scheduleEndMinutes}`;
-}
-
-/**
- * The Drawer detail for one "Histórico de verificações" row — grouped by
- * the specific record that changed, one small card per record with a
- * GitHub-diff-style before/after per field. `rows` is already scoped to a
- * single (check, config) pair by the caller (see `openLogDetail`) — no
- * config-level grouping here, since the history table itself never merges
- * more than one config into a single row anymore (each row IS one config).
- * `change_kind: 'new-shift'` records (no existing match at all) get their
- * own "Possível novo turno" card instead of a field diff; `'unresolved'`
- * records (a route or colaborador that didn't match anything — e.g. a typo
- * in the name column) get their own warning card with why, so a change that
- * can't be matched to anything still shows up as a change instead of
- * silently vanishing from the diff; `'error'` entries (a whole config or the
- * whole URL's deep pass failing) render as compact error lines, separate
- * from the field changes.
- */
-function CheckDiffPanel({
-  rows,
-  markingShiftId,
-  markedShiftIds,
-  onMarkDeleted,
-}: {
-  rows: CheckDiffRow[];
-  /** The one shift currently being soft-deleted via "Marcar como excluído" (disables just that card's button) — `null` when nothing's in flight. */
-  markingShiftId: number | null;
-  /** Shifts already marked this session — swaps that card's button for a confirmation instead of re-fetching the whole log to notice the same thing. */
-  markedShiftIds: Set<number>;
-  onMarkDeleted: (shiftId: number) => void;
-}) {
-  const errors = rows.filter((r) => r.changeKind === "error");
-  const changes = rows.filter((r) => r.changeKind !== "error");
-  const byIdentity = new Map<string, CheckDiffRow[]>();
-  for (const r of changes) {
-    const idKey = diffIdentityKey(r);
-    const list = byIdentity.get(idKey) ?? [];
-    list.push(r);
-    byIdentity.set(idKey, list);
-  }
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-      {errors.map((e, i) => (
-        <div
-          key={`err-${i}`}
-          className="error-box"
-          style={{ fontSize: "0.78rem", padding: "0.45rem 0.7rem", marginBottom: "0.4rem" }}
-        >
-          {e.message}
-        </div>
-      ))}
-      {Array.from(byIdentity.entries()).map(([idKey, entries]) => {
-        const first = entries[0];
-        const isNew = first.changeKind === "new-shift";
-        const isUnresolved = first.changeKind === "unresolved";
-        const isRemoved = first.changeKind === "removed";
-        return (
-          <div
-            key={idKey}
-            style={{
-              border: `1px solid ${isNew ? "var(--accent)" : isUnresolved ? "var(--warning)" : isRemoved ? "var(--danger)" : "var(--border-soft)"}`,
-              borderRadius: 8,
-              padding: "0.5rem 0.7rem",
-              marginBottom: "0.4rem",
-            }}
-          >
-            <div style={{ fontSize: "0.82rem", fontWeight: 500 }}>
-              {first.employeeName ?? "(nome vazio)"}
-              {first.workDate ? ` — ${formatDateAbbrevYY(first.workDate)}` : ""}
-              {" · "}
-              {first.local || "—"} / {first.role || "—"}
-            </div>
-            {(first.sheetName || first.rowNumber !== null) && (
-              <div className="muted" style={{ fontSize: "0.72rem" }}>
-                {first.sheetName ? `aba ${first.sheetName}, ` : ""}
-                {first.rowNumber !== null ? `linha ${first.rowNumber}` : ""}
-              </div>
-            )}
-            {isNew ? (
-              <span className="badge ok" style={{ marginTop: "0.35rem", display: "inline-flex" }}>
-                Possível novo turno
-              </span>
-            ) : isUnresolved ? (
-              <div
-                style={{
-                  marginTop: "0.35rem",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.35rem",
-                  fontSize: "0.78rem",
-                  color: "var(--warning)",
-                }}
-              >
-                <AlertTriangle size={13} style={{ flexShrink: 0 }} />
-                {first.message}
-              </div>
-            ) : isRemoved ? (
-              <div style={{ marginTop: "0.35rem" }}>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.35rem",
-                    fontSize: "0.78rem",
-                    color: "var(--danger)",
-                  }}
-                >
-                  <Trash2 size={13} style={{ flexShrink: 0 }} />
-                  Não encontrado na leitura mais recente do arquivo — pode ter sido removido na fonte.
-                </div>
-                {first.matchedShiftId !== null &&
-                  (markedShiftIds.has(first.matchedShiftId) ? (
-                    <span className="badge neutral" style={{ marginTop: "0.35rem", display: "inline-flex" }}>
-                      Marcado como excluído
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      className="ghost"
-                      style={{ marginTop: "0.35rem", fontSize: "0.76rem", padding: "0.25rem 0.5rem" }}
-                      disabled={markingShiftId === first.matchedShiftId}
-                      onClick={() => onMarkDeleted(first.matchedShiftId!)}
-                    >
-                      {markingShiftId === first.matchedShiftId ? "Marcando…" : "Marcar como excluído"}
-                    </button>
-                  ))}
-              </div>
-            ) : (
-              <div style={{ marginTop: "0.35rem", display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-                {entries.map((e, i) => (
-                  <div key={i} style={{ fontSize: "0.78rem" }}>
-                    <span className="muted">{diffFieldLabel(e.fieldName, e.columnLetter)}: </span>
-                    <span
-                      style={{
-                        background: "var(--danger-soft)",
-                        color: "var(--danger)",
-                        textDecoration: "line-through",
-                        padding: "0.05rem 0.35rem",
-                        borderRadius: 4,
-                      }}
-                    >
-                      {e.oldValue || "(vazio)"}
-                    </span>
-                    {" → "}
-                    <span
-                      style={{
-                        background: "var(--success-soft)",
-                        color: "var(--success)",
-                        padding: "0.05rem 0.35rem",
-                        borderRadius: 4,
-                      }}
-                    >
-                      {e.newValue || "(vazio)"}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 interface ConfigDraft {
   dateMode: ReimportDateMode;
   start: string;
@@ -235,6 +64,9 @@ interface ConfigDraft {
   endOffset: string;
   interval: string;
   keepManualEdits: boolean;
+  autoApplyEnabled: boolean;
+  autoApplyOverwriteManualEdits: boolean;
+  autoApplyOverwritePaid: boolean;
 }
 
 function draftFromConfig(c: ReimportConfig): ConfigDraft {
@@ -246,6 +78,9 @@ function draftFromConfig(c: ReimportConfig): ConfigDraft {
     endOffset: c.endOffsetDays !== null ? String(c.endOffsetDays) : "",
     interval: String(c.checkIntervalMinutes),
     keepManualEdits: c.keepManualEdits,
+    autoApplyEnabled: c.autoApplyEnabled,
+    autoApplyOverwriteManualEdits: c.autoApplyOverwriteManualEdits,
+    autoApplyOverwritePaid: c.autoApplyOverwritePaid,
   };
 }
 
@@ -282,6 +117,9 @@ const BLANK_NEW_CONFIG: ConfigDraft & { templateId: string } = {
   endOffset: "",
   interval: String(DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES),
   keepManualEdits: true,
+  autoApplyEnabled: false,
+  autoApplyOverwriteManualEdits: true,
+  autoApplyOverwritePaid: false,
 };
 
 export default function RemoteUpdatesPage() {
@@ -397,6 +235,9 @@ export default function RemoteUpdatesPage() {
         endOffsetDays: draft.dateMode === "relative" ? (draft.endOffset === "" ? null : Number(draft.endOffset)) : null,
         checkIntervalMinutes: Math.round(Number(draft.interval)),
         keepManualEdits: draft.keepManualEdits,
+        autoApplyEnabled: draft.autoApplyEnabled,
+        autoApplyOverwriteManualEdits: draft.autoApplyOverwriteManualEdits,
+        autoApplyOverwritePaid: draft.autoApplyOverwritePaid,
       });
       setConfigDrafts((prev) => {
         const next = new Map(prev);
@@ -468,6 +309,9 @@ export default function RemoteUpdatesPage() {
             : null,
         checkIntervalMinutes: Math.round(Number(newConfigDraft.interval)),
         keepManualEdits: newConfigDraft.keepManualEdits,
+        autoApplyEnabled: newConfigDraft.autoApplyEnabled,
+        autoApplyOverwriteManualEdits: newConfigDraft.autoApplyOverwriteManualEdits,
+        autoApplyOverwritePaid: newConfigDraft.autoApplyOverwritePaid,
       });
       setAddingConfigForUrl(null);
     } catch (e) {
@@ -948,6 +792,53 @@ export default function RemoteUpdatesPage() {
                             Vai usar: {preview}
                           </p>
                         )}
+                        <div style={{ marginTop: "0.5rem" }}>
+                          <label
+                            style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400, fontSize: "0.85rem" }}
+                            title="A verificação automática já aplica a mudança encontrada direto no sistema, em vez de deixar pendente pra revisão manual na tela de Pagamentos"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={draft.autoApplyEnabled}
+                              onChange={(e) => patchConfigDraft(c, { autoApplyEnabled: e.target.checked })}
+                            />
+                            Atualizar registros automaticamente
+                          </label>
+                          {draft.autoApplyEnabled && (
+                            <div
+                              style={{
+                                marginLeft: "1.5rem",
+                                marginTop: "0.3rem",
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: "0.25rem",
+                              }}
+                            >
+                              <label
+                                className="muted"
+                                style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400, fontSize: "0.8rem" }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={draft.autoApplyOverwriteManualEdits}
+                                  onChange={(e) => patchConfigDraft(c, { autoApplyOverwriteManualEdits: e.target.checked })}
+                                />
+                                Sobrescrever edições manuais
+                              </label>
+                              <label
+                                className="muted"
+                                style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400, fontSize: "0.8rem" }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={draft.autoApplyOverwritePaid}
+                                  onChange={(e) => patchConfigDraft(c, { autoApplyOverwritePaid: e.target.checked })}
+                                />
+                                Sobrescrever turnos já pagos
+                              </label>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
@@ -1063,6 +954,57 @@ export default function RemoteUpdatesPage() {
                           Vai usar: {formatResolvedPreview(resolveDraftPeriod(newConfigDraft))}
                         </p>
                       )}
+                      <div style={{ marginTop: "0.5rem" }}>
+                        <label
+                          style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400, fontSize: "0.85rem" }}
+                          title="A verificação automática já aplica a mudança encontrada direto no sistema, em vez de deixar pendente pra revisão manual na tela de Pagamentos"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={newConfigDraft.autoApplyEnabled}
+                            onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, autoApplyEnabled: e.target.checked }))}
+                          />
+                          Atualizar registros automaticamente
+                        </label>
+                        {newConfigDraft.autoApplyEnabled && (
+                          <div
+                            style={{
+                              marginLeft: "1.5rem",
+                              marginTop: "0.3rem",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "0.25rem",
+                            }}
+                          >
+                            <label
+                              className="muted"
+                              style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400, fontSize: "0.8rem" }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={newConfigDraft.autoApplyOverwriteManualEdits}
+                                onChange={(e) =>
+                                  setNewConfigDraft((prev) => ({ ...prev, autoApplyOverwriteManualEdits: e.target.checked }))
+                                }
+                              />
+                              Sobrescrever edições manuais
+                            </label>
+                            <label
+                              className="muted"
+                              style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400, fontSize: "0.8rem" }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={newConfigDraft.autoApplyOverwritePaid}
+                                onChange={(e) =>
+                                  setNewConfigDraft((prev) => ({ ...prev, autoApplyOverwritePaid: e.target.checked }))
+                                }
+                              />
+                              Sobrescrever turnos já pagos
+                            </label>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ) : (
                     <button
@@ -1229,7 +1171,7 @@ export default function RemoteUpdatesPage() {
         )}
         {isLoadingDrawerDiff && <p className="muted" style={{ margin: 0 }}>Carregando detalhes...</p>}
         {!isLoadingDrawerDiff && (
-          <CheckDiffPanel
+          <ChangeDiffPanel
             rows={drawerDiffRows}
             markingShiftId={markingDeletedShiftId}
             markedShiftIds={markedDeletedShiftIds}

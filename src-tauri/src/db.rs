@@ -346,5 +346,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0057_backfill_payment_shift_source_position.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 58,
+            description: "add source_url_reimport_configs.auto_apply_enabled/auto_apply_overwrite_manual_edits/auto_apply_overwrite_paid and source_url_check_diffs.applied — lets a reimport config write a change the automatic verification finds straight to payment_shifts instead of only leaving it pending for manual review",
+            sql: include_str!("../migrations/0058_reimport_auto_apply.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

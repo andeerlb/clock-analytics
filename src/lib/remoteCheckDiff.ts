@@ -1,12 +1,18 @@
-import { applyPaymentTemplate, type AppliedPaymentRow } from "./api";
+import { deletePaths, downloadPaymentFileFromUrl, hashPaymentFile, applyPaymentTemplate, type AppliedPaymentRow } from "./api";
 import {
+  applyAutoSyncedFieldUpdate,
+  deletePaymentShift,
   findDuplicatePaymentShifts,
   findEmployeeByAttempts,
   findPaymentShiftByPosition,
   getPaymentShiftsByIds,
   getPaymentTemplate,
   listHeadShiftsForSourceUrl,
+  logSourceFile,
+  markSourceFileSaved,
+  savePaymentShifts,
   type CheckDiffInput,
+  type PaymentShiftInput,
   type ReimportConfig,
 } from "./db";
 import {
@@ -18,6 +24,26 @@ import {
   resolveReimportConfigLabel,
   resolveReimportPeriod,
 } from "./format";
+import type { PaymentShiftStatus } from "./types";
+
+/**
+ * "Atualizar registros automaticamente" for one reimport config —
+ * `computeReimportDiff` still always COMPUTES and returns every diff it
+ * finds; this only controls whether it also WRITES the ones it's allowed to
+ * (see `CheckDiffRow.applied`). Never touches `change_kind: 'unresolved'` or
+ * `'error'` — those aren't things a write could resolve on its own.
+ */
+export interface AutoApplyOptions {
+  enabled: boolean;
+  /** Whether a matched shift with `editedManually` (but not paid) is still fair game. */
+  overwriteManualEdits: boolean;
+  /** Whether a matched shift with `status: 'pago'` is still fair game. */
+  overwritePaid: boolean;
+  /** The already-persisted `source_files.id` for `downloadedPath` — required so a written row has real provenance (`findPaymentShiftByPosition` etc. depend on it), same as any manual reimport's `logSourceFile` call. */
+  sourceFileId: number;
+  /** Scopes every write to just this one shift — used by the manual "Aceitar" action reviewing a single row. `undefined` applies everything eligible (the unattended periodic auto-apply pass). `change_kind: 'new-shift'`/`'removed'` are only ever auto-applied when this is `undefined` — "Aceitar" only ever updates the fields of the shift being reviewed, never creates or deletes one. */
+  onlyShiftId?: number;
+}
 
 /** "08:00–17:00", or "—" when there's no schedule at all — same shape `oldValue`/`newValue` need to be in (plain display text), not raw minutes. */
 function formatScheduleRange(startMinutes: number | null, endMinutes: number | null): string {
@@ -44,7 +70,7 @@ interface ParsedCandidate {
   scheduleEndMinutes: number | null;
   sheetName: string | null;
   rowNumber: number;
-  status: string;
+  status: PaymentShiftStatus;
   extraFields: Record<string, string>;
 }
 
@@ -77,7 +103,11 @@ function candidateDedupKey(
  * diff entry instead of letting it take down every other config's check
  * for the same URL.
  */
-export async function computeReimportDiff(config: ReimportConfig, downloadedPath: string): Promise<CheckDiffInput[]> {
+export async function computeReimportDiff(
+  config: ReimportConfig,
+  downloadedPath: string,
+  autoApply?: AutoApplyOptions,
+): Promise<CheckDiffInput[]> {
   const template = await getPaymentTemplate(config.templateId);
   const applied: AppliedPaymentRow[] = await applyPaymentTemplate(
     downloadedPath,
@@ -118,6 +148,7 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
       oldValue: null,
       newValue: null,
       message,
+      applied: false,
     };
   }
 
@@ -237,8 +268,21 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
     role: string;
     scheduleStartMinutes: number | null;
     scheduleEndMinutes: number | null;
-    status: string;
+    status: PaymentShiftStatus;
     extraData: Record<string, string> | null;
+    editedManually: boolean;
+  }
+
+  // Whether AutoApplyOptions actually allows writing THIS shift specifically
+  // — same two protections regardless of change_kind ('field' or 'removed'),
+  // and the `onlyShiftId` scope "Aceitar" uses to touch just the one row
+  // being reviewed.
+  function canAutoApply(shift: { shiftId: number; status: PaymentShiftStatus; editedManually: boolean }): boolean {
+    if (!autoApply?.enabled) return false;
+    if (autoApply.onlyShiftId !== undefined && autoApply.onlyShiftId !== shift.shiftId) return false;
+    if (shift.editedManually && !autoApply.overwriteManualEdits) return false;
+    if (shift.status === "pago" && !autoApply.overwritePaid) return false;
+    return true;
   }
 
   const entries: CheckDiffInput[] = [];
@@ -250,7 +294,7 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
     // other match — this reports "what changed in the file", not a
     // judgment call about whether to overwrite a deliberate manual action
     // (that's `keepManualEdits`'s job, enforced only at actual reimport
-    // time in `ImportPaymentsPage`).
+    // time in `ImportPaymentsPage` — or, for the auto-apply path, `canAutoApply` above).
     let current: CurrentShift | null = null;
     // Only set when `current` came from the position fallback below — the
     // one case where the row's OWN identity fields (data/local/função/
@@ -270,6 +314,7 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
           scheduleEndMinutes: matched.scheduleEndMinutes,
           status: matched.status,
           extraData: matched.extraData,
+          editedManually: matched.editedManually,
         };
       }
     } else {
@@ -290,6 +335,7 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
           scheduleEndMinutes: positional.scheduleEndMinutes,
           status: positional.status,
           extraData: positional.extraData,
+          editedManually: positional.editedManually,
         };
         reportIdentityFieldChanges = true;
       }
@@ -297,24 +343,52 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
 
     if (!current) {
       // No existing head for this identity OR this position — a genuinely
-      // new shift, not an edit of something already imported.
+      // new shift, not an edit of something already imported. Only ever
+      // auto-created during the unattended pass (`onlyShiftId === undefined`)
+      // — "Aceitar" (reviewing one specific existing shift) never creates.
+      let newShiftId: number | null = null;
+      if (autoApply?.enabled && autoApply.onlyShiftId === undefined) {
+        const input: PaymentShiftInput = {
+          employeeId: c.employeeId,
+          templateId: config.templateId,
+          sourceFileId: autoApply.sourceFileId,
+          local: c.local,
+          workDate: c.workDate,
+          role: c.role,
+          scheduleStartMinutes: c.scheduleStartMinutes,
+          scheduleEndMinutes: c.scheduleEndMinutes,
+          status: c.status,
+          extraData: Object.keys(c.extraFields).length > 0 ? c.extraFields : null,
+          previousShiftId: null,
+          sourceRowNumber: c.rowNumber,
+          sourceSheetName: c.sheetName,
+        };
+        await savePaymentShifts([input]);
+        // savePaymentShifts doesn't report back the new id (a bulk insert,
+        // by design) — safe to re-resolve it via the exact same position
+        // lookup a later check would use to find this same row again.
+        const created = await findPaymentShiftByPosition(config.sourceUrl, c.sheetName, c.rowNumber);
+        newShiftId = created?.shiftId ?? null;
+      }
       entries.push({
         ...identityBase(c),
         changeKind: "new-shift",
-        matchedShiftId: null,
+        matchedShiftId: newShiftId,
         columnLetter: null,
         fieldName: null,
         oldValue: null,
         newValue: null,
         message: null,
+        applied: newShiftId !== null,
       });
       continue;
     }
 
     const shift = current;
     accountedForIds.add(shift.shiftId);
+    const shiftFieldEntries: CheckDiffInput[] = [];
     function fieldDiff(fieldName: string, oldValue: string, newValue: string) {
-      entries.push({
+      shiftFieldEntries.push({
         ...identityBase(c),
         changeKind: "field",
         matchedShiftId: shift.shiftId,
@@ -323,6 +397,7 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
         oldValue,
         newValue,
         message: null,
+        applied: false,
       });
     }
 
@@ -360,7 +435,7 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
       const oldValue = currentExtra[key] ?? null;
       const newValue = freshExtra[key] ?? null;
       if (oldValue === newValue) continue;
-      entries.push({
+      shiftFieldEntries.push({
         ...identityBase(c),
         changeKind: "field",
         matchedShiftId: shift.shiftId,
@@ -369,7 +444,35 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
         oldValue,
         newValue,
         message: null,
+        applied: false,
       });
+    }
+
+    if (shiftFieldEntries.length === 0) continue;
+
+    // One write covers every field this shift's diff found — the diff
+    // itself stays per-field (for display), but `applyAutoSyncedFieldUpdate`
+    // takes a full record, same as any other reimport. `c` already carries
+    // this shift's complete fresh values, changed or not.
+    if (canAutoApply(shift)) {
+      const newShiftId = await applyAutoSyncedFieldUpdate(
+        shift.shiftId,
+        {
+          workDate: c.workDate,
+          local: c.local,
+          role: c.role,
+          scheduleStartMinutes: c.scheduleStartMinutes,
+          scheduleEndMinutes: c.scheduleEndMinutes,
+          status: shift.status === "pago" ? shift.status : c.status,
+          extraData: Object.keys(c.extraFields).length > 0 ? c.extraFields : null,
+        },
+        autoApply!.sourceFileId,
+        c.rowNumber,
+        c.sheetName,
+      );
+      for (const e of shiftFieldEntries) entries.push({ ...e, matchedShiftId: newShiftId, applied: true });
+    } else {
+      entries.push(...shiftFieldEntries);
     }
   }
 
@@ -385,6 +488,11 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
   for (const h of existingHeads) {
     if (accountedForIds.has(h.shiftId)) continue;
     if (expectedSheetNames.size > 0 && !expectedSheetNames.has(h.sheetName ?? "")) continue;
+    // Never auto-deleted via "Aceitar" (onlyShiftId set) — that action only
+    // ever updates the fields of the one shift being reviewed, same rule
+    // 'new-shift' creation follows above.
+    const willAutoDelete = autoApply?.onlyShiftId === undefined && canAutoApply(h);
+    if (willAutoDelete) await deletePaymentShift(h.shiftId);
     entries.push({
       configId: config.id,
       configLabel,
@@ -403,9 +511,55 @@ export async function computeReimportDiff(config: ReimportConfig, downloadedPath
       fieldName: null,
       oldValue: null,
       newValue: null,
-      message: "Este turno não foi encontrado na leitura mais recente do arquivo — pode ter sido removido na fonte.",
+      message: willAutoDelete
+        ? "Este turno não foi encontrado na leitura mais recente do arquivo — marcado como excluído automaticamente."
+        : "Este turno não foi encontrado na leitura mais recente do arquivo — pode ter sido removido na fonte.",
+      applied: willAutoDelete,
     });
   }
 
   return [...unresolvedEntries, ...entries];
+}
+
+/**
+ * "Aceitar e atualizar" — a human reviewing one turno's pending diff on the
+ * Pagamentos page (see `PaymentsPage`'s row-blocking Drawer) confirming it
+ * should be written. Re-downloads `config.sourceUrl` fresh (the diff table
+ * only ever stored DISPLAY strings for `oldValue`/`newValue`, e.g. a
+ * schedule range like "08:00–17:00" — not something safe to parse back into
+ * typed fields) and re-runs the same `computeReimportDiff` pass real
+ * auto-apply uses, scoped to just this one shift (`onlyShiftId`) — clicking
+ * "Aceitar" IS the human consent the two protection flags exist to require,
+ * so both are forced on for this one write regardless of the config's own
+ * saved defaults.
+ */
+export async function acceptShiftChange(config: ReimportConfig, shiftId: number): Promise<void> {
+  const downloaded = await downloadPaymentFileFromUrl(config.sourceUrl);
+  try {
+    const { hash } = await hashPaymentFile(downloaded.path);
+    const sourceFileId = await logSourceFile({
+      fileHash: hash,
+      fileName: downloaded.fileName,
+      pageCount: 1,
+      provider: resolveReimportConfigLabel(config),
+      importType: "payment",
+      status: "success",
+      errorMessage: null,
+      originalPdfPath: "",
+      sourceUrl: config.sourceUrl,
+      sourceEtag: downloaded.etag,
+      sourceLastModified: downloaded.lastModified,
+      sourceContentLength: downloaded.contentLength,
+    });
+    await computeReimportDiff(config, downloaded.path, {
+      enabled: true,
+      overwriteManualEdits: true,
+      overwritePaid: true,
+      sourceFileId,
+      onlyShiftId: shiftId,
+    });
+    await markSourceFileSaved(hash);
+  } finally {
+    await deletePaths([downloaded.path]);
+  }
 }

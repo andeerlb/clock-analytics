@@ -30,6 +30,7 @@ import ConfirmModal from "../components/ConfirmModal";
 import ConfirmPaymentModal from "../components/ConfirmPaymentModal";
 import DatePicker from "../components/DatePicker";
 import DateRangePicker from "../components/DateRangePicker";
+import Drawer from "../components/Drawer";
 import ExtraColumnsModal from "../components/ExtraColumnsModal";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
@@ -77,6 +78,7 @@ import {
 } from "../lib/format";
 import { generatePaymentsExportXlsx, type PaymentExportResult } from "../lib/paymentExport";
 import { generatePaymentsReportPdf, type PaymentsReportResult } from "../lib/paymentsReport";
+import { acceptShiftChange } from "../lib/remoteCheckDiff";
 import type {
   PaymentExportTemplateListRow,
   PaymentShiftRow,
@@ -123,40 +125,6 @@ const ALL_COLUMN_IDS = FLAT_COLUMNS.map((c) => c.id);
 const DEFAULT_VISIBLE_COLUMN_IDS = ALL_COLUMN_IDS.filter((id) => id !== "importado");
 const IDENTITY_COLUMN_IDS = new Set(["colaborador", "cliente", "empresa"]);
 const TURNO_COLUMNS = FLAT_COLUMNS.filter((c) => !IDENTITY_COLUMN_IDS.has(c.id));
-
-/** Which `FLAT_COLUMNS` cell a `source_url_check_diffs.field_name` belongs to — see `computeReimportDiff` (remoteCheckDiff.ts) for the fixed set of field names it ever produces. */
-function diffColumnId(fieldName: string | null): string | null {
-  switch (fieldName) {
-    case "status":
-      return "status";
-    case "data":
-      return "data";
-    case "local":
-      return "local";
-    case "função":
-      return "funcao";
-    case "horário":
-      return "horario";
-    default:
-      return fieldName?.startsWith("extra:") ? "extras" : null;
-  }
-}
-
-/** Small warning icon a cell shows when the last automatic verification found this exact field different from the source file — hover for the old→new value and when it was found. Purely informational, reflects whatever `listLatestFieldDiffsForShifts` last returned; never triggers a check itself. */
-function ChangedFieldBadge({ diffs }: { diffs: ShiftFieldDiffRow[] }) {
-  if (diffs.length === 0) return null;
-  const title = diffs
-    .map(
-      (d) =>
-        `${diffFieldLabel(d.fieldName, d.columnLetter)}: "${d.oldValue ?? "—"}" → "${d.newValue ?? "—"}" (verificado em ${formatDateTimeAbbrevYY(d.checkedAt)})`,
-    )
-    .join("\n");
-  return (
-    <span className="badge warn" style={{ marginLeft: "0.35rem", padding: "0.1rem 0.3rem" }} title={title}>
-      <AlertTriangle size={11} />
-    </span>
-  );
-}
 
 /** "2026-02" -> "fev/2026" */
 function formatCompetencia(competencia: string): string {
@@ -505,6 +473,7 @@ function ShiftRow({
   onDelete,
   onViewHistory,
   onViewExtra,
+  onReview,
 }: {
   shift: PaymentShiftRow & { shiftPeriod: ShiftPeriod | null };
   companyId: number;
@@ -520,6 +489,8 @@ function ShiftRow({
   onDelete: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
   onViewHistory: (shiftId: number, companyId: number) => void;
   onViewExtra: (data: Record<string, string>, sourceUrl: string | null) => void;
+  /** Opens the review Drawer — the only thing a blocked row's Ações column offers, and an optional "ver o que mudou" for an already-auto-applied one. */
+  onReview: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
 }) {
   const badge = STATUS_BADGE[s.status];
   const BadgeIcon = badge.icon;
@@ -537,15 +508,20 @@ function ShiftRow({
             scheduleEndMinutes: s.scheduleEndMinutes,
           })
         : null;
-  const canEdit = s.status === "pendente" || s.status === "erro";
+  // A pending change (found by the automatic verification, not yet
+  // reviewed/accepted) blocks every other row action — the only thing left
+  // to do with the row is review it (see `onReview`). One already applied
+  // by auto-apply is purely informational: doesn't block anything, just
+  // offers a way to see what changed.
+  const pendingChanges = changes.filter((c) => !c.applied);
+  const appliedChanges = changes.filter((c) => c.applied);
+  const isBlocked = pendingChanges.length > 0;
+  const canEdit = !isBlocked && (s.status === "pendente" || s.status === "erro");
   const col = (id: string) => visibleColumns.has(id);
   const patch = (p: ShiftFieldPatch) => onCommitField(s, groupRef, p);
-  const changesFor = (columnId: string) => changes.filter((c) => diffColumnId(c.fieldName) === columnId);
-  /** Not tied to any one column — the last automatic verification didn't find this shift's record at all in the source, in any row (see `computeReimportDiff`'s `change_kind: 'removed'`). */
-  const removedDiff = changes.find((c) => c.changeKind === "removed");
 
   return (
-    <tr style={removedDiff ? { background: "var(--danger-soft)" } : undefined}>
+    <tr style={isBlocked ? { background: "var(--warning-soft)" } : appliedChanges.length > 0 ? { background: "var(--accent-soft)" } : undefined}>
       {identity && col("colaborador") && (
         <td>
           <div className="person-cell">
@@ -559,19 +535,16 @@ function ShiftRow({
       {col("data") && (
         <td>
           <EditableDateCell editable={canEdit} value={s.workDate} display={formatDateAbbrevYY(s.workDate)} onCommit={(v) => patch({ workDate: v })} />
-          <ChangedFieldBadge diffs={changesFor("data")} />
         </td>
       )}
       {col("local") && (
         <td>
           <EditableCell editable={canEdit} value={s.local} display={s.local} onCommit={(v) => patch({ local: v })} />
-          <ChangedFieldBadge diffs={changesFor("local")} />
         </td>
       )}
       {col("funcao") && (
         <td>
           <EditableCell editable={canEdit} value={s.role} display={s.role} onCommit={(v) => patch({ role: v })} />
-          <ChangedFieldBadge diffs={changesFor("funcao")} />
         </td>
       )}
       {col("horario") && (
@@ -602,7 +575,6 @@ function ShiftRow({
               })
             }
           />
-          <ChangedFieldBadge diffs={changesFor("horario")} />
         </td>
       )}
       {col("horas") && <td>{duration !== null ? formatMinutesAsTime(duration) : "—"}</td>}
@@ -622,7 +594,6 @@ function ShiftRow({
             <BadgeIcon size={13} />
             {badge.label}
           </span>
-          <ChangedFieldBadge diffs={changesFor("status")} />
           {s.editedManually && (
             <span
               className="badge info"
@@ -663,57 +634,65 @@ function ShiftRow({
               <span className="muted">—</span>
             );
           })()}
-          <ChangedFieldBadge diffs={changesFor("extras")} />
         </td>
       )}
       <td>
-        {removedDiff && (
-          <div style={{ marginBottom: "0.35rem", display: "flex", alignItems: "center", gap: "0.35rem" }}>
-            <span
-              className="badge warn"
-              title={`Não encontrado na leitura mais recente do arquivo (verificado em ${formatDateTimeAbbrevYY(removedDiff.checkedAt)}) — pode ter sido removido na fonte. Use "Remover" para marcar como excluído no sistema.`}
+        {isBlocked ? (
+          <button type="button" className="secondary" onClick={() => onReview(s, groupRef)}>
+            <AlertTriangle size={13} style={{ marginRight: "0.35rem", verticalAlign: "-2px" }} />
+            Revisar alteração
+          </button>
+        ) : (
+          <>
+            {appliedChanges.length > 0 && (
+              <button
+                type="button"
+                className="ghost"
+                style={{ padding: "0.4rem" }}
+                onClick={() => onReview(s, groupRef)}
+                title="A verificação automática já atualizou este turno — ver o que mudou"
+              >
+                <Eye size={13} />
+              </button>
+            )}
+            {(s.status === "pendente" || s.status === "erro") && (
+              <button type="button" className="secondary" onClick={() => onPay(s, companyId, groupRef)}>
+                Fazer pagamento
+              </button>
+            )}
+            {s.status === "pago" && (
+              <button
+                type="button"
+                className="ghost"
+                style={{ padding: "0.4rem" }}
+                onClick={() => onRevert(s, groupRef)}
+                title="Voltar este turno para pendente"
+              >
+                <RotateCcw size={13} />
+              </button>
+            )}
+            {s.previousShiftId !== null && (
+              <button
+                type="button"
+                className="ghost"
+                style={{ padding: "0.4rem" }}
+                onClick={() => onViewHistory(s.previousShiftId!, companyId)}
+                title="Ver histórico de status deste turno"
+              >
+                <History size={13} />
+              </button>
+            )}
+            <button
+              type="button"
+              className="ghost"
+              style={{ padding: "0.4rem" }}
+              onClick={() => onDelete(s, groupRef)}
+              title="Remover este turno e todo o seu histórico"
             >
-              <AlertTriangle size={11} />
-              Removido na fonte?
-            </span>
-          </div>
+              <Trash2 size={13} />
+            </button>
+          </>
         )}
-        {(s.status === "pendente" || s.status === "erro") && (
-          <button type="button" className="secondary" onClick={() => onPay(s, companyId, groupRef)}>
-            Fazer pagamento
-          </button>
-        )}
-        {s.status === "pago" && (
-          <button
-            type="button"
-            className="ghost"
-            style={{ padding: "0.4rem" }}
-            onClick={() => onRevert(s, groupRef)}
-            title="Voltar este turno para pendente"
-          >
-            <RotateCcw size={13} />
-          </button>
-        )}
-        {s.previousShiftId !== null && (
-          <button
-            type="button"
-            className="ghost"
-            style={{ padding: "0.4rem" }}
-            onClick={() => onViewHistory(s.previousShiftId!, companyId)}
-            title="Ver histórico de status deste turno"
-          >
-            <History size={13} />
-          </button>
-        )}
-        <button
-          type="button"
-          className="ghost"
-          style={{ padding: "0.4rem" }}
-          onClick={() => onDelete(s, groupRef)}
-          title="Remover este turno e todo o seu histórico"
-        >
-          <Trash2 size={13} />
-        </button>
       </td>
     </tr>
   );
@@ -746,7 +725,7 @@ export default function PaymentsPage() {
     selectedExportTemplateId,
     setSelectedExportTemplateId,
   } = usePaymentsFilters();
-  const { trackedFiles } = useRemoteFileUpdates();
+  const { trackedFiles, reimportConfigs } = useRemoteFileUpdates();
 
   const [summaries, setSummaries] = useState<PaymentShiftSummaryRow[]>([]);
   const [summariesTotal, setSummariesTotal] = useState(0);
@@ -792,6 +771,15 @@ export default function PaymentsPage() {
   const [viewingExtraData, setViewingExtraData] = useState<{ data: Record<string, string>; sourceUrl: string | null } | null>(
     null,
   );
+
+  // "Revisar alteração" Drawer — the last automatic verification found a
+  // pending (or already auto-applied) change for this shift (see
+  // `shiftDiffs`). A pending one blocks every other row action until
+  // resolved here (see `ShiftRow`'s `isBlocked`).
+  const [reviewingShift, setReviewingShift] = useState<{ shift: PaymentShiftRow; groupRef: GroupRef } | null>(null);
+  const [accepting, setAccepting] = useState(false);
+  const [acceptError, setAcceptError] = useState<string | null>(null);
+  const [markingReviewDeleted, setMarkingReviewDeleted] = useState(false);
 
   useEffect(() => {
     Promise.all([listCompanies(), listClients()]).then(([companyRows, clientRows]) => {
@@ -942,6 +930,43 @@ export default function PaymentsPage() {
       await refetchFlat();
     } else {
       await Promise.all([refetchSummaries(), refetchGroup(groupRef.employeeId, groupRef.competencia)]);
+    }
+  }
+
+  /** "Aceitar e atualizar" in the review Drawer — re-checks the shift's own config fresh and writes the change, same as an unattended auto-apply pass would, scoped to just this one shift (see `acceptShiftChange`). */
+  async function handleAcceptChange() {
+    if (!reviewingShift) return;
+    const changes = shiftDiffs.get(reviewingShift.shift.id) ?? [];
+    const configId = changes.find((c) => c.changeKind === "field" && !c.applied)?.configId ?? null;
+    const config = configId !== null ? reimportConfigs.find((rc) => rc.id === configId) : undefined;
+    if (!config) {
+      setAcceptError("Não foi possível encontrar a configuração de reimportação que encontrou essa mudança — pode ter sido removida.");
+      return;
+    }
+    setAccepting(true);
+    setAcceptError(null);
+    try {
+      await acceptShiftChange(config, reviewingShift.shift.id);
+      await refreshShiftDiffs([reviewingShift.shift.id]);
+      await afterMutation(reviewingShift.groupRef);
+      setReviewingShift(null);
+    } catch (e) {
+      setAcceptError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setAccepting(false);
+    }
+  }
+
+  /** "Marcar como excluído" from inside the review Drawer — same soft-delete `deletePaymentShift` uses everywhere else, just reachable straight from a pending 'removed' review instead of the row's own (hidden, while blocked) Remover button. */
+  async function handleMarkReviewDeleted() {
+    if (!reviewingShift) return;
+    setMarkingReviewDeleted(true);
+    try {
+      await deletePaymentShift(reviewingShift.shift.id);
+      await afterMutation(reviewingShift.groupRef);
+      setReviewingShift(null);
+    } finally {
+      setMarkingReviewDeleted(false);
     }
   }
 
@@ -1525,6 +1550,7 @@ export default function PaymentsPage() {
                                             onDelete={(shift, groupRef) => setDeletingShift({ shift, groupRef })}
                                             onViewHistory={(shiftId, companyId) => setViewingHistory({ shiftId, companyId })}
                                             onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
+                                            onReview={(shift, groupRef) => setReviewingShift({ shift, groupRef })}
                                           />
                                         ))}
                                       </tbody>
@@ -1588,6 +1614,7 @@ export default function PaymentsPage() {
                       onDelete={(shift, groupRef) => setDeletingShift({ shift, groupRef })}
                       onViewHistory={(shiftId, companyId) => setViewingHistory({ shiftId, companyId })}
                       onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
+                      onReview={(shift, groupRef) => setReviewingShift({ shift, groupRef })}
                     />
                   ))}
                 </tbody>
@@ -1675,6 +1702,119 @@ export default function PaymentsPage() {
         allowDownload={false}
         onClose={() => setViewerPath(null)}
       />
+
+      <Drawer
+        open={reviewingShift !== null}
+        onClose={() => {
+          setReviewingShift(null);
+          setAcceptError(null);
+        }}
+        title={reviewingShift ? `${reviewingShift.shift.employeeName} — ${formatDate(reviewingShift.shift.workDate)}` : ""}
+      >
+        {reviewingShift &&
+          (() => {
+            const changes = shiftDiffs.get(reviewingShift.shift.id) ?? [];
+            const fieldChanges = changes.filter((c) => c.changeKind === "field");
+            const removedChange = changes.find((c) => c.changeKind === "removed");
+            const isBlocked = changes.some((c) => !c.applied);
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.9rem" }}>
+                <p className="muted" style={{ fontSize: "0.85rem", margin: 0 }}>
+                  {reviewingShift.shift.local} · {reviewingShift.shift.role}
+                  {reviewingShift.shift.scheduleStartMinutes !== null && reviewingShift.shift.scheduleEndMinutes !== null && (
+                    <>
+                      {" · "}
+                      {formatMinutesAsTime(reviewingShift.shift.scheduleStartMinutes)} –{" "}
+                      {formatMinutesAsTime(reviewingShift.shift.scheduleEndMinutes)}
+                    </>
+                  )}
+                </p>
+
+                {removedChange && (
+                  <div className="warning-box">
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}>
+                      <Trash2 size={14} style={{ flexShrink: 0 }} />
+                      {removedChange.message}
+                    </div>
+                    {removedChange.applied ? (
+                      <span className="badge neutral" style={{ marginTop: "0.5rem", display: "inline-flex" }}>
+                        Excluído automaticamente
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="ghost"
+                        style={{ marginTop: "0.5rem" }}
+                        disabled={markingReviewDeleted}
+                        onClick={handleMarkReviewDeleted}
+                      >
+                        {markingReviewDeleted ? "Marcando…" : "Marcar como excluído"}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {fieldChanges.length > 0 && (
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.5rem" }}>Campos alterados</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                      {fieldChanges.map((c, i) => (
+                        <div key={i} style={{ fontSize: "0.82rem" }}>
+                          <div className="muted" style={{ fontSize: "0.75rem" }}>
+                            {diffFieldLabel(c.fieldName, c.columnLetter)}
+                          </div>
+                          <span
+                            style={{
+                              background: "var(--danger-soft)",
+                              color: "var(--danger)",
+                              textDecoration: "line-through",
+                              padding: "0.05rem 0.35rem",
+                              borderRadius: 4,
+                            }}
+                          >
+                            {c.oldValue || "(vazio)"}
+                          </span>
+                          {" → "}
+                          <span
+                            style={{
+                              background: "var(--success-soft)",
+                              color: "var(--success)",
+                              padding: "0.05rem 0.35rem",
+                              borderRadius: 4,
+                            }}
+                          >
+                            {c.newValue || "(vazio)"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="muted" style={{ fontSize: "0.72rem", marginTop: "0.6rem" }}>
+                      Verificado em {formatDateTimeAbbrevYY(fieldChanges[0].checkedAt)}
+                    </p>
+                  </div>
+                )}
+
+                {acceptError && <div className="error-box">{acceptError}</div>}
+
+                {isBlocked && fieldChanges.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleAcceptChange}
+                    disabled={accepting}
+                    style={{ alignSelf: "flex-start" }}
+                  >
+                    {accepting ? "Aplicando..." : "Aceitar e atualizar"}
+                  </button>
+                )}
+                {!isBlocked && changes.length > 0 && (
+                  <span className="badge neutral" style={{ alignSelf: "flex-start" }}>
+                    Já aplicado automaticamente
+                  </span>
+                )}
+              </div>
+            );
+          })()}
+      </Drawer>
     </div>
   );
 }

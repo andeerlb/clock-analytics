@@ -1227,6 +1227,9 @@ export default function ImportPaymentsPage() {
               endOffsetDays: null,
               checkIntervalMinutes: DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES,
               keepManualEdits: effectiveKeepManualEdits,
+              autoApplyEnabled: false,
+              autoApplyOverwriteManualEdits: true,
+              autoApplyOverwritePaid: false,
             });
           }
         }

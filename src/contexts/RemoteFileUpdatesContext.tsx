@@ -1,15 +1,17 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { checkRemotePaymentFile, deletePaths, downloadPaymentFileFromUrl, setTrayStatus } from "../lib/api";
+import { checkRemotePaymentFile, deletePaths, downloadPaymentFileFromUrl, hashPaymentFile, setTrayStatus } from "../lib/api";
 import {
   copyCheckDiffs,
   createReimportConfig as createReimportConfigDb,
   deleteReimportConfig as deleteReimportConfigDb,
   listReimportConfigs,
   listTrackedPaymentUrls,
+  logSourceFile,
   logUrlCheckResult,
   markDeepCheckSignature,
+  markSourceFileSaved,
   saveCheckDiffs,
   setConfigCheckDisabled as setConfigCheckDisabledDb,
   trackUrlForAutoReimport,
@@ -164,6 +166,7 @@ function errorDiffEntry(configId: number | null, configLabel: string, message: s
     oldValue: null,
     newValue: null,
     message,
+    applied: false,
   };
 }
 
@@ -265,10 +268,13 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
    * last deep check already ran against (`TrackedPaymentUrl.lastDeepCheck*`
    * — NOT `sourceEtag`/etc., which only update on an actual saved
    * reimport), download the file once and run every active `ReimportConfig`
-   * for that URL through `computeReimportDiff` (never writing to
-   * payment_shifts — see `remoteCheckDiff.ts`). What THAT finds is what gets
-   * logged as this check's `result`: 'changed' only if a real field/new-shift
-   * diff turned up, 'unchanged' if it ran clean and found nothing, 'error'
+   * for that URL through `computeReimportDiff` — read-only UNLESS that
+   * config has `autoApplyEnabled` ("Atualizar registros automaticamente"),
+   * in which case it writes the change straight to `payment_shifts` too
+   * (see `remoteCheckDiff.ts`'s `AutoApplyOptions`). What THAT finds is what
+   * gets logged as this check's `result`: 'changed' only if a real
+   * field/new-shift diff turned up, 'unchanged' if it ran clean and found
+   * nothing, 'error'
    * if it couldn't finish. (3) A later check against that SAME signature
    * skips the download/parse (avoids doing real work for nothing) but still
    * gets a full, real check-log row: it reuses the verdict AND copies that
@@ -378,19 +384,65 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
           let wholeUrlErrorMessage: string | null = null;
           let downloadSucceeded = false;
           // Set as soon as the download lands — deleted in the `finally`
-          // below regardless of how the deep pass turns out, since this
-          // copy is only ever a scratch file for `computeReimportDiff` to
-          // read (the check never saves to `source_files`/`payment_shifts`,
-          // so nothing else could ever reference this exact path again).
-          // Left unset otherwise — nothing to clean up.
+          // below regardless of how the deep pass turns out, since this is
+          // always just a scratch file: `computeReimportDiff` never keeps
+          // its own copy, and even a config with `autoApplyEnabled` only
+          // ever needs `source_files`' METADATA (see `logSourceFile` below)
+          // to persist, not the file's bytes — nothing could ever reference
+          // this exact path again once this check is done with it. Left
+          // unset otherwise — nothing to clean up.
           let downloadedPath: string | null = null;
           try {
             const downloaded = await downloadPaymentFileFromUrl(t.sourceUrl);
             downloadSucceeded = true;
             downloadedPath = downloaded.path;
+
+            // "Atualizar registros automaticamente" needs real provenance
+            // for anything it writes (source_row_number/sheet position
+            // matching depends on it, same as any manual reimport's
+            // `logSourceFile` call) — persisted once per check, shared by
+            // every auto-apply config for this URL, not per-config.
+            const autoApplyConfigs = configs.filter((c) => c.autoApplyEnabled);
+            let autoApplySourceFileId: number | null = null;
+            let autoApplyFileHash: string | null = null;
+            if (autoApplyConfigs.length > 0) {
+              try {
+                const { hash } = await hashPaymentFile(downloaded.path);
+                autoApplyFileHash = hash;
+                autoApplySourceFileId = await logSourceFile({
+                  fileHash: hash,
+                  fileName: downloaded.fileName,
+                  pageCount: 1,
+                  provider: autoApplyConfigs.map((c) => resolveReimportConfigLabel(c)).join(", "),
+                  importType: "payment",
+                  status: "success",
+                  errorMessage: null,
+                  originalPdfPath: "",
+                  sourceUrl: t.sourceUrl,
+                  sourceEtag: current.etag,
+                  sourceLastModified: current.lastModified,
+                  sourceContentLength: current.contentLength,
+                });
+              } catch (e) {
+                // Couldn't persist the file — auto-apply configs fall back
+                // to a plain (read-only) diff pass below rather than
+                // failing the whole check over it.
+                entries.push(errorDiffEntry(null, "Atualizar registros automaticamente", String(e instanceof Error ? e.message : e)));
+              }
+            }
+
             for (const config of configs) {
               try {
-                entries.push(...(await computeReimportDiff(config, downloaded.path)));
+                const autoApply =
+                  config.autoApplyEnabled && autoApplySourceFileId !== null
+                    ? {
+                        enabled: true,
+                        overwriteManualEdits: config.autoApplyOverwriteManualEdits,
+                        overwritePaid: config.autoApplyOverwritePaid,
+                        sourceFileId: autoApplySourceFileId,
+                      }
+                    : undefined;
+                entries.push(...(await computeReimportDiff(config, downloaded.path, autoApply)));
               } catch (e) {
                 entries.push(
                   errorDiffEntry(
@@ -401,6 +453,8 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
                 );
               }
             }
+
+            if (autoApplyFileHash) await markSourceFileSaved(autoApplyFileHash);
           } catch (e) {
             wholeUrlErrorMessage = String(e instanceof Error ? e.message : e);
           } finally {

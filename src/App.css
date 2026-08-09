@@ -1984,3 +1984,36 @@ tr.row-error:hover {
 .pulse-dot {
   animation: pulse-dot 1.1s ease-in-out infinite;
 }
+
+/* Floating "bolinha" indicator (PendingChangesBall) — a soccer-ball bounce:
+   fast fall/rise (ease-in down, ease-out up) with a shrinking shadow at the
+   apex, like a real ball losing height on each bounce. */
+@keyframes ball-bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-16px);
+  }
+}
+
+@keyframes ball-bounce-shadow {
+  0%,
+  100% {
+    transform: scaleX(1);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scaleX(0.55);
+    opacity: 0.15;
+  }
+}
+
+.ball-bounce {
+  animation: ball-bounce 0.85s cubic-bezier(0.33, 0, 0.2, 1) infinite;
+}
+
+.ball-bounce-shadow {
+  animation: ball-bounce-shadow 0.85s cubic-bezier(0.33, 0, 0.2, 1) infinite;
+}
