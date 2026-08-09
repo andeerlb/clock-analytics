@@ -1,4 +1,4 @@
-import { Bold, Combine, Eraser, Italic, PaintBucket, Type } from "lucide-react";
+import { Bold, ChevronDown, Combine, Eraser, Italic, PaintBucket, Type } from "lucide-react";
 import {
   forwardRef,
   useEffect,
@@ -64,6 +64,18 @@ interface TemplateGridEditorProps {
   onRowContextMenu?: (row: number, x: number, y: number) => void;
   /** Fires on right-clicking a column's letter header. */
   onColumnContextMenu?: (col: number, x: number, y: number) => void;
+  /**
+   * The "Agrupar" hidden-actions button — there are two independent
+   * groupings a field can join (the turno/detail-row grouping, and the
+   * SOMA's own — see `PaymentExportTemplateConfig.subtotalGroupBy`), so
+   * this opens a small menu to pick which one, the same way
+   * `onCellContextMenu` opens its (much bigger) menu. This component only
+   * confirms the selected cell's value has the `{{word}}` shape before
+   * firing it — it has no idea `word` is a real bindable field, or that
+   * "turno vs. SOMA" is even a meaningful distinction (that's the parent's
+   * domain, same as everywhere else in this component).
+   */
+  onGroupingMenu?: (row: number, col: number, value: string, x: number, y: number) => void;
   /** Cell values (exact match, e.g. `"{{workDate}}"`) that should get a visual marker — used to show which cells currently drive agrupamento, without a separate side-panel list. Domain-agnostic on purpose (this component doesn't know what "agrupamento" means, just "highlight any cell whose value is exactly one of these"). */
   highlightExactValues?: Set<string>;
   /** Same idea as `highlightExactValues`, rendered as a second, differently-positioned/colored marker — lets two independent groupings (e.g. turno vs. SOMA) be told apart on a cell that's marked by both. */
@@ -146,7 +158,12 @@ function blankGrid(): TemplateGridData {
   return {
     rows: Array.from({ length: DEFAULT_ROWS }, () => Array.from({ length: DEFAULT_COLS }, blankCell)),
     columnWidths: Array.from({ length: DEFAULT_COLS }, () => DEFAULT_COL_WIDTH),
-    columnAutoFit: Array.from({ length: DEFAULT_COLS }, () => false),
+    // "Ajustar ao maior registro" is the default for a fresh column — a
+    // fixed width is something the user opts into, by dragging the column
+    // narrower/wider themselves (see `startColResize`, which switches that
+    // one column to fixed the moment a drag starts, using wherever it ends
+    // up), not something they have to remember to turn on first.
+    columnAutoFit: Array.from({ length: DEFAULT_COLS }, () => true),
     rowHeights: Array.from({ length: DEFAULT_ROWS }, () => DEFAULT_ROW_HEIGHT),
     merges: [],
   };
@@ -242,6 +259,7 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
     onCellContextMenu,
     onRowContextMenu,
     onColumnContextMenu,
+    onGroupingMenu,
     highlightExactValues,
     secondaryHighlightExactValues,
   },
@@ -252,6 +270,16 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
   const [editingCell, setEditingCell] = useState<{ row: number; col: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  // A one-line reminder shown next to the "hidden actions" buttons below
+  // when clicked with no selection to act on — auto-clears itself so it
+  // reads as a transient nudge, not a persistent error state.
+  const [hiddenActionHint, setHiddenActionHint] = useState<string | null>(null);
+  const hiddenActionHintTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (hiddenActionHintTimeoutRef.current) clearTimeout(hiddenActionHintTimeoutRef.current);
+    };
+  }, []);
 
   const dragAnchorRef = useRef<{ row: number; col: number } | null>(null);
   const isDraggingRef = useRef(false);
@@ -327,7 +355,7 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
       const needsCol = col === g.columnWidths.length - 1;
       if (!needsRow && !needsCol) return { ...g, rows };
       const columnWidths = needsCol ? [...g.columnWidths, DEFAULT_COL_WIDTH] : g.columnWidths;
-      const columnAutoFit = needsCol ? [...g.columnAutoFit, false] : g.columnAutoFit;
+      const columnAutoFit = needsCol ? [...g.columnAutoFit, true] : g.columnAutoFit;
       const widenedRows = needsCol ? rows.map((r) => [...r, blankCell()]) : rows;
       const finalRows = needsRow ? [...widenedRows, Array.from({ length: columnWidths.length }, blankCell)] : widenedRows;
       const rowHeights = needsRow ? [...g.rowHeights, DEFAULT_ROW_HEIGHT] : g.rowHeights;
@@ -391,6 +419,11 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
     e.stopPropagation();
     e.preventDefault();
     colResizeRef.current = { col, startX: e.clientX, startWidth: grid.columnWidths[col] };
+    // Dragging a column's own handle is an explicit "I want exactly this
+    // width" — switches it off "ajustar ao maior registro" right away so
+    // the width the drag ends on actually sticks, instead of the column
+    // silently snapping back to auto-fit at export time.
+    setGrid((g) => ({ ...g, columnAutoFit: g.columnAutoFit.map((v, i) => (i === col ? false : v)) }));
   }
   function startRowResize(row: number, e: ReactMouseEvent) {
     e.stopPropagation();
@@ -437,6 +470,70 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
       };
       return { ...g, merges: [...remaining, newMerge] };
     });
+  }
+
+  /**
+   * The "hidden actions" row's own click handler — a cell/row/column right
+   * click only ever fires with a concrete target already under the cursor,
+   * but a toolbar button has no such thing to go on, so it borrows the
+   * current selection's anchor as that target instead. Reuses
+   * `onCellContextMenu`/`onRowContextMenu`/`onColumnContextMenu` verbatim
+   * (same callbacks the actual right-clicks call) rather than duplicating
+   * any menu-building logic — whatever conditions the parent already
+   * applies there (e.g. "Agrupar por" only for a cell holding an exact
+   * `{{field}}` token) apply here for free, so a button never offers
+   * something its own right-click equivalent wouldn't.
+   */
+  function handleHiddenAction(kind: "cell" | "row" | "column", e: ReactMouseEvent<HTMLButtonElement>) {
+    if (hiddenActionHintTimeoutRef.current) clearTimeout(hiddenActionHintTimeoutRef.current);
+    if (!range) {
+      const message =
+        kind === "cell"
+          ? "Selecione uma célula para usar isso."
+          : kind === "row"
+            ? "Selecione uma célula na linha que deseja usar."
+            : "Selecione uma célula na coluna que deseja usar.";
+      setHiddenActionHint(message);
+      hiddenActionHintTimeoutRef.current = setTimeout(() => setHiddenActionHint(null), 3000);
+      return;
+    }
+    setHiddenActionHint(null);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = rect.left;
+    const y = rect.bottom + 4;
+    if (kind === "cell") {
+      const cell = grid.rows[range.r1][range.c1];
+      onCellContextMenu?.(range.r1, range.c1, cell.value, cell.backgroundColor, cell.fontColor, x, y);
+    } else if (kind === "row") {
+      onRowContextMenu?.(range.r1, x, y);
+    } else {
+      onColumnContextMenu?.(range.c1, x, y);
+    }
+  }
+
+  /**
+   * "Agrupar" — opens the parent's small "which grouping" menu (turno vs.
+   * SOMA) for the selected cell's field, same pattern as the three
+   * menu-opening buttons above. Two distinct reasons it might not be able
+   * to act, each with its own nudge: nothing selected at all, vs. a cell
+   * selected but its value isn't an exact `{{field}}` token to group by.
+   */
+  function handleGroupingMenuClick(e: ReactMouseEvent<HTMLButtonElement>) {
+    if (hiddenActionHintTimeoutRef.current) clearTimeout(hiddenActionHintTimeoutRef.current);
+    if (!range) {
+      setHiddenActionHint("Selecione uma célula para agrupar.");
+      hiddenActionHintTimeoutRef.current = setTimeout(() => setHiddenActionHint(null), 3000);
+      return;
+    }
+    const cell = grid.rows[range.r1][range.c1];
+    if (!/^\{\{\w+\}\}$/.test(cell.value.trim())) {
+      setHiddenActionHint('Selecione uma célula com um campo (ex: "{{local}}") para agrupar.');
+      hiddenActionHintTimeoutRef.current = setTimeout(() => setHiddenActionHint(null), 3000);
+      return;
+    }
+    setHiddenActionHint(null);
+    const rect = e.currentTarget.getBoundingClientRect();
+    onGroupingMenu?.(range.r1, range.c1, cell.value, rect.left, rect.bottom + 4);
   }
 
   useImperativeHandle(
@@ -590,6 +687,79 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
         >
           <Eraser size={14} />
         </button>
+      </div>
+      {/*
+        Every action here already exists as a right-click (on a cell/the
+        row-number gutter/the column-letter header) — this row exists
+        purely so those aren't undiscoverable. Each button reopens the
+        exact same menu its right-click equivalent would, anchored at the
+        current selection instead of the cursor; with nothing selected, it
+        nudges the user to select something instead of silently doing
+        nothing.
+      */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          // Deliberately never wraps — a second, ragged line here would
+          // read as broken/misaligned against the toolbar row above it.
+          // Narrower than this needs a horizontal scrollbar on the row
+          // itself instead, same "stay one clean line" rule the sticky
+          // grid headers below already follow.
+          flexWrap: "nowrap",
+          overflowX: "auto",
+          gap: "0.4rem",
+          padding: "0.4rem 0.7rem",
+          borderBottom: "1px solid var(--border)",
+          background: "var(--sidebar-bg)",
+        }}
+      >
+        <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", flexShrink: 0 }}>Mais ações:</span>
+        <button
+          type="button"
+          className="ghost"
+          onClick={handleGroupingMenuClick}
+          style={{ display: "inline-flex", alignItems: "center", flexShrink: 0, gap: "0.15rem", padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
+          title='Agrupar por linha (turno) ou por SOMA a célula selecionada (precisa conter um campo, ex: "{{local}}")'
+        >
+          Agrupar
+          <ChevronDown size={12} />
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          onClick={(e) => handleHiddenAction("cell", e)}
+          style={{ display: "inline-flex", alignItems: "center", flexShrink: 0, gap: "0.15rem", padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
+          title="Inserir campo, agrupar, somar coluna — as mesmas opções do botão direito numa célula"
+        >
+          Célula
+          <ChevronDown size={12} />
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          onClick={(e) => handleHiddenAction("row", e)}
+          style={{ display: "inline-flex", alignItems: "center", flexShrink: 0, gap: "0.15rem", padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
+          title="Marcar linha do turno/separadora/SOMA — as mesmas opções do botão direito no número da linha"
+        >
+          Linha
+          <ChevronDown size={12} />
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          onClick={(e) => handleHiddenAction("column", e)}
+          style={{ display: "inline-flex", alignItems: "center", flexShrink: 0, gap: "0.15rem", padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
+          title="Ajustar ao maior registro / tamanho fixo — as mesmas opções do botão direito na letra da coluna"
+        >
+          Coluna
+          <ChevronDown size={12} />
+        </button>
+        {hiddenActionHint && (
+          <span style={{ fontSize: "0.78rem", color: "var(--danger)", flexShrink: 0, whiteSpace: "nowrap" }}>
+            {hiddenActionHint}
+          </span>
+        )}
       </div>
       <div
         ref={wrapperRef}

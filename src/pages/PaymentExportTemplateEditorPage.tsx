@@ -316,6 +316,41 @@ export default function PaymentExportTemplateEditorPage() {
     });
   }
 
+  /**
+   * The grid's "Agrupar" hidden-actions button — there are two independent
+   * groupings a field can join (see `PaymentExportTemplateConfig.subtotalGroupBy`'s
+   * own doc comment), so this opens a small menu to pick which one instead
+   * of guessing. Same two toggle actions the big cell context menu already
+   * offers inline (`handleCellContextMenu`'s own "Agrupar por"/"Agrupar
+   * SOMA por" items) — kept as their own smaller menu here so the single
+   * most-reached-for action isn't buried among a dozen other cell actions.
+   * `field` is only ever a real bindable field in practice (the grid only
+   * checked the `{{ }}` shape, not this whitelist — see
+   * `TemplateGridEditorHandle.onGroupingMenu`'s own doc comment); the
+   * `isBindableField` check here is just defensive.
+   */
+  function handleGroupingMenu(_row: number, _col: number, value: string, x: number, y: number) {
+    const field = value.trim().match(/^\{\{(\w+)\}\}$/)?.[1];
+    if (!field || !isBindableField(field)) return;
+    const fieldLabel = PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[field];
+    const alreadyGrouped = groupBy.includes(field);
+    const items: ContextMenuItem[] = [
+      {
+        label: alreadyGrouped ? `Remover "${fieldLabel}" do agrupamento por linha` : `Agrupar por linha: "${fieldLabel}"`,
+        onClick: () => setGroupBy((prev) => (alreadyGrouped ? prev.filter((f) => f !== field) : [...prev, field])),
+      },
+    ];
+    if (subtotalEnabled) {
+      const alreadySubtotalGrouped = subtotalGroupBy.includes(field);
+      items.push({
+        label: alreadySubtotalGrouped ? `Remover "${fieldLabel}" do agrupamento da SOMA` : `Agrupar SOMA por: "${fieldLabel}"`,
+        onClick: () =>
+          setSubtotalGroupBy((prev) => (alreadySubtotalGrouped ? prev.filter((f) => f !== field) : [...prev, field])),
+      });
+    }
+    setContextMenu({ x, y, items });
+  }
+
   async function handleSave() {
     setError(null);
     if (!name.trim()) {
@@ -455,6 +490,7 @@ export default function PaymentExportTemplateEditorPage() {
           onCellContextMenu={handleCellContextMenu}
           onRowContextMenu={handleRowContextMenu}
           onColumnContextMenu={handleColumnContextMenu}
+          onGroupingMenu={handleGroupingMenu}
         />
       </div>
 
