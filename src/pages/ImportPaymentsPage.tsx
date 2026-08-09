@@ -493,8 +493,10 @@ export default function ImportPaymentsPage() {
   }
 
   /**
-   * Shared by the manual "Baixar arquivo" button and the remote-update
-   * banner's "Reimportar". A URL download can only ever produce .xlsx/.xls
+   * Shared by "Processar arquivo(s)" (via `proceedToProcess`, when nothing's
+   * been downloaded yet) and the remote-update banner's "Reimportar" — there's
+   * no standalone "Baixar arquivo" step anymore. A URL download can only
+   * ever produce .xlsx/.xls
    * (see `download_payment_file_from_url`'s magic-byte check) — if the
    * selected template expects csv/ods, that's caught here the same way
    * `handlePickFiles` catches a locally-picked file of the wrong format.
@@ -1111,13 +1113,22 @@ export default function ImportPaymentsPage() {
     navigate("/employees/new", { state: employeeFormState });
   }
 
+  /** Shared by "Processar arquivo(s)" and the "processar o arquivo inteiro?" confirm — in URL mode, nothing's been downloaded yet the first time this runs (there's no separate "Baixar arquivo" step anymore), so it downloads first, then falls into the same `pendingAutoProcess` effect "Reimportar" already uses to process right after. Already-downloaded paths (local files, or a URL reprocessed after an error) skip straight to processing. */
+  async function proceedToProcess() {
+    if (importMode === "url" && paths.length === 0) {
+      await handleDownloadFromUrl(undefined, true);
+      return;
+    }
+    handleProcess();
+  }
+
   /** No período set means "the whole file" — that's easy to do by accident, so it's confirmed instead of just silently processing everything. */
   function handleProcessClick() {
     if (!periodStart && !periodEnd) {
       setConfirmFullImport(true);
       return;
     }
-    handleProcess();
+    proceedToProcess();
   }
 
   async function handleSave() {
@@ -1414,7 +1425,7 @@ export default function ImportPaymentsPage() {
                       title={isAutoReimport ? "Arquivo desta reimportação automática — não editável aqui." : undefined}
                       style={{ flex: 1 }}
                     />
-                    {isAutoReimport ? (
+                    {isAutoReimport && (
                       <button
                         type="button"
                         className="secondary"
@@ -1422,16 +1433,6 @@ export default function ImportPaymentsPage() {
                         title="Sai da reimportação automática e libera a tela para importar outro arquivo"
                       >
                         Processar outro arquivo
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => handleDownloadFromUrl()}
-                        disabled={!selectedTemplate || !urlInput.trim() || urlDownloading}
-                        title={selectedTemplate ? undefined : "Selecione um template primeiro"}
-                      >
-                        {urlDownloading ? "Baixando..." : "Baixar arquivo"}
                       </button>
                     )}
                   </div>
@@ -1452,12 +1453,12 @@ export default function ImportPaymentsPage() {
                         style={{ marginTop: "0.2rem" }}
                       />
                       <span>
-                        Rastrear atualizações automaticamente
+                        Salvar em Verificação automática
                         <span className="muted" style={{ display: "block", fontSize: "0.78rem" }}>
-                          Verifica periodicamente se o arquivo mudou no servidor de origem e avisa
-                          (com a opção de reimportar) quando isso acontece — pode ser gerenciado
-                          depois em "Verificação automática". Só se aplica ao salvar; sem isso, este
-                          arquivo não fica sendo monitorado.
+                          Guarda esse link na tela "Verificação automática", pra não perder de vista —
+                          de lá dá pra acompanhar mudanças, reimportar manualmente ou deixar
+                          atualizando sozinho. Só se aplica ao salvar; sem isso, esse link não fica
+                          guardado em lugar nenhum.
                         </span>
                       </span>
                     </label>
@@ -1530,10 +1531,15 @@ export default function ImportPaymentsPage() {
             <div className="card-footer">
               <button
                 type="button"
-                disabled={paths.length === 0 || !templateId || busy}
+                disabled={
+                  (importMode === "url" ? !urlInput.trim() : paths.length === 0) ||
+                  !templateId ||
+                  busy ||
+                  urlDownloading
+                }
                 onClick={handleProcessClick}
               >
-                {busy ? "Processando..." : `Processar ${paths.length || ""} arquivo(s)`}
+                {urlDownloading ? "Baixando..." : busy ? "Processando..." : `Processar ${paths.length || ""} arquivo(s)`}
               </button>
             </div>
           </div>
@@ -2124,7 +2130,7 @@ export default function ImportPaymentsPage() {
           danger={false}
           onConfirm={() => {
             setConfirmFullImport(false);
-            handleProcess();
+            proceedToProcess();
           }}
           onCancel={() => setConfirmFullImport(false)}
         />
