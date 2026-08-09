@@ -394,7 +394,13 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
     }
     dragAnchorRef.current = { row, col };
     isDraggingRef.current = true;
-    wrapperRef.current?.focus();
+    // `preventScroll` matters here, not just as a nicety — without it, the
+    // browser's default focus-triggered scroll-into-view can shift the
+    // page's scroll position mid-interaction (e.g. between a double-click's
+    // two physical clicks, which fire this same handler twice), landing the
+    // second click on a completely different cell than the first and
+    // silently opening edit mode on the wrong one.
+    wrapperRef.current?.focus({ preventScroll: true });
     selectSingleCell(row, col);
   }
 
@@ -405,13 +411,25 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
 
   function selectRow(row: number) {
     setEditingCell(null);
-    wrapperRef.current?.focus();
+    // `preventScroll` matters here, not just as a nicety — without it, the
+    // browser's default focus-triggered scroll-into-view can shift the
+    // page's scroll position mid-interaction (e.g. between a double-click's
+    // two physical clicks, which fire this same handler twice), landing the
+    // second click on a completely different cell than the first and
+    // silently opening edit mode on the wrong one.
+    wrapperRef.current?.focus({ preventScroll: true });
     setRange({ r1: row, c1: 0, r2: row, c2: grid.columnWidths.length - 1 });
   }
 
   function selectColumn(col: number) {
     setEditingCell(null);
-    wrapperRef.current?.focus();
+    // `preventScroll` matters here, not just as a nicety — without it, the
+    // browser's default focus-triggered scroll-into-view can shift the
+    // page's scroll position mid-interaction (e.g. between a double-click's
+    // two physical clicks, which fire this same handler twice), landing the
+    // second click on a completely different cell than the first and
+    // silently opening edit mode on the wrong one.
+    wrapperRef.current?.focus({ preventScroll: true });
     setRange({ r1: 0, c1: col, r2: grid.rows.length - 1, c2: col });
   }
 

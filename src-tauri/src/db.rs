@@ -316,5 +316,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0052_payment_shifts_soft_delete.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 53,
+            description: "add source_url_check_diffs and last_deep_check_* signature columns — a background check that finds a header change now also downloads, parses and diffs against what's saved, recording exactly what changed instead of just 'changed'",
+            sql: include_str!("../migrations/0053_source_url_check_diffs.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

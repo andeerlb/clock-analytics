@@ -1,20 +1,25 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { checkRemotePaymentFile } from "../lib/api";
+import { checkRemotePaymentFile, downloadPaymentFileFromUrl } from "../lib/api";
 import {
   createReimportConfig as createReimportConfigDb,
   deleteReimportConfig as deleteReimportConfigDb,
   listReimportConfigs,
   listTrackedPaymentUrls,
   logUrlCheckResult,
+  markDeepCheckSignature,
+  saveCheckDiffs,
   setConfigCheckDisabled as setConfigCheckDisabledDb,
   trackUrlForAutoReimport,
+  untrackPaymentUrl as untrackPaymentUrlDb,
   updateReimportConfig as updateReimportConfigDb,
+  type CheckDiffInput,
   type ReimportConfig,
   type ReimportConfigInput,
   type TrackedPaymentUrl,
   type UrlCheckResult,
 } from "../lib/db";
 import { parseSqliteDateTime, resolveReimportConfigLabel, resolveReimportPeriod } from "../lib/format";
+import { computeReimportDiff } from "../lib/remoteCheckDiff";
 
 export type { ReimportConfig, ReimportConfigInput, ReimportDateMode, TrackedPaymentUrl, UrlCheckResult } from "../lib/db";
 
@@ -70,6 +75,30 @@ function isConfigDue(config: ReimportConfig, urlLastCheckedAt: string | null | u
   return now - parseSqliteDateTime(urlLastCheckedAt).getTime() >= effectiveMs;
 }
 
+/** A `change_kind: 'error'` diff entry not tied to any specific field — used both for a whole-config failure (bad/deleted template, parse error) and a whole-URL one (the download itself failed after every config was already known to want a deep pass). */
+function errorDiffEntry(configId: number | null, configLabel: string, message: string): CheckDiffInput {
+  return {
+    configId,
+    configLabel,
+    changeKind: "error",
+    matchedShiftId: null,
+    employeeId: null,
+    employeeName: null,
+    workDate: null,
+    local: null,
+    role: null,
+    scheduleStartMinutes: null,
+    scheduleEndMinutes: null,
+    sheetName: null,
+    rowNumber: null,
+    columnLetter: null,
+    fieldName: null,
+    oldValue: null,
+    newValue: null,
+    message,
+  };
+}
+
 /** Builds one config's `RemoteUpdateFlag` regardless of whether a remote change was actually detected — shared by `remoteUpdates` (filtered to changed + not dismissed) and `getReimportFlag` (used for an unconditional "Reprocessar agora"). */
 function buildReimportFlag(config: ReimportConfig, trackedFiles: TrackedPaymentUrl[]): RemoteUpdateFlag {
   const t = trackedFiles.find((f) => f.sourceUrl === config.sourceUrl);
@@ -102,6 +131,8 @@ interface RemoteFileUpdatesContextValue {
   updateReimportConfig: (id: number, input: Omit<ReimportConfigInput, "sourceUrl" | "templateId">) => Promise<void>;
   setConfigCheckDisabled: (id: number, disabled: boolean) => Promise<void>;
   deleteReimportConfig: (id: number) => Promise<void>;
+  /** Fully stops tracking a URL — its settings, every reimport config, and its whole check-log history. Already-imported payment_shifts are untouched. */
+  untrackUrl: (sourceUrl: string) => Promise<void>;
   refreshNow: () => void;
   /** True while at least one URL check is in flight — for a "Verificando..." indicator. */
   checking: boolean;
@@ -157,6 +188,22 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
    * checked (via `checkingUrlsRef`, read synchronously so two overlapping
    * calls — e.g. a force-click landing mid-tick — never double-check the
    * same URL), so it's safe to call from more than one place at once.
+   *
+   * For each URL: (1) the cheap header check, always — logged regardless of
+   * outcome; (2) IF that came back "changed" AND the remote signature
+   * differs from the one the last deep check already ran against
+   * (`TrackedPaymentUrl.lastDeepCheck*` — NOT `sourceEtag`/etc., which only
+   * update on an actual saved reimport), download the file once and run
+   * every active `ReimportConfig` for that URL through `computeReimportDiff`
+   * — never writing to payment_shifts, only recording what changed (see
+   * `remoteCheckDiff.ts`). This is what stops an unreimported "changed" file
+   * from being re-downloaded and re-parsed every tick indefinitely. A
+   * per-config failure (deleted template, parse error) or a whole-URL one
+   * (the download itself failing) becomes a single `change_kind: 'error'`
+   * diff entry instead of derailing every other config/URL in this batch.
+   * Each URL leaves `checkingUrls` as soon as ITS OWN work (header + any
+   * deep pass) finishes, not when the whole batch does — a slow deep pass
+   * on one URL shouldn't keep an unrelated fast URL showing "Verificando...".
    */
   const runChecks = useCallback(
     async (targets: TrackedPaymentUrl[]) => {
@@ -164,27 +211,90 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
       if (fresh.length === 0) return;
       fresh.forEach((t) => checkingUrlsRef.current.add(t.sourceUrl));
       setCheckingUrlsState(new Set(checkingUrlsRef.current));
+
+      // Read fresh regardless of what's in React state — this runs from
+      // `tick` (schedule), `forceCheckUrl`/`forceCheckAll` (manual), any of
+      // which may be working off a stale `reimportConfigs` snapshot.
+      const activeConfigsByUrl = new Map<string, ReimportConfig[]>();
       try {
-        const results = await Promise.allSettled(
-          fresh.map((t) => checkRemotePaymentFile(t.sourceUrl, t.sourceEtag, t.sourceLastModified, t.sourceContentLength)),
-        );
-        await Promise.all(
-          results.map((res, i) => {
-            const t = fresh[i];
-            if (res.status === "fulfilled") {
-              const result: UrlCheckResult =
-                res.value.changed === true ? "changed" : res.value.changed === false ? "unchanged" : "unknown";
-              return logUrlCheckResult(t.sourceUrl, t.fileName, result, null);
+        for (const c of await listReimportConfigs()) {
+          if (c.checkDisabled) continue;
+          const list = activeConfigsByUrl.get(c.sourceUrl) ?? [];
+          list.push(c);
+          activeConfigsByUrl.set(c.sourceUrl, list);
+        }
+      } catch {
+        // A failure here just means no URL gets a deep pass this round —
+        // the header checks below still run and still get logged.
+      }
+
+      async function runOne(t: TrackedPaymentUrl) {
+        try {
+          let headerResult: UrlCheckResult;
+          let current: { etag: string | null; lastModified: string | null; contentLength: number | null } | null = null;
+          let checkLogId: number;
+          try {
+            const check = await checkRemotePaymentFile(
+              t.sourceUrl,
+              t.sourceEtag,
+              t.sourceLastModified,
+              t.sourceContentLength,
+            );
+            headerResult = check.changed === true ? "changed" : check.changed === false ? "unchanged" : "unknown";
+            current = check.current;
+            checkLogId = await logUrlCheckResult(t.sourceUrl, t.fileName, headerResult, null);
+          } catch (e) {
+            const message = String(e instanceof Error ? e.message : e);
+            await logUrlCheckResult(t.sourceUrl, t.fileName, "error", message);
+            return;
+          }
+
+          if (headerResult !== "changed" || !current) return;
+
+          const signatureChanged =
+            current.etag !== t.lastDeepCheckEtag ||
+            current.lastModified !== t.lastDeepCheckLastModified ||
+            current.contentLength !== t.lastDeepCheckContentLength;
+          if (!signatureChanged) return;
+
+          const configs = activeConfigsByUrl.get(t.sourceUrl) ?? [];
+          if (configs.length === 0) return;
+
+          try {
+            const downloaded = await downloadPaymentFileFromUrl(t.sourceUrl);
+            const entries: CheckDiffInput[] = [];
+            for (const config of configs) {
+              try {
+                entries.push(...(await computeReimportDiff(config, downloaded.path)));
+              } catch (e) {
+                entries.push(
+                  errorDiffEntry(
+                    config.id,
+                    resolveReimportConfigLabel(config),
+                    String(e instanceof Error ? e.message : e),
+                  ),
+                );
+              }
             }
-            const message = String(res.reason instanceof Error ? res.reason.message : res.reason);
-            return logUrlCheckResult(t.sourceUrl, t.fileName, "error", message);
-          }),
-        );
+            await saveCheckDiffs(checkLogId, entries);
+            await markDeepCheckSignature(t.sourceUrl, current.etag, current.lastModified, current.contentLength);
+          } catch (e) {
+            await saveCheckDiffs(checkLogId, [
+              errorDiffEntry(null, "", String(e instanceof Error ? e.message : e)),
+            ]);
+          }
+        } finally {
+          checkingUrlsRef.current.delete(t.sourceUrl);
+          setCheckingUrlsState(new Set(checkingUrlsRef.current));
+        }
+      }
+
+      try {
+        await Promise.allSettled(fresh.map(runOne));
       } finally {
-        fresh.forEach((t) => checkingUrlsRef.current.delete(t.sourceUrl));
-        setCheckingUrlsState(new Set(checkingUrlsRef.current));
         // Re-read rather than patch in memory — the checked URLs come back
-        // with their brand new log entry, uniformly with everything else.
+        // with their brand new log entry (and deep-check signature),
+        // uniformly with everything else.
         await refreshTrackedState();
       }
     },
@@ -282,6 +392,11 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
     setReimportConfigs((prev) => prev.filter((c) => c.id !== id));
   }
 
+  async function untrackUrl(sourceUrl: string) {
+    await untrackPaymentUrlDb(sourceUrl);
+    await refreshTrackedState();
+  }
+
   const changedUrls = new Set(trackedFiles.filter((t) => t.lastResult === "changed").map((t) => t.sourceUrl));
   const remoteUpdates: RemoteUpdateFlag[] = reimportConfigs
     .filter((c) => !c.checkDisabled && changedUrls.has(c.sourceUrl) && !dismissed.has(c.id))
@@ -303,6 +418,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
         updateReimportConfig,
         setConfigCheckDisabled,
         deleteReimportConfig,
+        untrackUrl,
         refreshNow: tick,
         checking: checkingUrls.size > 0,
         checkingUrls,

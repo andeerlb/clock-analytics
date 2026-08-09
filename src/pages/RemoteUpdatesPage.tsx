@@ -3,6 +3,8 @@ import {
   AlertCircle,
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   FileText,
   HelpCircle,
   Link2,
@@ -11,9 +13,10 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import BackButton from "../components/BackButton";
+import ConfirmModal from "../components/ConfirmModal";
 import DateRangePicker from "../components/DateRangePicker";
 import Pagination from "../components/Pagination";
 import {
@@ -24,8 +27,10 @@ import {
 } from "../contexts/RemoteFileUpdatesContext";
 import {
   DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES,
+  listCheckDiffs,
   listPaymentTemplates,
   listUrlCheckLog,
+  type CheckDiffRow,
   type UrlCheckLogEntry,
   type UrlCheckResult,
 } from "../lib/db";
@@ -46,6 +51,131 @@ const RESULT_BADGE: Record<UrlCheckResult, { className: string; label: string; i
 };
 
 const LOG_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+
+/** "status" -> "Status"; "extra:C" -> "Coluna C" — there's no human header label for an unmapped column, only the raw letter it came from (see `remoteCheckDiff.ts`). */
+function diffFieldLabel(fieldName: string | null, columnLetter: string | null): string {
+  if (fieldName === "status") return "Status";
+  if (columnLetter) return `Coluna ${columnLetter}`;
+  return fieldName ?? "Campo";
+}
+
+/** Same identity a deep check matched a record by (employee+data+local+função+horário) — used only to group this one check's diff rows into one card per changed record, not to look anything up. */
+function diffIdentityKey(r: CheckDiffRow): string {
+  return `${r.employeeId}|${r.workDate}|${r.local}|${r.role}|${r.scheduleStartMinutes}|${r.scheduleEndMinutes}`;
+}
+
+/**
+ * The expanded detail under a "Histórico de verificações" row — grouped by
+ * reimport config, then by the specific record that changed within it, one
+ * small card per record with a GitHub-diff-style before/after per field.
+ * `change_kind: 'new-shift'` records (no existing match at all) get their
+ * own "Possível novo turno" card instead of a field diff; `'error'` entries
+ * (a whole config or the whole URL's deep pass failing) render as compact
+ * error lines, separate from the field changes.
+ */
+function CheckDiffPanel({ rows }: { rows: CheckDiffRow[] }) {
+  const byConfig = new Map<string, CheckDiffRow[]>();
+  for (const r of rows) {
+    const key = r.configId !== null ? String(r.configId) : "__url__";
+    const list = byConfig.get(key) ?? [];
+    list.push(r);
+    byConfig.set(key, list);
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.9rem" }}>
+      {Array.from(byConfig.entries()).map(([key, configRows]) => {
+        const label = configRows[0].configLabel || "Verificação geral";
+        const errors = configRows.filter((r) => r.changeKind === "error");
+        const changes = configRows.filter((r) => r.changeKind !== "error");
+        const byIdentity = new Map<string, CheckDiffRow[]>();
+        for (const r of changes) {
+          const idKey = diffIdentityKey(r);
+          const list = byIdentity.get(idKey) ?? [];
+          list.push(r);
+          byIdentity.set(idKey, list);
+        }
+        return (
+          <div key={key}>
+            <div style={{ fontWeight: 600, fontSize: "0.82rem", marginBottom: "0.45rem" }}>{label}</div>
+            {errors.map((e, i) => (
+              <div
+                key={`err-${i}`}
+                className="error-box"
+                style={{ fontSize: "0.78rem", padding: "0.45rem 0.7rem", marginBottom: "0.4rem" }}
+              >
+                {e.message}
+              </div>
+            ))}
+            {Array.from(byIdentity.entries()).map(([idKey, entries]) => {
+              const first = entries[0];
+              const isNew = first.changeKind === "new-shift";
+              return (
+                <div
+                  key={idKey}
+                  style={{
+                    border: `1px solid ${isNew ? "var(--accent)" : "var(--border-soft)"}`,
+                    borderRadius: 8,
+                    padding: "0.5rem 0.7rem",
+                    marginBottom: "0.4rem",
+                  }}
+                >
+                  <div style={{ fontSize: "0.82rem", fontWeight: 500 }}>
+                    {first.employeeName ?? "—"}
+                    {first.workDate ? ` — ${formatDateAbbrevYY(first.workDate)}` : ""}
+                    {" · "}
+                    {first.local || "—"} / {first.role || "—"}
+                  </div>
+                  {(first.sheetName || first.rowNumber !== null) && (
+                    <div className="muted" style={{ fontSize: "0.72rem" }}>
+                      {first.sheetName ? `aba ${first.sheetName}, ` : ""}
+                      {first.rowNumber !== null ? `linha ${first.rowNumber}` : ""}
+                    </div>
+                  )}
+                  {isNew ? (
+                    <span className="badge ok" style={{ marginTop: "0.35rem", display: "inline-flex" }}>
+                      Possível novo turno
+                    </span>
+                  ) : (
+                    <div style={{ marginTop: "0.35rem", display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                      {entries.map((e, i) => (
+                        <div key={i} style={{ fontSize: "0.78rem" }}>
+                          <span className="muted">{diffFieldLabel(e.fieldName, e.columnLetter)}: </span>
+                          <span
+                            style={{
+                              background: "var(--danger-soft)",
+                              color: "var(--danger)",
+                              textDecoration: "line-through",
+                              padding: "0.05rem 0.35rem",
+                              borderRadius: 4,
+                            }}
+                          >
+                            {e.oldValue || "(vazio)"}
+                          </span>
+                          {" → "}
+                          <span
+                            style={{
+                              background: "var(--success-soft)",
+                              color: "var(--success)",
+                              padding: "0.05rem 0.35rem",
+                              borderRadius: 4,
+                            }}
+                          >
+                            {e.newValue || "(vazio)"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 interface ConfigDraft {
   dateMode: ReimportDateMode;
@@ -115,6 +245,7 @@ export default function RemoteUpdatesPage() {
     updateReimportConfig,
     setConfigCheckDisabled,
     deleteReimportConfig,
+    untrackUrl,
     checkingUrls,
     forceCheckUrl,
     forceCheckAll,
@@ -134,6 +265,25 @@ export default function RemoteUpdatesPage() {
       await forceCheckAll();
     } finally {
       setForcingAll(false);
+    }
+  }
+
+  // "Parar de rastrear" — one confirm modal at a time, across all files.
+  const [untrackTarget, setUntrackTarget] = useState<TrackedPaymentUrl | null>(null);
+  const [untracking, setUntracking] = useState(false);
+  const [untrackError, setUntrackError] = useState<string | null>(null);
+
+  async function handleConfirmUntrack() {
+    if (!untrackTarget) return;
+    setUntracking(true);
+    setUntrackError(null);
+    try {
+      await untrackUrl(untrackTarget.sourceUrl);
+      setUntrackTarget(null);
+    } catch (e) {
+      setUntrackError(String(e));
+    } finally {
+      setUntracking(false);
     }
   }
 
@@ -283,6 +433,36 @@ export default function RemoteUpdatesPage() {
   const [logPageSize, setLogPageSize] = useState(LOG_PAGE_SIZE_OPTIONS[0]);
   const [logUrlFilter, setLogUrlFilter] = useState("");
 
+  // Expanded "N alterações" detail per check-log row — several can be open
+  // at once (not one-at-a-time like the config-edit forms above), so
+  // different checks can be compared side by side. Diffs are fetched lazily
+  // on first expand and cached, since most rows have none at all.
+  const [expandedLogIds, setExpandedLogIds] = useState<Set<number>>(new Set());
+  const [diffsByLogId, setDiffsByLogId] = useState<Map<number, CheckDiffRow[]>>(new Map());
+  const [loadingDiffLogIds, setLoadingDiffLogIds] = useState<Set<number>>(new Set());
+
+  async function toggleLogRow(entry: UrlCheckLogEntry) {
+    const isExpanded = expandedLogIds.has(entry.id);
+    setExpandedLogIds((prev) => {
+      const next = new Set(prev);
+      if (isExpanded) next.delete(entry.id);
+      else next.add(entry.id);
+      return next;
+    });
+    if (isExpanded || diffsByLogId.has(entry.id)) return;
+    setLoadingDiffLogIds((prev) => new Set(prev).add(entry.id));
+    try {
+      const rows = await listCheckDiffs(entry.id);
+      setDiffsByLogId((prev) => new Map(prev).set(entry.id, rows));
+    } finally {
+      setLoadingDiffLogIds((prev) => {
+        const next = new Set(prev);
+        next.delete(entry.id);
+        return next;
+      });
+    }
+  }
+
   useEffect(() => {
     listUrlCheckLog({ sourceUrl: logUrlFilter || undefined, page: logPage, pageSize: logPageSize }).then(
       ({ rows, total }) => {
@@ -300,6 +480,16 @@ export default function RemoteUpdatesPage() {
     () => Array.from(new Map(trackedFiles.map((t) => [t.sourceUrl, t.fileName])).entries()),
     [trackedFiles],
   );
+
+  // If the URL the log is filtered to just stopped being tracked (e.g.
+  // "Parar de rastrear"), fall back to "Todos os arquivos" instead of
+  // silently showing an empty table filtered to a URL that no longer exists.
+  useEffect(() => {
+    if (logUrlFilter && !urlOptions.some(([url]) => url === logUrlFilter)) {
+      setLogUrlFilter("");
+      setLogPage(0);
+    }
+  }, [logUrlFilter, urlOptions]);
 
   return (
     <div>
@@ -363,6 +553,16 @@ export default function RemoteUpdatesPage() {
                   <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
                     <FileText size={16} style={{ color: "var(--accent)", flexShrink: 0 }} />
                     <span style={{ fontWeight: 600, fontSize: "0.92rem" }}>{t.fileName}</span>
+                    <button
+                      type="button"
+                      className="ghost"
+                      style={{ marginLeft: "auto", padding: "0.15rem 0.5rem", fontSize: "0.75rem", color: "var(--danger)" }}
+                      onClick={() => setUntrackTarget(t)}
+                      title="Remove o rastreamento automático e o histórico de verificações deste arquivo — não afeta o que já foi importado"
+                    >
+                      <Trash2 size={12} style={{ marginRight: "0.3rem", verticalAlign: "-2px" }} />
+                      Parar de rastrear
+                    </button>
                   </div>
                   <button
                     type="button"
@@ -789,35 +989,63 @@ export default function RemoteUpdatesPage() {
                     // historical snapshot — a config edited/removed since
                     // this check ran shows as it is now.
                     const configsForEntry = reimportConfigs.filter((c) => c.sourceUrl === entry.sourceUrl);
+                    const hasDiffs = entry.diffCount > 0;
+                    const isExpanded = expandedLogIds.has(entry.id);
+                    const isLoadingDiff = loadingDiffLogIds.has(entry.id);
                     return (
-                      <tr key={entry.id}>
-                        <td style={{ whiteSpace: "nowrap" }}>{formatDateTimeAbbrevYY(entry.checkedAt, true)}</td>
-                        <td
-                          style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                          title={entry.fileName}
-                        >
-                          {entry.fileName}
-                        </td>
-                        <td>
-                          <span className={badge.className}>
-                            <BadgeIcon size={13} />
-                            {badge.label}
-                          </span>
-                        </td>
-                        <td className="muted" style={{ fontSize: "0.8rem" }}>
-                          {configsForEntry.length > 0
-                            ? configsForEntry.map((c) => c.templateName ?? "Template removido").join(", ")
-                            : "—"}
-                        </td>
-                        <td className="muted" style={{ fontSize: "0.8rem", whiteSpace: "nowrap" }}>
-                          {configsForEntry.length > 0
-                            ? configsForEntry.map((c) => formatResolvedPreview(resolveReimportPeriod(c))).join(", ")
-                            : "—"}
-                        </td>
-                        <td className="muted" style={{ fontSize: "0.8rem" }}>
-                          {entry.message ?? "—"}
-                        </td>
-                      </tr>
+                      <Fragment key={entry.id}>
+                        <tr>
+                          <td style={{ whiteSpace: "nowrap" }}>{formatDateTimeAbbrevYY(entry.checkedAt, true)}</td>
+                          <td
+                            style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                            title={entry.fileName}
+                          >
+                            {entry.fileName}
+                          </td>
+                          <td>
+                            <span className={badge.className}>
+                              <BadgeIcon size={13} />
+                              {badge.label}
+                            </span>
+                          </td>
+                          <td className="muted" style={{ fontSize: "0.8rem" }}>
+                            {configsForEntry.length > 0
+                              ? configsForEntry.map((c) => c.templateName ?? "Template removido").join(", ")
+                              : "—"}
+                          </td>
+                          <td className="muted" style={{ fontSize: "0.8rem", whiteSpace: "nowrap" }}>
+                            {configsForEntry.length > 0
+                              ? configsForEntry.map((c) => formatResolvedPreview(resolveReimportPeriod(c))).join(", ")
+                              : "—"}
+                          </td>
+                          <td className="muted" style={{ fontSize: "0.8rem" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                              <span>{entry.message ?? "—"}</span>
+                              {hasDiffs && (
+                                <button
+                                  type="button"
+                                  className={`count-chip chip-filter${isExpanded ? " active" : ""}`}
+                                  onClick={() => toggleLogRow(entry)}
+                                  style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem" }}
+                                >
+                                  {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                                  {entry.diffCount === 1 ? "1 alteração" : `${entry.diffCount} alterações`}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr>
+                            <td colSpan={6} style={{ background: "var(--card-bg)", padding: "0.8rem 1rem" }}>
+                              {isLoadingDiff && <p className="muted" style={{ margin: 0 }}>Carregando detalhes...</p>}
+                              {!isLoadingDiff && (
+                                <CheckDiffPanel rows={diffsByLogId.get(entry.id) ?? []} />
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     );
                   })}
                 </tbody>
@@ -844,6 +1072,25 @@ export default function RemoteUpdatesPage() {
           </>
         )}
       </div>
+
+      {untrackTarget && (
+        <ConfirmModal
+          title="Parar de rastrear este arquivo?"
+          message={`Remove o rastreamento automático e todo o histórico de verificações de "${untrackTarget.fileName}"${
+            reimportConfigs.filter((c) => c.sourceUrl === untrackTarget.sourceUrl).length > 0
+              ? ` (${reimportConfigs.filter((c) => c.sourceUrl === untrackTarget.sourceUrl).length} configuração(ões) de reimportação)`
+              : ""
+          }. Os turnos já importados não são afetados.`}
+          confirmLabel={untracking ? "Removendo..." : "Parar de rastrear"}
+          onConfirm={handleConfirmUntrack}
+          onCancel={() => {
+            setUntrackTarget(null);
+            setUntrackError(null);
+          }}
+          confirmDisabled={untracking}
+          error={untrackError}
+        />
+      )}
     </div>
   );
 }

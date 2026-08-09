@@ -1230,6 +1230,11 @@ export interface TrackedPaymentUrl {
   lastCheckedAt: string | null;
   lastResult: UrlCheckResult | null;
   lastErrorMessage: string | null;
+  /** The remote signature (etag/lastModified/contentLength) the last deep check (download+parse+diff) ran against — `null` before the first one. Compared against a fresh header check's own signature to decide whether a new deep pass is needed (see `RemoteFileUpdatesContext.runChecks`), independent of `sourceEtag`/etc. above, which only update on an actual saved reimport. */
+  lastDeepCheckEtag: string | null;
+  lastDeepCheckLastModified: string | null;
+  lastDeepCheckContentLength: number | null;
+  lastDeepCheckAt: string | null;
 }
 
 /**
@@ -1253,7 +1258,11 @@ export async function listTrackedPaymentUrls(): Promise<TrackedPaymentUrl[]> {
        sf.source_content_length AS sourceContentLength,
        log.checked_at AS lastCheckedAt,
        log.result AS lastResult,
-       log.message AS lastErrorMessage
+       log.message AS lastErrorMessage,
+       sus.last_deep_check_etag AS lastDeepCheckEtag,
+       sus.last_deep_check_last_modified AS lastDeepCheckLastModified,
+       sus.last_deep_check_content_length AS lastDeepCheckContentLength,
+       sus.last_deep_check_at AS lastDeepCheckAt
      FROM (
        SELECT *, ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY imported_at DESC) AS rn
        FROM source_files
@@ -1400,6 +1409,24 @@ export async function deleteReimportConfig(id: number): Promise<void> {
 }
 
 /**
+ * Fully stops tracking a URL — removes its tracking flag, every one of its
+ * reimport configs, and its whole check-log history. Deliberately leaves
+ * `source_files`/`payment_shifts` untouched: this is "stop watching this
+ * URL," not "undo what was ever imported from it."
+ */
+export async function untrackPaymentUrl(sourceUrl: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `DELETE FROM source_url_check_diffs
+     WHERE check_log_id IN (SELECT id FROM source_url_check_log WHERE source_url = $1)`,
+    [sourceUrl],
+  );
+  await db.execute("DELETE FROM source_url_check_log WHERE source_url = $1", [sourceUrl]);
+  await db.execute("DELETE FROM source_url_reimport_configs WHERE source_url = $1", [sourceUrl]);
+  await db.execute("DELETE FROM source_url_settings WHERE source_url = $1", [sourceUrl]);
+}
+
+/**
  * The one place `tracking_enabled` ever turns on — called from
  * `ImportPaymentsPage.handleSave` only when the user checked "Rastrear
  * atualizações automaticamente" for this save, which also creates that
@@ -1440,17 +1467,26 @@ export async function trackUrlForAutoReimport(
 
 const MAX_CHECK_LOG_ENTRIES_PER_URL = 200;
 
-/** Records one check attempt and prunes older entries for that URL beyond the last 200, so the log stays bounded regardless of how short the check interval is. */
+/** Records one check attempt and prunes older entries for that URL beyond the last 200, so the log stays bounded regardless of how short the check interval is. Returns the inserted row's id, so a deep check that runs right after can link its diffs back to this exact attempt. */
 export async function logUrlCheckResult(
   sourceUrl: string,
   fileName: string,
   result: UrlCheckResult,
   message: string | null,
-): Promise<void> {
+): Promise<number> {
   const db = await getDb();
-  await db.execute(
+  const inserted = await db.execute(
     `INSERT INTO source_url_check_log (source_url, file_name, result, message) VALUES ($1, $2, $3, $4)`,
     [sourceUrl, fileName, result, message],
+  );
+  await db.execute(
+    `DELETE FROM source_url_check_diffs
+     WHERE check_log_id IN (
+       SELECT id FROM source_url_check_log
+       WHERE source_url = $1
+         AND id NOT IN (SELECT id FROM source_url_check_log WHERE source_url = $1 ORDER BY checked_at DESC LIMIT $2)
+     )`,
+    [sourceUrl, MAX_CHECK_LOG_ENTRIES_PER_URL],
   );
   await db.execute(
     `DELETE FROM source_url_check_log
@@ -1460,6 +1496,7 @@ export async function logUrlCheckResult(
        )`,
     [sourceUrl, MAX_CHECK_LOG_ENTRIES_PER_URL],
   );
+  return inserted.lastInsertId as number;
 }
 
 export interface UrlCheckLogEntry {
@@ -1469,6 +1506,8 @@ export interface UrlCheckLogEntry {
   checkedAt: string;
   result: UrlCheckResult;
   message: string | null;
+  /** How many `source_url_check_diffs` rows this check produced — 0 for almost every row (deep checks only run on a real header change, see `RemoteFileUpdatesContext.runChecks`). Drives the "N alterações" expand chip without fetching every row's diffs up front. */
+  diffCount: number;
 }
 
 /** Full check history, most recent first — optionally scoped to one URL — for the Verificação automática page. */
@@ -1493,15 +1532,125 @@ export async function listUrlCheckLog(query: {
   const total = countRows[0]?.count ?? 0;
 
   const rows = await db.select<UrlCheckLogEntry[]>(
-    `SELECT id, source_url AS sourceUrl, file_name AS fileName, checked_at AS checkedAt, result, message
-     FROM source_url_check_log
+    `SELECT l.id, l.source_url AS sourceUrl, l.file_name AS fileName, l.checked_at AS checkedAt, l.result, l.message,
+            (SELECT COUNT(*) FROM source_url_check_diffs d WHERE d.check_log_id = l.id) AS diffCount
+     FROM source_url_check_log l
      ${whereClause}
-     ORDER BY checked_at DESC
+     ORDER BY l.checked_at DESC
      LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
     [...params, query.pageSize, query.page * query.pageSize],
   );
 
   return { rows, total };
+}
+
+export type CheckDiffKind = "field" | "new-shift" | "error";
+
+export interface CheckDiffRow {
+  id: number;
+  checkLogId: number;
+  configId: number | null;
+  configLabel: string;
+  changeKind: CheckDiffKind;
+  matchedShiftId: number | null;
+  employeeId: number | null;
+  employeeName: string | null;
+  workDate: string | null;
+  local: string | null;
+  role: string | null;
+  scheduleStartMinutes: number | null;
+  scheduleEndMinutes: number | null;
+  sheetName: string | null;
+  rowNumber: number | null;
+  columnLetter: string | null;
+  fieldName: string | null;
+  oldValue: string | null;
+  newValue: string | null;
+  message: string | null;
+}
+
+export type CheckDiffInput = Omit<CheckDiffRow, "id" | "checkLogId">;
+
+/** Bulk-inserts the deep-check diff for one check attempt — see `computeReimportDiff` (`remoteCheckDiff.ts`) for how these are produced. */
+export async function saveCheckDiffs(checkLogId: number, entries: CheckDiffInput[]): Promise<void> {
+  if (entries.length === 0) return;
+  const db = await getDb();
+  for (const e of entries) {
+    await db.execute(
+      `INSERT INTO source_url_check_diffs
+         (check_log_id, config_id, config_label, change_kind, matched_shift_id, employee_id, employee_name,
+          work_date, local, role, schedule_start_minutes, schedule_end_minutes, sheet_name, row_number,
+          column_letter, field_name, old_value, new_value, message)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+      [
+        checkLogId,
+        e.configId,
+        e.configLabel,
+        e.changeKind,
+        e.matchedShiftId,
+        e.employeeId,
+        e.employeeName,
+        e.workDate,
+        e.local,
+        e.role,
+        e.scheduleStartMinutes,
+        e.scheduleEndMinutes,
+        e.sheetName,
+        e.rowNumber,
+        e.columnLetter,
+        e.fieldName,
+        e.oldValue,
+        e.newValue,
+        e.message,
+      ],
+    );
+  }
+}
+
+/** Lazily fetched when a check-log row is expanded in the UI — most rows have none. */
+export async function listCheckDiffs(checkLogId: number): Promise<CheckDiffRow[]> {
+  const db = await getDb();
+  return db.select<CheckDiffRow[]>(
+    `SELECT id, check_log_id AS checkLogId, config_id AS configId, config_label AS configLabel,
+            change_kind AS changeKind, matched_shift_id AS matchedShiftId, employee_id AS employeeId,
+            employee_name AS employeeName, work_date AS workDate, local, role,
+            schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes,
+            sheet_name AS sheetName, row_number AS rowNumber, column_letter AS columnLetter,
+            field_name AS fieldName, old_value AS oldValue, new_value AS newValue, message
+     FROM source_url_check_diffs
+     WHERE check_log_id = $1
+     ORDER BY id`,
+    [checkLogId],
+  );
+}
+
+/** Records the remote signature a deep check (download+parse+diff) just ran against, so `RemoteFileUpdatesContext.runChecks` doesn't repeat that work every tick while the user hasn't reimported yet. */
+export async function markDeepCheckSignature(
+  sourceUrl: string,
+  etag: string | null,
+  lastModified: string | null,
+  contentLength: number | null,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `UPDATE source_url_settings
+     SET last_deep_check_etag = $2, last_deep_check_last_modified = $3, last_deep_check_content_length = $4,
+         last_deep_check_at = datetime('now')
+     WHERE source_url = $1`,
+    [sourceUrl, etag, lastModified, contentLength],
+  );
+}
+
+/** Batched lookup for the deep-check diff pass — one query for every matched shift's current values instead of N calls to `getPaymentShift`. */
+export async function getPaymentShiftsByIds(ids: number[]): Promise<PaymentShiftRow[]> {
+  if (ids.length === 0) return [];
+  const db = await getDb();
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
+  const rows = await db.select<PaymentShiftRowRaw[]>(
+    `SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS} ${PAYMENT_SHIFT_FROM_CLAUSE} WHERE ps.id IN (${placeholders})`,
+    ids,
+  );
+  return rows.map(parsePaymentShiftRow);
 }
 
 /**
