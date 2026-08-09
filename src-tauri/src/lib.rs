@@ -150,6 +150,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_providers,
+            commands::list_dir_files,
             commands::hash_files,
             commands::parse_import,
             commands::reveal_in_file_manager,

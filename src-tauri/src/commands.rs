@@ -30,6 +30,32 @@ pub fn list_providers() -> Vec<ProviderInfo> {
         .collect()
 }
 
+/// Lists the immediate files (not subfolders) inside `dir` whose extension
+/// case-insensitively matches one of `extensions` (no leading dot, e.g.
+/// "pdf") — backs the "Pasta inteira" file-picking option, an alternative
+/// to the OS multi-file dialog for a folder with many files already
+/// organized together.
+#[tauri::command]
+pub fn list_dir_files(dir: String, extensions: Vec<String>) -> Result<Vec<String>, String> {
+    let wanted: Vec<String> = extensions.iter().map(|e| e.to_lowercase()).collect();
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        if !path.is_file() {
+            continue;
+        }
+        let matches = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| wanted.contains(&e.to_lowercase()));
+        if matches {
+            paths.push(path.to_string_lossy().to_string());
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
 /// Content-hashes and page-counts each file so the frontend can check,
 /// before doing any parsing, whether a picked PDF was already imported
 /// (even if it was renamed or picked from a different folder) — and

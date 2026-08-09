@@ -53,6 +53,17 @@ export async function pickPdfFiles(): Promise<string[]> {
   return Array.isArray(selection) ? selection : [selection];
 }
 
+/** Opens the native folder picker — the "Pasta inteira" alternative to multi-file selection. */
+export async function pickFolder(): Promise<string | null> {
+  const selection = await open({ directory: true, multiple: false });
+  return typeof selection === "string" ? selection : null;
+}
+
+/** Immediate files (not subfolders) inside `dir` whose extension matches one of `extensions` (no leading dot, e.g. "pdf"). */
+export function listDirFiles(dir: string, extensions: string[]): Promise<string[]> {
+  return invoke("list_dir_files", { dir, extensions });
+}
+
 /** Opens the native file picker, restricted to payroll spreadsheet formats, single-select — for the template wizard's sample file. */
 export async function pickPaymentFile(): Promise<string | null> {
   const selection = await open({

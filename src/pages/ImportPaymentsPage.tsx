@@ -23,12 +23,15 @@ import DateRangePicker from "../components/DateRangePicker";
 import Drawer from "../components/Drawer";
 import EmployeePicker from "../components/EmployeePicker";
 import Pagination from "../components/Pagination";
+import PickFilesButton from "../components/PickFilesButton";
 import { useRemoteFileUpdates, type RemoteUpdateFlag } from "../contexts/RemoteFileUpdatesContext";
 import type { EmployeeFormNavState } from "./EmployeeFormPage";
 import {
   applyPaymentTemplate,
   downloadPaymentFileFromUrl,
   hashPaymentFile,
+  listDirFiles,
+  pickFolder,
   pickPaymentFiles,
   type AppliedPaymentRow,
 } from "../lib/api";
@@ -417,7 +420,7 @@ export default function ImportPaymentsPage() {
     setError(null);
   }
 
-  async function handlePick() {
+  async function handlePickFiles() {
     if (!selectedTemplate) return;
     setError(null);
     const selected = await pickPaymentFiles(selectedTemplate.acceptedFileKinds);
@@ -438,12 +441,27 @@ export default function ImportPaymentsPage() {
     if (valid.length > 0) addPaths(valid);
   }
 
+  async function handlePickFolder() {
+    if (!selectedTemplate) return;
+    setError(null);
+    const dir = await pickFolder();
+    if (!dir) return;
+    const selected = await listDirFiles(dir, selectedTemplate.acceptedFileKinds);
+    if (selected.length === 0) {
+      setError(
+        `Nenhum arquivo ${formatFileKindList(selectedTemplate.acceptedFileKinds)} encontrado na pasta selecionada.`,
+      );
+      return;
+    }
+    addPaths(selected);
+  }
+
   /**
    * Shared by the manual "Baixar arquivo" button and the remote-update
    * banner's "Reimportar". A URL download can only ever produce .xlsx/.xls
    * (see `download_payment_file_from_url`'s magic-byte check) — if the
    * selected template expects csv/ods, that's caught here the same way
-   * `handlePick` catches a locally-picked file of the wrong format.
+   * `handlePickFiles` catches a locally-picked file of the wrong format.
    *
    * `templateOverride` exists only for `handleReimportFromUrl`: it just
    * called `setTemplateId`, and `selectedTemplate` (derived from
@@ -1290,16 +1308,12 @@ export default function ImportPaymentsPage() {
                       ? `Formatos aceitos: ${formatFileKindList(selectedTemplate.acceptedFileKinds)} — suporta múltiplos arquivos.`
                       : "Selecione um template para saber os formatos aceitos."}
                   </p>
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={handlePick}
+                  <PickFilesButton
+                    onPickFiles={handlePickFiles}
+                    onPickFolder={handlePickFolder}
                     disabled={!selectedTemplate}
                     title={selectedTemplate ? undefined : "Selecione um template primeiro"}
-                  >
-                    <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-                    Procurar arquivos
-                  </button>
+                  />
                 </div>
               ) : (
                 <>

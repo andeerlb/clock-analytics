@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   Eye,
   FileText,
-  FolderOpen,
   History,
   Lightbulb,
   PlusCircle,
@@ -21,8 +20,9 @@ import { Link } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import Drawer from "../components/Drawer";
 import Pagination from "../components/Pagination";
+import PickFilesButton from "../components/PickFilesButton";
 import PdfViewerModal from "../components/PdfViewerModal";
-import { hashFiles, listProviders, parseImport, pickPdfFiles } from "../lib/api";
+import { hashFiles, listDirFiles, listProviders, parseImport, pickFolder, pickPdfFiles } from "../lib/api";
 import {
   findConflicts,
   listClients,
@@ -191,10 +191,22 @@ export default function ImportTimesheetPage() {
     });
   }
 
-  async function handlePick() {
+  async function handlePickFiles() {
     setError(null);
     const selected = await pickPdfFiles();
     if (selected.length > 0) addPaths(selected);
+  }
+
+  async function handlePickFolder() {
+    setError(null);
+    const dir = await pickFolder();
+    if (!dir) return;
+    const selected = await listDirFiles(dir, ["pdf"]);
+    if (selected.length === 0) {
+      setError("Nenhum arquivo PDF encontrado na pasta selecionada.");
+      return;
+    }
+    addPaths(selected);
   }
 
   const eligiblePaths = useMemo(
@@ -504,10 +516,7 @@ export default function ImportTimesheetPage() {
             <p className="muted" style={{ margin: 0 }}>
               Suporta múltiplos arquivos.
             </p>
-            <button type="button" className="secondary" onClick={handlePick}>
-              <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-              Procurar arquivos
-            </button>
+            <PickFilesButton onPickFiles={handlePickFiles} onPickFolder={handlePickFolder} />
           </div>
 
           {paths.length > 0 && (

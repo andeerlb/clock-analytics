@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   Eye,
   FileText,
-  FolderOpen,
   History,
   ListChecks,
   PlusCircle,
@@ -21,7 +20,15 @@ import Avatar from "../components/Avatar";
 import Drawer from "../components/Drawer";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
-import { applyPaymentTemplate, hashPaymentFile, pickPaymentFiles, type AppliedPaymentRow } from "../lib/api";
+import PickFilesButton from "../components/PickFilesButton";
+import {
+  applyPaymentTemplate,
+  hashPaymentFile,
+  listDirFiles,
+  pickFolder,
+  pickPaymentFiles,
+  type AppliedPaymentRow,
+} from "../lib/api";
 import {
   createEmployeesFromImport,
   findEmployeeByAttempts,
@@ -261,7 +268,7 @@ export default function ImportEmployeesPage() {
     setError(null);
   }
 
-  async function handlePick() {
+  async function handlePickFiles() {
     if (!selectedTemplate) return;
     setError(null);
     const selected = await pickPaymentFiles(selectedTemplate.acceptedFileKinds);
@@ -279,6 +286,21 @@ export default function ImportEmployeesPage() {
       );
     }
     if (valid.length > 0) addPaths(valid);
+  }
+
+  async function handlePickFolder() {
+    if (!selectedTemplate) return;
+    setError(null);
+    const dir = await pickFolder();
+    if (!dir) return;
+    const selected = await listDirFiles(dir, selectedTemplate.acceptedFileKinds);
+    if (selected.length === 0) {
+      setError(
+        `Nenhum arquivo ${formatFileKindList(selectedTemplate.acceptedFileKinds)} encontrado na pasta selecionada.`,
+      );
+      return;
+    }
+    addPaths(selected);
   }
 
   const employeeRows = useMemo(() => fileResults.flatMap((r) => r.rows), [fileResults]);
@@ -631,16 +653,12 @@ export default function ImportEmployeesPage() {
                     ? `Formatos aceitos: ${formatFileKindList(selectedTemplate.acceptedFileKinds)} — suporta múltiplos arquivos.`
                     : "Selecione um template para saber os formatos aceitos."}
                 </p>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={handlePick}
+                <PickFilesButton
+                  onPickFiles={handlePickFiles}
+                  onPickFolder={handlePickFolder}
                   disabled={!selectedTemplate}
                   title={selectedTemplate ? undefined : "Selecione um template primeiro"}
-                >
-                  <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-                  Procurar arquivos
-                </button>
+                />
               </div>
 
               {paths.length > 0 && (
