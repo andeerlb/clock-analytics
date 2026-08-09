@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { checkRemotePaymentFile, downloadPaymentFileFromUrl } from "../lib/api";
+import { checkRemotePaymentFile, deletePaths, downloadPaymentFileFromUrl } from "../lib/api";
 import {
   copyCheckDiffs,
   createReimportConfig as createReimportConfigDb,
@@ -290,9 +290,17 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
           const entries: CheckDiffInput[] = [];
           let wholeUrlErrorMessage: string | null = null;
           let downloadSucceeded = false;
+          // Set as soon as the download lands — deleted in the `finally`
+          // below regardless of how the deep pass turns out, since this
+          // copy is only ever a scratch file for `computeReimportDiff` to
+          // read (the check never saves to `source_files`/`payment_shifts`,
+          // so nothing else could ever reference this exact path again).
+          // Left unset otherwise — nothing to clean up.
+          let downloadedPath: string | null = null;
           try {
             const downloaded = await downloadPaymentFileFromUrl(t.sourceUrl);
             downloadSucceeded = true;
+            downloadedPath = downloaded.path;
             for (const config of configs) {
               try {
                 entries.push(...(await computeReimportDiff(config, downloaded.path)));
@@ -308,6 +316,15 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
             }
           } catch (e) {
             wholeUrlErrorMessage = String(e instanceof Error ? e.message : e);
+          } finally {
+            if (downloadedPath) {
+              try {
+                await deletePaths([downloadedPath]);
+              } catch {
+                // Best-effort — a leftover temp file from a background check
+                // isn't worth failing (or even logging) the check over.
+              }
+            }
           }
 
           const hasRealChange = entries.some((e) => e.changeKind !== "error");
