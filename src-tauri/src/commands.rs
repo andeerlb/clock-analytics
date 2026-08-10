@@ -765,6 +765,24 @@ pub fn write_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
     std::fs::write(&path, data).map_err(|e| e.to_string())
 }
 
+/// Copies the live database file to `dest_path` — see
+/// `storage::export_database` for why the frontend checkpoints first.
+#[tauri::command]
+pub fn export_database(app: AppHandle, dest_path: String) -> Result<(), String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    storage::export_database(&data_dir, &dest_path)
+}
+
+/// Replaces the live database file with `src_path` — see
+/// `storage::import_database` for the validation/backup/sidecar-cleanup it
+/// does before overwriting. The frontend closes its DB connection first and
+/// relaunches the app right after this returns.
+#[tauri::command]
+pub fn import_database(app: AppHandle, src_path: String) -> Result<(), String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    storage::import_database(&data_dir, &src_path)
+}
+
 fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     Ok(settings::load(&data_dir))

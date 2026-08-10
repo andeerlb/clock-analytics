@@ -1,9 +1,12 @@
 use serde::Serialize;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
+
+/// Every SQLite database file starts with this exact 16-byte header.
+const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
 
 /// Disk usage of everything the app itself created — the DB (plus its WAL/
 /// SHM sidecars, which hold real data until checkpointed), the copied PDFs
@@ -169,5 +172,54 @@ fn add_dir_to_zip(
             zip.write_all(&bytes).map_err(|e| e.to_string())?;
         }
     }
+    Ok(())
+}
+
+/// Copies the live `pontoscan.db` to `dest_path` — the caller is expected
+/// to have already run `PRAGMA wal_checkpoint(TRUNCATE)` over the existing
+/// connection first, so this single file (no `-wal`/`-shm` sidecars needed)
+/// is a complete, self-contained snapshot of everything up to this moment.
+pub fn export_database(data_dir: &Path, dest_path: &str) -> Result<(), String> {
+    let src = data_dir.join("pontoscan.db");
+    fs::copy(&src, dest_path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Replaces the live database with `src_path`. Validates the 16-byte SQLite
+/// header first — cheap, and enough to catch "wrong file picked" without
+/// pulling in a full SQL engine just for this. Backs up whatever's
+/// currently in place before overwriting, so a bad import is always
+/// recoverable. Removes the current database's `-wal`/`-shm` sidecars
+/// rather than carrying them over — they hold pages relative to the OLD
+/// file, and applying them on top of the newly-imported one would corrupt
+/// it. The caller is responsible for closing the existing DB connection
+/// before calling this, and relaunching the app right after: this only
+/// touches files, so nothing else stays consistent with the swap otherwise.
+pub fn import_database(data_dir: &Path, src_path: &str) -> Result<(), String> {
+    let mut header = [0u8; 16];
+    let mut f = fs::File::open(src_path).map_err(|e| e.to_string())?;
+    f.read_exact(&mut header)
+        .map_err(|_| "Arquivo pequeno demais para ser um banco de dados SQLite válido.".to_string())?;
+    if &header != SQLITE_MAGIC {
+        return Err("Esse arquivo não é um banco de dados SQLite válido.".to_string());
+    }
+
+    let dest = data_dir.join("pontoscan.db");
+    if dest.exists() {
+        let backup_name = format!(
+            "pontoscan.db.before-import-{}",
+            chrono::Local::now().format("%Y%m%d_%H%M%S")
+        );
+        fs::copy(&dest, data_dir.join(backup_name)).map_err(|e| e.to_string())?;
+    }
+
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = data_dir.join(format!("pontoscan.db{suffix}"));
+        if sidecar.exists() {
+            fs::remove_file(&sidecar).map_err(|e| e.to_string())?;
+        }
+    }
+
+    fs::copy(src_path, &dest).map_err(|e| e.to_string())?;
     Ok(())
 }

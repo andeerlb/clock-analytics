@@ -4271,6 +4271,18 @@ export async function vacuumDatabase(): Promise<void> {
   await db.execute("PRAGMA wal_checkpoint(TRUNCATE)");
 }
 
+/** Flushes any WAL contents into the main file — call before copying `pontoscan.db` directly (export) so the single file is a complete, self-contained snapshot instead of missing whatever's still sitting in `-wal`. */
+export async function checkpointDatabase(): Promise<void> {
+  const db = await getDb();
+  await db.execute("PRAGMA wal_checkpoint(TRUNCATE)");
+}
+
+/** Closes the live connection — call before replacing the underlying `pontoscan.db` file (import) so nothing here still holds it open when the app relaunches onto the new one. */
+export async function closeDatabase(): Promise<void> {
+  const db = await getDb();
+  await db.close();
+}
+
 export interface ClearDataOptions {
   /** Keep companies (and, transitively, whatever else depends on them). */
   keepCompanies?: boolean;

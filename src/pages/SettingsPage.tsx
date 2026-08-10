@@ -1,18 +1,21 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { relaunch } from "@tauri-apps/plugin-process";
 import type { Update } from "@tauri-apps/plugin-updater";
 import {
   AlertTriangle,
   Archive,
   CheckCircle2,
   Database,
+  Download,
   FileCheck2,
   FolderOpen,
   Minimize2,
   RefreshCw,
   Sparkles,
   Trash2,
+  Upload,
   XCircle,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -24,18 +27,28 @@ import {
   checkPopplerStatus,
   clearImportsDir,
   deletePaths,
+  exportDatabase,
   getCloseToTray,
   getStorageUsage,
+  importDatabase,
   openAppDataDir,
   setCloseToTray,
   setPopplerDir,
 } from "../lib/api";
-import { clearAllData, findRedundantOriginals, markOriginalsRemoved, vacuumDatabase } from "../lib/db";
+import {
+  checkpointDatabase,
+  clearAllData,
+  closeDatabase,
+  findRedundantOriginals,
+  markOriginalsRemoved,
+  vacuumDatabase,
+} from "../lib/db";
 import { formatBytes } from "../lib/format";
 import type { PopplerStatus, StorageUsage } from "../lib/types";
 import { checkForUpdate, REPO_URL } from "../lib/updateCheck";
 
 const CLEAR_CONFIRM_PHRASE = "APAGAR TUDO";
+const IMPORT_CONFIRM_PHRASE = "SUBSTITUIR BANCO";
 
 export default function SettingsPage() {
   const navigate = useNavigate();
@@ -65,6 +78,10 @@ export default function SettingsPage() {
   const [confirmText, setConfirmText] = useState("");
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [exporting, setExporting] = useState(false);
+  const [importConfirmText, setImportConfirmText] = useState("");
+  const [importing, setImporting] = useState(false);
 
   const [popplerStatus, setPopplerStatusState] = useState<PopplerStatus | null>(null);
   const [popplerDirInput, setPopplerDirInput] = useState("");
@@ -240,6 +257,52 @@ export default function SettingsPage() {
       await openAppDataDir();
     } catch (e) {
       setError(String(e));
+    }
+  }
+
+  async function handleExportDatabase() {
+    setError(null);
+    setExporting(true);
+    try {
+      const destPath = await save({
+        defaultPath: "pontoscan.db",
+        filters: [{ name: "Banco de dados SQLite", extensions: ["db"] }],
+      });
+      if (!destPath) return;
+      // Flush the WAL into the main file first — otherwise the copy could
+      // be missing whatever hasn't been checkpointed yet.
+      await checkpointDatabase();
+      await exportDatabase(destPath);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function handleImportDatabase() {
+    if (importConfirmText.trim() !== IMPORT_CONFIRM_PHRASE) return;
+    setError(null);
+    setImporting(true);
+    try {
+      const srcPath = await open({
+        multiple: false,
+        filters: [{ name: "Banco de dados SQLite", extensions: ["db"] }],
+      });
+      if (!srcPath || Array.isArray(srcPath)) {
+        setImporting(false);
+        return;
+      }
+      // Close this session's connection before the file underneath it gets
+      // replaced, then relaunch so the next connection opens fresh against
+      // the new file — nothing about the running app (cached DB promise,
+      // in-memory state) survives a straight file swap otherwise.
+      await closeDatabase();
+      await importDatabase(srcPath);
+      await relaunch();
+    } catch (e) {
+      setError(String(e));
+      setImporting(false);
     }
   }
 
@@ -450,6 +513,16 @@ export default function SettingsPage() {
               Abrir pasta de dados
             </button>
           </div>
+          <div style={{ flex: "1 1 260px" }}>
+            <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
+              Salva uma cópia completa do banco de dados atual num único arquivo — pra guardar, ou
+              pra mandar pra alguém analisar um problema. Só lê; não muda nada aqui.
+            </p>
+            <button type="button" className="secondary" onClick={handleExportDatabase} disabled={exporting}>
+              <Download size={15} style={{ marginRight: "0.4rem" }} />
+              {exporting ? "Exportando..." : "Exportar banco de dados"}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -583,6 +656,38 @@ export default function SettingsPage() {
             <Trash2 size={15} style={{ marginRight: "0.4rem" }} />
           )}
           {clearing ? "Apagando..." : "Apagar tudo"}
+        </button>
+
+        <hr style={{ margin: "1.4rem 0", border: "none", borderTop: "1px solid var(--border)" }} />
+
+        <p className="muted" style={{ fontSize: "0.85rem" }}>
+          Substitui TODO o banco de dados atual (cadastro, histórico, configurações — tudo) pelo
+          arquivo escolhido. Uma cópia do que está aqui agora é salva automaticamente antes de
+          trocar, mas o que está na tela desaparece e vira o conteúdo desse arquivo. O app reinicia
+          sozinho logo em seguida. Só use se souber exatamente o que tem dentro desse arquivo.
+        </p>
+
+        <div className="field" style={{ maxWidth: "22rem", marginTop: "0.4rem", marginBottom: "1rem", gap: "0.6rem" }}>
+          <label htmlFor="import-confirm">
+            Digite <strong>{IMPORT_CONFIRM_PHRASE}</strong> para confirmar
+          </label>
+          <input
+            id="import-confirm"
+            type="text"
+            value={importConfirmText}
+            onChange={(e) => setImportConfirmText(e.target.value)}
+            placeholder={IMPORT_CONFIRM_PHRASE}
+          />
+        </div>
+
+        <button
+          type="button"
+          onClick={handleImportDatabase}
+          disabled={importing || importConfirmText.trim() !== IMPORT_CONFIRM_PHRASE}
+          style={{ background: "var(--danger)", borderColor: "var(--danger)", color: "#410002" }}
+        >
+          <Upload size={15} style={{ marginRight: "0.4rem" }} />
+          {importing ? "Substituindo..." : "Importar banco de dados"}
         </button>
       </div>
 

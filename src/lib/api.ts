@@ -221,6 +221,16 @@ export function writeBinaryFile(path: string, data: Uint8Array): Promise<void> {
   return invoke("write_binary_file", { path, data: Array.from(data) });
 }
 
+/** Copies the live database file to `destPath` — call `checkpointDatabase()` (lib/db) first so it's a complete snapshot. */
+export function exportDatabase(destPath: string): Promise<void> {
+  return invoke("export_database", { destPath });
+}
+
+/** Replaces the live database file with `srcPath` — validates it's really a SQLite file and backs up the current one first (see the Rust side). Call `closeDatabase()` (lib/db) before this and relaunch the app right after. */
+export function importDatabase(srcPath: string): Promise<void> {
+  return invoke("import_database", { srcPath });
+}
+
 /** Whether pdfinfo/pdftotext/pdfseparate/pdfunite were found — checked at startup and on Configurações. */
 export function checkPopplerStatus(): Promise<PopplerStatus> {
   return invoke("check_poppler_status");
