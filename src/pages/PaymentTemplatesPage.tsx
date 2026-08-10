@@ -1,5 +1,6 @@
 import { Pencil, Plus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
 import PaymentTemplateWizard from "../components/PaymentTemplateWizard";
@@ -15,6 +16,8 @@ const FILE_KIND_LABELS: Record<string, string> = {
 };
 
 export default function PaymentTemplatesPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [templates, setTemplates] = useState<PaymentTemplateListRow[]>([]);
   const [wizardTarget, setWizardTarget] = useState<PaymentTemplateRow | "new" | null>(null);
   const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<PaymentTemplateListRow | null>(null);
@@ -38,6 +41,22 @@ export default function PaymentTemplatesPage() {
       setError(String(e));
     }
   }
+
+  // Deep link from elsewhere (e.g. a template name clicked in the
+  // Verificação automática check history) — opens straight into that
+  // template's editor. `location.state` is cleared right away (`replace`)
+  // so this fires exactly once per navigation, same pattern as
+  // ImportPaymentsPage's `autoReimportConfigId`.
+  const handledOpenState = useRef<unknown>(undefined);
+  useEffect(() => {
+    if (location.state === handledOpenState.current) return;
+    const templateId = (location.state as { openTemplateId?: number } | null)?.openTemplateId;
+    if (templateId === undefined) return;
+    handledOpenState.current = location.state;
+    navigate(location.pathname, { replace: true, state: null });
+    handleEditTemplate(templateId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
 
   async function handleDeleteTemplate() {
     if (!confirmDeleteTarget) return;

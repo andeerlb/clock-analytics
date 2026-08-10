@@ -1647,23 +1647,35 @@ export async function trackUrlForAutoReimport(
 
 const MAX_CHECK_LOG_ENTRIES_PER_URL = 200;
 
+/** A reimport config THIS check attempt actually evaluated, snapshotted at evaluation time — see `logUrlCheckResult`. */
+export interface EvaluatedConfigSnapshot {
+  id: number;
+  templateId: number;
+  templateName: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+}
+
 /**
  * Records one check attempt and prunes older entries for that URL beyond
  * the last 200, so the log stays bounded regardless of how short the check
- * interval is. `evaluatedConfigIds` are the reimport configs THIS attempt
+ * interval is. `evaluatedConfigs` are the reimport configs THIS attempt
  * actually evaluated (never "every config the URL has" — see
  * `RemoteFileUpdatesContext.runChecks`), recorded in
- * `source_url_check_log_configs` so each config's own due-ness/history is
- * independent of any sibling config sharing the same URL. Returns the
- * inserted row's id, so a deep check that runs right after can link its
- * diffs back to this exact attempt.
+ * `source_url_check_log_configs` — template/período snapshotted as of this
+ * exact evaluation, not read live off `source_url_reimport_configs`, so a
+ * later edit or delete of the config never rewrites what a past check
+ * actually used — so each config's own due-ness/history is independent of
+ * any sibling config sharing the same URL. Returns the inserted row's id, so
+ * a deep check that runs right after can link its diffs back to this exact
+ * attempt.
  */
 export async function logUrlCheckResult(
   sourceUrl: string,
   fileName: string,
   result: UrlCheckResult,
   message: string | null,
-  evaluatedConfigIds: number[],
+  evaluatedConfigs: EvaluatedConfigSnapshot[],
 ): Promise<number> {
   const db = await getDb();
   const inserted = await db.execute(
@@ -1671,10 +1683,11 @@ export async function logUrlCheckResult(
     [sourceUrl, fileName, result, message],
   );
   const checkLogId = inserted.lastInsertId as number;
-  for (const configId of evaluatedConfigIds) {
+  for (const config of evaluatedConfigs) {
     await db.execute(
-      `INSERT INTO source_url_check_log_configs (check_log_id, config_id) VALUES ($1, $2)`,
-      [checkLogId, configId],
+      `INSERT INTO source_url_check_log_configs (check_log_id, config_id, template_id, template_name, period_start, period_end)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [checkLogId, config.id, config.templateId, config.templateName, config.periodStart, config.periodEnd],
     );
   }
   await db.execute(
@@ -1717,6 +1730,11 @@ export interface UrlCheckLogEntry {
   diffCount: number;
   /** Whether any of THIS config's own diff rows on this check is a `change_kind: 'error'` — this config's own processing failed on this check, distinct from a real field/new-shift change and from a sibling config's own error (see `listUrlCheckLogForConfig`). */
   hasOwnError: boolean;
+  /** Snapshot of the template/período this config actually used on THIS check attempt (see `source_url_check_log_configs`) — the live config can be edited or deleted afterward, so these stay meaningful even when `ReimportConfig.templateId`/período have since changed. `null` for a check logged before migration 0064. */
+  templateId: number | null;
+  templateName: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
 }
 
 /**
@@ -1736,6 +1754,8 @@ export async function listUrlCheckLogForConfig(
   const db = await getDb();
   const rawRows = await db.select<(Omit<UrlCheckLogEntry, "hasOwnError"> & { hasOwnError: number })[]>(
     `SELECT l.id, l.source_url AS sourceUrl, l.file_name AS fileName, l.checked_at AS checkedAt, l.result, l.message,
+            jc.template_id AS templateId, jc.template_name AS templateName,
+            jc.period_start AS periodStart, jc.period_end AS periodEnd,
             (SELECT COUNT(*) FROM source_url_check_diffs d WHERE d.check_log_id = l.id AND d.config_id = $1) AS diffCount,
             (SELECT MAX(CASE WHEN d.change_kind = 'error' THEN 1 ELSE 0 END)
              FROM source_url_check_diffs d WHERE d.check_log_id = l.id AND d.config_id = $1) AS hasOwnError

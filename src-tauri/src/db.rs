@@ -382,5 +382,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0063_source_url_check_log_configs.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 64,
+            description: "source_url_check_log_configs gains template_id/template_name/period_start/period_end — a snapshot of what a config's check attempt actually used, since the live config can be edited or deleted afterward",
+            sql: include_str!("../migrations/0064_check_log_config_snapshot.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

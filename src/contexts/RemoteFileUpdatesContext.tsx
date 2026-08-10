@@ -19,6 +19,7 @@ import {
   untrackPaymentUrl as untrackPaymentUrlDb,
   updateReimportConfig as updateReimportConfigDb,
   type CheckDiffInput,
+  type EvaluatedConfigSnapshot,
   type ReimportConfig,
   type ReimportConfigInput,
   type TrackedPaymentUrl,
@@ -190,6 +191,18 @@ function buildReimportFlag(config: ReimportConfig, trackedFiles: TrackedPaymentU
   };
 }
 
+/** What `logUrlCheckResult` snapshots for a config it evaluated — template/período resolved NOW, at evaluation time, so a later edit or delete of the config never rewrites what a past check actually used. */
+function toEvaluatedConfigSnapshot(config: ReimportConfig): EvaluatedConfigSnapshot {
+  const { start, end } = resolveReimportPeriod(config);
+  return {
+    id: config.id,
+    templateId: config.templateId,
+    templateName: config.templateName,
+    periodStart: start,
+    periodEnd: end,
+  };
+}
+
 interface RemoteFileUpdatesContextValue {
   remoteUpdates: RemoteUpdateFlag[];
   dismissRemoteUpdate: (configId: number) => void;
@@ -342,7 +355,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
             current = check.current;
           } catch (e) {
             const message = String(e instanceof Error ? e.message : e);
-            await logUrlCheckResult(t.sourceUrl, t.fileName, "error", message, configs.map((c) => c.id));
+            await logUrlCheckResult(t.sourceUrl, t.fileName, "error", message, configs.map(toEvaluatedConfigSnapshot));
             return;
           }
 
@@ -354,7 +367,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
           if (headerResult !== "changed" && !unreliableHeader) {
             // Nothing to look closer at — the header itself is the whole
             // story here.
-            await logUrlCheckResult(t.sourceUrl, t.fileName, headerResult, null, configs.map((c) => c.id));
+            await logUrlCheckResult(t.sourceUrl, t.fileName, headerResult, null, configs.map(toEvaluatedConfigSnapshot));
             return;
           }
 
@@ -395,7 +408,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
                 t.fileName,
                 t.lastDeepCheckResult,
                 null,
-                configs.map((c) => c.id),
+                configs.map(toEvaluatedConfigSnapshot),
               );
               await copyCheckDiffs(t.lastDeepCheckLogId, checkLogId);
               return;
@@ -505,7 +518,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
             t.fileName,
             effectiveResult,
             wholeUrlErrorMessage,
-            configs.map((c) => c.id),
+            configs.map(toEvaluatedConfigSnapshot),
           );
           await saveCheckDiffs(checkLogId, entries);
           // A failed DOWNLOAD isn't cached as "checked" — a transient

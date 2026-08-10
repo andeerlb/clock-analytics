@@ -1,11 +1,8 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  AlertCircle,
   AlertTriangle,
-  CheckCircle2,
   ChevronDown,
   FileText,
-  HelpCircle,
   Link2,
   Plus,
   RefreshCw,
@@ -50,11 +47,11 @@ const HISTORY_STRIP_SIZE = 7;
 /** Page size for the "Histórico completo" drawer's infinite scroll. */
 const HISTORY_PAGE_SIZE = 30;
 
-const RESULT_BADGE: Record<UrlCheckResult, { className: string; label: string; icon: typeof CheckCircle2 }> = {
-  changed: { className: "badge warn", label: "Mudou", icon: AlertTriangle },
-  unchanged: { className: "badge ok", label: "Sem mudança", icon: CheckCircle2 },
-  unknown: { className: "badge neutral", label: "Indeterminado", icon: HelpCircle },
-  error: { className: "badge file-error", label: "Erro", icon: AlertCircle },
+const RESULT_BADGE: Record<UrlCheckResult, { className: string; label: string }> = {
+  changed: { className: "badge warn", label: "Mudou" },
+  unchanged: { className: "badge ok", label: "Sem mudança" },
+  unknown: { className: "badge neutral", label: "Indeterminado" },
+  error: { className: "badge file-error", label: "Erro" },
 };
 
 interface ConfigDraft {
@@ -98,6 +95,7 @@ function resolveDraftPeriod(draft: ConfigDraft): { start: string | null; end: st
 
 function formatResolvedPreview(resolved: { start: string | null; end: string | null }): string {
   if (!resolved.start && !resolved.end) return "todo o relatório";
+  if (resolved.start && resolved.start === resolved.end) return formatDateAbbrevYY(resolved.start);
   const start = resolved.start ? formatDateAbbrevYY(resolved.start) : "início";
   const end = resolved.end ? formatDateAbbrevYY(resolved.end) : "fim";
   return `${start} → ${end}`;
@@ -399,6 +397,51 @@ export default function RemoteUpdatesPage() {
     }
   }
 
+  // Período/template a check actually used — snapshotted per config on
+  // `source_url_check_log_configs` at evaluation time (see
+  // `logUrlCheckResult`), so this stays accurate even after the live config
+  // is edited or deleted. Shown both on the full-history list and the
+  // single-entry detail, since knowing WHAT was checked (not just when and
+  // whether it failed) is what actually informs a decision here.
+  function renderCheckMeta(entry: UrlCheckLogEntry) {
+    return (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem 1.2rem", fontSize: "0.78rem" }} className="muted">
+        <span>
+          Arquivo:{" "}
+          <button
+            type="button"
+            className="link-button"
+            title={entry.sourceUrl}
+            onClick={(e) => {
+              e.stopPropagation();
+              openUrl(entry.sourceUrl);
+            }}
+          >
+            {entry.fileName}
+          </button>
+        </span>
+        <span>Período aplicado: {formatResolvedPreview({ start: entry.periodStart, end: entry.periodEnd })}</span>
+        <span>
+          Template:{" "}
+          {entry.templateId !== null ? (
+            <button
+              type="button"
+              className="link-button"
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate("/import/payments/templates", { state: { openTemplateId: entry.templateId } });
+              }}
+            >
+              {entry.templateName ?? "Template removido"}
+            </button>
+          ) : (
+            entry.templateName ?? "—"
+          )}
+        </span>
+      </div>
+    );
+  }
+
   // "Ver histórico completo" — a paginated (infinite scroll) view of a
   // config's full check history, shown in the same Drawer as the
   // single-entry detail (`drawerRow`) but never both at once. Kept around
@@ -558,7 +601,7 @@ export default function RemoteUpdatesPage() {
                         onClick={() => setUntrackTarget(t)}
                         title="Remove o rastreamento automático e o histórico de verificações deste arquivo — não afeta o que já foi importado"
                       >
-                        PARAR RASTREAMENTO
+                        REMOVER RASTREAMENTO
                       </button>
                       <button
                         type="button"
@@ -645,8 +688,8 @@ export default function RemoteUpdatesPage() {
                                       : checkingConfigIds.has(c.id)
                                         ? "Verificando agora..."
                                         : dueAt !== null && dueAt - now <= 0
-                                          ? "Rodando em instantes..."
-                                          : `🕐 Próxima em ${dueAt !== null ? formatCountdown(dueAt - now) : "—"}`}
+                                          ? "Rodando"
+                                          : `Próxima em ${dueAt !== null ? formatCountdown(dueAt - now) : "—"}`}
                                   </span>
                                 </div>
                                 <div className="field-row" style={{ marginBottom: "0.7rem" }}>
@@ -1066,13 +1109,13 @@ export default function RemoteUpdatesPage() {
 
       {untrackTarget && (
         <ConfirmModal
-          title="Parar de rastrear este arquivo?"
+          title="Remover rastreamento deste arquivo?"
           message={`Remove o rastreamento automático e todo o histórico de verificações de "${untrackTarget.fileName}"${
             reimportConfigs.filter((c) => c.sourceUrl === untrackTarget.sourceUrl).length > 0
               ? ` (${reimportConfigs.filter((c) => c.sourceUrl === untrackTarget.sourceUrl).length} configuração(ões) de reimportação)`
               : ""
           }. Os turnos já importados não são afetados.`}
-          confirmLabel={untracking ? "Removendo..." : "Parar de rastrear"}
+          confirmLabel={untracking ? "Removendo..." : "Remover rastreamento"}
           onConfirm={handleConfirmUntrack}
           onCancel={() => {
             setUntrackTarget(null);
@@ -1086,6 +1129,7 @@ export default function RemoteUpdatesPage() {
       <Drawer
         open={drawerRow !== null || historyDrawerConfig !== null}
         onClose={closeDrawer}
+        width="min(680px, 95vw)"
         title={
           drawerRow
             ? `${drawerRow.configLabel} — ${formatDateTimeAbbrevYY(drawerRow.entry.checkedAt, true)}`
@@ -1106,6 +1150,7 @@ export default function RemoteUpdatesPage() {
                 ← Voltar ao histórico completo
               </button>
             )}
+            <div style={{ marginBottom: "0.8rem" }}>{renderCheckMeta(drawerRow.entry)}</div>
             {drawerRow.entry.message && (
               <div className="error-box" style={{ fontSize: "0.82rem" }}>
                 {drawerRow.entry.message}
@@ -1135,21 +1180,11 @@ export default function RemoteUpdatesPage() {
               <p className="muted" style={{ margin: 0 }}>Nenhuma verificação registrada ainda.</p>
             )}
             {historyRows.map((entry) => {
-              const failed = entry.message !== null || entry.hasOwnError;
               const badge = RESULT_BADGE[entry.result];
-              const Icon = badge.icon;
               return (
-                <button
+                <div
                   key={entry.id}
-                  type="button"
-                  className="outline"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: "0.6rem",
-                    textAlign: "left",
-                  }}
+                  className="history-full-row"
                   onClick={() =>
                     openLogDetail({
                       key: `${entry.id}:${historyDrawerConfig.configId}`,
@@ -1161,15 +1196,18 @@ export default function RemoteUpdatesPage() {
                     })
                   }
                 >
-                  <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.82rem" }}>
-                    <Icon size={14} style={{ color: failed ? "var(--danger)" : "var(--text-muted)" }} />
-                    {formatDateTimeAbbrevYY(entry.checkedAt, true)}
-                  </span>
-                  <span className={badge.className} style={{ fontSize: "0.7rem" }}>
-                    {badge.label}
-                    {entry.diffCount > 0 ? ` (${entry.diffCount})` : ""}
-                  </span>
-                </button>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.6rem" }}>
+                    <span style={{ fontSize: "0.82rem" }}>{formatDateTimeAbbrevYY(entry.checkedAt, true)}</span>
+                    <span className={badge.className} style={{ fontSize: "0.7rem" }}>
+                      {badge.label}
+                      {entry.diffCount > 0 ? ` (${entry.diffCount})` : ""}
+                    </span>
+                  </div>
+                  {entry.message && (
+                    <div style={{ fontSize: "0.78rem", color: "var(--danger)", marginTop: "0.35rem" }}>{entry.message}</div>
+                  )}
+                  <div style={{ marginTop: "0.35rem" }}>{renderCheckMeta(entry)}</div>
+                </div>
               );
             })}
             {!historyExhausted && <div ref={historySentinelRef} style={{ height: 1 }} />}

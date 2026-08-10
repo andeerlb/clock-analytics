@@ -2113,6 +2113,10 @@ tr.row-error:hover {
   padding: 0;
   white-space: nowrap;
 }
+.stop-tracking-btn:hover {
+  background: none;
+  text-decoration: underline;
+}
 .tracked-chevron {
   background: transparent;
   border: none;
@@ -2123,6 +2127,9 @@ tr.row-error:hover {
   align-items: center;
   transition: transform 0.15s ease;
   flex-shrink: 0;
+}
+.tracked-chevron:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
 .tracked-chevron.expanded {
   transform: rotate(180deg);
@@ -2183,6 +2190,20 @@ button.history-bar:hover {
   opacity: 0.7;
 }
 
+/* One row in the Drawer's "Ver histórico completo" paginated list — a div,
+   not a button, since it wraps the template-name link (its own nested
+   button) as well as the row's own click-to-open-detail area. */
+.history-full-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.history-full-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
 /* One of these per reimport config — the file-level card above can hold
    several, stacked, when the same URL has more than one config running. */
 .config-grid {
@@ -2227,7 +2248,7 @@ button.history-bar:hover {
   color: var(--text-muted);
   background: var(--surface-variant);
   padding: 0.15rem 0.6rem;
-  border-radius: 20px;
+  border-radius: 4px;
   white-space: nowrap;
 }
 .effective-field {
