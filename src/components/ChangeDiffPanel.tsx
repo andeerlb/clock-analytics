@@ -36,6 +36,8 @@ export default function ChangeDiffPanel({
   onAccept,
   acceptingShiftId = null,
   acceptedShiftIds,
+  onDismiss,
+  dismissingIds,
 }: {
   rows: CheckDiffRow[];
   /** The one shift currently being soft-deleted via "Marcar como excluído" (disables just that card's button) — `null` when nothing's in flight. */
@@ -47,7 +49,35 @@ export default function ChangeDiffPanel({
   onAccept?: (shiftId: number) => void;
   acceptingShiftId?: number | null;
   acceptedShiftIds?: Set<number>;
+  /** "Visto" — acknowledges a card/line without resolving it (see `dismissCheckDiffs`): takes every `CheckDiffRow.id` the card is made of, since a card can bundle several field diffs for the same turno. Omitted (e.g. the read-only single-check detail Drawer) means no "Visto" button is offered — that view is a historical record, not a pending list. */
+  onDismiss?: (rowIds: number[]) => void;
+  dismissingIds?: Set<number>;
 }) {
+  /** Renders "Visto" for a card/line, keyed off the full rows (not just ids) so an already-dismissed group shows a static confirmation instead of a clickable button — dismissing never removes the card, just acknowledges it. */
+  function renderDismissButton(groupRows: CheckDiffRow[]) {
+    if (!onDismiss) return null;
+    if (groupRows.every((r) => r.dismissedAt !== null)) {
+      return (
+        <span className="badge neutral" style={{ display: "inline-flex", fontSize: "0.7rem" }}>
+          Visto
+        </span>
+      );
+    }
+    const rowIds = groupRows.map((r) => r.id);
+    const busy = dismissingIds !== undefined && rowIds.some((id) => dismissingIds.has(id));
+    return (
+      <button
+        type="button"
+        className="ghost"
+        style={{ fontSize: "0.76rem", padding: "0.25rem 0.5rem" }}
+        disabled={busy}
+        onClick={() => onDismiss(rowIds)}
+      >
+        {busy ? "..." : "Visto"}
+      </button>
+    );
+  }
+
   const errors = rows.filter((r) => r.changeKind === "error");
   const changes = rows.filter((r) => r.changeKind !== "error");
   const byIdentity = new Map<string, CheckDiffRow[]>();
@@ -64,9 +94,18 @@ export default function ChangeDiffPanel({
         <div
           key={`err-${i}`}
           className="error-box"
-          style={{ fontSize: "0.78rem", padding: "0.45rem 0.7rem", marginBottom: "0.4rem" }}
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            gap: "0.6rem",
+            fontSize: "0.78rem",
+            padding: "0.45rem 0.7rem",
+            marginBottom: "0.4rem",
+          }}
         >
-          {e.message}
+          <span>{e.message}</span>
+          {renderDismissButton([e])}
         </div>
       ))}
       {Array.from(byIdentity.entries()).map(([idKey, entries]) => {
@@ -97,22 +136,27 @@ export default function ChangeDiffPanel({
               </div>
             )}
             {isNew ? (
-              <span className="badge ok" style={{ marginTop: "0.35rem", display: "inline-flex" }}>
-                {first.applied ? "Criado automaticamente" : "Possível novo turno"}
-              </span>
+              <div style={{ marginTop: "0.35rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
+                <span className="badge ok" style={{ display: "inline-flex" }}>
+                  {first.applied ? "Criado automaticamente" : "Possível novo turno"}
+                </span>
+                {renderDismissButton(entries)}
+              </div>
             ) : isUnresolved ? (
-              <div
-                style={{
-                  marginTop: "0.35rem",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.35rem",
-                  fontSize: "0.78rem",
-                  color: "var(--warning)",
-                }}
-              >
-                <AlertTriangle size={13} style={{ flexShrink: 0 }} />
-                {first.message}
+              <div style={{ marginTop: "0.35rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.35rem",
+                    fontSize: "0.78rem",
+                    color: "var(--warning)",
+                  }}
+                >
+                  <AlertTriangle size={13} style={{ flexShrink: 0 }} />
+                  {first.message}
+                </div>
+                {renderDismissButton(entries)}
               </div>
             ) : isRemoved ? (
               <div style={{ marginTop: "0.35rem" }}>
@@ -128,29 +172,40 @@ export default function ChangeDiffPanel({
                   <Trash2 size={13} style={{ flexShrink: 0 }} />
                   {first.message}
                 </div>
-                {first.applied ? (
-                  <span className="badge neutral" style={{ marginTop: "0.35rem", display: "inline-flex" }}>
-                    Excluído automaticamente
-                  </span>
-                ) : (
-                  onMarkDeleted &&
-                  first.matchedShiftId !== null &&
-                  (markedShiftIds?.has(first.matchedShiftId) ? (
-                    <span className="badge neutral" style={{ marginTop: "0.35rem", display: "inline-flex" }}>
-                      Marcado como excluído
+                <div
+                  style={{
+                    marginTop: "0.35rem",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "0.5rem",
+                  }}
+                >
+                  {first.applied ? (
+                    <span className="badge neutral" style={{ display: "inline-flex" }}>
+                      Excluído automaticamente
                     </span>
                   ) : (
-                    <button
-                      type="button"
-                      className="ghost"
-                      style={{ marginTop: "0.35rem", fontSize: "0.76rem", padding: "0.25rem 0.5rem" }}
-                      disabled={markingShiftId === first.matchedShiftId}
-                      onClick={() => onMarkDeleted(first.matchedShiftId!)}
-                    >
-                      {markingShiftId === first.matchedShiftId ? "Marcando…" : "Marcar como excluído"}
-                    </button>
-                  ))
-                )}
+                    onMarkDeleted &&
+                    first.matchedShiftId !== null &&
+                    (markedShiftIds?.has(first.matchedShiftId) ? (
+                      <span className="badge neutral" style={{ display: "inline-flex" }}>
+                        Marcado como excluído
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="ghost"
+                        style={{ fontSize: "0.76rem", padding: "0.25rem 0.5rem" }}
+                        disabled={markingShiftId === first.matchedShiftId}
+                        onClick={() => onMarkDeleted(first.matchedShiftId!)}
+                      >
+                        {markingShiftId === first.matchedShiftId ? "Marcando…" : "Marcar como excluído"}
+                      </button>
+                    ))
+                  )}
+                  {renderDismissButton(entries)}
+                </div>
               </div>
             ) : (
               <div style={{ marginTop: "0.35rem", display: "flex", flexDirection: "column", gap: "0.3rem" }}>
@@ -181,29 +236,32 @@ export default function ChangeDiffPanel({
                     </span>
                   </div>
                 ))}
-                {first.applied ? (
-                  <span className="badge neutral" style={{ marginTop: "0.15rem", display: "inline-flex" }}>
-                    Aplicado automaticamente
-                  </span>
-                ) : (
-                  onAccept &&
-                  first.matchedShiftId !== null &&
-                  (acceptedShiftIds?.has(first.matchedShiftId) ? (
-                    <span className="badge ok" style={{ marginTop: "0.15rem", display: "inline-flex" }}>
-                      Atualizado
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
+                  {first.applied ? (
+                    <span className="badge neutral" style={{ display: "inline-flex" }}>
+                      Aplicado automaticamente
                     </span>
                   ) : (
-                    <button
-                      type="button"
-                      className="ghost"
-                      style={{ marginTop: "0.15rem", fontSize: "0.76rem", padding: "0.25rem 0.5rem", alignSelf: "flex-start" }}
-                      disabled={acceptingShiftId === first.matchedShiftId}
-                      onClick={() => onAccept(first.matchedShiftId!)}
-                    >
-                      {acceptingShiftId === first.matchedShiftId ? "Aplicando…" : "Aceitar e atualizar"}
-                    </button>
-                  ))
-                )}
+                    onAccept &&
+                    first.matchedShiftId !== null &&
+                    (acceptedShiftIds?.has(first.matchedShiftId) ? (
+                      <span className="badge ok" style={{ display: "inline-flex" }}>
+                        Atualizado
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="ghost"
+                        style={{ fontSize: "0.76rem", padding: "0.25rem 0.5rem", alignSelf: "flex-start" }}
+                        disabled={acceptingShiftId === first.matchedShiftId}
+                        onClick={() => onAccept(first.matchedShiftId!)}
+                      >
+                        {acceptingShiftId === first.matchedShiftId ? "Aplicando…" : "Aceitar e atualizar"}
+                      </button>
+                    ))
+                  )}
+                  {renderDismissButton(entries)}
+                </div>
               </div>
             )}
           </div>

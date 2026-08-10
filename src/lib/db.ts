@@ -1735,6 +1735,10 @@ export interface UrlCheckLogEntry {
   templateName: string | null;
   periodStart: string | null;
   periodEnd: string | null;
+  /** The `source_url_check_diffs.id` of this check's `change_kind: 'error'` row relevant to this config — this config's own error if it has one, otherwise the shared whole-URL error (`config_id IS NULL`) every config evaluated on that same attempt points at. `null` when this check found no error for this config at all (nothing to dismiss). See `dismissCheckDiffs`. */
+  errorDiffId: number | null;
+  /** "Visto" — when that error row was acknowledged, `null` until then. Dismissing it here also clears it everywhere else that same row is read (e.g. the pending-updates banner), since it's the exact same row, not a copy. */
+  errorDismissedAt: string | null;
 }
 
 /**
@@ -1758,7 +1762,13 @@ export async function listUrlCheckLogForConfig(
             jc.period_start AS periodStart, jc.period_end AS periodEnd,
             (SELECT COUNT(*) FROM source_url_check_diffs d WHERE d.check_log_id = l.id AND d.config_id = $1) AS diffCount,
             (SELECT MAX(CASE WHEN d.change_kind = 'error' THEN 1 ELSE 0 END)
-             FROM source_url_check_diffs d WHERE d.check_log_id = l.id AND d.config_id = $1) AS hasOwnError
+             FROM source_url_check_diffs d WHERE d.check_log_id = l.id AND d.config_id = $1) AS hasOwnError,
+            (SELECT d.id FROM source_url_check_diffs d
+             WHERE d.check_log_id = l.id AND d.change_kind = 'error' AND (d.config_id = $1 OR d.config_id IS NULL)
+             ORDER BY (d.config_id IS NULL) ASC LIMIT 1) AS errorDiffId,
+            (SELECT d.dismissed_at FROM source_url_check_diffs d
+             WHERE d.check_log_id = l.id AND d.change_kind = 'error' AND (d.config_id = $1 OR d.config_id IS NULL)
+             ORDER BY (d.config_id IS NULL) ASC LIMIT 1) AS errorDismissedAt
      FROM source_url_check_log l
      JOIN source_url_check_log_configs jc ON jc.check_log_id = l.id AND jc.config_id = $1
      ORDER BY l.checked_at DESC
@@ -1803,9 +1813,11 @@ export interface CheckDiffRow {
   message: string | null;
   /** Whether this diff was already written to `payment_shifts` — by unattended auto-apply, or a manual "Aceitar" (see `computeReimportDiff`'s `AutoApplyOptions`) — vs. still pending review. Only ever `true` for `changeKind: 'field' | 'removed'`, the only kinds a write ever applies to. */
   applied: boolean;
+  /** "Visto" — when the user acknowledged this specific row (see `dismissCheckDiffs`), `null` until then. Excludes it from `listAllLatestShiftDiffs`'s pending-updates count, but a LATER check finding the same problem again writes a brand-new (undismissed) row — dismissing never suppresses a future occurrence. */
+  dismissedAt: string | null;
 }
 
-export type CheckDiffInput = Omit<CheckDiffRow, "id" | "checkLogId">;
+export type CheckDiffInput = Omit<CheckDiffRow, "id" | "checkLogId" | "dismissedAt">;
 
 type CheckDiffRowRaw = Omit<CheckDiffRow, "applied"> & { applied: number };
 
@@ -1859,7 +1871,8 @@ export async function listCheckDiffs(checkLogId: number): Promise<CheckDiffRow[]
             employee_name AS employeeName, work_date AS workDate, local, role,
             schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes,
             sheet_name AS sheetName, row_number AS rowNumber, column_letter AS columnLetter,
-            field_name AS fieldName, old_value AS oldValue, new_value AS newValue, message, applied
+            field_name AS fieldName, old_value AS oldValue, new_value AS newValue, message, applied,
+            dismissed_at AS dismissedAt
      FROM source_url_check_diffs
      WHERE check_log_id = $1
      ORDER BY id`,
@@ -1962,7 +1975,11 @@ export async function listLatestFieldDiffsForShifts(shiftIds: number[]): Promise
  * possible removal, an unresolved row, a whole-config/URL error), not just
  * the subset that can paint an existing Pagamentos row. That narrower
  * subset is exactly what `listLatestFieldDiffsForShifts` is for — this is
- * the unfiltered version.
+ * the unfiltered version. Includes rows already acknowledged via "Visto"
+ * (`dismissed_at`, see `dismissCheckDiffs`) — dismissing never removes a
+ * row from this list, it only stops that row from counting toward
+ * callers' own "unseen" tallies (each caller filters `dismissedAt === null`
+ * itself; see `PendingChangesTab`), so the full history stays browsable.
  */
 export async function listAllLatestShiftDiffs(): Promise<CheckDiffRow[]> {
   const db = await getDb();
@@ -1972,13 +1989,30 @@ export async function listAllLatestShiftDiffs(): Promise<CheckDiffRow[]> {
             d.employee_name AS employeeName, d.work_date AS workDate, d.local, d.role,
             d.schedule_start_minutes AS scheduleStartMinutes, d.schedule_end_minutes AS scheduleEndMinutes,
             d.sheet_name AS sheetName, d.row_number AS rowNumber, d.column_letter AS columnLetter,
-            d.field_name AS fieldName, d.old_value AS oldValue, d.new_value AS newValue, d.message, d.applied
+            d.field_name AS fieldName, d.old_value AS oldValue, d.new_value AS newValue, d.message, d.applied,
+            d.dismissed_at AS dismissedAt
      FROM source_url_check_diffs d
      JOIN source_url_check_log l ON l.id = d.check_log_id
      WHERE l.id = (SELECT MAX(l2.id) FROM source_url_check_log l2 WHERE l2.source_url = l.source_url)
      ORDER BY d.id DESC`,
   );
   return rows.map(parseCheckDiffRow);
+}
+
+/**
+ * "Visto" — acknowledges specific diff rows without resolving anything or
+ * removing them: they stay visible everywhere they're listed (the pending
+ * banner, the config's "Histórico completo"), just marked seen, and stop
+ * counting toward each screen's own "unseen" badge/alert. A later check
+ * finding the same logical change/error again always writes a brand-new
+ * `source_url_check_diffs` row (a fresh `id`), which starts undismissed and
+ * alerts again on its own — this only ever silences THIS exact occurrence.
+ */
+export async function dismissCheckDiffs(ids: number[]): Promise<void> {
+  if (ids.length === 0) return;
+  const db = await getDb();
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
+  await db.execute(`UPDATE source_url_check_diffs SET dismissed_at = datetime('now') WHERE id IN (${placeholders})`, ids);
 }
 
 /** Records the remote signature a deep check (download+parse+diff) just ran against, and what it actually found (`result`) — so `RemoteFileUpdatesContext.runChecks` doesn't repeat that work every tick while the user hasn't reimported yet, and a later "changed"-per-header check against the same signature can log the SAME diff-driven verdict instead of re-asserting the raw header result. */

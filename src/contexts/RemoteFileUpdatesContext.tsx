@@ -355,7 +355,17 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
             current = check.current;
           } catch (e) {
             const message = String(e instanceof Error ? e.message : e);
-            await logUrlCheckResult(t.sourceUrl, t.fileName, "error", message, configs.map(toEvaluatedConfigSnapshot));
+            const checkLogId = await logUrlCheckResult(
+              t.sourceUrl,
+              t.fileName,
+              "error",
+              message,
+              configs.map(toEvaluatedConfigSnapshot),
+            );
+            // A real diff row (not just `source_url_check_log.message`) so
+            // this whole-URL failure surfaces in the global pending-updates
+            // banner too, not only on the Verificação automática page.
+            await saveCheckDiffs(checkLogId, [errorDiffEntry(null, t.fileName, message)]);
             return;
           }
 
@@ -492,6 +502,9 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
             if (autoApplyFileHash) await markSourceFileSaved(autoApplyFileHash);
           } catch (e) {
             wholeUrlErrorMessage = String(e instanceof Error ? e.message : e);
+            // Same reasoning as the header-check failure above — without a
+            // diff row this never reaches the global pending-updates banner.
+            entries.push(errorDiffEntry(null, t.fileName, wholeUrlErrorMessage));
           } finally {
             if (downloadedPath) {
               try {

@@ -16,6 +16,7 @@ import {
 import {
   DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES,
   deletePaymentShift,
+  dismissCheckDiffs,
   listCheckDiffs,
   listPaymentTemplates,
   listUrlCheckLogForConfig,
@@ -430,6 +431,25 @@ export default function RemoteUpdatesPage() {
             entry.templateName ?? "—"
           )}
         </span>
+        {entry.errorDiffId !== null &&
+          (entry.errorDismissedAt !== null ? (
+            <span className="badge neutral" style={{ display: "inline-flex", fontSize: "0.68rem" }}>
+              Visto
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="ghost"
+              style={{ fontSize: "0.72rem", padding: "0.15rem 0.5rem" }}
+              disabled={dismissingErrorIds.has(entry.errorDiffId)}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDismissError(entry.errorDiffId!);
+              }}
+            >
+              {dismissingErrorIds.has(entry.errorDiffId) ? "..." : "Visto"}
+            </button>
+          ))}
       </div>
     );
   }
@@ -497,6 +517,35 @@ export default function RemoteUpdatesPage() {
     setHistoryDrawerConfig(null);
     setHistoryRows([]);
     setHistoryExhausted(false);
+  }
+
+  // "Visto" on a check's own error — acknowledges it (via the same
+  // `dismissCheckDiffs` the pending-updates banner uses on the exact same
+  // `source_url_check_diffs` row) without removing it from either history
+  // list here: only `entry.errorDismissedAt` flips, everywhere that entry is
+  // currently held in state (the small strip, the full list, the open
+  // detail), so the row stays visible/browsable, just marked seen.
+  const [dismissingErrorIds, setDismissingErrorIds] = useState<Set<number>>(new Set());
+  async function handleDismissError(diffId: number) {
+    setDismissingErrorIds((prev) => new Set(prev).add(diffId));
+    try {
+      await dismissCheckDiffs([diffId]);
+      const dismissedAt = new Date().toISOString();
+      const markSeen = (r: UrlCheckLogEntry) => (r.errorDiffId === diffId ? { ...r, errorDismissedAt: dismissedAt } : r);
+      setHistoryRows((prev) => prev.map(markSeen));
+      setHistoryByConfig((prev) => {
+        const next = new Map(prev);
+        for (const [configId, data] of prev) next.set(configId, { ...data, rows: data.rows.map(markSeen) });
+        return next;
+      });
+      setDrawerRow((prev) => (prev && prev.entry.errorDiffId === diffId ? { ...prev, entry: markSeen(prev.entry) } : prev));
+    } finally {
+      setDismissingErrorIds((prev) => {
+        const next = new Set(prev);
+        next.delete(diffId);
+        return next;
+      });
+    }
   }
 
   return (

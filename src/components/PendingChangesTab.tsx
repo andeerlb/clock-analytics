@@ -2,7 +2,7 @@ import { Bell } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
-import { deletePaymentShift, listAllLatestShiftDiffs, type CheckDiffRow } from "../lib/db";
+import { deletePaymentShift, dismissCheckDiffs, listAllLatestShiftDiffs, type CheckDiffRow } from "../lib/db";
 import { acceptShiftChange } from "../lib/remoteCheckDiff";
 import ChangeDiffPanel from "./ChangeDiffPanel";
 import Drawer from "./Drawer";
@@ -41,6 +41,7 @@ export default function PendingChangesTab() {
   const [acceptedShiftIds, setAcceptedShiftIds] = useState<Set<number>>(new Set());
   const [markingShiftId, setMarkingShiftId] = useState<number | null>(null);
   const [markedShiftIds, setMarkedShiftIds] = useState<Set<number>>(new Set());
+  const [dismissingIds, setDismissingIds] = useState<Set<number>>(new Set());
   const [actionError, setActionError] = useState<string | null>(null);
 
   // A full-screen wizard/modal (e.g. PaymentTemplateWizard — `position:
@@ -71,8 +72,16 @@ export default function PendingChangesTab() {
     listAllLatestShiftDiffs().then(setRows);
   }, [trackedFiles]);
 
+  // Dismissing ("Visto") never removes a row from `rows` — it stays
+  // browsable in the Drawer below — it only stops counting toward this
+  // tab's own badge/alert, computed here from the unseen subset. If
+  // everything's already been seen, the floating tab itself hides (nothing
+  // new to alert about) UNLESS the Drawer is already open, in which case it
+  // stays open rather than yanking itself shut mid-review.
+  const unseenRows = rows.filter((r) => r.dismissedAt === null);
+
   if (location.pathname === "/remote-updates/imports") return null;
-  if (rows.length === 0) return null;
+  if (unseenRows.length === 0 && !open) return null;
 
   function handleClick() {
     setSpringing(true);
@@ -122,6 +131,24 @@ export default function PendingChangesTab() {
     }
   }
 
+  /** "Visto" — acknowledges this card/line's diff rows (see `dismissCheckDiffs`) so it stops counting toward this tab's badge. Never suppresses a future occurrence: a later check finding the same problem again writes a brand-new, undismissed row. */
+  async function handleDismiss(rowIds: number[]) {
+    setDismissingIds((prev) => new Set([...prev, ...rowIds]));
+    setActionError(null);
+    try {
+      await dismissCheckDiffs(rowIds);
+      await refreshRows();
+    } catch (e) {
+      setActionError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setDismissingIds((prev) => {
+        const next = new Set(prev);
+        rowIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    }
+  }
+
   const pending = rows.filter((r) => !r.applied);
   const applied = rows.filter((r) => r.applied);
 
@@ -133,7 +160,7 @@ export default function PendingChangesTab() {
           onClick={handleClick}
           disabled={springing}
           className={`sidebar-tab${springing ? " sidebar-tab-spring" : ""}`}
-          title={`Você tem ${rows.length} atualização${rows.length === 1 ? "" : "ões"} pendente${rows.length === 1 ? "" : "s"} — clique para revisar`}
+          title={`Você tem ${unseenRows.length} atualização${unseenRows.length === 1 ? "" : "ões"} pendente${unseenRows.length === 1 ? "" : "s"} — clique para revisar`}
           style={{
             left: sidebarCovered ? 0 : undefined,
             display: "flex",
@@ -165,7 +192,7 @@ export default function PendingChangesTab() {
               color: "var(--bg)",
             }}
           >
-            {rows.length}
+            {unseenRows.length}
           </span>
         </button>
       )}
@@ -193,6 +220,8 @@ export default function PendingChangesTab() {
                 onMarkDeleted={handleMarkDeleted}
                 markingShiftId={markingShiftId}
                 markedShiftIds={markedShiftIds}
+                onDismiss={handleDismiss}
+                dismissingIds={dismissingIds}
               />
             </div>
           )}
@@ -201,7 +230,7 @@ export default function PendingChangesTab() {
               <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.5rem" }}>
                 Aplicadas automaticamente ({applied.length})
               </div>
-              <ChangeDiffPanel rows={applied} />
+              <ChangeDiffPanel rows={applied} onDismiss={handleDismiss} dismissingIds={dismissingIds} />
             </div>
           )}
         </div>

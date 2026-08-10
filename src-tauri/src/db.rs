@@ -388,5 +388,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0064_check_log_config_snapshot.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 65,
+            description: "source_url_check_diffs gains dismissed_at — lets the user acknowledge (\"Visto\") a specific diff/error row without it counting toward the pending-updates banner, without suppressing a later occurrence of the same problem",
+            sql: include_str!("../migrations/0065_check_diffs_dismissed.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
