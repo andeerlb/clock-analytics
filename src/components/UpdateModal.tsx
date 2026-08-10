@@ -1,7 +1,8 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
 import type { Update } from "@tauri-apps/plugin-updater";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import Modal from "./Modal";
 import { LATEST_RELEASE_URL } from "../lib/updateCheck";
 
 type Phase = "prompt" | "downloading" | "installing" | "error";
@@ -28,15 +29,6 @@ export default function UpdateModal({ update, onClose }: { update: Update; onClo
   const [error, setError] = useState<string | null>(null);
 
   const busy = phase === "downloading" || phase === "installing";
-
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape" && !busy) handleClose();
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busy]);
 
   function handleClose() {
     update.close();
@@ -70,93 +62,80 @@ export default function UpdateModal({ update, onClose }: { update: Update; onClo
     progress.total !== null ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100)) : null;
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0, 0, 0, 0.7)",
-        zIndex: 200,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-      onClick={busy ? undefined : handleClose}
-    >
-      <div className="card" style={{ maxWidth: "28rem", margin: "1rem" }} onClick={(e) => e.stopPropagation()}>
-        <h3 style={{ marginTop: 0 }}>Nova versão disponível</h3>
-        <p className="muted">
-          {update.currentVersion} → <strong>{update.version}</strong>
-        </p>
+    <Modal onClose={handleClose} closeOnEscape={!busy} closeOnBackdrop={!busy} width="42rem">
+      <h3 style={{ marginTop: 0 }}>Nova versão disponível</h3>
+      <p className="muted">
+        {update.currentVersion} → <strong>{update.version}</strong>
+      </p>
 
-        {update.body && (
-          <div
-            className="muted"
-            style={{
-              fontSize: "0.82rem",
-              whiteSpace: "pre-wrap",
-              maxHeight: "10rem",
-              overflowY: "auto",
-              border: "1px solid var(--border)",
-              borderRadius: 8,
-              padding: "0.6rem",
-              marginBottom: "0.8rem",
-            }}
-          >
-            {update.body}
-          </div>
-        )}
-
-        {phase === "downloading" && (
-          <div style={{ marginTop: "0.6rem" }}>
-            <p className="muted" style={{ fontSize: "0.85rem", marginBottom: "0.4rem" }}>
-              Baixando atualização{progressPct !== null ? ` — ${progressPct}%` : "..."}
-            </p>
-            <div style={{ height: 6, borderRadius: 4, background: "var(--border)", overflow: "hidden" }}>
-              <div
-                style={{
-                  height: "100%",
-                  width: `${progressPct ?? 15}%`,
-                  background: "var(--accent)",
-                  transition: "width 0.2s ease",
-                }}
-              />
-            </div>
-          </div>
-        )}
-        {phase === "installing" && (
-          <p className="muted" style={{ fontSize: "0.85rem" }}>
-            Instalando e reiniciando...
-          </p>
-        )}
-
-        {error && (
-          <div className="error-box" style={{ marginTop: "0.8rem" }}>
-            Não foi possível atualizar automaticamente ({error}). Baixe a nova versão manualmente no GitHub.
-          </div>
-        )}
-
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.2rem" }}>
-          {phase === "error" ? (
-            <>
-              <button type="button" className="outline" onClick={handleClose}>
-                Fechar
-              </button>
-              <button type="button" onClick={() => openUrl(LATEST_RELEASE_URL)}>
-                Abrir no GitHub
-              </button>
-            </>
-          ) : (
-            <>
-              <button type="button" className="outline" onClick={handleClose} disabled={busy}>
-                Depois
-              </button>
-              <button type="button" onClick={handleUpdate} disabled={busy}>
-                {phase === "downloading" ? "Baixando..." : phase === "installing" ? "Instalando..." : "Atualizar agora"}
-              </button>
-            </>
-          )}
+      {update.body && (
+        <div
+          className="muted"
+          style={{
+            fontSize: "0.9rem",
+            whiteSpace: "pre-wrap",
+            maxHeight: "60vh",
+            overflowY: "auto",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            padding: "0.8rem 1rem",
+            marginBottom: "0.8rem",
+          }}
+        >
+          {update.body}
         </div>
+      )}
+
+      {phase === "downloading" && (
+        <div style={{ marginTop: "0.6rem" }}>
+          <p className="muted" style={{ fontSize: "0.85rem", marginBottom: "0.4rem" }}>
+            Baixando atualização{progressPct !== null ? ` — ${progressPct}%` : "..."}
+          </p>
+          <div style={{ height: 6, borderRadius: 4, background: "var(--border)", overflow: "hidden" }}>
+            <div
+              style={{
+                height: "100%",
+                width: `${progressPct ?? 15}%`,
+                background: "var(--accent)",
+                transition: "width 0.2s ease",
+              }}
+            />
+          </div>
+        </div>
+      )}
+      {phase === "installing" && (
+        <p className="muted" style={{ fontSize: "0.85rem" }}>
+          Instalando e reiniciando...
+        </p>
+      )}
+
+      {error && (
+        <div className="error-box" style={{ marginTop: "0.8rem" }}>
+          Não foi possível atualizar automaticamente ({error}). Baixe a nova versão manualmente no GitHub.
+        </div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.2rem" }}>
+        {phase === "error" ? (
+          <>
+            <button type="button" className="outline" onClick={handleClose}>
+              Fechar
+            </button>
+            <button type="button" onClick={() => openUrl(LATEST_RELEASE_URL)}>
+              Abrir no GitHub
+            </button>
+          </>
+        ) : (
+          <>
+            <button type="button" className="outline" onClick={handleClose} disabled={busy}>
+              Depois
+            </button>
+            <button type="button" onClick={handleUpdate} disabled={busy}>
+              {phase === "downloading" ? "Baixando..." : phase === "installing" ? "Instalando..." : "Atualizar agora"}
+            </button>
+          </>
+        )}
       </div>
-    </div>
+    </Modal>
   );
 }

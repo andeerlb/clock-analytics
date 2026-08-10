@@ -1,12 +1,10 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { Briefcase, Building2, Clock, FileUp, RefreshCw, Settings, Users, Wallet } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
-import GithubIcon from "./GithubIcon";
 import UpdateModal from "./UpdateModal";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
-import { checkForUpdate, REPO_URL } from "../lib/updateCheck";
+import { checkForUpdate } from "../lib/updateCheck";
 
 const NAV_ITEMS = [
   { to: "/import", label: "Importar", icon: FileUp, end: false },
@@ -41,10 +39,16 @@ export default function Sidebar() {
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const { remoteUpdates, trackedFiles, reimportConfigs, checking, tickError } = useRemoteFileUpdates();
 
+  // Passive check on launch — found means "surface it immediately" (no
+  // separate click needed to see the modal), not just a badge waiting to be
+  // noticed.
   useEffect(() => {
     checkForUpdate()
       .then((update) => {
-        if (update) setAvailableUpdate(update);
+        if (update) {
+          setAvailableUpdate(update);
+          setShowUpdateModal(true);
+        }
       })
       .catch(() => {});
   }, []);
@@ -109,30 +113,6 @@ export default function Sidebar() {
           </span>
           <span>Verificação automática</span>
         </NavLink>
-
-        <button
-          type="button"
-          className="app-nav-link ghost"
-          style={{ width: "100%", textAlign: "left" }}
-          onClick={() => (availableUpdate ? setShowUpdateModal(true) : openUrl(REPO_URL))}
-          title={availableUpdate ? "Nova versão disponível" : "Ver no GitHub"}
-        >
-          <GithubIcon size={18} />
-          <span>GitHub</span>
-          {availableUpdate && (
-            <span
-              style={{
-                marginLeft: "auto",
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                background: "var(--success)",
-                flexShrink: 0,
-              }}
-              aria-label="Nova versão disponível"
-            />
-          )}
-        </button>
 
         <NavLink to="/settings" className={navLinkClass}>
           <Settings size={18} />
