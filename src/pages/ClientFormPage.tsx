@@ -1,7 +1,14 @@
-import { Plus, X } from "lucide-react";
+import { Calculator, Moon, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
+import NightShiftRuleFields from "../components/NightShiftRuleFields";
+import PaymentValueRulesEditor, {
+  fromPaymentValueRules,
+  isValueRulesValid,
+  toPaymentValueRules,
+  type WizardValueRule,
+} from "../components/PaymentValueRulesEditor";
 import {
   addClientCompany,
   createClient,
@@ -12,6 +19,7 @@ import {
   type CompanyRow,
 } from "../lib/db";
 import { maskCnpj } from "../lib/format";
+import type { NightShiftRule } from "../lib/types";
 
 export default function ClientFormPage() {
   const { id } = useParams<{ id: string }>();
@@ -29,6 +37,18 @@ export default function ClientFormPage() {
   const [companyError, setCompanyError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [cnpj, setCnpj] = useState("");
+  // Unlike a company, a client's night-shift window/rule is optional — off
+  // by default means "inherit the linked company's own window/rule" (see
+  // `getEffectivePaymentRules` in db.ts). The 3 fields below only matter
+  // while this is on.
+  const [overrideNightShift, setOverrideNightShift] = useState(false);
+  const [nightStartTime, setNightStartTime] = useState("22:00");
+  const [nightEndTime, setNightEndTime] = useState("05:00");
+  const [nightShiftRule, setNightShiftRule] = useState<NightShiftRule>("overlap");
+  // No separate toggle for value rules — an empty list already means "no
+  // override, inherit the company's chain entirely" (same convention as
+  // every other optional rule chain in this project).
+  const [valueRules, setValueRules] = useState<WizardValueRule[]>([]);
   const [loading, setLoading] = useState(isEditing);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +68,13 @@ export default function ClientFormPage() {
         setName(c.name);
         setCnpj(maskCnpj(c.cnpj));
         setLinkedCompanies(c.companies);
+        setOverrideNightShift(c.nightStartTime !== null);
+        if (c.nightStartTime !== null && c.nightEndTime !== null && c.nightShiftRule !== null) {
+          setNightStartTime(c.nightStartTime);
+          setNightEndTime(c.nightEndTime);
+          setNightShiftRule(c.nightShiftRule);
+        }
+        setValueRules(fromPaymentValueRules(c.valueRules));
       })
       .catch((e) => setError(String(e instanceof Error ? e.message : e)))
       .finally(() => setLoading(false));
@@ -102,10 +129,15 @@ export default function ClientFormPage() {
     setError(null);
     setBusy(true);
     try {
+      const valueRuleInputs = toPaymentValueRules(valueRules);
+      const nightArgs: [string | null, string | null, NightShiftRule | null] = overrideNightShift
+        ? [nightStartTime, nightEndTime, nightShiftRule]
+        : [null, null, null];
+
       if (isEditing) {
-        await updateClient(Number(id), name, cnpj);
+        await updateClient(Number(id), name, cnpj, ...nightArgs, valueRuleInputs);
       } else {
-        await createClient(pendingCompanies.map((c) => c.id), name, cnpj);
+        await createClient(pendingCompanies.map((c) => c.id), name, cnpj, ...nightArgs, valueRuleInputs);
       }
       navigate("/clients");
     } catch (err) {
@@ -222,7 +254,55 @@ export default function ClientFormPage() {
               />
             </div>
 
-            <button type="submit" disabled={busy || (!isEditing && pendingCompanies.length === 0)}>
+            <section className="glass-panel" style={{ marginBottom: "1.2rem" }}>
+              <h3 className="glass-panel-heading">
+                <Moon size={18} />
+                Horário noturno
+              </h3>
+              <p className="glass-panel-desc">
+                Por padrão, este cliente usa o horário noturno configurado na empresa. Sobrescreva
+                aqui só se este cliente específico tiver um horário diferente.
+              </p>
+              <label className="field-code-checkbox" style={{ marginBottom: overrideNightShift ? "1rem" : 0 }}>
+                <input
+                  type="checkbox"
+                  checked={overrideNightShift}
+                  onChange={(e) => setOverrideNightShift(e.target.checked)}
+                />
+                Sobrescrever horário noturno da empresa
+              </label>
+              {overrideNightShift && (
+                <NightShiftRuleFields
+                  nightStartTime={nightStartTime}
+                  nightEndTime={nightEndTime}
+                  nightShiftRule={nightShiftRule}
+                  onChange={(patch) => {
+                    if (patch.nightStartTime !== undefined) setNightStartTime(patch.nightStartTime);
+                    if (patch.nightEndTime !== undefined) setNightEndTime(patch.nightEndTime);
+                    if (patch.nightShiftRule !== undefined) setNightShiftRule(patch.nightShiftRule);
+                  }}
+                  idPrefix="client"
+                />
+              )}
+            </section>
+
+            <section className="glass-panel" style={{ marginBottom: "1.2rem" }}>
+              <h3 className="glass-panel-heading">
+                <Calculator size={18} />
+                Regras de valor por hora trabalhada
+              </h3>
+              <p className="glass-panel-desc">
+                Por padrão, este cliente usa as regras de valor configuradas na empresa. Cadastre
+                regras aqui só se este cliente específico tiver valores diferentes — sem nenhuma
+                regra, o Valor continua vindo da empresa.
+              </p>
+              <PaymentValueRulesEditor valueRules={valueRules} onChange={setValueRules} />
+            </section>
+
+            <button
+              type="submit"
+              disabled={busy || (!isEditing && pendingCompanies.length === 0) || !isValueRulesValid(valueRules)}
+            >
               {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
             </button>
           </form>

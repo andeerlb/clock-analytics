@@ -43,7 +43,7 @@ import { revealInFileManager } from "../lib/api";
 import {
   deletePaymentShift,
   editPaymentShift,
-  getCompany,
+  getEffectivePaymentRules,
   getPaymentVisibleColumns,
   listClients,
   listCompanies,
@@ -56,8 +56,8 @@ import {
   revertPaymentShiftToPending,
   setPaymentVisibleColumns,
   type ClientRow,
-  type CompanyDetail,
   type CompanyRow,
+  type EffectivePaymentRules,
   type ListPaymentShiftSummariesQuery,
   type PaymentShiftFlatRow,
   type PaymentShiftGroupRow,
@@ -464,7 +464,7 @@ function ShiftRow({
   companyId,
   groupRef,
   identity,
-  company,
+  rules,
   visibleColumns,
   changes,
   onCommitField,
@@ -479,7 +479,7 @@ function ShiftRow({
   companyId: number;
   groupRef: GroupRef;
   identity?: { employeeName: string; companyName: string; clientName: string };
-  company: CompanyDetail | null;
+  rules: EffectivePaymentRules | null;
   visibleColumns: Set<string>;
   /** What the last automatic verification found different for this shift (if anything) — see `listLatestFieldDiffsForShifts`. */
   changes: ShiftFieldDiffRow[];
@@ -487,7 +487,7 @@ function ShiftRow({
   onPay: (shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) => void;
   onRevert: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
   onDelete: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
-  onViewHistory: (shiftId: number, companyId: number) => void;
+  onViewHistory: (shiftId: number, companyId: number, clientId: number) => void;
   onViewExtra: (data: Record<string, string>, sourceUrl: string | null) => void;
   /** Opens the review Drawer — the only thing a blocked row's Ações column offers, and an optional "ver o que mudou" for an already-auto-applied one. */
   onReview: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
@@ -499,8 +499,8 @@ function ShiftRow({
   const value =
     s.amount !== null
       ? s.amount
-      : company && duration !== null
-        ? resolvePaymentValue(company.valueRules, duration, {
+      : rules && duration !== null
+        ? resolvePaymentValue(rules.valueRules, duration, {
             workDate: s.workDate,
             local: s.local,
             role: s.role,
@@ -676,7 +676,7 @@ function ShiftRow({
                 type="button"
                 className="ghost"
                 style={{ padding: "0.4rem" }}
-                onClick={() => onViewHistory(s.previousShiftId!, companyId)}
+                onClick={() => onViewHistory(s.previousShiftId!, companyId, s.clientId)}
                 title="Ver histórico de status deste turno"
               >
                 <History size={13} />
@@ -752,8 +752,8 @@ export default function PaymentsPage() {
   const [groupRows, setGroupRows] = useState<Map<string, PaymentShiftGroupRow[]>>(new Map());
   const [loadingGroups, setLoadingGroups] = useState<Set<string>>(new Set());
 
-  const [companiesById, setCompaniesById] = useState<Map<number, CompanyDetail>>(new Map());
-  const fetchedCompanyIds = useRef<Set<number>>(new Set());
+  const [rulesByPair, setRulesByPair] = useState<Map<string, EffectivePaymentRules>>(new Map());
+  const fetchedRulePairKeys = useRef<Set<string>>(new Set());
 
   const [shiftDiffs, setShiftDiffs] = useState<Map<number, ShiftFieldDiffRow[]>>(new Map());
 
@@ -767,7 +767,7 @@ export default function PaymentsPage() {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [inlineEditError, setInlineEditError] = useState<string | null>(null);
-  const [viewingHistory, setViewingHistory] = useState<{ shiftId: number; companyId: number } | null>(null);
+  const [viewingHistory, setViewingHistory] = useState<{ shiftId: number; companyId: number; clientId: number } | null>(null);
   const [viewingExtraData, setViewingExtraData] = useState<{ data: Record<string, string>; sourceUrl: string | null } | null>(
     null,
   );
@@ -795,20 +795,26 @@ export default function PaymentsPage() {
     listPaymentExportTemplates().then(setExportTemplates);
   }, []);
 
-  function ensureCompaniesLoaded(ids: number[]) {
-    const toFetch = Array.from(new Set(ids)).filter((id) => !fetchedCompanyIds.current.has(id));
-    if (toFetch.length === 0) return;
-    toFetch.forEach((id) => fetchedCompanyIds.current.add(id));
-    Promise.all(toFetch.map((id) => getCompany(id))).then((fetched) => {
-      setCompaniesById((prev) => {
+  function ensureRulesLoaded(pairs: { clientId: number; companyId: number }[]) {
+    const toFetch = new Map(
+      pairs
+        .map((p) => [`${p.clientId}:${p.companyId}`, p] as const)
+        .filter(([key]) => !fetchedRulePairKeys.current.has(key)),
+    );
+    if (toFetch.size === 0) return;
+    toFetch.forEach((_, key) => fetchedRulePairKeys.current.add(key));
+    Promise.all(
+      Array.from(toFetch.entries(), async ([key, p]) => [key, await getEffectivePaymentRules(p.clientId, p.companyId)] as const),
+    ).then((fetched) => {
+      setRulesByPair((prev) => {
         const next = new Map(prev);
-        fetched.forEach((c) => next.set(c.id, c));
+        fetched.forEach(([key, rules]) => next.set(key, rules));
         return next;
       });
     });
   }
 
-  /** Refreshed on every load of `flatRows`/a group's rows, not cached long-term like `companiesById` — the background verification keeps running while this page is open, so what it last found can change out from under an already-loaded row. */
+  /** Refreshed on every load of `flatRows`/a group's rows, not cached long-term like `rulesByPair` — the background verification keeps running while this page is open, so what it last found can change out from under an already-loaded row. */
   async function refreshShiftDiffs(ids: number[]) {
     const uniqueIds = Array.from(new Set(ids));
     if (uniqueIds.length === 0) return;
@@ -869,7 +875,7 @@ export default function PaymentsPage() {
     const { rows, total } = await listPaymentShiftsFlat({ ...baseQuery(), page, pageSize });
     setFlatRows(rows);
     setFlatTotal(total);
-    ensureCompaniesLoaded(rows.map((r) => r.companyId));
+    ensureRulesLoaded(rows.map((r) => ({ clientId: r.clientId, companyId: r.companyId })));
     refreshShiftDiffs(rows.map((r) => r.id));
   }
 
@@ -983,7 +989,7 @@ export default function PaymentsPage() {
       listPaymentShiftsForGroup(s.employeeId, s.competencia, baseQuery())
         .then((rows) => {
           setGroupRows((prev) => new Map(prev).set(key, rows));
-          ensureCompaniesLoaded([s.companyId]);
+          ensureRulesLoaded([{ clientId: s.clientId, companyId: s.companyId }]);
           refreshShiftDiffs(rows.map((r) => r.id));
         })
         .finally(() => {
@@ -1058,10 +1064,10 @@ export default function PaymentsPage() {
 
   function shiftValueFor(s: PaymentShiftRow, companyId: number): number | null {
     if (s.amount !== null) return s.amount;
-    const company = companiesById.get(companyId);
-    if (!company || s.scheduleStartMinutes === null || s.scheduleEndMinutes === null) return null;
+    const rules = rulesByPair.get(`${s.clientId}:${companyId}`);
+    if (!rules || s.scheduleStartMinutes === null || s.scheduleEndMinutes === null) return null;
     const duration = shiftDurationMinutes(s.scheduleStartMinutes, s.scheduleEndMinutes);
-    return resolvePaymentValue(company.valueRules, duration, {
+    return resolvePaymentValue(rules.valueRules, duration, {
       workDate: s.workDate,
       local: s.local,
       role: s.role,
@@ -1541,14 +1547,14 @@ export default function PaymentsPage() {
                                             shift={r}
                                             companyId={s.companyId}
                                             groupRef={{ employeeId: s.employeeId, competencia: s.competencia }}
-                                            company={companiesById.get(s.companyId) ?? null}
+                                            rules={rulesByPair.get(`${s.clientId}:${s.companyId}`) ?? null}
                                             visibleColumns={visibleColumns}
                                             changes={shiftDiffs.get(r.id) ?? []}
                                             onCommitField={commitField}
                                             onPay={(shift, companyId, groupRef) => setPayingShift({ shift, companyId, groupRef })}
                                             onRevert={(shift, groupRef) => setRevertingShift({ shift, groupRef })}
                                             onDelete={(shift, groupRef) => setDeletingShift({ shift, groupRef })}
-                                            onViewHistory={(shiftId, companyId) => setViewingHistory({ shiftId, companyId })}
+                                            onViewHistory={(shiftId, companyId, clientId) => setViewingHistory({ shiftId, companyId, clientId })}
                                             onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
                                             onReview={(shift, groupRef) => setReviewingShift({ shift, groupRef })}
                                           />
@@ -1605,14 +1611,14 @@ export default function PaymentsPage() {
                       companyId={r.companyId}
                       groupRef={null}
                       identity={{ employeeName: r.employeeName, companyName: r.companyName, clientName: r.clientName }}
-                      company={companiesById.get(r.companyId) ?? null}
+                      rules={rulesByPair.get(`${r.clientId}:${r.companyId}`) ?? null}
                       visibleColumns={visibleColumns}
                       changes={shiftDiffs.get(r.id) ?? []}
                       onCommitField={commitField}
                       onPay={(shift, companyId, groupRef) => setPayingShift({ shift, companyId, groupRef })}
                       onRevert={(shift, groupRef) => setRevertingShift({ shift, groupRef })}
                       onDelete={(shift, groupRef) => setDeletingShift({ shift, groupRef })}
-                      onViewHistory={(shiftId, companyId) => setViewingHistory({ shiftId, companyId })}
+                      onViewHistory={(shiftId, companyId, clientId) => setViewingHistory({ shiftId, companyId, clientId })}
                       onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
                       onReview={(shift, groupRef) => setReviewingShift({ shift, groupRef })}
                     />
@@ -1687,7 +1693,7 @@ export default function PaymentsPage() {
 
       <ShiftHistoryModal
         shiftId={viewingHistory?.shiftId ?? null}
-        company={viewingHistory ? companiesById.get(viewingHistory.companyId) ?? null : null}
+        rules={viewingHistory ? rulesByPair.get(`${viewingHistory.clientId}:${viewingHistory.companyId}`) ?? null : null}
         onClose={() => setViewingHistory(null)}
       />
       <ExtraColumnsModal

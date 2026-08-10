@@ -306,6 +306,22 @@ export const SHEET_NAME_RULE_FIELD = "aba";
 
 export type PaymentRuleField = PaymentTargetField | typeof SHEET_NAME_RULE_FIELD;
 
+/**
+ * One field test inside a routing/status rule — a `"condition"` rule can
+ * have several of these, ALL of which must match (AND) for the rule to
+ * fire (e.g. "SE Aba == X E CPF == Y"). See `resolvePaymentRoute`/
+ * `resolvePaymentStatus` (format.ts) for exactly how one condition is
+ * matched — routing and status rules evaluate an individual condition
+ * slightly differently (an empty `values` means something different for
+ * each), but both AND their `conditions` array the same way.
+ */
+export interface PaymentRuleCondition {
+  field: PaymentRuleField;
+  values: string[];
+  /** Whether matching `values` against the row's field folds case. */
+  caseInsensitive: boolean;
+}
+
 export interface PaymentTemplateFieldMapping {
   columnLetter: string;
   targetField: PaymentTargetField;
@@ -351,18 +367,18 @@ export interface PaymentTemplateListRow {
 /**
  * One step of a template's if/else-if/else routing chain — see
  * `resolvePaymentRoute` in `format.ts` for how these are evaluated. A
- * `"condition"` rule matches rows whose `field` value is one of `values`;
- * an `"else"` rule (field/values both `null`) always matches, is optional,
- * and at most one per template — always the last step in the chain.
+ * `"condition"` rule matches rows where EVERY entry in `conditions` matches
+ * (AND) — e.g. `[{field: "aba", values: ["X"]}, {field: "cpf", values:
+ * ["Y"]}]` reads as "SE Aba == X E CPF == Y"; an `"else"` rule (`conditions`
+ * empty) always matches, is optional, and at most one per template — always
+ * the last step in the chain.
  */
 export type PaymentTemplateRuleKind = "condition" | "else";
 
 export interface PaymentTemplateRule {
   kind: PaymentTemplateRuleKind;
-  field: PaymentRuleField | null;
-  values: string[];
-  /** Whether matching `values` against a row's field folds case — ignored when `kind === "else"`. */
-  caseInsensitive: boolean;
+  /** Empty when `kind === "else"`. */
+  conditions: PaymentRuleCondition[];
   companyId: number;
   companyName: string;
   clientId: number;
@@ -379,10 +395,8 @@ export interface PaymentTemplateRule {
  */
 export interface PaymentStatusRule {
   kind: PaymentTemplateRuleKind;
-  field: PaymentRuleField | null;
-  values: string[];
-  /** Whether matching `values` against a row's field folds case — ignored when `kind === "else"`. */
-  caseInsensitive: boolean;
+  /** Empty when `kind === "else"`. */
+  conditions: PaymentRuleCondition[];
   status: PaymentShiftStatus;
 }
 
@@ -526,6 +540,9 @@ export interface PaymentShiftRow {
   id: number;
   employeeId: number;
   employeeName: string;
+  /** Snapshotted onto the row at write time (never a live join through `employees`) — moving an employee to a different client later leaves every already-written shift's client/company exactly as it was. See `PaymentShiftCoreFields`/`applyAutoSyncedFieldUpdate` in db.ts for who's allowed to change it (only a fresh re-sync, never a plain status/value edit). */
+  clientId: number;
+  companyId: number;
   local: string;
   workDate: string;
   role: string;

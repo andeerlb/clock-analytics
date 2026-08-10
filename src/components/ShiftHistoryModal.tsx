@@ -1,6 +1,6 @@
 import { AlertCircle, CheckCircle2, Clock3 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { getPaymentShiftHistory, type CompanyDetail } from "../lib/db";
+import { getPaymentShiftHistory, type EffectivePaymentRules } from "../lib/db";
 import {
   classifyShiftPeriod,
   formatCurrencyBRL,
@@ -32,27 +32,27 @@ function DetailRow({ label, children }: { label: string; children: ReactNode }) 
 
 function HistoryEntry({
   shift,
-  company,
+  rules,
   isLast,
 }: {
   shift: PaymentShiftRow;
-  company: CompanyDetail | null;
+  rules: EffectivePaymentRules | null;
   isLast: boolean;
 }) {
   const hasSchedule = shift.scheduleStartMinutes !== null && shift.scheduleEndMinutes !== null;
   const durationMinutes = hasSchedule
     ? shiftDurationMinutes(shift.scheduleStartMinutes!, shift.scheduleEndMinutes!)
     : null;
-  const nightStart = company ? parseTimeToMinutes(company.nightStartTime) : null;
-  const nightEnd = company ? parseTimeToMinutes(company.nightEndTime) : null;
+  const nightStart = rules ? parseTimeToMinutes(rules.nightStartTime) : null;
+  const nightEnd = rules ? parseTimeToMinutes(rules.nightEndTime) : null;
   const period =
-    company && hasSchedule && nightStart !== null && nightEnd !== null
-      ? classifyShiftPeriod(company.nightShiftRule, nightStart, nightEnd, shift.scheduleStartMinutes!, shift.scheduleEndMinutes!)
+    rules && hasSchedule && nightStart !== null && nightEnd !== null
+      ? classifyShiftPeriod(rules.nightShiftRule, nightStart, nightEnd, shift.scheduleStartMinutes!, shift.scheduleEndMinutes!)
       : null;
   const value =
     shift.amount ??
-    (company && durationMinutes !== null
-      ? resolvePaymentValue(company.valueRules, durationMinutes, {
+    (rules && durationMinutes !== null
+      ? resolvePaymentValue(rules.valueRules, durationMinutes, {
           workDate: shift.workDate,
           local: shift.local,
           role: shift.role,
@@ -116,12 +116,12 @@ function HistoryEntry({
  */
 export default function ShiftHistoryModal({
   shiftId,
-  company,
+  rules,
   onClose,
 }: {
   /** `null` keeps the modal unmounted/closed. */
   shiftId: number | null;
-  company: CompanyDetail | null;
+  rules: EffectivePaymentRules | null;
   onClose: () => void;
 }) {
   const [history, setHistory] = useState<PaymentShiftRow[]>([]);
@@ -186,7 +186,7 @@ export default function ShiftHistoryModal({
         {!loading &&
           !error &&
           history.map((shift, i) => (
-            <HistoryEntry key={shift.id} shift={shift} company={company} isLast={i === history.length - 1} />
+            <HistoryEntry key={shift.id} shift={shift} rules={rules} isLast={i === history.length - 1} />
           ))}
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.4rem" }}>
           <button type="button" className="outline" onClick={onClose}>

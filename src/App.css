@@ -1733,20 +1733,15 @@ tr.row-error:hover {
   opacity: 1;
 }
 
-.rule-card-grid {
-  display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(160px, 1.6fr) minmax(120px, 1fr) minmax(120px, 1fr) auto;
-  gap: 12px;
-  align-items: start;
-  flex: 1;
-}
-
-/* Same idea as .rule-card-grid, but the status chain's consequence is a single [Status] field instead of [Empresa] + [Cliente]. */
+/* A rule can now hold several AND-combined conditions (see PaymentRuleCondition),
+   so — same reasoning as .value-rule-card-grid below — this is a stacked flex
+   column instead of a fixed-column grid: there's no fixed column count to lay
+   out when the condition list is variable-length. */
+.rule-card-grid,
 .status-rule-card-grid {
-  display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(160px, 1.6fr) minmax(120px, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  align-items: start;
   flex: 1;
 }
 

@@ -3,6 +3,7 @@ import {
   applyAutoSyncedFieldUpdate,
   deletePaymentShift,
   findDuplicatePaymentShifts,
+  findEmployeeAnywhereByAttempts,
   findEmployeeByAttempts,
   findPaymentShiftByPosition,
   getPaymentShiftsByIds,
@@ -64,6 +65,9 @@ const PROVENANCE_EXTRA_KEYS = new Set(["arquivo de origem", "linha de origem", "
 interface ParsedCandidate {
   employeeId: number;
   employeeName: string;
+  /** From this row's own freshly resolved route — see `applyAutoSyncedFieldUpdate`'s doc comment for why this must survive to the write, not the matched shift's old snapshot. */
+  clientId: number;
+  companyId: number;
   workDate: string;
   local: string;
   role: string;
@@ -199,9 +203,22 @@ export async function computeReimportDiff(
       // that used to resolve suddenly stops resolving.
       const positional = await findPaymentShiftByPosition(config.sourceUrl, row.sheetName, row.rowNumber);
       if (positional) accountedForIds.add(positional.shiftId);
-      const message = positional
+      // Purely informational — enriches the message so a review knows
+      // WHY the scoped search failed, without moving anyone: moving stays
+      // exclusive to the manual "Mover para Cliente Y" action on the import
+      // preview, a deliberate human decision, never something a background
+      // check does on its own.
+      const elsewhere = await findEmployeeAnywhereByAttempts(template.identifierPriority, {
+        cpf: row.fields.cpf || null,
+        matricula: row.fields.matricula || null,
+        nome: row.fields.nome || null,
+      });
+      let message = positional
         ? `Colaborador não encontrado para "${row.fields.nome || "(nome vazio)"}" — nesta posição (${row.sheetName ? `aba ${row.sheetName}, ` : ""}linha ${row.rowNumber}) havia antes um turno de "${positional.employeeName}".`
         : `Colaborador não encontrado para "${row.fields.nome || "(nome vazio)"}".`;
+      if (elsewhere) {
+        message += ` Existe um colaborador com esse nome cadastrado em ${elsewhere.clientName} (${elsewhere.companyName}), mas a regra desta linha aponta para ${route.clientName} (${route.companyName}) — reveja em "Importar pagamentos" para mover o cadastro, se for o caso.`;
+      }
       unresolvedEntries.push(unresolvedEntry(row, workDate, parsedSchedule, message));
       continue;
     }
@@ -209,6 +226,8 @@ export async function computeReimportDiff(
     candidates.push({
       employeeId: employee.id,
       employeeName: employee.name,
+      clientId: route.clientId,
+      companyId: route.companyId,
       workDate,
       local: row.fields.local ?? "",
       role: row.fields.funcao ?? "",
@@ -354,6 +373,8 @@ export async function computeReimportDiff(
           employeeId: c.employeeId,
           templateId: config.templateId,
           sourceFileId: autoApply.sourceFileId,
+          clientId: c.clientId,
+          companyId: c.companyId,
           local: c.local,
           workDate: c.workDate,
           role: c.role,
@@ -467,6 +488,8 @@ export async function computeReimportDiff(
           scheduleEndMinutes: c.scheduleEndMinutes,
           status: shift.status === "pago" ? shift.status : c.status,
           extraData: Object.keys(c.extraFields).length > 0 ? c.extraFields : null,
+          clientId: c.clientId,
+          companyId: c.companyId,
         },
         autoApply!.sourceFileId,
         c.rowNumber,

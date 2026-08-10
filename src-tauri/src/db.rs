@@ -352,5 +352,29 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0058_reimport_auto_apply.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 59,
+            description: "add payment_template_rules.conditions_json/payment_template_status_rules.conditions_json — a routing/status rule can test several mapped fields at once (AND), not just one",
+            sql: include_str!("../migrations/0059_rule_conditions.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 60,
+            description: "add payment_shifts.client_id/company_id (backfilled from the current employee) — snapshots which client/company a turno belonged to at import time instead of deriving it live through employees, so moving an employee to a different client later doesn't retroactively rewrite historical turnos",
+            sql: include_str!("../migrations/0060_payment_shift_client_snapshot.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 61,
+            description: "same as 0060, for imports (Cartão Ponto) instead of payment_shifts",
+            sql: include_str!("../migrations/0061_import_client_snapshot.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 62,
+            description: "clients gain the same optional night-shift window/rule and pay-value-chain overrides companies have (client_payment_value_rules mirrors payment_value_rules) — NULL/empty means \"inherit the company's\", client wins when set",
+            sql: include_str!("../migrations/0062_client_payment_rules.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -96,14 +96,23 @@ const DELIMITER_OPTIONS = [
 
 const DATE_FORMAT_OPTIONS = ["DD/MM/YYYY", "DD/MM/YY", "YYYY-MM-DD", "MM/DD/YYYY"];
 
+/** The wizard's editable draft of one `PaymentRuleCondition` — a single field test inside a rule (see `WizardRule`/`WizardStatusRule`). */
+interface WizardRuleCondition {
+  field: PaymentRuleField;
+  /** Raw comma-separated input. */
+  valuesText: string;
+  caseInsensitive: boolean;
+}
+
+function newRuleCondition(): WizardRuleCondition {
+  return { field: PAYMENT_TARGET_FIELDS[0], valuesText: "", caseInsensitive: true };
+}
+
 /** The wizard's editable draft of one step in a template's if/else-if/else routing chain — see `PaymentTemplateRule` in types.ts for the saved shape. */
 interface WizardRule {
   kind: PaymentTemplateRuleKind;
-  field: PaymentRuleField;
-  /** Raw comma-separated input; ignored when `kind === "else"`. */
-  valuesText: string;
-  /** Ignored when `kind === "else"`. */
-  caseInsensitive: boolean;
+  /** ANDed together — empty when `kind === "else"`. */
+  conditions: WizardRuleCondition[];
   companyId: number | null;
   clientId: number | null;
 }
@@ -111,7 +120,10 @@ interface WizardRule {
 function isRuleValid(r: WizardRule): boolean {
   if (!r.companyId || !r.clientId) return false;
   if (r.kind === "else") return true;
-  return r.valuesText.split(",").map((v) => v.trim()).filter(Boolean).length > 0;
+  return (
+    r.conditions.length > 0 &&
+    r.conditions.every((c) => c.valuesText.split(",").map((v) => v.trim()).filter(Boolean).length > 0)
+  );
 }
 
 /**
@@ -123,12 +135,14 @@ function isRuleValid(r: WizardRule): boolean {
  */
 interface WizardStatusRule {
   kind: PaymentTemplateRuleKind;
-  field: PaymentRuleField;
-  /** Raw comma-separated input; ignored when `kind === "else"`. Left blank, matches rows where the mapped field is itself empty — see `resolvePaymentStatus`. */
-  valuesText: string;
-  /** Ignored when `kind === "else"`. */
-  caseInsensitive: boolean;
+  /** ANDed together — empty when `kind === "else"`. */
+  conditions: WizardRuleCondition[];
   status: PaymentShiftStatus;
+}
+
+/** Unlike `isRuleValid`, a condition's `valuesText` is allowed to be blank here — that's a deliberate "field is empty" test, see `resolvePaymentStatus`. Only guards against a "condition" rule with zero conditions (never matches, see `resolvePaymentStatus`'s own defensive guard). */
+function isStatusRuleValid(r: WizardStatusRule): boolean {
+  return r.kind === "else" || r.conditions.length > 0;
 }
 
 function fileKindFromPath(path: string): PaymentFileKind {
@@ -257,9 +271,11 @@ export default function PaymentTemplateWizard({
     setRules(
       target.rules.map((r) => ({
         kind: r.kind,
-        field: r.field ?? PAYMENT_TARGET_FIELDS[0],
-        valuesText: r.values.join(", "),
-        caseInsensitive: r.caseInsensitive,
+        conditions: r.conditions.map((c) => ({
+          field: c.field,
+          valuesText: c.values.join(", "),
+          caseInsensitive: c.caseInsensitive,
+        })),
         companyId: r.companyId,
         clientId: r.clientId,
       })),
@@ -267,9 +283,11 @@ export default function PaymentTemplateWizard({
     setStatusRules(
       target.statusRules.map((r) => ({
         kind: r.kind,
-        field: r.field ?? PAYMENT_TARGET_FIELDS[0],
-        valuesText: r.values.join(", "),
-        caseInsensitive: r.caseInsensitive,
+        conditions: r.conditions.map((c) => ({
+          field: c.field,
+          valuesText: c.values.join(", "),
+          caseInsensitive: c.caseInsensitive,
+        })),
         status: r.status,
       })),
     );
@@ -645,9 +663,7 @@ export default function PaymentTemplateWizard({
   function addConditionRule() {
     const newRule: WizardRule = {
       kind: "condition",
-      field: PAYMENT_TARGET_FIELDS[0],
-      valuesText: "",
-      caseInsensitive: true,
+      conditions: [newRuleCondition()],
       companyId: null,
       clientId: null,
     };
@@ -659,17 +675,7 @@ export default function PaymentTemplateWizard({
   }
 
   function addElseRule() {
-    setRules((prev) => [
-      ...prev,
-      {
-        kind: "else",
-        field: PAYMENT_TARGET_FIELDS[0],
-        valuesText: "",
-        caseInsensitive: true,
-        companyId: null,
-        clientId: null,
-      },
-    ]);
+    setRules((prev) => [...prev, { kind: "else", conditions: [], companyId: null, clientId: null }]);
   }
 
   function removeRule(index: number) {
@@ -680,15 +686,33 @@ export default function PaymentTemplateWizard({
     setRules((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }
 
+  function addRuleCondition(ruleIndex: number) {
+    setRules((prev) =>
+      prev.map((r, i) => (i === ruleIndex ? { ...r, conditions: [...r.conditions, newRuleCondition()] } : r)),
+    );
+  }
+
+  function removeRuleCondition(ruleIndex: number, condIndex: number) {
+    setRules((prev) =>
+      prev.map((r, i) => (i === ruleIndex ? { ...r, conditions: r.conditions.filter((_, ci) => ci !== condIndex) } : r)),
+    );
+  }
+
+  function updateRuleCondition(ruleIndex: number, condIndex: number, patch: Partial<WizardRuleCondition>) {
+    setRules((prev) =>
+      prev.map((r, i) =>
+        i === ruleIndex ? { ...r, conditions: r.conditions.map((c, ci) => (ci === condIndex ? { ...c, ...patch } : c)) } : r,
+      ),
+    );
+  }
+
   const hasStatusElseRule = statusRules.some((r) => r.kind === "else");
 
   /** Same "always right before senão" placement as `addConditionRule`. */
   function addStatusConditionRule() {
     const newRule: WizardStatusRule = {
       kind: "condition",
-      field: PAYMENT_TARGET_FIELDS[0],
-      valuesText: "",
-      caseInsensitive: true,
+      conditions: [newRuleCondition()],
       status: "pendente",
     };
     setStatusRules((prev) => {
@@ -699,10 +723,7 @@ export default function PaymentTemplateWizard({
   }
 
   function addStatusElseRule() {
-    setStatusRules((prev) => [
-      ...prev,
-      { kind: "else", field: PAYMENT_TARGET_FIELDS[0], valuesText: "", caseInsensitive: true, status: "pendente" },
-    ]);
+    setStatusRules((prev) => [...prev, { kind: "else", conditions: [], status: "pendente" }]);
   }
 
   function removeStatusRule(index: number) {
@@ -711,6 +732,26 @@ export default function PaymentTemplateWizard({
 
   function updateStatusRule(index: number, patch: Partial<WizardStatusRule>) {
     setStatusRules((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  }
+
+  function addStatusRuleCondition(ruleIndex: number) {
+    setStatusRules((prev) =>
+      prev.map((r, i) => (i === ruleIndex ? { ...r, conditions: [...r.conditions, newRuleCondition()] } : r)),
+    );
+  }
+
+  function removeStatusRuleCondition(ruleIndex: number, condIndex: number) {
+    setStatusRules((prev) =>
+      prev.map((r, i) => (i === ruleIndex ? { ...r, conditions: r.conditions.filter((_, ci) => ci !== condIndex) } : r)),
+    );
+  }
+
+  function updateStatusRuleCondition(ruleIndex: number, condIndex: number, patch: Partial<WizardRuleCondition>) {
+    setStatusRules((prev) =>
+      prev.map((r, i) =>
+        i === ruleIndex ? { ...r, conditions: r.conditions.map((c, ci) => (ci === condIndex ? { ...c, ...patch } : c)) } : r,
+      ),
+    );
   }
 
   function addIdentifierAttempt() {
@@ -860,24 +901,28 @@ export default function PaymentTemplateWizard({
 
       const ruleInputs: PaymentTemplateRuleInput[] = rules.map((r) => ({
         kind: r.kind,
-        field: r.kind === "condition" ? r.field : null,
-        values:
+        conditions:
           r.kind === "condition"
-            ? r.valuesText.split(",").map((v) => v.trim()).filter(Boolean)
+            ? r.conditions.map((c) => ({
+                field: c.field,
+                values: c.valuesText.split(",").map((v) => v.trim()).filter(Boolean),
+                caseInsensitive: c.caseInsensitive,
+              }))
             : [],
-        caseInsensitive: r.caseInsensitive,
         companyId: r.companyId!,
         clientId: r.clientId!,
       }));
 
       const statusRuleInputs: PaymentTemplateStatusRuleInput[] = statusRules.map((r) => ({
         kind: r.kind,
-        field: r.kind === "condition" ? r.field : null,
-        values:
+        conditions:
           r.kind === "condition"
-            ? r.valuesText.split(",").map((v) => v.trim()).filter(Boolean)
+            ? r.conditions.map((c) => ({
+                field: c.field,
+                values: c.valuesText.split(",").map((v) => v.trim()).filter(Boolean),
+                caseInsensitive: c.caseInsensitive,
+              }))
             : [],
-        caseInsensitive: r.caseInsensitive,
         status: r.status,
       }));
 
@@ -1542,84 +1587,111 @@ export default function PaymentTemplateWizard({
                         <div className="rule-card-grid">
                         {rule.kind === "condition" ? (
                           <>
-                            <div className="field-code">
-                              <label>Se [Campo]</label>
-                              <select
-                                className="glass-input"
-                                value={rule.field}
-                                onChange={(e) => updateRule(i, { field: e.target.value as PaymentRuleField })}
-                              >
-                                {PAYMENT_TARGET_FIELDS.map((f) => (
-                                  <option key={f} value={f}>
-                                    {PAYMENT_TARGET_FIELD_LABELS[f]}
-                                  </option>
-                                ))}
-                                <option value={SHEET_NAME_RULE_FIELD}>Aba (nome da planilha)</option>
-                              </select>
-                            </div>
-                            <div className="field-code">
-                              <label>== [Valores possíveis]</label>
-                              <input
-                                className="glass-input"
-                                type="text"
-                                value={rule.valuesText}
-                                onChange={(e) => updateRule(i, { valuesText: e.target.value })}
-                                placeholder="Ex.: FLV, Mercearia"
-                              />
-                              <label className="field-code-checkbox">
-                                <input
-                                  type="checkbox"
-                                  checked={rule.caseInsensitive}
-                                  onChange={(e) => updateRule(i, { caseInsensitive: e.target.checked })}
-                                />
-                                Ignorar maiúsculas/minúsculas
-                              </label>
-                            </div>
+                            {rule.conditions.map((cond, ci) => (
+                              <div key={ci} style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "flex-start" }}>
+                                <div className="field-code" style={{ flex: 1, minWidth: "140px" }}>
+                                  <label>{ci === 0 ? "Se [Campo]" : "E [Campo]"}</label>
+                                  <select
+                                    className="glass-input"
+                                    value={cond.field}
+                                    onChange={(e) => updateRuleCondition(i, ci, { field: e.target.value as PaymentRuleField })}
+                                  >
+                                    {PAYMENT_TARGET_FIELDS.map((f) => (
+                                      <option key={f} value={f}>
+                                        {PAYMENT_TARGET_FIELD_LABELS[f]}
+                                      </option>
+                                    ))}
+                                    <option value={SHEET_NAME_RULE_FIELD}>Aba (guia dentro do arquivo)</option>
+                                  </select>
+                                </div>
+                                <div className="field-code" style={{ flex: 1, minWidth: "160px" }}>
+                                  <label>== [Valores possíveis]</label>
+                                  <input
+                                    className="glass-input"
+                                    type="text"
+                                    value={cond.valuesText}
+                                    onChange={(e) => updateRuleCondition(i, ci, { valuesText: e.target.value })}
+                                    placeholder="Ex.: FLV, Mercearia"
+                                  />
+                                  <label className="field-code-checkbox">
+                                    <input
+                                      type="checkbox"
+                                      checked={cond.caseInsensitive}
+                                      onChange={(e) => updateRuleCondition(i, ci, { caseInsensitive: e.target.checked })}
+                                    />
+                                    Ignorar maiúsculas/minúsculas
+                                  </label>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="ghost"
+                                  style={{ padding: "0.4rem", marginTop: "22px" }}
+                                  onClick={() => removeRuleCondition(i, ci)}
+                                  disabled={rule.conditions.length <= 1}
+                                  aria-label="Remover condição"
+                                  title="Remover condição"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            ))}
+                            <button
+                              type="button"
+                              className="glow-button"
+                              style={{ alignSelf: "flex-start" }}
+                              onClick={() => addRuleCondition(i)}
+                            >
+                              <Plus size={12} />
+                              Condição (E)
+                            </button>
                           </>
                         ) : (
                           <span className="rule-card-else-label">
                             SENÃO — se nenhuma regra acima bater, usa esta
                           </span>
                         )}
-                        <div className="field-code consequence">
-                          <label>Então [Empresa]</label>
-                          <select
-                            className="glass-input"
-                            value={rule.companyId ?? ""}
-                            onChange={(e) =>
-                              updateRule(i, {
-                                companyId: e.target.value ? Number(e.target.value) : null,
-                                clientId: null,
-                              })
-                            }
-                          >
-                            <option value="">Selecione</option>
-                            {companies.map((c) => (
-                              <option key={c.id} value={c.id}>
-                                {c.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="field-code consequence">
-                          <label>E [Cliente]</label>
-                          <select
-                            className="glass-input"
-                            value={rule.clientId ?? ""}
-                            onChange={(e) =>
-                              updateRule(i, { clientId: e.target.value ? Number(e.target.value) : null })
-                            }
-                            disabled={!rule.companyId}
-                          >
-                            <option value="">Selecione</option>
-                            {clientsAll
-                              .filter((c) => c.companyId === rule.companyId)
-                              .map((c) => (
+                        <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+                          <div className="field-code consequence" style={{ flex: 1, minWidth: "160px" }}>
+                            <label>Então [Empresa]</label>
+                            <select
+                              className="glass-input"
+                              value={rule.companyId ?? ""}
+                              onChange={(e) =>
+                                updateRule(i, {
+                                  companyId: e.target.value ? Number(e.target.value) : null,
+                                  clientId: null,
+                                })
+                              }
+                            >
+                              <option value="">Selecione</option>
+                              {companies.map((c) => (
                                 <option key={c.id} value={c.id}>
                                   {c.name}
                                 </option>
                               ))}
-                          </select>
+                            </select>
+                          </div>
+                          <div className="field-code consequence" style={{ flex: 1, minWidth: "160px" }}>
+                            <label>E [Cliente]</label>
+                            <select
+                              className="glass-input"
+                              value={rule.clientId ?? ""}
+                              onChange={(e) =>
+                                updateRule(i, { clientId: e.target.value ? Number(e.target.value) : null })
+                              }
+                              disabled={!rule.companyId}
+                            >
+                              <option value="">Selecione</option>
+                              {clientsAll
+                                .filter((c) => c.companyId === rule.companyId)
+                                .map((c) => (
+                                  <option key={c.id} value={c.id}>
+                                    {c.name}
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                        </div>
                         </div>
                         <div className="rule-card-delete">
                           <button
@@ -1632,7 +1704,6 @@ export default function PaymentTemplateWizard({
                           >
                             <Trash2 size={14} />
                           </button>
-                        </div>
                         </div>
                       </div>
                     </div>
@@ -1682,46 +1753,70 @@ export default function PaymentTemplateWizard({
                         <div className="status-rule-card-grid">
                           {rule.kind === "condition" ? (
                             <>
-                              <div className="field-code">
-                                <label>Se [Campo]</label>
-                                <select
-                                  className="glass-input"
-                                  value={rule.field}
-                                  onChange={(e) =>
-                                    updateStatusRule(i, { field: e.target.value as PaymentRuleField })
-                                  }
-                                >
-                                  {PAYMENT_TARGET_FIELDS.map((f) => (
-                                    <option key={f} value={f}>
-                                      {PAYMENT_TARGET_FIELD_LABELS[f]}
-                                    </option>
-                                  ))}
-                                  <option value={SHEET_NAME_RULE_FIELD}>Aba (nome da planilha)</option>
-                                </select>
-                              </div>
-                              <div className="field-code">
-                                <label>== [Valores possíveis]</label>
-                                <input
-                                  className="glass-input"
-                                  type="text"
-                                  value={rule.valuesText}
-                                  onChange={(e) => updateStatusRule(i, { valuesText: e.target.value })}
-                                  placeholder="Ex.: PAGO, QUITADO"
-                                />
-                                <p className="field-hint" style={{ margin: "0.3rem 0 0" }}>
-                                  Em branco, casa quando o campo mapeado vier vazio.
-                                </p>
-                                <label className="field-code-checkbox">
-                                  <input
-                                    type="checkbox"
-                                    checked={rule.caseInsensitive}
-                                    onChange={(e) =>
-                                      updateStatusRule(i, { caseInsensitive: e.target.checked })
-                                    }
-                                  />
-                                  Ignorar maiúsculas/minúsculas
-                                </label>
-                              </div>
+                              {rule.conditions.map((cond, ci) => (
+                                <div key={ci} style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "flex-start" }}>
+                                  <div className="field-code" style={{ flex: 1, minWidth: "140px" }}>
+                                    <label>{ci === 0 ? "Se [Campo]" : "E [Campo]"}</label>
+                                    <select
+                                      className="glass-input"
+                                      value={cond.field}
+                                      onChange={(e) =>
+                                        updateStatusRuleCondition(i, ci, { field: e.target.value as PaymentRuleField })
+                                      }
+                                    >
+                                      {PAYMENT_TARGET_FIELDS.map((f) => (
+                                        <option key={f} value={f}>
+                                          {PAYMENT_TARGET_FIELD_LABELS[f]}
+                                        </option>
+                                      ))}
+                                      <option value={SHEET_NAME_RULE_FIELD}>Aba (guia dentro do arquivo)</option>
+                                    </select>
+                                  </div>
+                                  <div className="field-code" style={{ flex: 1, minWidth: "160px" }}>
+                                    <label>== [Valores possíveis]</label>
+                                    <input
+                                      className="glass-input"
+                                      type="text"
+                                      value={cond.valuesText}
+                                      onChange={(e) => updateStatusRuleCondition(i, ci, { valuesText: e.target.value })}
+                                      placeholder="Ex.: PAGO, QUITADO"
+                                    />
+                                    <p className="field-hint" style={{ margin: "0.3rem 0 0" }}>
+                                      Em branco, casa quando o campo mapeado vier vazio.
+                                    </p>
+                                    <label className="field-code-checkbox">
+                                      <input
+                                        type="checkbox"
+                                        checked={cond.caseInsensitive}
+                                        onChange={(e) =>
+                                          updateStatusRuleCondition(i, ci, { caseInsensitive: e.target.checked })
+                                        }
+                                      />
+                                      Ignorar maiúsculas/minúsculas
+                                    </label>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="ghost"
+                                    style={{ padding: "0.4rem", marginTop: "22px" }}
+                                    onClick={() => removeStatusRuleCondition(i, ci)}
+                                    disabled={rule.conditions.length <= 1}
+                                    aria-label="Remover condição"
+                                    title="Remover condição"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              ))}
+                              <button
+                                type="button"
+                                className="glow-button"
+                                style={{ alignSelf: "flex-start" }}
+                                onClick={() => addStatusRuleCondition(i)}
+                              >
+                                <Plus size={12} />
+                                Condição (E)
+                              </button>
                             </>
                           ) : (
                             <span className="rule-card-else-label">
@@ -1744,18 +1839,18 @@ export default function PaymentTemplateWizard({
                               ))}
                             </select>
                           </div>
-                          <div className="rule-card-delete">
-                            <button
-                              type="button"
-                              className="ghost"
-                              style={{ padding: "0.4rem" }}
-                              onClick={() => removeStatusRule(i)}
-                              aria-label="Remover regra"
-                              title="Remover regra"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
+                        </div>
+                        <div className="rule-card-delete">
+                          <button
+                            type="button"
+                            className="ghost"
+                            style={{ padding: "0.4rem" }}
+                            onClick={() => removeStatusRule(i)}
+                            aria-label="Remover regra"
+                            title="Remover regra"
+                          >
+                            <Trash2 size={14} />
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -1820,6 +1915,7 @@ export default function PaymentTemplateWizard({
               !name.trim() ||
               rules.length === 0 ||
               rules.some((r) => !isRuleValid(r)) ||
+              statusRules.some((r) => !isStatusRuleValid(r)) ||
               !isIdentifierPriorityValid
             }
           >

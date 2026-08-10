@@ -531,21 +531,32 @@ export function withSheetNameField(fields: Record<string, string>, sheetName: st
   return { ...fields, [SHEET_NAME_RULE_FIELD]: sheetName ?? "" };
 }
 
+/** Whether a single routing condition matches — see `resolvePaymentRoute`: a rule with no raw value for its field never matches, rather than treating "empty" as a value to compare. */
+function matchesRouteCondition(condition: { field: string; values: string[]; caseInsensitive: boolean }, fields: Record<string, string>): boolean {
+  const raw = fields[condition.field];
+  if (!raw) return false;
+  const fold = (s: string) => (condition.caseInsensitive ? s.toLowerCase() : s);
+  const normalized = fold(raw.trim());
+  return condition.values.some((v) => fold(v.trim()) === normalized);
+}
+
 /**
  * Resolves which company/client a payment-import row belongs to, by
  * walking a template's if/else-if/else rule chain in order — the first
- * rule that matches wins. A `"condition"` rule matches when the row's
- * already-mapped `rule.field` value (trimmed, case-insensitive) is one of
- * `rule.values`; an `"else"` rule always matches. `null` means no rule
- * matched (no `"else"` present, and no condition matched either) — the
- * caller shows this as a row needing manual resolution, not a silent drop.
+ * rule that matches wins. A `"condition"` rule matches when EVERY one of
+ * its `conditions` matches (AND) — each condition matches when the row's
+ * already-mapped field value (trimmed, case-insensitive) is one of that
+ * condition's `values`; a rule with zero conditions never matches (a
+ * defensive guard, not a real configuration — the wizard always keeps at
+ * least one). An `"else"` rule always matches. `null` means no rule
+ * matched (no `"else"` present, and no condition rule matched either) —
+ * the caller shows this as a row needing manual resolution, not a silent
+ * drop.
  */
 export function resolvePaymentRoute(
   rules: {
     kind: "condition" | "else";
-    field: string | null;
-    values: string[];
-    caseInsensitive: boolean;
+    conditions: { field: string; values: string[]; caseInsensitive: boolean }[];
     companyId: number;
     companyName: string;
     clientId: number;
@@ -562,11 +573,8 @@ export function resolvePaymentRoute(
         clientName: rule.clientName,
       };
     }
-    const raw = rule.field ? fields[rule.field] : undefined;
-    if (!raw) continue;
-    const fold = (s: string) => (rule.caseInsensitive ? s.toLowerCase() : s);
-    const normalized = fold(raw.trim());
-    if (rule.values.some((v) => fold(v.trim()) === normalized)) {
+    if (rule.conditions.length === 0) continue;
+    if (rule.conditions.every((c) => matchesRouteCondition(c, fields))) {
       return {
         companyId: rule.companyId,
         companyName: rule.companyName,
@@ -578,42 +586,44 @@ export function resolvePaymentRoute(
   return null;
 }
 
+/** Whether a single status condition matches — unlike a routing condition, an empty `values` list is a deliberate "field is empty/missing" test, not a skip. See `resolvePaymentStatus`. */
+function matchesStatusCondition(condition: { field: string; values: string[]; caseInsensitive: boolean }, fields: Record<string, string>): boolean {
+  const raw = fields[condition.field]?.trim() ?? "";
+  if (condition.values.length === 0) return !raw;
+  if (!raw) return false;
+  const fold = (s: string) => (condition.caseInsensitive ? s.toLowerCase() : s);
+  const normalized = fold(raw);
+  return condition.values.some((v) => fold(v.trim()) === normalized);
+}
+
 /**
  * Resolves a payment-import row's initial status, walking a template's
  * if/else-if/else status chain the same way `resolvePaymentRoute` walks
  * the routing one — first match wins, "um pra um" (one status per rule,
- * not a company/client pair). `null` means no rule matched (including an
- * empty chain, since this feature is optional) — the caller falls back to
- * the default `"pendente"`, not a manual-resolution state like an
- * unresolved route: an unmatched status is a normal, expected outcome.
+ * not a company/client pair), and a `"condition"` rule matches when EVERY
+ * one of its `conditions` matches (AND), same combining rule as routing.
+ * `null` means no rule matched (including an empty chain, since this
+ * feature is optional) — the caller falls back to the default
+ * `"pendente"`, not a manual-resolution state like an unresolved route: an
+ * unmatched status is a normal, expected outcome.
  *
- * A `"condition"` rule with an empty `values` (the "Valores possíveis"
- * field left blank) matches when the row's mapped field is itself empty or
- * missing — a deliberate configuration, not a placeholder for "no
- * condition set" — rather than being skipped like `resolvePaymentRoute`
- * skips a rule with no raw value to compare.
+ * A condition with an empty `values` (the "Valores possíveis" field left
+ * blank) matches when the row's mapped field is itself empty or missing —
+ * a deliberate configuration, not a placeholder for "no condition set" —
+ * rather than never matching like a routing condition with no raw value.
  */
 export function resolvePaymentStatus(
   rules: {
     kind: "condition" | "else";
-    field: string | null;
-    values: string[];
-    caseInsensitive: boolean;
+    conditions: { field: string; values: string[]; caseInsensitive: boolean }[];
     status: PaymentShiftStatus;
   }[],
   fields: Record<string, string>,
 ): PaymentShiftStatus | null {
   for (const rule of rules) {
     if (rule.kind === "else") return rule.status;
-    const raw = (rule.field ? fields[rule.field] : undefined)?.trim() ?? "";
-    if (rule.values.length === 0) {
-      if (!raw) return rule.status;
-      continue;
-    }
-    if (!raw) continue;
-    const fold = (s: string) => (rule.caseInsensitive ? s.toLowerCase() : s);
-    const normalized = fold(raw);
-    if (rule.values.some((v) => fold(v.trim()) === normalized)) return rule.status;
+    if (rule.conditions.length === 0) continue;
+    if (rule.conditions.every((c) => matchesStatusCondition(c, fields))) return rule.status;
   }
   return null;
 }

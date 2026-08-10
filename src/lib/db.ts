@@ -21,6 +21,7 @@ import type {
   PaymentExportTemplateListRow,
   PaymentExportTemplateRow,
   PaymentFileKind,
+  PaymentRuleCondition,
   PaymentRuleField,
   PaymentTemplateFieldMapping,
   PaymentTemplateGroup,
@@ -286,13 +287,15 @@ export async function saveParsedTimesheet(
 
   const importResult = await db.execute(
     `INSERT INTO imports
-       (provider, employee_id, period_start, period_end, original_pdf_path, import_file_id,
+       (provider, employee_id, client_id, company_id, period_start, period_end, original_pdf_path, import_file_id,
         source_file_id, max_punches, total_worked_minutes, overtime_minutes, absence_minutes,
         late_minutes, regular_minutes, interval_minutes, pending_count)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
     [
       sheet.provider,
       employeeId,
+      clientId,
+      companyId,
       sheet.period.start,
       sheet.period.end,
       sheet.originalPdfPath,
@@ -509,6 +512,10 @@ export async function createClient(
   companyIds: number[],
   name: string,
   cnpj: string,
+  nightStartTime: string | null = null,
+  nightEndTime: string | null = null,
+  nightShiftRule: NightShiftRule | null = null,
+  valueRules: PaymentValueRule[] = [],
 ): Promise<number> {
   const db = await getDb();
   const normalizedCnpj = normalizeCnpj(cnpj);
@@ -525,13 +532,17 @@ export async function createClient(
 
   let clientId: number;
   if (existing.length > 0) {
+    // Linking an existing client to one more empresa isn't an edit of that
+    // client — its rule overrides (if any) are left exactly as they are,
+    // any `nightStartTime`/`valueRules` passed here are silently ignored.
     clientId = existing[0].id;
   } else {
-    const result = await db.execute("INSERT INTO clients (name, cnpj) VALUES ($1, $2)", [
-      name.trim(),
-      normalizedCnpj,
-    ]);
+    const result = await db.execute(
+      "INSERT INTO clients (name, cnpj, night_start_time, night_end_time, night_shift_rule) VALUES ($1, $2, $3, $4, $5)",
+      [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule],
+    );
     clientId = result.lastInsertId as number;
+    await insertClientValueRules(db, clientId, valueRules);
   }
 
   for (const companyId of companyIds) {
@@ -554,12 +565,44 @@ export interface ClientDetail {
   name: string;
   cnpj: string;
   companies: { id: number; name: string }[];
+  /** `null` (all three together) means "no override — inherit the linked company's own night window/rule", see `getEffectivePaymentRules`. */
+  nightStartTime: string | null;
+  nightEndTime: string | null;
+  nightShiftRule: NightShiftRule | null;
+  /** Empty means "no override — inherit the linked company's own chain entirely", not "worth zero" — same convention `CompanyDetail.valueRules` already uses. */
+  valueRules: PaymentValueRule[];
+}
+
+/** Inserted in array order, same evaluation-by-insertion-order convention as `insertCompanyValueRules`. */
+async function insertClientValueRules(db: Database, clientId: number, rules: PaymentValueRule[]): Promise<void> {
+  for (const rule of rules) {
+    await db.execute(
+      `INSERT INTO client_payment_value_rules (client_id, kind, conditions_json, operator, threshold_minutes, amount)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        clientId,
+        rule.kind,
+        rule.kind === "condition" && rule.conditions.length > 0 ? JSON.stringify(rule.conditions) : null,
+        rule.kind === "condition" ? rule.operator : null,
+        rule.kind === "condition" ? rule.thresholdMinutes : null,
+        rule.amount,
+      ],
+    );
+  }
+}
+
+async function deleteClientValueRules(db: Database, clientId: number): Promise<void> {
+  await db.execute("DELETE FROM client_payment_value_rules WHERE client_id = $1", [clientId]);
 }
 
 export async function getClient(id: number): Promise<ClientDetail> {
   const db = await getDb();
-  const rows = await db.select<{ id: number; name: string; cnpj: string }[]>(
-    "SELECT id, name, cnpj FROM clients WHERE id = $1",
+  const rows = await db.select<
+    { id: number; name: string; cnpj: string; nightStartTime: string | null; nightEndTime: string | null; nightShiftRule: NightShiftRule | null }[]
+  >(
+    `SELECT id, name, cnpj, night_start_time AS nightStartTime, night_end_time AS nightEndTime,
+            night_shift_rule AS nightShiftRule
+     FROM clients WHERE id = $1`,
     [id],
   );
   if (rows.length === 0) throw new Error("Cliente não encontrado.");
@@ -571,7 +614,16 @@ export async function getClient(id: number): Promise<ClientDetail> {
      ORDER BY c.name`,
     [id],
   );
-  return { ...rows[0], companies };
+  const valueRuleRows = await db.select<(Omit<PaymentValueRule, "conditions"> & { conditionsJson: string | null })[]>(
+    `SELECT kind, conditions_json AS conditionsJson, operator, threshold_minutes AS thresholdMinutes, amount
+     FROM client_payment_value_rules WHERE client_id = $1 ORDER BY id`,
+    [id],
+  );
+  const valueRules: PaymentValueRule[] = valueRuleRows.map(({ conditionsJson, ...rule }) => ({
+    ...rule,
+    conditions: conditionsJson ? JSON.parse(conditionsJson) : [],
+  }));
+  return { ...rows[0], companies, valueRules };
 }
 
 /** Links `clientId` to an additional `companyId` — a no-op if already linked. */
@@ -621,7 +673,15 @@ export async function removeClientCompany(clientId: number, companyId: number): 
  * Updates a client's own name/CNPJ — its company links are managed
  * separately, via `addClientCompany`/`removeClientCompany`.
  */
-export async function updateClient(id: number, name: string, cnpj: string): Promise<void> {
+export async function updateClient(
+  id: number,
+  name: string,
+  cnpj: string,
+  nightStartTime: string | null = null,
+  nightEndTime: string | null = null,
+  nightShiftRule: NightShiftRule | null = null,
+  valueRules: PaymentValueRule[] = [],
+): Promise<void> {
   const db = await getDb();
   const normalizedCnpj = normalizeCnpj(cnpj);
   if (normalizedCnpj.length !== 14) {
@@ -634,11 +694,30 @@ export async function updateClient(id: number, name: string, cnpj: string): Prom
   if (existing.length > 0) {
     throw new Error("Já existe um cliente cadastrado com esse CNPJ.");
   }
-  await db.execute("UPDATE clients SET name = $1, cnpj = $2 WHERE id = $3", [
-    name.trim(),
-    normalizedCnpj,
-    id,
-  ]);
+  await db.execute(
+    "UPDATE clients SET name = $1, cnpj = $2, night_start_time = $3, night_end_time = $4, night_shift_rule = $5 WHERE id = $6",
+    [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule, id],
+  );
+  await deleteClientValueRules(db, id);
+  await insertClientValueRules(db, id, valueRules);
+}
+
+/** The night-shift window/rule + pay-value chain actually in effect for one (cliente, empresa) pair — the client's own override when it has one, falling back field-by-field (night window) or as a whole chain (value rules) to the company's otherwise. Mirrored in SQL by `shiftPeriodSql` for night-shift classification (the only one of the two ever resolved SQL-side). */
+export interface EffectivePaymentRules {
+  nightStartTime: string;
+  nightEndTime: string;
+  nightShiftRule: NightShiftRule;
+  valueRules: PaymentValueRule[];
+}
+
+export async function getEffectivePaymentRules(clientId: number, companyId: number): Promise<EffectivePaymentRules> {
+  const [client, company] = await Promise.all([getClient(clientId), getCompany(companyId)]);
+  return {
+    nightStartTime: client.nightStartTime ?? company.nightStartTime,
+    nightEndTime: client.nightEndTime ?? company.nightEndTime,
+    nightShiftRule: client.nightShiftRule ?? company.nightShiftRule,
+    valueRules: client.valueRules.length > 0 ? client.valueRules : company.valueRules,
+  };
 }
 
 export interface EmployeeRow {
@@ -808,6 +887,45 @@ export async function updateEmployee(
   ]);
 }
 
+/**
+ * Moves a colaborador's home cadastro to a different cliente/empresa — safe
+ * to do after the client/company snapshot migration (0060/0061): every
+ * already-imported `payment_shifts`/`imports` row keeps its own snapshotted
+ * `client_id`/`company_id`, so this never rewrites historical data, only
+ * where FUTURE imports for this employee resolve to. Used by
+ * `ImportPaymentsPage`'s "Mover para Cliente Y" action, when a routing rule
+ * now resolves an already-registered employee to a different cliente/empresa
+ * than the one they're currently under.
+ */
+export async function moveEmployeeToClient(employeeId: number, newClientId: number, newCompanyId: number): Promise<void> {
+  const db = await getDb();
+  const current = await db.select<{ cpf: string }[]>("SELECT cpf FROM employees WHERE id = $1", [employeeId]);
+  if (current.length === 0) throw new Error("Colaborador não encontrado.");
+
+  const link = await db.select<{ clientId: number }[]>(
+    "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
+    [newClientId, newCompanyId],
+  );
+  if (link.length === 0) throw new Error("Esse cliente não está vinculado à empresa selecionada.");
+
+  // Same collision guard as `updateEmployee` — moving into a cliente/empresa
+  // that already has a different colaborador with this CPF would silently
+  // create two rows sharing an identity there.
+  const existing = await db.select<{ id: number }[]>(
+    "SELECT id FROM employees WHERE client_id = $1 AND company_id = $2 AND cpf = $3 AND id != $4",
+    [newClientId, newCompanyId, current[0].cpf, employeeId],
+  );
+  if (existing.length > 0) {
+    throw new Error("Já existe um colaborador com esse CPF para essa empresa e cliente.");
+  }
+
+  await db.execute("UPDATE employees SET client_id = $1, company_id = $2 WHERE id = $3", [
+    newClientId,
+    newCompanyId,
+    employeeId,
+  ]);
+}
+
 const IMPORT_SELECT_COLUMNS = `
   i.id AS importId,
   i.provider AS provider,
@@ -836,8 +954,8 @@ const IMPORT_SELECT_COLUMNS = `
 const IMPORT_FROM_CLAUSE = `
   FROM imports i
   JOIN employees e ON e.id = i.employee_id
-  JOIN companies c ON c.id = e.company_id
-  LEFT JOIN clients cl ON cl.id = e.client_id
+  JOIN companies c ON c.id = i.company_id
+  LEFT JOIN clients cl ON cl.id = i.client_id
   LEFT JOIN source_files sf ON sf.id = i.source_file_id
 `;
 
@@ -989,8 +1107,8 @@ export async function listStoredDayRecords(
     FROM day_records d
     JOIN imports i ON i.id = d.import_id
     JOIN employees e ON e.id = i.employee_id
-    JOIN companies c ON c.id = e.company_id
-    LEFT JOIN clients cl ON cl.id = e.client_id
+    JOIN companies c ON c.id = i.company_id
+    LEFT JOIN clients cl ON cl.id = i.client_id
     ${where}
     ORDER BY e.name, d.date
     `,
@@ -1953,6 +2071,7 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
       field: PaymentRuleField | null;
       valuesJson: string | null;
       caseInsensitive: number;
+      conditionsJson: string | null;
       companyId: number;
       companyName: string;
       clientId: number;
@@ -1960,6 +2079,7 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
     }[]
   >(
     `SELECT r.kind, r.field, r.values_json AS valuesJson, r.case_insensitive AS caseInsensitive,
+            r.conditions_json AS conditionsJson,
             r.company_id AS companyId, c.name AS companyName,
             r.client_id AS clientId, cl.name AS clientName
      FROM payment_template_rules r
@@ -1969,11 +2089,17 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
      ORDER BY r.id`,
     [id],
   );
-  const rules: PaymentTemplateRule[] = ruleRows.map((r) => ({
-    ...r,
-    values: r.valuesJson ? JSON.parse(r.valuesJson) : [],
-    caseInsensitive: Boolean(r.caseInsensitive),
-  }));
+  const rules: PaymentTemplateRule[] = ruleRows.map((r) => {
+    const { field, valuesJson, caseInsensitive, conditionsJson, ...rest } = r;
+    return {
+      ...rest,
+      conditions: conditionsJson
+        ? (JSON.parse(conditionsJson) as PaymentRuleCondition[])
+        : field
+          ? [{ field, values: valuesJson ? JSON.parse(valuesJson) : [], caseInsensitive: Boolean(caseInsensitive) }]
+          : [],
+    };
+  });
 
   const statusRuleRows = await db.select<
     {
@@ -1981,20 +2107,28 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
       field: PaymentRuleField | null;
       valuesJson: string | null;
       caseInsensitive: number;
+      conditionsJson: string | null;
       status: PaymentShiftStatus;
     }[]
   >(
-    `SELECT kind, field, values_json AS valuesJson, case_insensitive AS caseInsensitive, status
+    `SELECT kind, field, values_json AS valuesJson, case_insensitive AS caseInsensitive,
+            conditions_json AS conditionsJson, status
      FROM payment_template_status_rules
      WHERE template_id = $1
      ORDER BY id`,
     [id],
   );
-  const statusRules: PaymentStatusRule[] = statusRuleRows.map((r) => ({
-    ...r,
-    values: r.valuesJson ? JSON.parse(r.valuesJson) : [],
-    caseInsensitive: Boolean(r.caseInsensitive),
-  }));
+  const statusRules: PaymentStatusRule[] = statusRuleRows.map((r) => {
+    const { field, valuesJson, caseInsensitive, conditionsJson, ...rest } = r;
+    return {
+      ...rest,
+      conditions: conditionsJson
+        ? (JSON.parse(conditionsJson) as PaymentRuleCondition[])
+        : field
+          ? [{ field, values: valuesJson ? JSON.parse(valuesJson) : [], caseInsensitive: Boolean(caseInsensitive) }]
+          : [],
+    };
+  });
 
   const { acceptedFileKindsJson, ...row } = rows[0];
   return {
@@ -2009,18 +2143,16 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
 
 export interface PaymentTemplateRuleInput {
   kind: PaymentTemplateRuleKind;
-  field: PaymentRuleField | null;
-  values: string[];
-  caseInsensitive: boolean;
+  /** Empty when `kind === "else"`. */
+  conditions: PaymentRuleCondition[];
   companyId: number;
   clientId: number;
 }
 
 export interface PaymentTemplateStatusRuleInput {
   kind: PaymentTemplateRuleKind;
-  field: PaymentRuleField | null;
-  values: string[];
-  caseInsensitive: boolean;
+  /** Empty when `kind === "else"`. */
+  conditions: PaymentRuleCondition[];
   status: PaymentShiftStatus;
 }
 
@@ -2092,14 +2224,12 @@ async function insertTemplateRules(
   for (const rule of rules) {
     await db.execute(
       `INSERT INTO payment_template_rules
-         (template_id, kind, field, values_json, case_insensitive, company_id, client_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+         (template_id, kind, conditions_json, company_id, client_id)
+       VALUES ($1, $2, $3, $4, $5)`,
       [
         templateId,
         rule.kind,
-        rule.kind === "condition" ? rule.field : null,
-        rule.kind === "condition" ? JSON.stringify(rule.values) : null,
-        rule.caseInsensitive ? 1 : 0,
+        rule.kind === "condition" ? JSON.stringify(rule.conditions) : null,
         rule.companyId,
         rule.clientId,
       ],
@@ -2120,14 +2250,12 @@ async function insertTemplateStatusRules(
   for (const rule of rules) {
     await db.execute(
       `INSERT INTO payment_template_status_rules
-         (template_id, kind, field, values_json, case_insensitive, status)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+         (template_id, kind, conditions_json, status)
+       VALUES ($1, $2, $3, $4)`,
       [
         templateId,
         rule.kind,
-        rule.kind === "condition" ? rule.field : null,
-        rule.kind === "condition" ? JSON.stringify(rule.values) : null,
-        rule.caseInsensitive ? 1 : 0,
+        rule.kind === "condition" ? JSON.stringify(rule.conditions) : null,
         rule.status,
       ],
     );
@@ -2596,6 +2724,79 @@ export async function findEmployeeByAttempts(
   return null;
 }
 
+/**
+ * Same identifier-matching algorithm as `findEmployeeByAttempts`, but with
+ * no client/company scope at all — used only after a scoped search already
+ * failed, to answer "does this person exist somewhere else?" (see
+ * `moveEmployeeToClient`). Never used to resolve who a payment row actually
+ * belongs to during import — that always stays scoped to the route's own
+ * resolved client/empresa, so a coincidental CPF/nome match under an
+ * unrelated cliente can never silently misroute a shift.
+ */
+export async function findEmployeeAnywhereByAttempts(
+  attempts: IdentifierAttempt[],
+  values: { cpf: string | null; matricula: string | null; nome: string | null },
+): Promise<EmployeeRow | null> {
+  const db = await getDb();
+  const select = `SELECT e.id, e.name, e.cpf, e.matricula,
+      cl.id AS clientId, cl.name AS clientName,
+      c.id AS companyId, c.name AS companyName
+    FROM employees e
+    JOIN clients cl ON cl.id = e.client_id
+    JOIN companies c ON c.id = e.company_id`;
+
+  for (const attempt of attempts) {
+    if (attempt.fields.length === 0) continue;
+    const conditions: string[] = [];
+    const params: (string | number)[] = [];
+    let skip = false;
+
+    for (const field of attempt.fields) {
+      if (field === "cpf") {
+        const normalized = values.cpf ? normalizeCpf(values.cpf) : "";
+        if (normalized.length !== 11) {
+          skip = true;
+          break;
+        }
+        params.push(normalized);
+        conditions.push(`e.cpf = $${params.length}`);
+      } else if (field === "matricula") {
+        const trimmed = values.matricula?.trim();
+        if (!trimmed) {
+          skip = true;
+          break;
+        }
+        params.push(trimmed);
+        conditions.push(
+          attempt.caseInsensitive ? `lower(e.matricula) = lower($${params.length})` : `e.matricula = $${params.length}`,
+        );
+      } else {
+        const trimmed = values.nome?.trim();
+        if (!trimmed) {
+          skip = true;
+          break;
+        }
+        params.push(trimmed);
+        const nameParam = params.length;
+        params.push(trimmed);
+        const aliasParam = params.length;
+        const nameCmp = attempt.caseInsensitive ? `lower(e.name) = lower($${nameParam})` : `e.name = $${nameParam}`;
+        const aliasCmp = attempt.caseInsensitive
+          ? `lower(ea.alias) = lower($${aliasParam})`
+          : `ea.alias = $${aliasParam}`;
+        conditions.push(
+          `(${nameCmp} OR EXISTS (SELECT 1 FROM employee_aliases ea WHERE ea.employee_id = e.id AND ${aliasCmp}))`,
+        );
+      }
+    }
+
+    if (skip) continue;
+    const rows = await db.select<EmployeeRow[]>(`${select} WHERE ${conditions.join(" AND ")}`, params);
+    if (rows.length > 0) return rows[0];
+  }
+  return null;
+}
+
 export interface DuplicatePaymentShiftMatch {
   /** The *current* (head) row for this identity — see `HEAD_SHIFT_CONDITION`. Reprocessing links its new row back to exactly this one via `PaymentShiftInput.previousShiftId`, not to whichever row happens to be oldest. */
   shiftId: number;
@@ -2845,6 +3046,8 @@ export interface PaymentShiftInput {
   employeeId: number;
   templateId: number | null;
   sourceFileId: number | null;
+  clientId: number;
+  companyId: number;
   local: string;
   workDate: string;
   role: string;
@@ -2867,14 +3070,16 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
   for (const r of rows) {
     await db.execute(
       `INSERT INTO payment_shifts
-         (employee_id, template_id, source_file_id, local, work_date, role,
+         (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role,
           schedule_start_minutes, schedule_end_minutes, status, extra_data, previous_shift_id,
           source_row_number, source_sheet_name)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
       [
         r.employeeId,
         r.templateId,
         r.sourceFileId,
+        r.clientId,
+        r.companyId,
         r.local,
         r.workDate,
         r.role,
@@ -2970,18 +3175,25 @@ function timeInRangeSql(pointExpr: string, startExpr: string, endExpr: string): 
 
 /**
  * SQL fragments for classifying a `payment_shifts` row (already joined as
- * `ps`, with its employee's company already joined as `c`) as "noturno" —
- * `hasSchedule` (a row with no parsed horário is neither diurno nor
- * noturno, same as `classifyShiftPeriod`'s caller returning `null`) and
- * `isNoturno` (the rule-dependent classification itself, only meaningful
- * where `hasSchedule` holds) are kept separate so a caller can build both
- * "is noturno" (`hasSchedule AND isNoturno`) and "is diurno" (`hasSchedule
- * AND NOT isNoturno`) without `NOT` accidentally flipping missing-schedule
- * rows into false positives.
+ * `ps`, with its company already joined as `c` AND its client already
+ * joined as `cl`) as "noturno" — the effective night window/rule is the
+ * client's own override when set, falling back to the company's otherwise
+ * (`COALESCE(cl.night_*, c.night_*)`, same client-wins precedence as
+ * `getEffectivePaymentRules`, just mirrored in SQL). `hasSchedule` (a row
+ * with no parsed horário is neither diurno nor noturno, same as
+ * `classifyShiftPeriod`'s caller returning `null`) and `isNoturno` (the
+ * rule-dependent classification itself, only meaningful where `hasSchedule`
+ * holds) are kept separate so a caller can build both "is noturno"
+ * (`hasSchedule AND isNoturno`) and "is diurno" (`hasSchedule AND NOT
+ * isNoturno`) without `NOT` accidentally flipping missing-schedule rows
+ * into false positives.
  */
 function shiftPeriodSql(): { hasSchedule: string; isNoturno: string } {
-  const nightStart = "((CAST(substr(c.night_start_time,1,2) AS INTEGER) * 60) + CAST(substr(c.night_start_time,4,2) AS INTEGER))";
-  const nightEnd = "((CAST(substr(c.night_end_time,1,2) AS INTEGER) * 60) + CAST(substr(c.night_end_time,4,2) AS INTEGER))";
+  const effectiveStart = "COALESCE(cl.night_start_time, c.night_start_time)";
+  const effectiveEnd = "COALESCE(cl.night_end_time, c.night_end_time)";
+  const effectiveRule = "COALESCE(cl.night_shift_rule, c.night_shift_rule)";
+  const nightStart = `((CAST(substr(${effectiveStart},1,2) AS INTEGER) * 60) + CAST(substr(${effectiveStart},4,2) AS INTEGER))`;
+  const nightEnd = `((CAST(substr(${effectiveEnd},1,2) AS INTEGER) * 60) + CAST(substr(${effectiveEnd},4,2) AS INTEGER))`;
   const shiftStart = "ps.schedule_start_minutes";
   const shiftEnd = "ps.schedule_end_minutes";
 
@@ -2992,7 +3204,7 @@ function shiftPeriodSql(): { hasSchedule: string; isNoturno: string } {
   const duration = `(CASE WHEN ${shiftEnd} > ${shiftStart} THEN ${shiftEnd} - ${shiftStart} ELSE 1440 - ${shiftStart} + ${shiftEnd} END)`;
   const majorityOverlap = `(${duration} > 0 AND ${overlapMinutes} * 2 >= ${duration})`;
 
-  const isNoturno = `(CASE c.night_shift_rule
+  const isNoturno = `(CASE ${effectiveRule}
     WHEN 'start-in-range' THEN ${startInRange}
     WHEN 'end-in-range' THEN ${endInRange}
     WHEN 'start-or-end-in-range' THEN (${startInRange} OR ${endInRange})
@@ -3152,8 +3364,8 @@ export async function listPaymentShiftSummaries(
   const havingClause = havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : "";
   const from = `FROM payment_shifts ps
     JOIN employees e ON e.id = ps.employee_id
-    JOIN clients cl ON cl.id = e.client_id
-    JOIN companies c ON c.id = e.company_id`;
+    JOIN clients cl ON cl.id = ps.client_id
+    JOIN companies c ON c.id = ps.company_id`;
 
   const countRows = await db.select<{ count: number }[]>(
     `SELECT COUNT(*) AS count FROM (
@@ -3228,8 +3440,8 @@ export async function listPaymentShiftsForReport(
             ps.status, ps.amount, ${shiftPeriodSelectSql()} AS shiftPeriod
      FROM payment_shifts ps
      JOIN employees e ON e.id = ps.employee_id
-     JOIN clients cl ON cl.id = e.client_id
-     JOIN companies c ON c.id = e.company_id
+     JOIN clients cl ON cl.id = ps.client_id
+     JOIN companies c ON c.id = ps.company_id
      WHERE ${conditions.join(" AND ")}
      ORDER BY ps.work_date, ps.local, e.name`,
     params,
@@ -3267,8 +3479,8 @@ export async function listPaymentShiftsFlat(
   const conditions = buildPaymentShiftRowConditions(query, params);
   const from = `FROM payment_shifts ps
     JOIN employees e ON e.id = ps.employee_id
-    JOIN clients cl ON cl.id = e.client_id
-    JOIN companies c ON c.id = e.company_id
+    JOIN clients cl ON cl.id = ps.client_id
+    JOIN companies c ON c.id = ps.company_id
     LEFT JOIN source_files sf ON sf.id = ps.source_file_id`;
   const whereClause = `WHERE ${conditions.join(" AND ")}`;
 
@@ -3277,7 +3489,7 @@ export async function listPaymentShiftsFlat(
 
   const rows = await db.select<PaymentShiftFlatRowRaw[]>(
     `SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS},
-            c.id AS companyId, c.name AS companyName, cl.id AS clientId, cl.name AS clientName,
+            c.name AS companyName, cl.name AS clientName,
             ${shiftPeriodSelectSql()} AS shiftPeriod
      ${from}
      ${whereClause}
@@ -3286,11 +3498,12 @@ export async function listPaymentShiftsFlat(
     [...params, query.pageSize, query.page * query.pageSize],
   );
 
-  return { rows: rows.map((r) => ({ ...parsePaymentShiftRow(r), companyId: r.companyId, companyName: r.companyName, clientId: r.clientId, clientName: r.clientName, shiftPeriod: r.shiftPeriod })), total };
+  return { rows: rows.map((r) => ({ ...parsePaymentShiftRow(r), companyName: r.companyName, clientName: r.clientName, shiftPeriod: r.shiftPeriod })), total };
 }
 
 const PAYMENT_SHIFT_SELECT_COLUMNS = `
   ps.id, ps.employee_id AS employeeId, e.name AS employeeName,
+  ps.client_id AS clientId, ps.company_id AS companyId,
   ps.local, ps.work_date AS workDate, ps.role,
   ps.schedule_start_minutes AS scheduleStartMinutes,
   ps.schedule_end_minutes AS scheduleEndMinutes,
@@ -3358,7 +3571,8 @@ export async function listPaymentShiftsForGroup(
     `SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS}, ${shiftPeriodSelectSql()} AS shiftPeriod
      FROM payment_shifts ps
      JOIN employees e ON e.id = ps.employee_id
-     JOIN companies c ON c.id = e.company_id
+     JOIN companies c ON c.id = ps.company_id
+     JOIN clients cl ON cl.id = ps.client_id
      LEFT JOIN source_files sf ON sf.id = ps.source_file_id
      WHERE ${conditions.join(" AND ")}
      ORDER BY ps.work_date, ps.id`,
@@ -3387,6 +3601,9 @@ interface PaymentShiftCoreFields {
   employeeId: number;
   templateId: number | null;
   sourceFileId: number | null;
+  /** Snapshotted, carried forward unchanged by every plain status/value transition below — only `applyAutoSyncedFieldUpdate` (a real re-sync against the source file) is allowed to replace it, with a freshly resolved route. */
+  clientId: number;
+  companyId: number;
   local: string;
   workDate: string;
   role: string;
@@ -3405,6 +3622,7 @@ interface PaymentShiftCoreFields {
 async function readPaymentShiftCoreFields(db: Database, shiftId: number): Promise<PaymentShiftCoreFields> {
   const rows = await db.select<PaymentShiftCoreFields[]>(
     `SELECT employee_id AS employeeId, template_id AS templateId, source_file_id AS sourceFileId,
+            client_id AS clientId, company_id AS companyId,
             local, work_date AS workDate, role,
             schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes,
             extra_data AS extraData, status,
@@ -3433,14 +3651,16 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
 
   const result = await db.execute(
     `INSERT INTO payment_shifts
-       (employee_id, template_id, source_file_id, local, work_date, role,
+       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role,
         schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
         source_row_number, source_sheet_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pago', $9, $10, $11, 1, $12, $13)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pago', $11, $12, $13, 1, $14, $15)`,
     [
       s.employeeId,
       s.templateId,
       s.sourceFileId,
+      s.clientId,
+      s.companyId,
       s.local,
       s.workDate,
       s.role,
@@ -3470,14 +3690,16 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
 
   const result = await db.execute(
     `INSERT INTO payment_shifts
-       (employee_id, template_id, source_file_id, local, work_date, role,
+       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role,
         schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
         source_row_number, source_sheet_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pendente', NULL, $9, $10, 1, $11, $12)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pendente', NULL, $11, $12, 1, $13, $14)`,
     [
       s.employeeId,
       s.templateId,
       s.sourceFileId,
+      s.clientId,
+      s.companyId,
       s.local,
       s.workDate,
       s.role,
@@ -3524,14 +3746,16 @@ export async function editPaymentShift(
 
   const result = await db.execute(
     `INSERT INTO payment_shifts
-       (employee_id, template_id, source_file_id, local, work_date, role,
+       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role,
         schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
         source_row_number, source_sheet_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, $13, $14)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, $15, $16)`,
     [
       s.employeeId,
       s.templateId,
       s.sourceFileId,
+      s.clientId,
+      s.companyId,
       fields.local,
       fields.workDate,
       fields.role,
@@ -3586,6 +3810,9 @@ export async function applyAutoSyncedFieldUpdate(
     scheduleEndMinutes: number | null;
     status: PaymentShiftStatus;
     extraData: Record<string, string> | null;
+    /** Fresh, from this line's own re-resolved route — NOT carried over from `readPaymentShiftCoreFields`, unlike every other field this function shares with `editPaymentShift`. This is what lets a re-sync notice "the routing rule changed, this shift belongs to a different client/empresa now". */
+    clientId: number;
+    companyId: number;
   },
   sourceFileId: number,
   sourceRowNumber: number | null,
@@ -3596,14 +3823,16 @@ export async function applyAutoSyncedFieldUpdate(
 
   const result = await db.execute(
     `INSERT INTO payment_shifts
-       (employee_id, template_id, source_file_id, local, work_date, role,
+       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role,
         schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data,
         edited_manually, source_row_number, source_sheet_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0, $13, $14)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16)`,
     [
       s.employeeId,
       s.templateId,
       sourceFileId,
+      fields.clientId,
+      fields.companyId,
       fields.local,
       fields.workDate,
       fields.role,

@@ -40,14 +40,17 @@ import {
   DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES,
   deletePaymentShift,
   findDuplicatePaymentShifts,
+  findEmployeeAnywhereByAttempts,
   findEmployeeByAttempts,
   findPaymentShiftByPosition,
+  getEmployee,
   getPaymentTemplate,
   listHeadShiftsForSourceUrl,
   listImportFiles,
   listPaymentTemplates,
   logSourceFile,
   markSourceFileSaved,
+  moveEmployeeToClient,
   savePaymentShifts,
   type DuplicatePaymentShiftMatch,
   type EmployeeRow,
@@ -163,6 +166,24 @@ interface PaymentPreviewRow {
   matchedEditedManually: boolean;
   /** Whether the match was only found by walking the matched shift's history — its own Local/Função/Horário/Data have since been hand-edited away from what's still in this file (see `findDuplicatePaymentShifts`). Only meaningful alongside `matchedEditedManually`. */
   matchedIdentityChanged: boolean;
+  /**
+   * Set (only for `category === "not-found"`) when the scoped search under
+   * the route's resolved client/empresa failed, but the same person is
+   * already registered under a DIFFERENT client/empresa — usually because a
+   * routing rule changed since they were first imported. Offers "Mover
+   * [Nome] para [Cliente Y]" instead of (or alongside) "Cadastrar
+   * colaborador"/"Vincular" — safe to do without touching any historical
+   * turno, since `payment_shifts`/`imports` snapshot their own client/
+   * empresa at import time (see `moveEmployeeToClient`).
+   */
+  foundInOtherClient: {
+    employeeId: number;
+    employeeName: string;
+    currentClientId: number;
+    currentClientName: string;
+    currentCompanyId: number;
+    currentCompanyName: string;
+  } | null;
 }
 
 /**
@@ -267,6 +288,8 @@ export default function ImportPaymentsPage() {
   const [periodStart, setPeriodStart] = useState(restored?.periodStart ?? "");
   const [periodEnd, setPeriodEnd] = useState(restored?.periodEnd ?? "");
   const [confirmFullImport, setConfirmFullImport] = useState(false);
+  /** Row index of a "colaborador não encontrado" row whose "Mover para Cliente Y" is pending confirmation — `null` when the modal is closed. */
+  const [moveEmployeeConfirmIndex, setMoveEmployeeConfirmIndex] = useState<number | null>(null);
   const [rowFilter, setRowFilter] = useState<RowFilter>(restored?.rowFilter ?? "all");
   const [nameSearch, setNameSearch] = useState(restored?.nameSearch ?? "");
 
@@ -796,6 +819,7 @@ export default function ImportPaymentsPage() {
                 resolvedClientName: null,
                 resolvedCompanyId: null,
                 resolvedCompanyName: null,
+                foundInOtherClient: null,
                 category: "skipped",
               });
               continue;
@@ -823,6 +847,15 @@ export default function ImportPaymentsPage() {
                   nome,
                 })
               : null;
+            // Scoped search failed — before giving up, check whether this
+            // same person is already registered under a DIFFERENT
+            // cliente/empresa (typically because a routing rule changed
+            // since they were first imported). Offers "Mover para Cliente
+            // Y" instead of leaving the row a dead end.
+            const elsewhere =
+              route && !employee
+                ? await findEmployeeAnywhereByAttempts(selectedTemplate.identifierPriority, { cpf, matricula, nome })
+                : null;
             rows.push({
               ...base,
               employee,
@@ -833,6 +866,16 @@ export default function ImportPaymentsPage() {
               resolvedClientName: route?.clientName ?? null,
               resolvedCompanyId: route?.companyId ?? null,
               resolvedCompanyName: route?.companyName ?? null,
+              foundInOtherClient: elsewhere
+                ? {
+                    employeeId: elsewhere.id,
+                    employeeName: elsewhere.name,
+                    currentClientId: elsewhere.clientId,
+                    currentClientName: elsewhere.clientName,
+                    currentCompanyId: elsewhere.companyId,
+                    currentCompanyName: elsewhere.companyName,
+                  }
+                : null,
               category: !route ? "unresolved-route" : !employee ? "not-found" : "valid",
             });
           }
@@ -972,6 +1015,83 @@ export default function ImportPaymentsPage() {
     const dbCheckTargets: PaymentPreviewRow[] = [];
     for (const r of newlyResolved) {
       r.employee = employee;
+      const key = shiftDedupKey(employee.id, r);
+      if (seenInBatch.has(key)) {
+        r.category = "duplicate-in-file";
+      } else {
+        seenInBatch.add(key);
+        r.category = "valid";
+        dbCheckTargets.push(r);
+      }
+    }
+
+    if (dbCheckTargets.length > 0) {
+      const dupMatches = await findDuplicatePaymentShifts(
+        dbCheckTargets.map((r) => ({
+          employeeId: employee.id,
+          workDate: r.workDate!,
+          local: r.local,
+          role: r.role,
+          scheduleStartMinutes: r.scheduleStartMinutes,
+          scheduleEndMinutes: r.scheduleEndMinutes,
+        })),
+      );
+      dupMatches.forEach((match, i) => applyDuplicateMatch(dbCheckTargets[i], match));
+    }
+
+    setSelectedRows((prev) => {
+      const next = new Set(prev);
+      allRows.forEach((r, i) => {
+        if (newlyResolved.includes(r) && r.category === "valid") next.add(i);
+      });
+      return next;
+    });
+    setFileResults([...fileResults]);
+  }
+
+  /**
+   * "Mover [Nome] para [Cliente Y]" on a "colaborador não encontrado" row
+   * that's actually registered under a different cliente/empresa (see
+   * `row.foundInOtherClient`) — updates only the colaborador's own cadastro
+   * (`moveEmployeeToClient`), safe to do without touching any historical
+   * turno now that `payment_shifts`/`imports` snapshot their own client/
+   * empresa at import time. Every other row in this batch blocked on the
+   * SAME person gets linked too, same "resolve the whole batch, not just
+   * the clicked row" pattern as `handleLinkEmployee`.
+   */
+  async function handleMoveEmployee(clickedIndex: number) {
+    const clicked = shiftRows[clickedIndex];
+    if (!clicked?.foundInOtherClient || clicked.resolvedClientId === null || clicked.resolvedCompanyId === null) return;
+    setError(null);
+    const movedEmployeeId = clicked.foundInOtherClient.employeeId;
+    let employee: EmployeeRow;
+    try {
+      await moveEmployeeToClient(movedEmployeeId, clicked.resolvedClientId, clicked.resolvedCompanyId);
+      employee = await getEmployee(movedEmployeeId);
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+      return;
+    }
+
+    const allRows = fileResults.flatMap((r) => r.rows);
+
+    const seenInBatch = new Set<string>();
+    for (const r of allRows) {
+      if (r.employee) seenInBatch.add(shiftDedupKey(r.employee.id, r));
+    }
+
+    const newlyResolved = allRows.filter(
+      (r) =>
+        r.category === "not-found" &&
+        r.foundInOtherClient?.employeeId === movedEmployeeId &&
+        r.resolvedClientId === clicked.resolvedClientId &&
+        r.resolvedCompanyId === clicked.resolvedCompanyId,
+    );
+
+    const dbCheckTargets: PaymentPreviewRow[] = [];
+    for (const r of newlyResolved) {
+      r.employee = employee;
+      r.foundInOtherClient = null;
       const key = shiftDedupKey(employee.id, r);
       if (seenInBatch.has(key)) {
         r.category = "duplicate-in-file";
@@ -1169,6 +1289,8 @@ export default function ImportPaymentsPage() {
           employeeId: row.employee.id,
           templateId: selectedTemplate.id,
           sourceFileId: sourceFileIdByHash.get(fileHash) ?? null,
+          clientId: row.resolvedClientId!,
+          companyId: row.resolvedCompanyId!,
           local: row.local,
           workDate: row.workDate,
           role: row.role,
@@ -1946,7 +2068,23 @@ export default function ImportPaymentsPage() {
                                     <AlertTriangle size={13} />
                                     Colaborador não encontrado
                                   </span>
-                                  <div style={{ marginTop: "0.25rem" }}>
+                                  {row.foundInOtherClient && (
+                                    <div style={{ marginTop: "0.25rem", fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                                      Já cadastrado em {row.foundInOtherClient.currentClientName} —
+                                      a regra agora aponta para {row.resolvedClientName}.
+                                    </div>
+                                  )}
+                                  <div style={{ marginTop: "0.25rem", display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
+                                    {row.foundInOtherClient && (
+                                      <button
+                                        type="button"
+                                        className="link-button"
+                                        style={{ fontSize: "0.78rem" }}
+                                        onClick={() => setMoveEmployeeConfirmIndex(index)}
+                                      >
+                                        Mover {row.foundInOtherClient.employeeName} para {row.resolvedClientName}
+                                      </button>
+                                    )}
                                     <button
                                       type="button"
                                       className="link-button"
@@ -2134,6 +2272,21 @@ export default function ImportPaymentsPage() {
             proceedToProcess();
           }}
           onCancel={() => setConfirmFullImport(false)}
+        />
+      )}
+
+      {moveEmployeeConfirmIndex !== null && shiftRows[moveEmployeeConfirmIndex]?.foundInOtherClient && (
+        <ConfirmModal
+          title="Mover colaborador para outro cliente"
+          message={`Isso atualiza o cadastro de ${shiftRows[moveEmployeeConfirmIndex].foundInOtherClient!.employeeName} para ${shiftRows[moveEmployeeConfirmIndex].resolvedClientName} (${shiftRows[moveEmployeeConfirmIndex].resolvedCompanyName}). O histórico já importado (Pagamentos e Cartão Ponto) não muda — só as próximas importações passam a usar o novo cliente/empresa.`}
+          confirmLabel="Mover colaborador"
+          danger={false}
+          onConfirm={async () => {
+            const idx = moveEmployeeConfirmIndex;
+            setMoveEmployeeConfirmIndex(null);
+            await handleMoveEmployee(idx);
+          }}
+          onCancel={() => setMoveEmployeeConfirmIndex(null)}
         />
       )}
     </div>
