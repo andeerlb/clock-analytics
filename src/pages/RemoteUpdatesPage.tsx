@@ -12,7 +12,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import ChangeDiffPanel from "../components/ChangeDiffPanel";
@@ -226,9 +226,6 @@ export default function RemoteUpdatesPage() {
     listPaymentTemplates().then(setTemplates);
   }, []);
 
-  /** Every tracked file whose most recent check failed — a top-of-page summary, so a failure isn't only visible to whoever scrolls down to that specific file's card. */
-  const erroredFiles = useMemo(() => trackedFiles.filter((t) => t.lastResult === "error"), [trackedFiles]);
-
   /** Same due-time math as the context's scheduler (`isConfigDue`) — mirrored here just for display, from this config's OWN `lastCheckedAt`, independent of any sibling config sharing the same `sourceUrl`. */
   function nextCheckAtFor(c: ReimportConfig): number | null {
     if (c.checkDisabled) return null;
@@ -417,14 +414,6 @@ export default function RemoteUpdatesPage() {
       {tickError && (
         <div className="error-box">
           Falha ao verificar atualizações automaticamente: {tickError}
-        </div>
-      )}
-      {erroredFiles.length > 0 && (
-        <div className="error-box">
-          {erroredFiles.length === 1
-            ? `1 arquivo falhou na última verificação: ${erroredFiles[0].fileName}.`
-            : `${erroredFiles.length} arquivos falharam na última verificação: ${erroredFiles.map((f) => f.fileName).join(", ")}.`}{" "}
-          Veja os detalhes no histórico de cada configuração, abaixo.
         </div>
       )}
 
