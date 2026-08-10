@@ -394,5 +394,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0065_check_diffs_dismissed.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 66,
+            description: "add dismissed_diff_fingerprints — content-based \"Visto\" suppression, so a later check whose diff has identical content to one already dismissed is auto-dismissed on arrival instead of re-alerting",
+            sql: include_str!("../migrations/0066_dismissed_diff_fingerprints.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

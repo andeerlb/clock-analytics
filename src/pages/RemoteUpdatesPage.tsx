@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { AlertTriangle, ChevronDown, FileText, Link2, Plus, RefreshCw } from "lucide-react";
+import { ChevronDown, FileText, Link2, Plus, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import BackButton from "../components/BackButton";
@@ -31,6 +31,7 @@ import {
   parseSqliteDateTime,
   resolveReimportPeriod,
 } from "../lib/format";
+import { acceptShiftChange } from "../lib/remoteCheckDiff";
 import type { PaymentTemplateListRow } from "../lib/types";
 
 /** How many of a URL's most recent checks the "Histórico recente" strip shows. */
@@ -120,8 +121,6 @@ const BLANK_NEW_CONFIG: ConfigDraft & { templateId: string } = {
 export default function RemoteUpdatesPage() {
   const navigate = useNavigate();
   const {
-    remoteUpdates,
-    dismissRemoteUpdate,
     trackedFiles,
     reimportConfigs,
     addReimportConfig,
@@ -368,6 +367,62 @@ export default function RemoteUpdatesPage() {
     }
   }
 
+  // "Aceitar e atualizar" on a 'field' diff card — mirrors
+  // `PendingChangesTab.handleAccept`, scoped to whichever check's detail is
+  // currently open in this Drawer (`drawerRow.config`, the LIVE config —
+  // `null` if it's since been edited away/deleted, in which case there's
+  // nothing left to re-download against).
+  const [acceptingShiftId, setAcceptingShiftId] = useState<number | null>(null);
+  const [acceptedShiftIds, setAcceptedShiftIds] = useState<Set<number>>(new Set());
+  const [drawerActionError, setDrawerActionError] = useState<string | null>(null);
+
+  async function handleAcceptShiftChange(shiftId: number) {
+    if (!drawerRow?.config) {
+      setDrawerActionError(
+        "Não foi possível encontrar a configuração de reimportação que encontrou essa mudança — pode ter sido removida.",
+      );
+      return;
+    }
+    setAcceptingShiftId(shiftId);
+    setDrawerActionError(null);
+    try {
+      await acceptShiftChange(drawerRow.config, shiftId);
+      setAcceptedShiftIds((prev) => new Set(prev).add(shiftId));
+    } catch (e) {
+      setDrawerActionError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setAcceptingShiftId(null);
+    }
+  }
+
+  // "Visto" on a card/line inside this check's own diff detail — same
+  // `dismissCheckDiffs` the pending-updates banner uses, just updates the
+  // cached `diffsByLogId` entry in place afterward instead of refetching.
+  const [dismissingDiffIds, setDismissingDiffIds] = useState<Set<number>>(new Set());
+  async function handleDismissDiffRows(rowIds: number[]) {
+    setDismissingDiffIds((prev) => new Set([...prev, ...rowIds]));
+    try {
+      await dismissCheckDiffs(rowIds);
+      const dismissedAt = new Date().toISOString();
+      setDiffsByLogId((prev) => {
+        const next = new Map(prev);
+        for (const [logId, diffRows] of prev) {
+          next.set(
+            logId,
+            diffRows.map((r) => (rowIds.includes(r.id) ? { ...r, dismissedAt } : r)),
+          );
+        }
+        return next;
+      });
+    } finally {
+      setDismissingDiffIds((prev) => {
+        const next = new Set(prev);
+        rowIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    }
+  }
+
   interface CheckLogDisplayRow {
     key: string;
     entry: UrlCheckLogEntry;
@@ -521,6 +576,7 @@ export default function RemoteUpdatesPage() {
     setHistoryDrawerConfig(null);
     setHistoryRows([]);
     setHistoryExhausted(false);
+    setDrawerActionError(null);
   }
 
   // "Visto" on a check's own error — acknowledges it (via the same
@@ -598,7 +654,6 @@ export default function RemoteUpdatesPage() {
       {trackedFiles.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "0.7rem" }}>
           {trackedFiles.map((t: TrackedPaymentUrl) => {
-              const updatesForFile = remoteUpdates.filter((u) => u.sourceUrl === t.sourceUrl);
               const configsForFile = reimportConfigs.filter((c) => c.sourceUrl === t.sourceUrl);
               const activeCount = configsForFile.filter((c) => !c.checkDisabled).length;
               const statusVariant = activeCount > 0 ? "active" : "paused";
@@ -672,7 +727,6 @@ export default function RemoteUpdatesPage() {
                         const draft = configDraftFor(c);
                         const resolvedPreview = formatResolvedPreview(resolveDraftPeriod(draft));
                         const dueAt = nextCheckAtFor(c);
-                        const update = updatesForFile.find((u) => u.configId === c.id);
 
                         // This config's own recent-check history — fetched
                         // scoped to exactly the checks THIS config was
@@ -698,36 +752,6 @@ export default function RemoteUpdatesPage() {
 
                         return (
                           <div key={c.id}>
-                            {update && (
-                              <div
-                                className="warning-box"
-                                style={{
-                                  display: "flex",
-                                  justifyContent: "space-between",
-                                  alignItems: "center",
-                                  gap: "1rem",
-                                  marginBottom: "0.6rem",
-                                }}
-                              >
-                                <span>
-                                  <AlertTriangle size={15} style={{ verticalAlign: "-2px", marginRight: "0.4rem" }} />
-                                  Mudou no servidor de origem.
-                                </span>
-                                <div style={{ display: "flex", gap: "0.5rem", flexShrink: 0 }}>
-                                  <button type="button" className="outline" onClick={() => dismissRemoteUpdate(update.configId)}>
-                                    Ignorar
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      navigate("/import/payments", { state: { autoReimportConfigId: update.configId } })
-                                    }
-                                  >
-                                    Ir para Importar Pagamentos
-                                  </button>
-                                </div>
-                              </div>
-                            )}
                             <div className="config-grid">
                               <div className="sync-panel">
                                 <div className="panel-head">
@@ -1263,10 +1287,35 @@ export default function RemoteUpdatesPage() {
               </button>
             )}
             <div style={{ marginBottom: "0.8rem" }}>{renderCheckMeta(drawerRow.entry)}</div>
-            {drawerRow.entry.message && (
-              <div className="error-box" style={{ fontSize: "0.82rem" }}>
-                {drawerRow.entry.message}
+            {drawerActionError && (
+              <div className="error-box" style={{ fontSize: "0.82rem", marginBottom: "0.6rem" }}>
+                {drawerActionError}
               </div>
+            )}
+            {drawerRow.entry.message && (
+              <>
+                <div className="error-box" style={{ fontSize: "0.82rem" }}>
+                  {drawerRow.entry.message}
+                </div>
+                {drawerRow.configId !== null && (
+                  <button
+                    type="button"
+                    style={{ marginTop: "0.6rem" }}
+                    onClick={() =>
+                      navigate("/import/payments", {
+                        state: {
+                          autoReimportConfigId: drawerRow.configId,
+                          autoReimportPeriodStart: drawerRow.entry.periodStart,
+                          autoReimportPeriodEnd: drawerRow.entry.periodEnd,
+                        },
+                      })
+                    }
+                    title="Abre Importar Pagamentos com este arquivo e template já preenchidos e reprocessa agora, com o mesmo período que essa verificação usou"
+                  >
+                    Reprocessar agora
+                  </button>
+                )}
+              </>
             )}
             {isLoadingDrawerDiff && <p className="muted" style={{ margin: 0 }}>Carregando detalhes...</p>}
             {!isLoadingDrawerDiff && drawerDiffRows.length === 0 && !drawerRow.entry.message && (
@@ -1278,6 +1327,20 @@ export default function RemoteUpdatesPage() {
                 markingShiftId={markingDeletedShiftId}
                 markedShiftIds={markedDeletedShiftIds}
                 onMarkDeleted={handleMarkShiftDeleted}
+                onAccept={handleAcceptShiftChange}
+                acceptingShiftId={acceptingShiftId}
+                acceptedShiftIds={acceptedShiftIds}
+                onDismiss={handleDismissDiffRows}
+                dismissingIds={dismissingDiffIds}
+                onReprocess={(configId, periodStart, periodEnd) =>
+                  navigate("/import/payments", {
+                    state: {
+                      autoReimportConfigId: configId,
+                      autoReimportPeriodStart: periodStart,
+                      autoReimportPeriodEnd: periodEnd,
+                    },
+                  })
+                }
               />
             )}
           </>

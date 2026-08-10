@@ -651,12 +651,26 @@ export default function ImportPaymentsPage() {
   const handledAutoReimportState = useRef<unknown>(undefined);
   useEffect(() => {
     if (location.state === handledAutoReimportState.current) return;
-    const configId = (location.state as { autoReimportConfigId?: number } | null)?.autoReimportConfigId;
+    const state = location.state as
+      | { autoReimportConfigId?: number; autoReimportPeriodStart?: string | null; autoReimportPeriodEnd?: string | null }
+      | null;
+    const configId = state?.autoReimportConfigId;
     if (configId === undefined) return;
     handledAutoReimportState.current = location.state;
     navigate(location.pathname, { replace: true, state: null });
     const flag = getReimportFlag(configId);
-    if (flag) handleReimportFromUrl(flag);
+    if (!flag) return;
+    // "Reprocessar agora" clicked from a SPECIFIC past check (the
+    // Verificação automática page's history/detail views) carries that
+    // check's own snapshotted Período — the live config's `resolvedPeriod*`
+    // (todos os relatórios "as of right now" for a relative config) can
+    // have drifted since, and reprocessing is supposed to retry exactly
+    // what failed, not today's version of it.
+    const flagWithPeriod =
+      state?.autoReimportPeriodStart !== undefined
+        ? { ...flag, resolvedPeriodStart: state.autoReimportPeriodStart, resolvedPeriodEnd: state.autoReimportPeriodEnd ?? null }
+        : flag;
+    handleReimportFromUrl(flagWithPeriod);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
 

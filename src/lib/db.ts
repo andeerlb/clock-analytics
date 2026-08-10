@@ -1813,11 +1813,14 @@ export interface CheckDiffRow {
   message: string | null;
   /** Whether this diff was already written to `payment_shifts` — by unattended auto-apply, or a manual "Aceitar" (see `computeReimportDiff`'s `AutoApplyOptions`) — vs. still pending review. Only ever `true` for `changeKind: 'field' | 'removed'`, the only kinds a write ever applies to. */
   applied: boolean;
-  /** "Visto" — when the user acknowledged this specific row (see `dismissCheckDiffs`), `null` until then. Excludes it from `listAllLatestShiftDiffs`'s pending-updates count, but a LATER check finding the same problem again writes a brand-new (undismissed) row — dismissing never suppresses a future occurrence. */
+  /** "Visto" — when this row was acknowledged, `null` until then. Content-based (see `dismissCheckDiffs`/`dismissed_diff_fingerprints`): dismissing THIS row also registers its content fingerprint, so a LATER check whose new row has the exact same content (same config, kind, identity, value/message — nothing actually changed) arrives already dismissed. A row with even one different field is a genuinely new problem and starts undismissed. */
   dismissedAt: string | null;
+  /** The período THIS config actually used on the check that produced this row — joined from `source_url_check_log_configs` (migration 0064), not read live off the config (which may have since changed, especially a "relative to today" one). `null` for a whole-URL row (`configId IS NULL`, no single config to attribute a período to) or a check logged before migration 0064. Drives "Reprocessar agora" replaying the SAME período that failed, not today's. */
+  periodStart: string | null;
+  periodEnd: string | null;
 }
 
-export type CheckDiffInput = Omit<CheckDiffRow, "id" | "checkLogId" | "dismissedAt">;
+export type CheckDiffInput = Omit<CheckDiffRow, "id" | "checkLogId" | "dismissedAt" | "periodStart" | "periodEnd">;
 
 type CheckDiffRowRaw = Omit<CheckDiffRow, "applied"> & { applied: number };
 
@@ -1825,12 +1828,82 @@ function parseCheckDiffRow(r: CheckDiffRowRaw): CheckDiffRow {
   return { ...r, applied: Boolean(r.applied) };
 }
 
-/** Bulk-inserts the deep-check diff for one check attempt — see `computeReimportDiff` (`remoteCheckDiff.ts`) for how these are produced. */
-export async function saveCheckDiffs(checkLogId: number, entries: CheckDiffInput[]): Promise<void> {
+// U+001F, a control character no real field/message text will ever contain
+// — safe as a delimiter joining fingerprint fields without ambiguity.
+const FINGERPRINT_SEP = "\x1f";
+
+/** Deterministic content signature for a diff — anything that would make two occurrences look meaningfully different to the user, and nothing else (not `id`/`checkLogId`/`createdAt`/`applied`/`configLabel`, which can shift without the underlying problem changing at all). Same shape (field order/coalescing) as the SQL expression `copyCheckDiffs` builds inline — the two MUST stay identical or lookups silently stop matching. */
+function diffContentFingerprint(e: {
+  changeKind: CheckDiffKind;
+  configId: number | null;
+  employeeId: number | null;
+  employeeName: string | null;
+  workDate: string | null;
+  local: string | null;
+  role: string | null;
+  scheduleStartMinutes: number | null;
+  scheduleEndMinutes: number | null;
+  sheetName: string | null;
+  rowNumber: number | null;
+  fieldName: string | null;
+  oldValue: string | null;
+  newValue: string | null;
+  message: string | null;
+}): string {
+  return [
+    e.changeKind,
+    e.configId,
+    e.employeeId,
+    e.employeeName,
+    e.workDate,
+    e.local,
+    e.role,
+    e.scheduleStartMinutes,
+    e.scheduleEndMinutes,
+    e.sheetName,
+    e.rowNumber,
+    e.fieldName,
+    e.oldValue,
+    e.newValue,
+    e.message,
+  ]
+    .map((v) => (v === null || v === undefined ? "" : String(v)))
+    .join(FINGERPRINT_SEP);
+}
+
+/** Same field order as `diffContentFingerprint`, as a SQL expression over `source_url_check_diffs` columns (aliased/unaliased via `prefix`, e.g. `"d."`) — lets `copyCheckDiffs` check fingerprint matches in one bulk `INSERT ... SELECT` instead of a per-row round trip. */
+function fingerprintSqlExpr(prefix: string): string {
+  const cols = [
+    "change_kind",
+    "config_id",
+    "employee_id",
+    "employee_name",
+    "work_date",
+    "local",
+    "role",
+    "schedule_start_minutes",
+    "schedule_end_minutes",
+    "sheet_name",
+    "row_number",
+    "field_name",
+    "old_value",
+    "new_value",
+    "message",
+  ];
+  return cols.map((c) => `COALESCE(${prefix}${c}, '')`).join(` || char(31) || `);
+}
+
+/** Bulk-inserts the deep-check diff for one check attempt — see `computeReimportDiff` (`remoteCheckDiff.ts`) for how these are produced. `sourceUrl` scopes the "Visto" fingerprint lookup (see `diffContentFingerprint`): a new row whose content exactly matches one already dismissed for this URL is inserted already dismissed, so re-alerting only happens when something actually changed. */
+export async function saveCheckDiffs(checkLogId: number, sourceUrl: string, entries: CheckDiffInput[]): Promise<void> {
   if (entries.length === 0) return;
   const db = await getDb();
   for (const e of entries) {
-    await db.execute(
+    const fingerprint = diffContentFingerprint(e);
+    const dismissedMatch = await db.select<{ id: number }[]>(
+      `SELECT id FROM dismissed_diff_fingerprints WHERE source_url = $1 AND fingerprint = $2 LIMIT 1`,
+      [sourceUrl, fingerprint],
+    );
+    const inserted = await db.execute(
       `INSERT INTO source_url_check_diffs
          (check_log_id, config_id, config_label, change_kind, matched_shift_id, employee_id, employee_name,
           work_date, local, role, schedule_start_minutes, schedule_end_minutes, sheet_name, row_number,
@@ -1859,6 +1932,11 @@ export async function saveCheckDiffs(checkLogId: number, entries: CheckDiffInput
         e.applied ? 1 : 0,
       ],
     );
+    if (dismissedMatch.length > 0) {
+      await db.execute(`UPDATE source_url_check_diffs SET dismissed_at = datetime('now') WHERE id = $1`, [
+        inserted.lastInsertId,
+      ]);
+    }
   }
 }
 
@@ -1866,16 +1944,17 @@ export async function saveCheckDiffs(checkLogId: number, entries: CheckDiffInput
 export async function listCheckDiffs(checkLogId: number): Promise<CheckDiffRow[]> {
   const db = await getDb();
   const rows = await db.select<CheckDiffRowRaw[]>(
-    `SELECT id, check_log_id AS checkLogId, config_id AS configId, config_label AS configLabel,
-            change_kind AS changeKind, matched_shift_id AS matchedShiftId, employee_id AS employeeId,
-            employee_name AS employeeName, work_date AS workDate, local, role,
-            schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes,
-            sheet_name AS sheetName, row_number AS rowNumber, column_letter AS columnLetter,
-            field_name AS fieldName, old_value AS oldValue, new_value AS newValue, message, applied,
-            dismissed_at AS dismissedAt
-     FROM source_url_check_diffs
-     WHERE check_log_id = $1
-     ORDER BY id`,
+    `SELECT d.id, d.check_log_id AS checkLogId, d.config_id AS configId, d.config_label AS configLabel,
+            d.change_kind AS changeKind, d.matched_shift_id AS matchedShiftId, d.employee_id AS employeeId,
+            d.employee_name AS employeeName, d.work_date AS workDate, d.local, d.role,
+            d.schedule_start_minutes AS scheduleStartMinutes, d.schedule_end_minutes AS scheduleEndMinutes,
+            d.sheet_name AS sheetName, d.row_number AS rowNumber, d.column_letter AS columnLetter,
+            d.field_name AS fieldName, d.old_value AS oldValue, d.new_value AS newValue, d.message, d.applied,
+            d.dismissed_at AS dismissedAt, jc.period_start AS periodStart, jc.period_end AS periodEnd
+     FROM source_url_check_diffs d
+     LEFT JOIN source_url_check_log_configs jc ON jc.check_log_id = d.check_log_id AND jc.config_id = d.config_id
+     WHERE d.check_log_id = $1
+     ORDER BY d.id`,
     [checkLogId],
   );
   return rows.map(parseCheckDiffRow);
@@ -1990,9 +2069,10 @@ export async function listAllLatestShiftDiffs(): Promise<CheckDiffRow[]> {
             d.schedule_start_minutes AS scheduleStartMinutes, d.schedule_end_minutes AS scheduleEndMinutes,
             d.sheet_name AS sheetName, d.row_number AS rowNumber, d.column_letter AS columnLetter,
             d.field_name AS fieldName, d.old_value AS oldValue, d.new_value AS newValue, d.message, d.applied,
-            d.dismissed_at AS dismissedAt
+            d.dismissed_at AS dismissedAt, jc.period_start AS periodStart, jc.period_end AS periodEnd
      FROM source_url_check_diffs d
      JOIN source_url_check_log l ON l.id = d.check_log_id
+     LEFT JOIN source_url_check_log_configs jc ON jc.check_log_id = d.check_log_id AND jc.config_id = d.config_id
      WHERE l.id = (SELECT MAX(l2.id) FROM source_url_check_log l2 WHERE l2.source_url = l.source_url)
      ORDER BY d.id DESC`,
   );
@@ -2003,16 +2083,64 @@ export async function listAllLatestShiftDiffs(): Promise<CheckDiffRow[]> {
  * "Visto" — acknowledges specific diff rows without resolving anything or
  * removing them: they stay visible everywhere they're listed (the pending
  * banner, the config's "Histórico completo"), just marked seen, and stop
- * counting toward each screen's own "unseen" badge/alert. A later check
- * finding the same logical change/error again always writes a brand-new
- * `source_url_check_diffs` row (a fresh `id`), which starts undismissed and
- * alerts again on its own — this only ever silences THIS exact occurrence.
+ * counting toward each screen's own "unseen" badge/alert. Content-based, not
+ * just these literal rows: also registers each row's content fingerprint
+ * (`dismissed_diff_fingerprints`, scoped to that row's `source_url`), so a
+ * LATER check whose new row has the exact identical content — same config,
+ * kind, identity, value/message, nothing actually changed — is inserted
+ * already dismissed (see `saveCheckDiffs`/`copyCheckDiffs`) instead of
+ * re-alerting. The moment even one field differs, it's a genuinely new
+ * problem and starts undismissed.
  */
 export async function dismissCheckDiffs(ids: number[]): Promise<void> {
   if (ids.length === 0) return;
   const db = await getDb();
   const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
   await db.execute(`UPDATE source_url_check_diffs SET dismissed_at = datetime('now') WHERE id IN (${placeholders})`, ids);
+
+  const rows = await db.select<
+    {
+      sourceUrl: string;
+      changeKind: CheckDiffKind;
+      configId: number | null;
+      employeeId: number | null;
+      employeeName: string | null;
+      workDate: string | null;
+      local: string | null;
+      role: string | null;
+      scheduleStartMinutes: number | null;
+      scheduleEndMinutes: number | null;
+      sheetName: string | null;
+      rowNumber: number | null;
+      fieldName: string | null;
+      oldValue: string | null;
+      newValue: string | null;
+      message: string | null;
+    }[]
+  >(
+    `SELECT l.source_url AS sourceUrl, d.change_kind AS changeKind, d.config_id AS configId,
+            d.employee_id AS employeeId, d.employee_name AS employeeName, d.work_date AS workDate,
+            d.local, d.role, d.schedule_start_minutes AS scheduleStartMinutes,
+            d.schedule_end_minutes AS scheduleEndMinutes, d.sheet_name AS sheetName, d.row_number AS rowNumber,
+            d.field_name AS fieldName, d.old_value AS oldValue, d.new_value AS newValue, d.message
+     FROM source_url_check_diffs d
+     JOIN source_url_check_log l ON l.id = d.check_log_id
+     WHERE d.id IN (${placeholders})`,
+    ids,
+  );
+  for (const r of rows) {
+    const fingerprint = diffContentFingerprint(r);
+    const existing = await db.select<{ id: number }[]>(
+      `SELECT id FROM dismissed_diff_fingerprints WHERE source_url = $1 AND fingerprint = $2 LIMIT 1`,
+      [r.sourceUrl, fingerprint],
+    );
+    if (existing.length === 0) {
+      await db.execute(`INSERT INTO dismissed_diff_fingerprints (source_url, fingerprint) VALUES ($1, $2)`, [
+        r.sourceUrl,
+        fingerprint,
+      ]);
+    }
+  }
 }
 
 /** Records the remote signature a deep check (download+parse+diff) just ran against, and what it actually found (`result`) — so `RemoteFileUpdatesContext.runChecks` doesn't repeat that work every tick while the user hasn't reimported yet, and a later "changed"-per-header check against the same signature can log the SAME diff-driven verdict instead of re-asserting the raw header result. */
@@ -2041,21 +2169,29 @@ export async function markDeepCheckSignature(
  * re-downloading/re-parsing just to arrive at the same rows again. Every
  * check attempt's history is meant to show what it found, even when what it
  * found is "the same thing as last time" — this is how a cached "Mudou"
- * still gets its own expandable diff detail instead of a blank "—".
+ * still gets its own expandable diff detail instead of a blank "—". Same
+ * "Visto" fingerprint check as `saveCheckDiffs` (done inline, in SQL, since
+ * this is a single bulk copy rather than one entry at a time) — a copied row
+ * whose content matches something already dismissed for `sourceUrl` arrives
+ * already dismissed too.
  */
-export async function copyCheckDiffs(fromCheckLogId: number, toCheckLogId: number): Promise<void> {
+export async function copyCheckDiffs(fromCheckLogId: number, toCheckLogId: number, sourceUrl: string): Promise<void> {
   const db = await getDb();
   await db.execute(
     `INSERT INTO source_url_check_diffs
        (check_log_id, config_id, config_label, change_kind, matched_shift_id, employee_id, employee_name,
         work_date, local, role, schedule_start_minutes, schedule_end_minutes, sheet_name, row_number,
-        column_letter, field_name, old_value, new_value, message, applied)
+        column_letter, field_name, old_value, new_value, message, applied, dismissed_at)
      SELECT $2, config_id, config_label, change_kind, matched_shift_id, employee_id, employee_name,
             work_date, local, role, schedule_start_minutes, schedule_end_minutes, sheet_name, row_number,
-            column_letter, field_name, old_value, new_value, message, applied
+            column_letter, field_name, old_value, new_value, message, applied,
+            CASE WHEN EXISTS (
+              SELECT 1 FROM dismissed_diff_fingerprints f
+              WHERE f.source_url = $3 AND f.fingerprint = ${fingerprintSqlExpr("")}
+            ) THEN datetime('now') ELSE NULL END
      FROM source_url_check_diffs
      WHERE check_log_id = $1`,
-    [fromCheckLogId, toCheckLogId],
+    [fromCheckLogId, toCheckLogId, sourceUrl],
   );
 }
 

@@ -38,6 +38,7 @@ export default function ChangeDiffPanel({
   acceptedShiftIds,
   onDismiss,
   dismissingIds,
+  onReprocess,
 }: {
   rows: CheckDiffRow[];
   /** The one shift currently being soft-deleted via "Marcar como excluído" (disables just that card's button) — `null` when nothing's in flight. */
@@ -49,9 +50,11 @@ export default function ChangeDiffPanel({
   onAccept?: (shiftId: number) => void;
   acceptingShiftId?: number | null;
   acceptedShiftIds?: Set<number>;
-  /** "Visto" — acknowledges a card/line without resolving it (see `dismissCheckDiffs`): takes every `CheckDiffRow.id` the card is made of, since a card can bundle several field diffs for the same turno. Omitted (e.g. the read-only single-check detail Drawer) means no "Visto" button is offered — that view is a historical record, not a pending list. */
+  /** "Visto" — acknowledges a card/line without resolving it (see `dismissCheckDiffs`): takes every `CheckDiffRow.id` the card is made of, since a card can bundle several field diffs for the same turno. Content-based (see `dismissed_diff_fingerprints`): a later check whose new row has identical content to a dismissed one arrives already dismissed, so it stays quiet everywhere — the pending banner AND this same single-check detail — until something actually changes. Omitted entirely only where there's truly no dismiss story (none currently). */
   onDismiss?: (rowIds: number[]) => void;
   dismissingIds?: Set<number>;
+  /** 'unresolved' cards (colaborador/rota não encontrado) get a "Reprocessar agora" button that calls this with the row's `configId` and the período THAT CHECK used (`CheckDiffRow.periodStart`/`periodEnd`, not whatever the live config resolves to today) — the fix is usually outside this panel entirely (an alias, a template tweak), so reprocessing with the exact same período is what lets the user find out whether it's actually resolved now. Omitted means no button offered. */
+  onReprocess?: (configId: number, periodStart: string | null, periodEnd: string | null) => void;
 }) {
   /** Renders "Visto" for a card/line, keyed off the full rows (not just ids) so an already-dismissed group shows a static confirmation instead of a clickable button — dismissing never removes the card, just acknowledges it. */
   function renderDismissButton(groupRows: CheckDiffRow[]) {
@@ -68,7 +71,7 @@ export default function ChangeDiffPanel({
     return (
       <button
         type="button"
-        className="ghost"
+        className="outline"
         style={{ fontSize: "0.76rem", padding: "0.25rem 0.5rem" }}
         disabled={busy}
         onClick={() => onDismiss(rowIds)}
@@ -143,7 +146,7 @@ export default function ChangeDiffPanel({
                 {renderDismissButton(entries)}
               </div>
             ) : isUnresolved ? (
-              <div style={{ marginTop: "0.35rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
+              <div style={{ marginTop: "0.35rem" }}>
                 <div
                   style={{
                     display: "flex",
@@ -156,7 +159,27 @@ export default function ChangeDiffPanel({
                   <AlertTriangle size={13} style={{ flexShrink: 0 }} />
                   {first.message}
                 </div>
-                {renderDismissButton(entries)}
+                <div
+                  style={{
+                    marginTop: "0.35rem",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "0.5rem",
+                  }}
+                >
+                  {onReprocess && first.configId !== null && (
+                    <button
+                      type="button"
+                      className="outline"
+                      style={{ fontSize: "0.76rem", padding: "0.25rem 0.5rem" }}
+                      onClick={() => onReprocess(first.configId!, first.periodStart, first.periodEnd)}
+                    >
+                      Reprocessar agora
+                    </button>
+                  )}
+                  {renderDismissButton(entries)}
+                </div>
               </div>
             ) : isRemoved ? (
               <div style={{ marginTop: "0.35rem" }}>

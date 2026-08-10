@@ -1,6 +1,6 @@
 import { Bell } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { deletePaymentShift, dismissCheckDiffs, listAllLatestShiftDiffs, type CheckDiffRow } from "../lib/db";
 import { acceptShiftChange } from "../lib/remoteCheckDiff";
@@ -32,6 +32,7 @@ import Drawer from "./Drawer";
  */
 export default function PendingChangesTab() {
   const location = useLocation();
+  const navigate = useNavigate();
   const { trackedFiles, reimportConfigs } = useRemoteFileUpdates();
   const [rows, setRows] = useState<CheckDiffRow[]>([]);
   const [open, setOpen] = useState(false);
@@ -149,6 +150,14 @@ export default function PendingChangesTab() {
     }
   }
 
+  /** "Reprocessar agora" on an 'unresolved' card — closes this Drawer first since the navigation takes over the screen anyway. */
+  function handleReprocess(configId: number, periodStart: string | null, periodEnd: string | null) {
+    setOpen(false);
+    navigate("/import/payments", {
+      state: { autoReimportConfigId: configId, autoReimportPeriodStart: periodStart, autoReimportPeriodEnd: periodEnd },
+    });
+  }
+
   const pending = rows.filter((r) => !r.applied);
   const applied = rows.filter((r) => r.applied);
 
@@ -222,6 +231,7 @@ export default function PendingChangesTab() {
                 markedShiftIds={markedShiftIds}
                 onDismiss={handleDismiss}
                 dismissingIds={dismissingIds}
+                onReprocess={handleReprocess}
               />
             </div>
           )}

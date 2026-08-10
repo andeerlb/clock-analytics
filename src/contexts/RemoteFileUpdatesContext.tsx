@@ -365,7 +365,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
             // A real diff row (not just `source_url_check_log.message`) so
             // this whole-URL failure surfaces in the global pending-updates
             // banner too, not only on the Verificação automática page.
-            await saveCheckDiffs(checkLogId, [errorDiffEntry(null, t.fileName, message)]);
+            await saveCheckDiffs(checkLogId, t.sourceUrl, [errorDiffEntry(null, t.fileName, message)]);
             return;
           }
 
@@ -420,7 +420,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
                 null,
                 configs.map(toEvaluatedConfigSnapshot),
               );
-              await copyCheckDiffs(t.lastDeepCheckLogId, checkLogId);
+              await copyCheckDiffs(t.lastDeepCheckLogId, checkLogId, t.sourceUrl);
               return;
             }
           }
@@ -533,7 +533,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
             wholeUrlErrorMessage,
             configs.map(toEvaluatedConfigSnapshot),
           );
-          await saveCheckDiffs(checkLogId, entries);
+          await saveCheckDiffs(checkLogId, t.sourceUrl, entries);
           // A failed DOWNLOAD isn't cached as "checked" — a transient
           // network blip should be retried next tick, not stuck reusing an
           // 'error' verdict forever until the header changes again. A
