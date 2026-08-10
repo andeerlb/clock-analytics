@@ -2024,11 +2024,14 @@ tr.row-error:hover {
   animation: sidebar-tab-spring 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 
-/* Verificação automática — collapsible tracked-file cards. */
+/* Verificação automática — collapsible tracked-file cards. `overflow`
+   deliberately left at its default (visible) — nothing inside touches the
+   card's own edge (header has no background, body content is padded/inset),
+   and `hidden` here used to clip DateRangePicker's absolutely-positioned
+   calendar popup whenever it opened near the card's bottom edge. */
 .tracked-card {
   border: 1px solid var(--border-soft);
   border-radius: 10px;
-  overflow: hidden;
   background: var(--card-bg);
 }
 .tracked-card-header {
@@ -2074,7 +2077,7 @@ tr.row-error:hover {
   font-weight: 700;
   letter-spacing: 0.04em;
   padding: 0.1rem 0.55rem;
-  border-radius: 20px;
+  border-radius: 4px;
   flex-shrink: 0;
 }
 .status-pill::before {
@@ -2223,7 +2226,7 @@ button.history-bar:hover {
 .automation-panel-box {
   background: rgba(0, 0, 0, 0.16);
   border: 1px solid var(--border-softer);
-  border-radius: 9px;
+  border-radius: 4px;
   padding: 0.85rem 0.95rem;
 }
 .automation-panel {
@@ -2235,6 +2238,8 @@ button.history-bar:hover {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border-softer);
   gap: 0.6rem;
 }
 .panel-label {
@@ -2251,13 +2256,74 @@ button.history-bar:hover {
   border-radius: 4px;
   white-space: nowrap;
 }
+/* Two-column body of the "Configurações de sincronização" panel — Template
+   + Intervalo on the left, Modo/Período/Período efetivo on the right. */
+.sync-panel-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.2rem;
+}
+@media (max-width: 700px) {
+  .sync-panel-columns {
+    grid-template-columns: 1fr;
+  }
+}
+.sync-panel-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.template-box {
+  background: var(--surface-variant);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.85rem;
+}
+.stepper {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.stepper button {
+  background: var(--surface-variant);
+  color: var(--text);
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  width: 2.2rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.stepper button:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.stepper input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  border-radius: 0;
+  text-align: center;
+  background: transparent;
+  -moz-appearance: textfield;
+}
+.stepper input:focus {
+  outline: none;
+}
+.stepper input::-webkit-outer-spin-button,
+.stepper input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
 .effective-field {
   background: var(--surface-variant);
   border: 1px solid var(--border-soft);
   color: var(--text-muted);
   font-size: 0.8rem;
   padding: 0.4rem 0.6rem;
-  border-radius: 7px;
+  border-radius: 4px;
 }
 .automation-toggle-box {
   background: rgba(0, 0, 0, 0.16);

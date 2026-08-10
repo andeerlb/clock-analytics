@@ -1,14 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import {
-  AlertTriangle,
-  ChevronDown,
-  FileText,
-  Link2,
-  Plus,
-  RefreshCw,
-  Trash2,
-  Upload,
-} from "lucide-react";
+import { AlertTriangle, ChevronDown, FileText, Link2, Plus, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import BackButton from "../components/BackButton";
@@ -156,16 +147,16 @@ export default function RemoteUpdatesPage() {
     }
   }
 
-  // Expanded state per tracked URL — absent (not in the set) means
-  // collapsed, so every file starts closed and only opens once the user asks.
-  const [expandedUrls, setExpandedUrls] = useState<Set<string>>(new Set());
-  function toggleFileExpanded(sourceUrl: string) {
-    setExpandedUrls((prev) => {
-      const next = new Set(prev);
-      if (next.has(sourceUrl)) next.delete(sourceUrl);
-      else next.add(sourceUrl);
-      return next;
-    });
+  // Expanded state per tracked URL — explicit user toggles only; absent
+  // means "use the default", which is expanded unless every config for that
+  // URL is disabled/missing (a "Pausado" file has nothing actively running,
+  // so it starts out of the way instead).
+  const [expandedOverrides, setExpandedOverrides] = useState<Map<string, boolean>>(new Map());
+  function isUrlExpandedByDefault(sourceUrl: string): boolean {
+    return reimportConfigs.some((rc) => rc.sourceUrl === sourceUrl && !rc.checkDisabled);
+  }
+  function toggleFileExpanded(sourceUrl: string, currentlyExpanded: boolean) {
+    setExpandedOverrides((prev) => new Map(prev).set(sourceUrl, !currentlyExpanded));
   }
 
   // Recent-check history, per REIMPORT CONFIG — each one runs and reports
@@ -182,7 +173,8 @@ export default function RemoteUpdatesPage() {
 
   useEffect(() => {
     for (const c of reimportConfigs) {
-      if (!expandedUrls.has(c.sourceUrl) || loadingHistoryConfigId === c.id) continue;
+      const expanded = expandedOverrides.get(c.sourceUrl) ?? isUrlExpandedByDefault(c.sourceUrl);
+      if (!expanded || loadingHistoryConfigId === c.id) continue;
       const cached = historyByConfig.get(c.id);
       if (cached && cached.checkedAt === c.lastCheckedAt) continue;
       setLoadingHistoryConfigId(c.id);
@@ -192,7 +184,7 @@ export default function RemoteUpdatesPage() {
       break; // one fetch at a time is plenty — the effect re-runs as soon as this one lands
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reimportConfigs, expandedUrls, historyByConfig, loadingHistoryConfigId]);
+  }, [reimportConfigs, expandedOverrides, historyByConfig, loadingHistoryConfigId]);
 
   // "Parar de rastrear" — one confirm modal at a time, across all files.
   const [untrackTarget, setUntrackTarget] = useState<TrackedPaymentUrl | null>(null);
@@ -558,11 +550,11 @@ export default function RemoteUpdatesPage() {
               const activeCount = configsForFile.filter((c) => !c.checkDisabled).length;
               const statusVariant = activeCount > 0 ? "active" : "paused";
               const statusLabel = configsForFile.length === 0 ? "Sem config." : activeCount > 0 ? "Ativo" : "Pausado";
-              const expanded = expandedUrls.has(t.sourceUrl);
+              const expanded = expandedOverrides.get(t.sourceUrl) ?? activeCount > 0;
               const anyConfigChecking = configsForFile.some((c) => checkingConfigIds.has(c.id));
               return (
                 <div key={t.sourceUrl} className="tracked-card">
-                  <div className="tracked-card-header" onClick={() => toggleFileExpanded(t.sourceUrl)}>
+                  <div className="tracked-card-header" onClick={() => toggleFileExpanded(t.sourceUrl, expanded)}>
                     <div className="tracked-card-icon">
                       <FileText size={16} />
                     </div>
@@ -607,7 +599,7 @@ export default function RemoteUpdatesPage() {
                         type="button"
                         className={`tracked-chevron${expanded ? " expanded" : ""}`}
                         aria-label={expanded ? "Recolher" : "Expandir"}
-                        onClick={() => toggleFileExpanded(t.sourceUrl)}
+                        onClick={() => toggleFileExpanded(t.sourceUrl, expanded)}
                       >
                         <ChevronDown size={18} />
                       </button>
@@ -692,76 +684,99 @@ export default function RemoteUpdatesPage() {
                                           : `Próxima em ${dueAt !== null ? formatCountdown(dueAt - now) : "—"}`}
                                   </span>
                                 </div>
-                                <div className="field-row" style={{ marginBottom: "0.7rem" }}>
-                                  <div className="field" style={{ flex: "1 1 140px", marginBottom: 0 }}>
-                                    <label>Template</label>
-                                    <p
-                                      className="muted"
-                                      style={{ margin: 0 }}
-                                      title="Definido ao criar a configuração — pra trocar, remova e crie de novo"
-                                    >
-                                      {c.templateName ?? "Template removido"}
-                                    </p>
-                                  </div>
-                                  <div className="field" style={{ flex: "1 1 120px", marginBottom: 0 }}>
-                                    <label>Modo</label>
-                                    <select
-                                      value={draft.dateMode}
-                                      onChange={(e) => patchConfigDraft(c, { dateMode: e.target.value as ReimportDateMode })}
-                                    >
-                                      <option value="fixed">Fixo</option>
-                                      <option value="relative">Relativo a hoje</option>
-                                    </select>
-                                  </div>
-                                </div>
-                                {draft.dateMode === "fixed" ? (
-                                  <div className="field" style={{ marginBottom: "0.7rem" }}>
-                                    <label>Período</label>
-                                    <DateRangePicker
-                                      startValue={draft.start}
-                                      endValue={draft.end}
-                                      onChange={(start, end) => patchConfigDraft(c, { start, end })}
-                                    />
-                                  </div>
-                                ) : (
-                                  <div className="field-row" style={{ marginBottom: "0.7rem" }}>
-                                    <div className="field" style={{ flex: "1 1 110px", marginBottom: 0 }}>
-                                      <label>Início (dias atrás)</label>
-                                      <input
-                                        type="number"
-                                        min={0}
-                                        step={1}
-                                        value={draft.startOffset}
-                                        onChange={(e) => patchConfigDraft(c, { startOffset: e.target.value })}
-                                      />
+                                <div className="sync-panel-columns">
+                                  <div className="sync-panel-col">
+                                    <div className="field">
+                                      <label>Template</label>
+                                      <div
+                                        className="template-box"
+                                        title="Definido ao criar a configuração — pra trocar, remova e crie de novo"
+                                      >
+                                        {c.templateName ?? "Template removido"}
+                                      </div>
                                     </div>
-                                    <div className="field" style={{ flex: "1 1 110px", marginBottom: 0 }}>
-                                      <label>Fim (dias atrás)</label>
-                                      <input
-                                        type="number"
-                                        min={0}
-                                        step={1}
-                                        value={draft.endOffset}
-                                        onChange={(e) => patchConfigDraft(c, { endOffset: e.target.value })}
-                                      />
+                                    <div className="field">
+                                      <label>Intervalo (min)</label>
+                                      <div className="stepper">
+                                        <button
+                                          type="button"
+                                          aria-label="Diminuir intervalo"
+                                          onClick={() =>
+                                            patchConfigDraft(c, {
+                                              interval: String(Math.max(1, (Number(draft.interval) || 1) - 1)),
+                                            })
+                                          }
+                                        >
+                                          −
+                                        </button>
+                                        <input
+                                          type="number"
+                                          min={1}
+                                          step={1}
+                                          required
+                                          value={draft.interval}
+                                          onChange={(e) => patchConfigDraft(c, { interval: e.target.value })}
+                                        />
+                                        <button
+                                          type="button"
+                                          aria-label="Aumentar intervalo"
+                                          onClick={() =>
+                                            patchConfigDraft(c, { interval: String((Number(draft.interval) || 0) + 1) })
+                                          }
+                                        >
+                                          +
+                                        </button>
+                                      </div>
                                     </div>
                                   </div>
-                                )}
-                                <div className="field-row" style={{ marginBottom: 0 }}>
-                                  <div className="field" style={{ flex: "1 1 110px", marginBottom: 0 }}>
-                                    <label>Intervalo (min)</label>
-                                    <input
-                                      type="number"
-                                      min={1}
-                                      step={1}
-                                      required
-                                      value={draft.interval}
-                                      onChange={(e) => patchConfigDraft(c, { interval: e.target.value })}
-                                    />
-                                  </div>
-                                  <div className="field" style={{ flex: "1 1 160px", marginBottom: 0 }}>
-                                    <label>Período efetivo</label>
-                                    <div className="effective-field">{resolvedPreview}</div>
+                                  <div className="sync-panel-col">
+                                    <div className="field">
+                                      <label>Modo</label>
+                                      <select
+                                        value={draft.dateMode}
+                                        onChange={(e) => patchConfigDraft(c, { dateMode: e.target.value as ReimportDateMode })}
+                                      >
+                                        <option value="fixed">Fixo</option>
+                                        <option value="relative">Relativo a hoje</option>
+                                      </select>
+                                    </div>
+                                    {draft.dateMode === "fixed" ? (
+                                      <div className="field">
+                                        <label>Período Selecionado</label>
+                                        <DateRangePicker
+                                          startValue={draft.start}
+                                          endValue={draft.end}
+                                          onChange={(start, end) => patchConfigDraft(c, { start, end })}
+                                        />
+                                      </div>
+                                    ) : (
+                                      <div className="field-row" style={{ marginBottom: 0 }}>
+                                        <div className="field" style={{ flex: "1 1 110px", marginBottom: 0 }}>
+                                          <label>Início (dias atrás)</label>
+                                          <input
+                                            type="number"
+                                            min={0}
+                                            step={1}
+                                            value={draft.startOffset}
+                                            onChange={(e) => patchConfigDraft(c, { startOffset: e.target.value })}
+                                          />
+                                        </div>
+                                        <div className="field" style={{ flex: "1 1 110px", marginBottom: 0 }}>
+                                          <label>Fim (dias atrás)</label>
+                                          <input
+                                            type="number"
+                                            min={0}
+                                            step={1}
+                                            value={draft.endOffset}
+                                            onChange={(e) => patchConfigDraft(c, { endOffset: e.target.value })}
+                                          />
+                                        </div>
+                                      </div>
+                                    )}
+                                    <div className="field">
+                                      <label>Período efetivo aplicável</label>
+                                      <div className="effective-field">{resolvedPreview}</div>
+                                    </div>
                                   </div>
                                 </div>
                               </div>
@@ -833,7 +848,7 @@ export default function RemoteUpdatesPage() {
                                     onClick={() => handleSaveConfig(c)}
                                     disabled={savingConfigId === c.id || !draftIntervalValid(draft.interval)}
                                   >
-                                    {savingConfigId === c.id ? "Salvando..." : "💾 Salvar configurações"}
+                                    {savingConfigId === c.id ? "Salvando..." : "Salvar configurações"}
                                   </button>
                                   <button
                                     type="button"
@@ -841,28 +856,22 @@ export default function RemoteUpdatesPage() {
                                     onClick={() => navigate("/import/payments", { state: { autoReimportConfigId: c.id } })}
                                     title="Abre Importar Pagamentos com este arquivo e template já preenchidos e reprocessa agora, mesmo sem mudança detectada no servidor de origem"
                                   >
-                                    <Upload size={13} style={{ marginRight: "0.35rem", verticalAlign: "-2px" }} />
                                     Reprocessar agora
                                   </button>
                                   <div style={{ display: "flex", gap: "0.5rem" }}>
                                     <button
                                       type="button"
-                                      className="ghost"
+                                      className="outline"
                                       style={{ flex: 1 }}
                                       onClick={() => forceCheckConfig(c.id)}
                                       disabled={checkingConfigIds.has(c.id)}
                                       title="Verifica esta configuração agora, ignorando o intervalo configurado"
                                     >
-                                      <RefreshCw
-                                        size={12}
-                                        className={checkingConfigIds.has(c.id) ? "spin" : undefined}
-                                        style={{ marginRight: "0.3rem", verticalAlign: "-2px" }}
-                                      />
-                                      Forçar verificação
+                                      {checkingConfigIds.has(c.id) ? "Verificando..." : "Forçar verificação"}
                                     </button>
                                     <button
                                       type="button"
-                                      className="ghost"
+                                      className="outline"
                                       onClick={() => handleToggleConfig(c)}
                                       disabled={togglingConfigId === c.id}
                                     >
@@ -870,13 +879,12 @@ export default function RemoteUpdatesPage() {
                                     </button>
                                     <button
                                       type="button"
-                                      className="ghost"
+                                      className="outline"
                                       style={{ color: "var(--danger)" }}
                                       onClick={() => handleDeleteConfig(c.id)}
                                       disabled={deletingConfigId === c.id}
-                                      aria-label="Remover configuração"
                                     >
-                                      <Trash2 size={14} />
+                                      {deletingConfigId === c.id ? "Removendo..." : "Remover"}
                                     </button>
                                   </div>
                                 </div>
@@ -926,179 +934,222 @@ export default function RemoteUpdatesPage() {
                       })}
 
                       {addingConfigForUrl === t.sourceUrl ? (
-                    <div
-                      style={{
-                        border: "1px dashed var(--border)",
-                        borderRadius: 8,
-                        padding: "0.6rem 0.7rem",
-                        marginTop: "0.5rem",
-                      }}
-                    >
-                      {addingConfigError && <div className="error-box" style={{ marginBottom: "0.6rem" }}>{addingConfigError}</div>}
-                      <div className="field-row" style={{ marginBottom: 0, alignItems: "flex-end" }}>
-                        <div className="field" style={{ flex: "0 1 170px", marginBottom: 0 }}>
-                          <label>Template</label>
-                          <select
-                            value={newConfigDraft.templateId}
-                            onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, templateId: e.target.value }))}
-                          >
-                            <option value="">Selecione</option>
-                            {templates.map((tpl) => (
-                              <option key={tpl.id} value={tpl.id}>
-                                {tpl.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="field" style={{ flex: "0 1 120px", marginBottom: 0 }}>
-                          <label>Modo</label>
-                          <select
-                            value={newConfigDraft.dateMode}
-                            onChange={(e) =>
-                              setNewConfigDraft((prev) => ({ ...prev, dateMode: e.target.value as ReimportDateMode }))
-                            }
-                          >
-                            <option value="fixed">Fixo</option>
-                            <option value="relative">Relativo a hoje</option>
-                          </select>
-                        </div>
-                        {newConfigDraft.dateMode === "fixed" ? (
-                          <div className="field" style={{ marginBottom: 0 }}>
-                            <label>Período</label>
-                            <DateRangePicker
-                              startValue={newConfigDraft.start}
-                              endValue={newConfigDraft.end}
-                              onChange={(start, end) => setNewConfigDraft((prev) => ({ ...prev, start, end }))}
-                            />
+                        <div style={{ marginTop: "0.5rem" }}>
+                          {addingConfigError && (
+                            <div className="error-box" style={{ marginBottom: "0.6rem" }}>
+                              {addingConfigError}
+                            </div>
+                          )}
+                          <div className="config-grid">
+                            <div className="sync-panel">
+                              <div className="panel-head">
+                                <span className="panel-label">NOVA CONFIGURAÇÃO</span>
+                              </div>
+                              <div className="sync-panel-columns">
+                                <div className="sync-panel-col">
+                                  <div className="field">
+                                    <label>Template</label>
+                                    <select
+                                      value={newConfigDraft.templateId}
+                                      onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, templateId: e.target.value }))}
+                                    >
+                                      <option value="">Selecione</option>
+                                      {templates.map((tpl) => (
+                                        <option key={tpl.id} value={tpl.id}>
+                                          {tpl.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div className="field">
+                                    <label>Intervalo (min)</label>
+                                    <div className="stepper">
+                                      <button
+                                        type="button"
+                                        aria-label="Diminuir intervalo"
+                                        onClick={() =>
+                                          setNewConfigDraft((prev) => ({
+                                            ...prev,
+                                            interval: String(Math.max(1, (Number(prev.interval) || 1) - 1)),
+                                          }))
+                                        }
+                                      >
+                                        −
+                                      </button>
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        step={1}
+                                        required
+                                        value={newConfigDraft.interval}
+                                        onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, interval: e.target.value }))}
+                                      />
+                                      <button
+                                        type="button"
+                                        aria-label="Aumentar intervalo"
+                                        onClick={() =>
+                                          setNewConfigDraft((prev) => ({
+                                            ...prev,
+                                            interval: String((Number(prev.interval) || 0) + 1),
+                                          }))
+                                        }
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="sync-panel-col">
+                                  <div className="field">
+                                    <label>Modo</label>
+                                    <select
+                                      value={newConfigDraft.dateMode}
+                                      onChange={(e) =>
+                                        setNewConfigDraft((prev) => ({ ...prev, dateMode: e.target.value as ReimportDateMode }))
+                                      }
+                                    >
+                                      <option value="fixed">Fixo</option>
+                                      <option value="relative">Relativo a hoje</option>
+                                    </select>
+                                  </div>
+                                  {newConfigDraft.dateMode === "fixed" ? (
+                                    <div className="field">
+                                      <label>Período Selecionado</label>
+                                      <DateRangePicker
+                                        startValue={newConfigDraft.start}
+                                        endValue={newConfigDraft.end}
+                                        onChange={(start, end) => setNewConfigDraft((prev) => ({ ...prev, start, end }))}
+                                      />
+                                    </div>
+                                  ) : (
+                                    <div className="field-row" style={{ marginBottom: 0 }}>
+                                      <div className="field" style={{ flex: "1 1 110px", marginBottom: 0 }}>
+                                        <label>Início (dias atrás)</label>
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          step={1}
+                                          value={newConfigDraft.startOffset}
+                                          onChange={(e) =>
+                                            setNewConfigDraft((prev) => ({ ...prev, startOffset: e.target.value }))
+                                          }
+                                        />
+                                      </div>
+                                      <div className="field" style={{ flex: "1 1 110px", marginBottom: 0 }}>
+                                        <label>Fim (dias atrás)</label>
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          step={1}
+                                          value={newConfigDraft.endOffset}
+                                          onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, endOffset: e.target.value }))}
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
+                                  <div className="field">
+                                    <label>Período efetivo aplicável</label>
+                                    <div className="effective-field">
+                                      {formatResolvedPreview(resolveDraftPeriod(newConfigDraft))}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="automation-panel">
+                              <span className="panel-label" style={{ marginBottom: "0.75rem" }}>
+                                AUTOMAÇÃO E REGRAS
+                              </span>
+                              <div className="automation-toggle-box">
+                                <label
+                                  style={{ display: "flex", alignItems: "flex-start", gap: "0.6rem", fontWeight: 400, cursor: "pointer" }}
+                                  title="A verificação automática já aplica a mudança encontrada direto no sistema, em vez de deixar pendente pra revisão manual na tela de Pagamentos"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={newConfigDraft.autoApplyEnabled}
+                                    onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, autoApplyEnabled: e.target.checked }))}
+                                    style={{ marginTop: "2px" }}
+                                  />
+                                  <span>
+                                    <div style={{ fontSize: "0.85rem", fontWeight: 600 }}>Atualizar registros automaticamente</div>
+                                    <div className="muted" style={{ fontSize: "0.76rem", marginTop: "2px" }}>
+                                      O sistema aplicará as regras abaixo nas sincronizações.
+                                    </div>
+                                  </span>
+                                </label>
+                              </div>
+                              <div className="automation-sub-rules">
+                                <label
+                                  className="muted"
+                                  style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400, fontSize: "0.82rem" }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={newConfigDraft.autoApplyOverwriteManualEdits}
+                                    onChange={(e) =>
+                                      setNewConfigDraft((prev) => ({ ...prev, autoApplyOverwriteManualEdits: e.target.checked }))
+                                    }
+                                    disabled={!newConfigDraft.autoApplyEnabled}
+                                  />
+                                  Sobrescrever edições manuais
+                                </label>
+                                <label
+                                  className="muted"
+                                  style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400, fontSize: "0.82rem" }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={newConfigDraft.autoApplyOverwritePaid}
+                                    onChange={(e) =>
+                                      setNewConfigDraft((prev) => ({ ...prev, autoApplyOverwritePaid: e.target.checked }))
+                                    }
+                                    disabled={!newConfigDraft.autoApplyEnabled}
+                                  />
+                                  Sobrescrever turnos já pagos
+                                </label>
+                                <label
+                                  className="muted"
+                                  style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400, fontSize: "0.82rem" }}
+                                  title="Uma reimportação automática por essa configuração não sobrescreve um turno já pago, revertido ou com valor corrigido à mão"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={newConfigDraft.keepManualEdits}
+                                    onChange={(e) =>
+                                      setNewConfigDraft((prev) => ({ ...prev, keepManualEdits: e.target.checked }))
+                                    }
+                                  />
+                                  Manter registros atualizados manualmente
+                                </label>
+                              </div>
+                              <div className="automation-actions">
+                                <button
+                                  type="button"
+                                  onClick={handleCreateConfig}
+                                  disabled={addingConfigSaving || !draftIntervalValid(newConfigDraft.interval)}
+                                >
+                                  {addingConfigSaving ? "Adicionando..." : "Adicionar"}
+                                </button>
+                                <button type="button" className="outline" onClick={() => setAddingConfigForUrl(null)}>
+                                  Cancelar
+                                </button>
+                              </div>
+                            </div>
                           </div>
-                        ) : (
-                          <>
-                            <div className="field" style={{ flex: "0 1 110px", marginBottom: 0 }}>
-                              <label>Início (dias atrás)</label>
-                              <input
-                                type="number"
-                                min={0}
-                                step={1}
-                                value={newConfigDraft.startOffset}
-                                onChange={(e) =>
-                                  setNewConfigDraft((prev) => ({ ...prev, startOffset: e.target.value }))
-                                }
-                              />
-                            </div>
-                            <div className="field" style={{ flex: "0 1 110px", marginBottom: 0 }}>
-                              <label>Fim (dias atrás)</label>
-                              <input
-                                type="number"
-                                min={0}
-                                step={1}
-                                value={newConfigDraft.endOffset}
-                                onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, endOffset: e.target.value }))}
-                              />
-                            </div>
-                          </>
-                        )}
-                        <div className="field" style={{ flex: "0 1 110px", marginBottom: 0 }}>
-                          <label>Intervalo (min)</label>
-                          <input
-                            type="number"
-                            min={1}
-                            step={1}
-                            required
-                            value={newConfigDraft.interval}
-                            onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, interval: e.target.value }))}
-                          />
                         </div>
-                        <div className="field" style={{ flex: "0 1 200px", marginBottom: 0 }}>
-                          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400 }}>
-                            <input
-                              type="checkbox"
-                              checked={newConfigDraft.keepManualEdits}
-                              onChange={(e) =>
-                                setNewConfigDraft((prev) => ({ ...prev, keepManualEdits: e.target.checked }))
-                              }
-                            />
-                            Manter registros atualizados manualmente
-                          </label>
-                        </div>
+                      ) : (
                         <button
                           type="button"
-                          onClick={handleCreateConfig}
-                          disabled={addingConfigSaving || !draftIntervalValid(newConfigDraft.interval)}
+                          className="ghost"
+                          style={{ marginTop: "0.5rem" }}
+                          onClick={() => openAddConfig(t.sourceUrl)}
                         >
-                          {addingConfigSaving ? "Adicionando..." : "Adicionar"}
+                          <Plus size={14} style={{ marginRight: "0.3rem" }} />
+                          Adicionar configuração
                         </button>
-                        <button type="button" className="ghost" onClick={() => setAddingConfigForUrl(null)}>
-                          Cancelar
-                        </button>
-                      </div>
-                      {newConfigDraft.dateMode === "relative" && (
-                        <p className="muted" style={{ fontSize: "0.75rem", margin: "0.4rem 0 0" }}>
-                          Vai usar: {formatResolvedPreview(resolveDraftPeriod(newConfigDraft))}
-                        </p>
                       )}
-                      <div style={{ marginTop: "0.5rem" }}>
-                        <label
-                          style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400, fontSize: "0.85rem" }}
-                          title="A verificação automática já aplica a mudança encontrada direto no sistema, em vez de deixar pendente pra revisão manual na tela de Pagamentos"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={newConfigDraft.autoApplyEnabled}
-                            onChange={(e) => setNewConfigDraft((prev) => ({ ...prev, autoApplyEnabled: e.target.checked }))}
-                          />
-                          Atualizar registros automaticamente
-                        </label>
-                        {newConfigDraft.autoApplyEnabled && (
-                          <div
-                            style={{
-                              marginLeft: "1.5rem",
-                              marginTop: "0.3rem",
-                              display: "flex",
-                              flexDirection: "column",
-                              gap: "0.25rem",
-                            }}
-                          >
-                            <label
-                              className="muted"
-                              style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400, fontSize: "0.8rem" }}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={newConfigDraft.autoApplyOverwriteManualEdits}
-                                onChange={(e) =>
-                                  setNewConfigDraft((prev) => ({ ...prev, autoApplyOverwriteManualEdits: e.target.checked }))
-                                }
-                              />
-                              Sobrescrever edições manuais
-                            </label>
-                            <label
-                              className="muted"
-                              style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400, fontSize: "0.8rem" }}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={newConfigDraft.autoApplyOverwritePaid}
-                                onChange={(e) =>
-                                  setNewConfigDraft((prev) => ({ ...prev, autoApplyOverwritePaid: e.target.checked }))
-                                }
-                              />
-                              Sobrescrever turnos já pagos
-                            </label>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      className="ghost"
-                      style={{ marginTop: "0.5rem" }}
-                      onClick={() => openAddConfig(t.sourceUrl)}
-                    >
-                      <Plus size={14} style={{ marginRight: "0.3rem" }} />
-                      Adicionar configuração
-                    </button>
-                  )}
                     </div>
                   )}
                 </div>
