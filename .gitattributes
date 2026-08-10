@@ -1,0 +1,8 @@
+# SQL migrations are embedded verbatim into the compiled binary via
+# include_str!() and hashed by tauri-plugin-sql (sqlx) to detect drift —
+# a line-ending-only change (LF vs CRLF, e.g. from core.autocrlf on
+# Windows) flips that hash even though the SQL itself never changed,
+# and the app refuses to start with "migration N was previously applied
+# but has been modified". Pinning these to LF regardless of platform
+# settings keeps that hash stable.
+src-tauri/migrations/*.sql text eol=lf

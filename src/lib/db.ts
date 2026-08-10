@@ -1431,6 +1431,8 @@ export interface ReimportConfig {
   autoApplyOverwriteManualEdits: boolean;
   /** Only consulted when `autoApplyEnabled` — whether auto-apply is allowed to overwrite a shift that's already `status: 'pago'`. Defaults off: a paid shift's fields are never touched automatically unless explicitly opted in (see `computeReimportDiff`'s existing rule that a paid shift's `status` itself is never diffed either way). */
   autoApplyOverwritePaid: boolean;
+  /** When THIS config was last actually evaluated by a check attempt (via `source_url_check_log_configs`) — `null` if never. Drives this config's own due-ness independently of any sibling config sharing the same `sourceUrl`; see `isConfigDue`. */
+  lastCheckedAt: string | null;
 }
 
 /** Pre-filled in the "Adicionar configuração" form on the Verificação automática page — the user can change it, but a value is always required. */
@@ -1464,7 +1466,11 @@ export async function listReimportConfigs(): Promise<ReimportConfig[]> {
        c.keep_manual_edits AS keepManualEdits,
        c.auto_apply_enabled AS autoApplyEnabled,
        c.auto_apply_overwrite_manual_edits AS autoApplyOverwriteManualEdits,
-       c.auto_apply_overwrite_paid AS autoApplyOverwritePaid
+       c.auto_apply_overwrite_paid AS autoApplyOverwritePaid,
+       (SELECT MAX(l.checked_at)
+        FROM source_url_check_log_configs jc
+        JOIN source_url_check_log l ON l.id = jc.check_log_id
+        WHERE jc.config_id = c.id) AS lastCheckedAt
      FROM source_url_reimport_configs c
      LEFT JOIN payment_templates pt ON pt.id = c.template_id
      ORDER BY c.created_at`,
@@ -1563,6 +1569,11 @@ export async function setConfigCheckDisabled(id: number, disabled: boolean): Pro
 
 export async function deleteReimportConfig(id: number): Promise<void> {
   const db = await getDb();
+  // Unlike source_url_check_diffs (which keeps a config_label snapshot for
+  // audit even after the config is gone), this table has no audit value on
+  // its own — it's pure scheduling bookkeeping (see `isConfigDue`), so once
+  // the config no longer exists there's nothing left to compute from it.
+  await db.execute("DELETE FROM source_url_check_log_configs WHERE config_id = $1", [id]);
   await db.execute("DELETE FROM source_url_reimport_configs WHERE id = $1", [id]);
 }
 
@@ -1576,6 +1587,11 @@ export async function untrackPaymentUrl(sourceUrl: string): Promise<void> {
   const db = await getDb();
   await db.execute(
     `DELETE FROM source_url_check_diffs
+     WHERE check_log_id IN (SELECT id FROM source_url_check_log WHERE source_url = $1)`,
+    [sourceUrl],
+  );
+  await db.execute(
+    `DELETE FROM source_url_check_log_configs
      WHERE check_log_id IN (SELECT id FROM source_url_check_log WHERE source_url = $1)`,
     [sourceUrl],
   );
@@ -1631,20 +1647,47 @@ export async function trackUrlForAutoReimport(
 
 const MAX_CHECK_LOG_ENTRIES_PER_URL = 200;
 
-/** Records one check attempt and prunes older entries for that URL beyond the last 200, so the log stays bounded regardless of how short the check interval is. Returns the inserted row's id, so a deep check that runs right after can link its diffs back to this exact attempt. */
+/**
+ * Records one check attempt and prunes older entries for that URL beyond
+ * the last 200, so the log stays bounded regardless of how short the check
+ * interval is. `evaluatedConfigIds` are the reimport configs THIS attempt
+ * actually evaluated (never "every config the URL has" — see
+ * `RemoteFileUpdatesContext.runChecks`), recorded in
+ * `source_url_check_log_configs` so each config's own due-ness/history is
+ * independent of any sibling config sharing the same URL. Returns the
+ * inserted row's id, so a deep check that runs right after can link its
+ * diffs back to this exact attempt.
+ */
 export async function logUrlCheckResult(
   sourceUrl: string,
   fileName: string,
   result: UrlCheckResult,
   message: string | null,
+  evaluatedConfigIds: number[],
 ): Promise<number> {
   const db = await getDb();
   const inserted = await db.execute(
     `INSERT INTO source_url_check_log (source_url, file_name, result, message) VALUES ($1, $2, $3, $4)`,
     [sourceUrl, fileName, result, message],
   );
+  const checkLogId = inserted.lastInsertId as number;
+  for (const configId of evaluatedConfigIds) {
+    await db.execute(
+      `INSERT INTO source_url_check_log_configs (check_log_id, config_id) VALUES ($1, $2)`,
+      [checkLogId, configId],
+    );
+  }
   await db.execute(
     `DELETE FROM source_url_check_diffs
+     WHERE check_log_id IN (
+       SELECT id FROM source_url_check_log
+       WHERE source_url = $1
+         AND id NOT IN (SELECT id FROM source_url_check_log WHERE source_url = $1 ORDER BY checked_at DESC LIMIT $2)
+     )`,
+    [sourceUrl, MAX_CHECK_LOG_ENTRIES_PER_URL],
+  );
+  await db.execute(
+    `DELETE FROM source_url_check_log_configs
      WHERE check_log_id IN (
        SELECT id FROM source_url_check_log
        WHERE source_url = $1
@@ -1660,7 +1703,7 @@ export async function logUrlCheckResult(
        )`,
     [sourceUrl, MAX_CHECK_LOG_ENTRIES_PER_URL],
   );
-  return inserted.lastInsertId as number;
+  return checkLogId;
 }
 
 export interface UrlCheckLogEntry {
@@ -1670,42 +1713,45 @@ export interface UrlCheckLogEntry {
   checkedAt: string;
   result: UrlCheckResult;
   message: string | null;
-  /** How many `source_url_check_diffs` rows this check produced — 0 for almost every row (deep checks only run on a real header change, see `RemoteFileUpdatesContext.runChecks`). Drives the "N alterações" expand chip without fetching every row's diffs up front. */
+  /** How many `source_url_check_diffs` rows this check produced FOR THE CONFIG THIS ROW WAS FETCHED FOR — not the check's combined total (see `listUrlCheckLogForConfig`). Drives the "N alterações" hint on that config's history bar without fetching every row's diffs up front. */
   diffCount: number;
+  /** Whether any of THIS config's own diff rows on this check is a `change_kind: 'error'` — this config's own processing failed on this check, distinct from a real field/new-shift change and from a sibling config's own error (see `listUrlCheckLogForConfig`). */
+  hasOwnError: boolean;
 }
 
-/** Full check history, most recent first — optionally scoped to one URL — for the Verificação automática page. */
-export async function listUrlCheckLog(query: {
-  sourceUrl?: string;
-  page: number;
-  pageSize: number;
-}): Promise<PagedResult<UrlCheckLogEntry>> {
+/**
+ * Most recent check-log entries this reimport config was actually evaluated
+ * in (via `source_url_check_log_configs`) — the "Histórico recente" strip's
+ * data source. Independent of any sibling config sharing the same
+ * `sourceUrl`: a check attempt that only evaluated OTHER configs (because
+ * this one wasn't due yet) never shows up here, and `diffCount`/
+ * `hasOwnError` are scoped to this config's own diff rows on that check, not
+ * the shared HTTP check's combined outcome.
+ */
+export async function listUrlCheckLogForConfig(configId: number, limit: number): Promise<UrlCheckLogEntry[]> {
   const db = await getDb();
-  const conditions: string[] = [];
-  const params: (string | number)[] = [];
-  if (query.sourceUrl) {
-    params.push(query.sourceUrl);
-    conditions.push(`source_url = $${params.length}`);
-  }
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-
-  const countRows = await db.select<{ count: number }[]>(
-    `SELECT COUNT(*) AS count FROM source_url_check_log ${whereClause}`,
-    params,
-  );
-  const total = countRows[0]?.count ?? 0;
-
-  const rows = await db.select<UrlCheckLogEntry[]>(
+  const rawRows = await db.select<(Omit<UrlCheckLogEntry, "hasOwnError"> & { hasOwnError: number })[]>(
     `SELECT l.id, l.source_url AS sourceUrl, l.file_name AS fileName, l.checked_at AS checkedAt, l.result, l.message,
-            (SELECT COUNT(*) FROM source_url_check_diffs d WHERE d.check_log_id = l.id) AS diffCount
+            (SELECT COUNT(*) FROM source_url_check_diffs d WHERE d.check_log_id = l.id AND d.config_id = $1) AS diffCount,
+            (SELECT MAX(CASE WHEN d.change_kind = 'error' THEN 1 ELSE 0 END)
+             FROM source_url_check_diffs d WHERE d.check_log_id = l.id AND d.config_id = $1) AS hasOwnError
      FROM source_url_check_log l
-     ${whereClause}
+     JOIN source_url_check_log_configs jc ON jc.check_log_id = l.id AND jc.config_id = $1
      ORDER BY l.checked_at DESC
-     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-    [...params, query.pageSize, query.page * query.pageSize],
+     LIMIT $2`,
+    [configId, limit],
   );
+  return rawRows.map((r) => ({ ...r, hasOwnError: Boolean(r.hasOwnError) }));
+}
 
-  return { rows, total };
+/** Config ids a given check attempt actually evaluated — used to decide whether a cached deep-check verdict can be reused for a NEW set of configs (only safe when every one of them was already covered by that same attempt), see `RemoteFileUpdatesContext.runChecks`. */
+export async function listCheckLogConfigIds(checkLogId: number): Promise<number[]> {
+  const db = await getDb();
+  const rows = await db.select<{ configId: number }[]>(
+    `SELECT config_id AS configId FROM source_url_check_log_configs WHERE check_log_id = $1`,
+    [checkLogId],
+  );
+  return rows.map((r) => r.configId);
 }
 
 export type CheckDiffKind = "field" | "new-shift" | "unresolved" | "error" | "removed";
@@ -1804,6 +1850,8 @@ export interface CheckLogConfigDiffCount {
   configId: number | null;
   configLabel: string;
   diffCount: number;
+  /** Whether any of this (check, config) pair's diff rows is a `change_kind: 'error'` — this config's own processing failed on this check, distinct from a real field/new-shift change. Used to color a per-config history bar red without fetching every row up front. */
+  hasError: boolean;
 }
 
 /**
@@ -1819,13 +1867,15 @@ export async function listCheckDiffCountsByLogIds(checkLogIds: number[]): Promis
   if (checkLogIds.length === 0) return [];
   const db = await getDb();
   const placeholders = checkLogIds.map((_, i) => `$${i + 1}`).join(", ");
-  return db.select<CheckLogConfigDiffCount[]>(
-    `SELECT check_log_id AS checkLogId, config_id AS configId, config_label AS configLabel, COUNT(*) AS diffCount
+  const rows = await db.select<(Omit<CheckLogConfigDiffCount, "hasError"> & { hasError: number })[]>(
+    `SELECT check_log_id AS checkLogId, config_id AS configId, config_label AS configLabel, COUNT(*) AS diffCount,
+            MAX(CASE WHEN change_kind = 'error' THEN 1 ELSE 0 END) AS hasError
      FROM source_url_check_diffs
      WHERE check_log_id IN (${placeholders})
      GROUP BY check_log_id, config_id, config_label`,
     checkLogIds,
   );
+  return rows.map((r) => ({ ...r, hasError: Boolean(r.hasError) }));
 }
 
 export interface ShiftFieldDiffRow {

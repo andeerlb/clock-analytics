@@ -6,6 +6,7 @@ import {
   copyCheckDiffs,
   createReimportConfig as createReimportConfigDb,
   deleteReimportConfig as deleteReimportConfigDb,
+  listCheckLogConfigIds,
   listReimportConfigs,
   listTrackedPaymentUrls,
   logSourceFile,
@@ -56,20 +57,22 @@ export interface RemoteUpdateFlag {
  * the "Verificação automática" page can both reflect it regardless of
  * which screen is open).
  *
- * Each reimport config has its own mandatory check interval and its own
- * on/off switch (`ReimportConfig.checkIntervalMinutes`/`checkDisabled`,
- * editable on the Verificação automática page) — there's no global default
- * to fall back to. The actual HTTP check, though, is still made once per
- * URL — there's only one remote file to ask about, however many configs
- * are watching it — so every tick: (1) figure out which URLs have at least
- * one non-disabled, due config; (2) check each of those URLs exactly once;
- * (3) a "changed" result then applies to every non-disabled config for
- * that URL, not just the one(s) that happened to trigger the check. This
- * is naturally robust to a throttled/suspended timer (e.g. the app
- * minimized for a while): due-ness is computed from real timestamps every
- * tick, not a tick count, so a late tick just picks up everything overdue
- * however that happened. A `visibilitychange` listener triggers an extra
- * tick on refocus for the same reason.
+ * Each reimport config has its own mandatory check interval, its own on/off
+ * switch (`ReimportConfig.checkIntervalMinutes`/`checkDisabled`, editable on
+ * the Verificação automática page), and — crucially — its own independent
+ * schedule: due-ness is computed from `ReimportConfig.lastCheckedAt` (when
+ * THIS config was last actually evaluated, via
+ * `source_url_check_log_configs`), never from a shared per-URL timestamp. A
+ * URL with several configs on different intervals only gets its HTTP check
+ * made when at least one of them is due, and that check only ever evaluates
+ * the config(s) that are actually due right then — a slow config never gets
+ * silently re-evaluated just because a fast sibling sharing the same URL
+ * came due (see `runChecks`). This is naturally robust to a
+ * throttled/suspended timer (e.g. the app minimized for a while): due-ness
+ * is computed from real timestamps every tick, not a tick count, so a late
+ * tick just picks up everything overdue however that happened. A
+ * `visibilitychange` listener triggers an extra tick on refocus for the same
+ * reason.
  */
 const TICK_INTERVAL_MS = 60_000;
 
@@ -138,11 +141,11 @@ function isUnreliableHeaderHost(sourceUrl: string): boolean {
   return host === "1drv.ms" || host === "onedrive.live.com" || host.endsWith(".sharepoint.com");
 }
 
-function isConfigDue(config: ReimportConfig, urlLastCheckedAt: string | null | undefined, now: number): boolean {
+function isConfigDue(config: ReimportConfig, now: number): boolean {
   if (config.checkDisabled) return false;
-  if (!urlLastCheckedAt) return true;
+  if (!config.lastCheckedAt) return true;
   const effectiveMs = config.checkIntervalMinutes * 60_000;
-  return now - parseSqliteDateTime(urlLastCheckedAt).getTime() >= effectiveMs;
+  return now - parseSqliteDateTime(config.lastCheckedAt).getTime() >= effectiveMs;
 }
 
 /** A `change_kind: 'error'` diff entry not tied to any specific field — used both for a whole-config failure (bad/deleted template, parse error) and a whole-URL one (the download itself failed after every config was already known to want a deep pass). */
@@ -205,13 +208,13 @@ interface RemoteFileUpdatesContextValue {
   /** Fully stops tracking a URL — its settings, every reimport config, and its whole check-log history. Already-imported payment_shifts are untouched. */
   untrackUrl: (sourceUrl: string) => Promise<void>;
   refreshNow: () => void;
-  /** True while at least one URL check is in flight — for a "Verificando..." indicator. */
+  /** True while at least one reimport config's check is in flight — for a "Verificando..." indicator. */
   checking: boolean;
-  /** URLs with an HTTP check actually in flight right now (not just "due") — the precise "em progresso" state, per URL, for the Verificação automática page's per-config rows. */
-  checkingUrls: Set<string>;
-  /** Forces an immediate check of one URL, bypassing every config's schedule — the per-config "Forçar verificação" button. A no-op if that URL is already being checked. */
-  forceCheckUrl: (sourceUrl: string) => Promise<void>;
-  /** Forces an immediate check of every tracked URL, bypassing schedules — the global "Forçar verificação de todas" button. */
+  /** Reimport configs with a check actually in flight right now (not just "due") — the precise "em progresso" state, per CONFIG (not per URL — see the module comment on why each config's schedule is independent even when it shares a URL with siblings), for the Verificação automática page's per-config rows. */
+  checkingConfigIds: Set<number>;
+  /** Forces an immediate check of one reimport config, bypassing its own schedule — the per-config "Forçar verificação" button. Never touches a sibling config sharing the same `sourceUrl`. A no-op if that config is already being checked or no longer exists. */
+  forceCheckConfig: (configId: number) => Promise<void>;
+  /** Forces an immediate check of every tracked URL and every one of its non-disabled configs, bypassing schedules — the global "Forçar verificação de todas" button. */
   forceCheckAll: () => Promise<void>;
   /** Every URL explicitly opted into tracking, with its shared check state — feeds the Verificação automática page. */
   trackedFiles: TrackedPaymentUrl[];
@@ -236,14 +239,17 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
   const [tickError, setTickError] = useState<string | null>(null);
   const [trackedFiles, setTrackedFiles] = useState<TrackedPaymentUrl[]>([]);
   const [reimportConfigs, setReimportConfigs] = useState<ReimportConfig[]>([]);
-  // URLs with an HTTP check actually in flight — a Set (not one global
-  // boolean) so a forced check of a single URL and the regular scheduled
-  // tick can report precise per-URL "em progresso" state instead of a
-  // page-wide flag that's ambiguous about which file it refers to. Kept in
-  // a ref too, so overlapping calls (a force-click landing mid-tick) can
-  // see what's already in flight without waiting on a state update.
-  const [checkingUrls, setCheckingUrlsState] = useState<Set<string>>(new Set());
-  const checkingUrlsRef = useRef<Set<string>>(new Set());
+  // Reimport configs with a check actually in flight — a Set (not one
+  // global boolean) so a forced check of a single config and the regular
+  // scheduled tick can report precise per-CONFIG "em progresso" state
+  // instead of a page-wide flag, or a per-URL one that would wrongly light
+  // up a sibling config sharing the same URL but not actually being
+  // evaluated right now (see the module comment on independent per-config
+  // scheduling). Kept in a ref too, so overlapping calls (a force-click
+  // landing mid-tick) can see what's already in flight without waiting on a
+  // state update.
+  const [checkingConfigIds, setCheckingConfigIdsState] = useState<Set<number>>(new Set());
+  const checkingConfigIdsRef = useRef<Set<number>>(new Set());
 
   const refreshTrackedState = useCallback(async () => {
     const [refreshedFiles, refreshedConfigs] = await Promise.all([listTrackedPaymentUrls(), listReimportConfigs()]);
@@ -253,12 +259,19 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
   }, []);
 
   /**
-   * Checks exactly the URLs in `targets`, unconditionally — due-ness is
-   * decided by the caller (`tick` for the schedule, `forceCheckUrl`/
-   * `forceCheckAll` for a manual override). Skips any URL already being
-   * checked (via `checkingUrlsRef`, read synchronously so two overlapping
-   * calls — e.g. a force-click landing mid-tick — never double-check the
-   * same URL), so it's safe to call from more than one place at once.
+   * Runs exactly the work handed in — each item a tracked URL plus the
+   * SPECIFIC reimport configs to evaluate on it this round (never "every
+   * config that URL has": due-ness is decided per config by the caller —
+   * `tick` for the schedule, `forceCheckConfig`/`forceCheckAll` for a manual
+   * override — precisely so a config with a long interval never gets
+   * silently re-evaluated just because a faster sibling sharing the same
+   * URL came due). A config already mid-check (via `checkingConfigIdsRef`,
+   * read synchronously so two overlapping calls — e.g. a force-click
+   * landing mid-tick — never double-check the same config) is dropped from
+   * whichever item lists it; an item left with zero configs after that is
+   * skipped UNLESS it had none to begin with (a tracked URL with no reimport
+   * config yet, only reachable via `forceCheckAll` — still worth a header
+   * check on its own).
    *
    * For each URL: (1) the cheap header check, always. This ONLY decides
    * whether to look closer — on its own it's noisy (a host can hand out a
@@ -267,25 +280,33 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
    * header says "changed" and the remote signature differs from the one the
    * last deep check already ran against (`TrackedPaymentUrl.lastDeepCheck*`
    * — NOT `sourceEtag`/etc., which only update on an actual saved
-   * reimport), download the file once and run every active `ReimportConfig`
-   * for that URL through `computeReimportDiff` — read-only UNLESS that
-   * config has `autoApplyEnabled` ("Atualizar registros automaticamente"),
-   * in which case it writes the change straight to `payment_shifts` too
-   * (see `remoteCheckDiff.ts`'s `AutoApplyOptions`). What THAT finds is what
-   * gets logged as this check's `result`: 'changed' only if a real
-   * field/new-shift diff turned up, 'unchanged' if it ran clean and found
-   * nothing, 'error'
-   * if it couldn't finish. (3) A later check against that SAME signature
-   * skips the download/parse (avoids doing real work for nothing) but still
-   * gets a full, real check-log row: it reuses the verdict AND copies that
-   * run's diff rows onto its own check_log_id (`copyCheckDiffs`) — so
-   * "Detalhes" never goes blank just because the expensive part was
-   * skipped, and a still-unaddressed "Mudou" keeps showing its own diff on
-   * every single check until the file is actually reimported (or the
-   * change dismissed — see `dismissRemoteUpdate`). Each URL leaves
-   * `checkingUrls` as soon as ITS OWN work (header + any deep pass)
-   * finishes, not when the whole batch does — a slow deep pass on one URL
-   * shouldn't keep an unrelated fast URL showing "Verificando...".
+   * reimport), download the file once and run every config THIS run was
+   * given for that URL through `computeReimportDiff` — read-only UNLESS
+   * that config has `autoApplyEnabled` ("Atualizar registros
+   * automaticamente"), in which case it writes the change straight to
+   * `payment_shifts` too (see `remoteCheckDiff.ts`'s `AutoApplyOptions`).
+   * What THAT finds is what gets logged as this check's `result`: 'changed'
+   * only if a real field/new-shift diff turned up, 'unchanged' if it ran
+   * clean and found nothing, 'error' if it couldn't finish. Every config
+   * this run evaluated (whichever branch handled it) is recorded via
+   * `logUrlCheckResult`'s `evaluatedConfigIds` — that's what makes each
+   * config's own due-ness and "Histórico recente" independent of its
+   * siblings. (3) A later check against that SAME signature skips the
+   * download/parse (avoids doing real work for nothing) but ONLY when every
+   * config this run needs was already covered by that cached deep check
+   * (`listCheckLogConfigIds`) — otherwise a config new to this signature
+   * (e.g. it just became due for the first time since the file last
+   * changed) would wrongly inherit a verdict that never actually considered
+   * it. When it applies, it still gets a full, real check-log row: it
+   * reuses the verdict AND copies that run's diff rows onto its own
+   * check_log_id (`copyCheckDiffs`) — so "Detalhes" never goes blank just
+   * because the expensive part was skipped, and a still-unaddressed "Mudou"
+   * keeps showing its own diff on every single check until the file is
+   * actually reimported (or the change dismissed — see
+   * `dismissRemoteUpdate`). Each config leaves `checkingConfigIds` as soon
+   * as ITS OWN URL's work (header + any deep pass) finishes, not when the
+   * whole batch does — a slow deep pass on one URL shouldn't keep an
+   * unrelated fast config showing "Verificando...".
    *
    * Exception to both (2) and (3) above: `isUnreliableHeaderHost` (OneDrive/
    * SharePoint) — for those, a "changed" verdict is never trusted to mean
@@ -294,29 +315,19 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
    * always runs the real download+diff, same as "Reprocessar agora".
    */
   const runChecks = useCallback(
-    async (targets: TrackedPaymentUrl[]) => {
-      const fresh = targets.filter((t) => !checkingUrlsRef.current.has(t.sourceUrl));
+    async (work: { t: TrackedPaymentUrl; configs: ReimportConfig[] }[]) => {
+      const fresh = work
+        .map(({ t, configs }) => ({
+          t,
+          configs: configs.filter((c) => !checkingConfigIdsRef.current.has(c.id)),
+          hadConfigs: configs.length > 0,
+        }))
+        .filter((w) => w.configs.length > 0 || !w.hadConfigs);
       if (fresh.length === 0) return;
-      fresh.forEach((t) => checkingUrlsRef.current.add(t.sourceUrl));
-      setCheckingUrlsState(new Set(checkingUrlsRef.current));
+      fresh.forEach(({ configs }) => configs.forEach((c) => checkingConfigIdsRef.current.add(c.id)));
+      setCheckingConfigIdsState(new Set(checkingConfigIdsRef.current));
 
-      // Read fresh regardless of what's in React state — this runs from
-      // `tick` (schedule), `forceCheckUrl`/`forceCheckAll` (manual), any of
-      // which may be working off a stale `reimportConfigs` snapshot.
-      const activeConfigsByUrl = new Map<string, ReimportConfig[]>();
-      try {
-        for (const c of await listReimportConfigs()) {
-          if (c.checkDisabled) continue;
-          const list = activeConfigsByUrl.get(c.sourceUrl) ?? [];
-          list.push(c);
-          activeConfigsByUrl.set(c.sourceUrl, list);
-        }
-      } catch {
-        // A failure here just means no URL gets a deep pass this round —
-        // the header checks below still run and still get logged.
-      }
-
-      async function runOne(t: TrackedPaymentUrl) {
+      async function runOne(t: TrackedPaymentUrl, configs: ReimportConfig[]) {
         try {
           let headerResult: UrlCheckResult;
           let current: { etag: string | null; lastModified: string | null; contentLength: number | null };
@@ -331,7 +342,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
             current = check.current;
           } catch (e) {
             const message = String(e instanceof Error ? e.message : e);
-            await logUrlCheckResult(t.sourceUrl, t.fileName, "error", message);
+            await logUrlCheckResult(t.sourceUrl, t.fileName, "error", message, configs.map((c) => c.id));
             return;
           }
 
@@ -343,17 +354,16 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
           if (headerResult !== "changed" && !unreliableHeader) {
             // Nothing to look closer at — the header itself is the whole
             // story here.
-            await logUrlCheckResult(t.sourceUrl, t.fileName, headerResult, null);
+            await logUrlCheckResult(t.sourceUrl, t.fileName, headerResult, null, configs.map((c) => c.id));
             return;
           }
 
-          const configs = activeConfigsByUrl.get(t.sourceUrl) ?? [];
           if (configs.length === 0) {
             // No reimport config to diff against — nothing to verify
             // deeper, so the header's own word is all there is to log
             // (whatever it actually was — forcing "changed" here would be
             // asserting something no check actually confirmed).
-            await logUrlCheckResult(t.sourceUrl, t.fileName, headerResult, null);
+            await logUrlCheckResult(t.sourceUrl, t.fileName, headerResult, null, []);
             return;
           }
 
@@ -371,13 +381,25 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
 
           // Reuse the cached verdict only when there's a real one to reuse
           // (a signature recorded before this cache existed, or one whose
-          // log row was since pruned, leaves these `null`) — otherwise fall
-          // through to a real pass so a matching-but-unverified signature
-          // never gets stuck reporting a guess forever.
+          // log row was since pruned, leaves these `null`) AND every config
+          // this run needs was actually part of that cached deep check —
+          // otherwise fall through to a real pass so a matching-but-
+          // unverified signature never gets stuck reporting a guess forever,
+          // and a config new to this signature never inherits a verdict that
+          // never considered it.
           if (!signatureChanged && t.lastDeepCheckResult !== null && t.lastDeepCheckLogId !== null) {
-            const checkLogId = await logUrlCheckResult(t.sourceUrl, t.fileName, t.lastDeepCheckResult, null);
-            await copyCheckDiffs(t.lastDeepCheckLogId, checkLogId);
-            return;
+            const cachedConfigIds = new Set(await listCheckLogConfigIds(t.lastDeepCheckLogId));
+            if (configs.every((c) => cachedConfigIds.has(c.id))) {
+              const checkLogId = await logUrlCheckResult(
+                t.sourceUrl,
+                t.fileName,
+                t.lastDeepCheckResult,
+                null,
+                configs.map((c) => c.id),
+              );
+              await copyCheckDiffs(t.lastDeepCheckLogId, checkLogId);
+              return;
+            }
           }
 
           const entries: CheckDiffInput[] = [];
@@ -478,7 +500,13 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
                 ? "error"
                 : "unchanged";
 
-          const checkLogId = await logUrlCheckResult(t.sourceUrl, t.fileName, effectiveResult, wholeUrlErrorMessage);
+          const checkLogId = await logUrlCheckResult(
+            t.sourceUrl,
+            t.fileName,
+            effectiveResult,
+            wholeUrlErrorMessage,
+            configs.map((c) => c.id),
+          );
           await saveCheckDiffs(checkLogId, entries);
           // A failed DOWNLOAD isn't cached as "checked" — a transient
           // network blip should be retried next tick, not stuck reusing an
@@ -497,16 +525,16 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
             if (effectiveResult === "changed") await notifyFileChanged(t.fileName);
           }
         } finally {
-          checkingUrlsRef.current.delete(t.sourceUrl);
-          setCheckingUrlsState(new Set(checkingUrlsRef.current));
+          configs.forEach((c) => checkingConfigIdsRef.current.delete(c.id));
+          setCheckingConfigIdsState(new Set(checkingConfigIdsRef.current));
         }
       }
 
       try {
-        await Promise.allSettled(fresh.map(runOne));
+        await Promise.allSettled(fresh.map(({ t, configs }) => runOne(t, configs)));
       } finally {
-        // Re-read rather than patch in memory — the checked URLs come back
-        // with their brand new log entry (and deep-check signature),
+        // Re-read rather than patch in memory — the checked URLs/configs come
+        // back with their brand new log entry (and deep-check signature),
         // uniformly with everything else.
         await refreshTrackedState();
       }
@@ -518,20 +546,28 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
     try {
       const [tracked, configs] = await Promise.all([listTrackedPaymentUrls(), listReimportConfigs()]);
       const now = Date.now();
-      const lastCheckedByUrl = new Map(tracked.map((t) => [t.sourceUrl, t.lastCheckedAt]));
       // Keep the rest of the app current even on a tick that finds nothing
       // due — cheap, since `tracked`/`configs` were just fetched anyway.
       setTrackedFiles(tracked);
       setReimportConfigs(configs);
 
-      const dueUrls = new Set(
-        configs.filter((c) => isConfigDue(c, lastCheckedByUrl.get(c.sourceUrl), now)).map((c) => c.sourceUrl),
-      );
-      const dueTracked = tracked.filter((t) => dueUrls.has(t.sourceUrl));
-      if (dueTracked.length > 0) await runChecks(dueTracked);
+      const trackedByUrl = new Map(tracked.map((t) => [t.sourceUrl, t]));
+      const dueConfigsByUrl = new Map<string, ReimportConfig[]>();
+      for (const c of configs) {
+        if (!isConfigDue(c, now)) continue;
+        const list = dueConfigsByUrl.get(c.sourceUrl) ?? [];
+        list.push(c);
+        dueConfigsByUrl.set(c.sourceUrl, list);
+      }
+      const work: { t: TrackedPaymentUrl; configs: ReimportConfig[] }[] = [];
+      for (const [sourceUrl, dueConfigs] of dueConfigsByUrl) {
+        const t = trackedByUrl.get(sourceUrl);
+        if (t) work.push({ t, configs: dueConfigs });
+      }
+      if (work.length > 0) await runChecks(work);
       setTickError(null);
     } catch (e) {
-      // Unlike a per-URL check failure (always captured via
+      // Unlike a per-config check failure (always captured via
       // logUrlCheckResult, tied to that URL's own row/history), a failure
       // here has no specific URL to attach a history entry to — this is the
       // only place that kind of failure is visible at all, so it's kept
@@ -541,18 +577,32 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
     }
   }, [runChecks]);
 
-  const forceCheckUrl = useCallback(
-    async (sourceUrl: string) => {
-      const target = trackedFiles.find((t) => t.sourceUrl === sourceUrl);
-      if (!target) return;
-      await runChecks([target]);
+  /** Fetches fresh rather than trusting React state — this can run right after a config/tracking change the page's own state hasn't necessarily settled from yet. */
+  const forceCheckConfig = useCallback(
+    async (configId: number) => {
+      const configs = await listReimportConfigs();
+      const config = configs.find((c) => c.id === configId);
+      if (!config) return;
+      const tracked = await listTrackedPaymentUrls();
+      const t = tracked.find((f) => f.sourceUrl === config.sourceUrl);
+      if (!t) return;
+      await runChecks([{ t, configs: [config] }]);
     },
-    [trackedFiles, runChecks],
+    [runChecks],
   );
 
   const forceCheckAll = useCallback(async () => {
-    await runChecks(trackedFiles);
-  }, [trackedFiles, runChecks]);
+    const [tracked, configs] = await Promise.all([listTrackedPaymentUrls(), listReimportConfigs()]);
+    const activeConfigsByUrl = new Map<string, ReimportConfig[]>();
+    for (const c of configs) {
+      if (c.checkDisabled) continue;
+      const list = activeConfigsByUrl.get(c.sourceUrl) ?? [];
+      list.push(c);
+      activeConfigsByUrl.set(c.sourceUrl, list);
+    }
+    const work = tracked.map((t) => ({ t, configs: activeConfigsByUrl.get(t.sourceUrl) ?? [] }));
+    await runChecks(work);
+  }, [runChecks]);
 
   useEffect(() => {
     ensureNotificationPermission();
@@ -664,9 +714,9 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
         deleteReimportConfig,
         untrackUrl,
         refreshNow: tick,
-        checking: checkingUrls.size > 0,
-        checkingUrls,
-        forceCheckUrl,
+        checking: checkingConfigIds.size > 0,
+        checkingConfigIds,
+        forceCheckConfig,
         forceCheckAll,
         trackedFiles,
         reimportConfigs,

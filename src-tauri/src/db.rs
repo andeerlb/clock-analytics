@@ -376,5 +376,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0062_client_payment_rules.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 63,
+            description: "add source_url_check_log_configs — which reimport configs a check attempt actually evaluated, so due-ness and history become per-config instead of shared per URL",
+            sql: include_str!("../migrations/0063_source_url_check_log_configs.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
