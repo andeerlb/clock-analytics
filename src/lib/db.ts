@@ -887,6 +887,51 @@ export async function updateEmployee(
   ]);
 }
 
+export interface EmployeeHistoryCounts {
+  paymentShifts: number;
+  timesheetImports: number;
+}
+
+/** Counts everything `deleteEmployee` would wipe along with the colaborador — shown in its confirm modal so the deletion's real scope is never a surprise. */
+export async function countEmployeeHistory(employeeId: number): Promise<EmployeeHistoryCounts> {
+  const db = await getDb();
+  const shifts = await db.select<{ count: number }[]>("SELECT COUNT(*) AS count FROM payment_shifts WHERE employee_id = $1", [
+    employeeId,
+  ]);
+  const imports = await db.select<{ count: number }[]>("SELECT COUNT(*) AS count FROM imports WHERE employee_id = $1", [
+    employeeId,
+  ]);
+  return { paymentShifts: shifts[0].count, timesheetImports: imports[0].count };
+}
+
+/**
+ * Hard-deletes a colaborador and everything tied to them: cartões de ponto
+ * (imports, plus their day_records/punches), turnos de pagamento
+ * (payment_shifts — the real rows, not the usual soft `deleted_at`, since
+ * there's no colaborador left for a soft-deleted row to still belong to),
+ * and apelidos. Cascades done by hand rather than relying on
+ * `ON DELETE CASCADE`, same reasoning as `deleteImport` — sqlite only
+ * enforces foreign keys when `PRAGMA foreign_keys = ON` was set on the
+ * connection, which isn't guaranteed here. Irreversible.
+ */
+export async function deleteEmployee(employeeId: number): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `DELETE FROM punches WHERE day_record_id IN (
+       SELECT id FROM day_records WHERE import_id IN (SELECT id FROM imports WHERE employee_id = $1)
+     )`,
+    [employeeId],
+  );
+  await db.execute(
+    "DELETE FROM day_records WHERE import_id IN (SELECT id FROM imports WHERE employee_id = $1)",
+    [employeeId],
+  );
+  await db.execute("DELETE FROM imports WHERE employee_id = $1", [employeeId]);
+  await db.execute("DELETE FROM payment_shifts WHERE employee_id = $1", [employeeId]);
+  await db.execute("DELETE FROM employee_aliases WHERE employee_id = $1", [employeeId]);
+  await db.execute("DELETE FROM employees WHERE id = $1", [employeeId]);
+}
+
 /**
  * Moves a colaborador's home cadastro to a different cliente/empresa — safe
  * to do after the client/company snapshot migration (0060/0061): every

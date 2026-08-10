@@ -1,10 +1,13 @@
-import { Plus, X } from "lucide-react";
+import { Plus, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
+import ConfirmModal from "../components/ConfirmModal";
 import {
   addEmployeeAlias,
+  countEmployeeHistory,
   createEmployeeManual,
+  deleteEmployee,
   getEmployee,
   listClients,
   listEmployeeAliases,
@@ -12,6 +15,7 @@ import {
   updateEmployee,
   type ClientRow,
   type EmployeeAliasRow,
+  type EmployeeHistoryCounts,
 } from "../lib/db";
 import { maskCpf } from "../lib/format";
 
@@ -55,6 +59,34 @@ export default function EmployeeFormPage() {
   const [newAlias, setNewAlias] = useState("");
   const [aliasBusy, setAliasBusy] = useState(false);
   const [aliasError, setAliasError] = useState<string | null>(null);
+
+  // "Excluir colaborador" — irreversible, wipes payment_shifts/imports too
+  // (see `deleteEmployee`), so the confirm modal shows exactly how much of
+  // that this colaborador actually has before the user commits.
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [historyCounts, setHistoryCounts] = useState<EmployeeHistoryCounts | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function handleOpenDeleteConfirm() {
+    setDeleteError(null);
+    setHistoryCounts(null);
+    setDeleteConfirmOpen(true);
+    setHistoryCounts(await countEmployeeHistory(Number(id)));
+  }
+
+  async function handleConfirmDelete() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteEmployee(Number(id));
+      navigate("/employees");
+    } catch (e) {
+      setDeleteError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   useEffect(() => {
     if (isEditing) {
@@ -316,6 +348,37 @@ export default function EmployeeFormPage() {
             </button>
           </form>
         </div>
+      )}
+
+      {!loading && isEditing && (
+        <div className="card" style={{ maxWidth: "32rem", marginTop: "1.2rem", borderColor: "var(--danger)" }}>
+          <h3 style={{ marginTop: 0 }}>Excluir colaborador</h3>
+          <p className="page-subtitle" style={{ marginTop: 0 }}>
+            Remove {name || "este colaborador"} do cadastro, junto com todo o histórico
+            vinculado a ele — turnos de pagamento, cartões de ponto e apelidos. Não pode ser
+            desfeito.
+          </p>
+          <button type="button" className="danger" onClick={handleOpenDeleteConfirm}>
+            <Trash2 size={14} style={{ marginRight: "0.4rem" }} />
+            Excluir colaborador
+          </button>
+        </div>
+      )}
+
+      {deleteConfirmOpen && (
+        <ConfirmModal
+          title="Excluir colaborador?"
+          message={
+            historyCounts === null
+              ? "Carregando o que será excluído junto..."
+              : `Isso exclui ${name || "este colaborador"} permanentemente, junto com ${historyCounts.paymentShifts} turno(s) de pagamento e ${historyCounts.timesheetImports} cartão(ões) de ponto já importados, além dos apelidos cadastrados. Não pode ser desfeito.`
+          }
+          confirmLabel={deleting ? "Excluindo..." : "Excluir colaborador"}
+          confirmDisabled={deleting || historyCounts === null}
+          onConfirm={handleConfirmDelete}
+          onCancel={() => setDeleteConfirmOpen(false)}
+          error={deleteError}
+        />
       )}
     </div>
   );
