@@ -2177,9 +2177,25 @@ tr.row-error:hover {
   border: none;
   padding: 0;
 }
+/* Plays once, the moment a bar is actually inserted into the DOM — since
+   React matches existing bars by `key={entry.id}` across re-renders, a check
+   that's already been showing just slides position without remounting (no
+   replay); only a genuinely new check result mounts fresh and animates in,
+   so this reads as "a new result just landed" instead of a generic reveal. */
+@keyframes history-bar-enter {
+  0% {
+    transform: translateX(-28px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
 button.history-bar {
   cursor: pointer;
   transition: filter 0.15s ease;
+  animation: history-bar-enter 0.9s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 button.history-bar:hover {
   filter: brightness(1.3);

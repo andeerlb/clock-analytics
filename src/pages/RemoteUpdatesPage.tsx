@@ -628,7 +628,7 @@ export default function RemoteUpdatesPage() {
                         // here just because it happened to be checked too.
                         const configHistory = historyByConfig.get(c.id);
                         const configHistoryBars = configHistory
-                          ? [...configHistory.rows].reverse().map((h) => ({
+                          ? configHistory.rows.map((h) => ({
                               entry: h,
                               diffCount: h.diffCount,
                               failed: h.message !== null || h.hasOwnError,
