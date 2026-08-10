@@ -2,6 +2,77 @@ use tauri_plugin_sql::{Migration, MigrationKind};
 
 pub const DB_URL: &str = "sqlite:pontoscan.db";
 
+/// One-time startup repair for migration 67 (`employees.UNIQUE(company_id, cpf)`
+/// widened to `(company_id, client_id, cpf)`): an earlier shipped build of
+/// this migration used `PRAGMA foreign_keys=OFF` to allow rebuilding the
+/// `employees` table, which is a documented no-op mid-transaction — every
+/// migration runs inside one (`tauri-plugin-sql`/sqlx always wraps them) —
+/// so on some machines that PRAGMA silently did nothing and the table
+/// rebuild failed outright (`FOREIGN KEY constraint failed`), while on at
+/// least one other it appears to have partially gone through: the schema
+/// ended up correctly widened, but sqlx's own bookkeeping row for version
+/// 67 in `_sqlx_migrations` doesn't match this file's current (corrected,
+/// verified) content. Left alone, that mismatch makes sqlx refuse to start
+/// at all (`MigrateError::VersionMismatch`) instead of just re-running
+/// cleanly.
+///
+/// This runs BEFORE the frontend ever calls `Database.load()` (the actual
+/// trigger for tauri-plugin-sql's own migration pass) — from this app's own
+/// `.setup()` hook, using a throwaway `sqlx` connection instead of the
+/// managed pool that plugin owns. It's pure repair, not a duplicate
+/// migration path: if `employees` doesn't yet show the widened constraint
+/// (a fresh install, or a database where migration 67 cleanly failed and
+/// rolled back with no trace — the common case), this does nothing and the
+/// real migrator runs migration 67 completely normally. It only acts when
+/// the schema is ALREADY fixed but the bookkeeping is stale, clearing just
+/// that one row so the real migrator treats version 67 as pending again and
+/// re-applies this file's (idempotent — verified against a full production
+/// data copy, byte-for-byte) content fresh.
+pub fn repair_stale_migration_67(db_path: &std::path::Path) {
+    if !db_path.exists() {
+        return; // Fresh install — nothing to repair, nothing to check.
+    }
+    let Some(db_path_str) = db_path.to_str() else { return };
+    let url = format!("sqlite:{db_path_str}");
+
+    tauri::async_runtime::block_on(async move {
+        use sqlx::{Connection, Row};
+
+        let Ok(mut conn) = sqlx::sqlite::SqliteConnection::connect(&url).await else {
+            return; // Best-effort — let the real migrator surface any real connection problem.
+        };
+
+        let has_migrations_table: bool = sqlx::query_scalar(
+            "SELECT count(*) > 0 FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations'",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .unwrap_or(false);
+        if !has_migrations_table {
+            return; // Never migrated at all yet — nothing stale to clean up.
+        }
+
+        let employees_sql: Option<String> = sqlx::query("SELECT sql FROM sqlite_master WHERE type='table' AND name='employees'")
+            .fetch_optional(&mut conn)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|row| row.try_get::<String, _>(0).ok());
+
+        // Whitespace-insensitive check for the widened 3-column UNIQUE —
+        // exact formatting doesn't matter, only that client_id made it in.
+        let already_fixed = employees_sql
+            .map(|sql| sql.chars().filter(|c| !c.is_whitespace()).collect::<String>())
+            .is_some_and(|normalized| normalized.contains("UNIQUE(company_id,client_id,cpf)"));
+
+        if already_fixed {
+            let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 67")
+                .execute(&mut conn)
+                .await;
+        }
+    });
+}
+
 pub fn migrations() -> Vec<Migration> {
     vec![
         Migration {

@@ -83,6 +83,14 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            // Runs before the webview/frontend ever calls `Database.load()`
+            // (the JS trigger for tauri-plugin-sql's own migration pass) —
+            // see `db::repair_stale_migration_67` for why this needs to
+            // exist at all.
+            if let Ok(config_dir) = app.path().app_config_dir() {
+                db::repair_stale_migration_67(&config_dir.join("pontoscan.db"));
+            }
+
             // Always present (regardless of the "Minimizar na bandeja ao
             // fechar" setting) — it's the only way back once a close has
             // been turned into a hide, and a "Sair" that actually quits.

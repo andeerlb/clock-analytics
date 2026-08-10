@@ -1,5 +1,5 @@
-import { Bell } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Bell, ChevronRight } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { deletePaymentShift, dismissCheckDiffs, listAllLatestShiftDiffs, type CheckDiffRow } from "../lib/db";
@@ -7,28 +7,52 @@ import { acceptShiftChange } from "../lib/remoteCheckDiff";
 import ChangeDiffPanel from "./ChangeDiffPanel";
 import Drawer from "./Drawer";
 
+/** `.app-nav`'s own width (App.css) — the floating card can be dragged anywhere EXCEPT over the sidebar; that column is real layout, not an overlay, so this is the one thing that never moves either. */
+const SIDEBAR_WIDTH = 220;
+/** Minimum gap kept between the card and the sidebar/viewport edges while dragging. */
+const CARD_MARGIN = 8;
+/** Above every modal in the app (the highest, ConfirmModal/Drawer's own overlay, is 200) — a full-screen wizard (PaymentTemplateWizard etc., z-index 100) used to tie with the old sidebar-edge tab and could paint over it; this always wins. */
+const CARD_Z_INDEX = 250;
+
+function clampCardPosition(top: number, left: number, width: number, height: number): { top: number; left: number } {
+  const minLeft = SIDEBAR_WIDTH + CARD_MARGIN;
+  const maxLeft = Math.max(minLeft, window.innerWidth - width - CARD_MARGIN);
+  const minTop = CARD_MARGIN;
+  const maxTop = Math.max(minTop, window.innerHeight - height - CARD_MARGIN);
+  return {
+    left: Math.min(Math.max(left, minLeft), maxLeft),
+    top: Math.min(Math.max(top, minTop), maxTop),
+  };
+}
+
 /**
- * "Você tem atualizações pendentes" tab, mounted once at the app root (see
- * `App.tsx`) — glued to the sidebar's right edge (`.sidebar-tab` in
- * App.css), not floating loose over the page. Shows up whenever the
- * automatic verification found ANYTHING on its last pass over ANY tracked
- * URL: a changed field, a possible new turno, a possible removal, an
- * unresolved row, or an error — pending or already auto-applied, anywhere
- * in the system (see `listAllLatestShiftDiffs`), not just on whatever
- * screen happens to be open right now. Refreshed on the same `trackedFiles`
- * signal `PaymentsPage` already uses to stay live (a fresh reference every
- * time a background check batch finishes). Hidden on the Verificação
- * automática page itself, which already shows all of this in full detail.
+ * "Você tem atualizações pendentes" card, mounted once at the app root (see
+ * `App.tsx`) — floats freely over the page (drag it anywhere by the card
+ * itself; a plain click, no real movement, opens the Drawer instead — see
+ * `handlePointerUp`'s movement threshold). Starts in the top-right corner
+ * each fresh session; wherever it's dragged to afterward is where it stays
+ * until the app restarts (position lives in plain component state, not
+ * persisted). Can't be dragged over the sidebar — that's real layout, not
+ * something floating over it — and always renders above every modal in the
+ * app (`CARD_Z_INDEX`), including a full-screen wizard, which the OLD
+ * sidebar-edge version could end up painted under.
  *
- * Clicking stretches the tab like a rubber band anchored at the sidebar
- * edge, snaps it back, and fades it out (`.sidebar-tab-spring`) before the
- * Drawer takes over — reappears on its own once the Drawer closes, if
- * `rows` still has anything in it by then. The Drawer itself is grouped by
- * colaborador/turno (each card is already one turno — `ChangeDiffPanel`'s
- * own identity grouping does this for free) and offers the same
- * "Aceitar"/"Marcar como excluído" actions as the Pagamentos page's own
- * review Drawer — no need to go find the row over there just to act on
- * something spotted from here.
+ * Shows up whenever the automatic verification found ANYTHING on its last
+ * pass over ANY tracked URL: a changed field, a possible new turno, a
+ * possible removal, an unresolved row, or an error — pending or already
+ * auto-applied, anywhere in the system (see `listAllLatestShiftDiffs`), not
+ * just on whatever screen happens to be open right now. Refreshed on the
+ * same `trackedFiles` signal `PaymentsPage` already uses to stay live (a
+ * fresh reference every time a background check batch finishes). Hidden on
+ * the Verificação automática page itself, which already shows all of this
+ * in full detail — and, same as before, hides entirely once nothing's
+ * unseen (unless the Drawer is already open, which then just stays open).
+ *
+ * The Drawer itself is grouped by colaborador/turno (each card is already
+ * one turno — `ChangeDiffPanel`'s own identity grouping does this for free)
+ * and offers the same "Aceitar"/"Marcar como excluído" actions as the
+ * Pagamentos page's own review Drawer — no need to go find the row over
+ * there just to act on something spotted from here.
  */
 export default function PendingChangesTab() {
   const location = useLocation();
@@ -36,7 +60,6 @@ export default function PendingChangesTab() {
   const { trackedFiles, reimportConfigs } = useRemoteFileUpdates();
   const [rows, setRows] = useState<CheckDiffRow[]>([]);
   const [open, setOpen] = useState(false);
-  const [springing, setSpringing] = useState(false);
 
   const [acceptingShiftId, setAcceptingShiftId] = useState<number | null>(null);
   const [acceptedShiftIds, setAcceptedShiftIds] = useState<Set<number>>(new Set());
@@ -45,28 +68,59 @@ export default function PendingChangesTab() {
   const [dismissingIds, setDismissingIds] = useState<Set<number>>(new Set());
   const [actionError, setActionError] = useState<string | null>(null);
 
-  // A full-screen wizard/modal (e.g. PaymentTemplateWizard — `position:
-  // fixed; inset: 0` at the same z-index as this tab) visually covers the
-  // sidebar without removing it from the DOM, so measuring the sidebar's
-  // own layout wouldn't notice anything changed. Instead this just asks the
-  // browser what's actually on top at a point inside where the sidebar
-  // would be — if it's not part of `.app-nav`, something is covering it, so
-  // the tab glues to the real screen edge instead of the sidebar's (now
-  // hidden) one. Polled rather than event-driven since a modal opening
-  // doesn't fire any event this could listen for.
-  const [sidebarCovered, setSidebarCovered] = useState(false);
+  // Drag state — `position` is `null` until the very first drag, meaning
+  // "use the CSS top-right default" (`top`/`right` in the style below);
+  // once dragged, it switches to explicit pixel `top`/`left` and stays that
+  // way for the rest of the session. `isDragging` is only for the cursor
+  // style; `dragRef`/`movedRef` don't need to trigger re-renders, so they
+  // stay in refs.
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useRef<{ pointerX: number; pointerY: number; cardLeft: number; cardTop: number } | null>(null);
+  const movedRef = useRef(false);
+
+  function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    const el = cardRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    movedRef.current = false;
+    dragStartRef.current = { pointerX: e.clientX, pointerY: e.clientY, cardLeft: rect.left, cardTop: rect.top };
+    setIsDragging(true);
+    el.setPointerCapture(e.pointerId);
+  }
+
+  function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    const start = dragStartRef.current;
+    const el = cardRef.current;
+    if (!start || !el) return;
+    const dx = e.clientX - start.pointerX;
+    const dy = e.clientY - start.pointerY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) movedRef.current = true;
+    const rect = el.getBoundingClientRect();
+    setPosition(clampCardPosition(start.cardTop + dy, start.cardLeft + dx, rect.width, rect.height));
+  }
+
+  function handlePointerUp() {
+    setIsDragging(false);
+    dragStartRef.current = null;
+    if (!movedRef.current) setOpen(true);
+  }
+
+  // Re-clamps after a window resize — a position saved before shrinking the
+  // window could otherwise land off-screen or over the sidebar.
   useEffect(() => {
-    function checkSidebarCovered() {
-      const el = document.elementFromPoint(110, window.innerHeight / 2);
-      setSidebarCovered(!el?.closest(".app-nav"));
+    function handleResize() {
+      const el = cardRef.current;
+      if (!el) return;
+      setPosition((prev) => {
+        if (!prev) return prev;
+        const rect = el.getBoundingClientRect();
+        return clampCardPosition(prev.top, prev.left, rect.width, rect.height);
+      });
     }
-    checkSidebarCovered();
-    const interval = setInterval(checkSidebarCovered, 400);
-    window.addEventListener("resize", checkSidebarCovered);
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener("resize", checkSidebarCovered);
-    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
   }, []);
 
   useEffect(() => {
@@ -83,14 +137,6 @@ export default function PendingChangesTab() {
 
   if (location.pathname === "/remote-updates/imports") return null;
   if (unseenRows.length === 0 && !open) return null;
-
-  function handleClick() {
-    setSpringing(true);
-    setTimeout(() => {
-      setSpringing(false);
-      setOpen(true);
-    }, 500);
-  }
 
   async function refreshRows() {
     setRows(await listAllLatestShiftDiffs());
@@ -164,46 +210,33 @@ export default function PendingChangesTab() {
   return (
     <>
       {!open && (
-        <button
-          type="button"
-          onClick={handleClick}
-          disabled={springing}
-          className={`sidebar-tab${springing ? " sidebar-tab-spring" : ""}`}
-          title={`Você tem ${unseenRows.length} atualização${unseenRows.length === 1 ? "" : "ões"} pendente${unseenRows.length === 1 ? "" : "s"} — clique para revisar`}
+        <div
+          ref={cardRef}
+          className="pending-changes-card"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          title={`Você tem ${unseenRows.length} atualização${unseenRows.length === 1 ? "" : "ões"} pendente${unseenRows.length === 1 ? "" : "s"} — clique para revisar, ou arraste pra mover`}
           style={{
-            left: sidebarCovered ? 0 : undefined,
-            display: "flex",
-            alignItems: "center",
-            gap: "0.4rem",
-            border: "1px solid var(--border)",
-            borderLeft: "none",
-            borderRadius: "0 12px 12px 0",
-            background: "var(--sidebar-bg)",
-            color: "var(--text)",
-            padding: "0.55rem 0.8rem 0.55rem 0.6rem",
-            cursor: "pointer",
-            boxShadow: "0 6px 16px -4px rgba(0, 0, 0, 0.5)",
+            position: "fixed",
+            zIndex: CARD_Z_INDEX,
+            cursor: isDragging ? "grabbing" : "grab",
+            ...(position ? { top: position.top, left: position.left } : { top: 16, right: 16 }),
           }}
         >
-          <Bell size={16} style={{ color: "var(--warning)", flexShrink: 0 }} />
-          <span
-            style={{
-              minWidth: 18,
-              height: 18,
-              padding: "0 4px",
-              borderRadius: 9,
-              fontSize: "0.7rem",
-              fontWeight: 700,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "var(--danger)",
-              color: "var(--bg)",
-            }}
-          >
-            {unseenRows.length}
-          </span>
-        </button>
+          <div className="pending-changes-card-icon">
+            <Bell size={16} />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: "0.86rem" }}>
+              {unseenRows.length} atualização{unseenRows.length === 1 ? "" : "ões"} pendente{unseenRows.length === 1 ? "" : "s"}
+            </div>
+            <div className="muted" style={{ fontSize: "0.66rem", fontWeight: 700, letterSpacing: "0.05em", marginTop: "1px" }}>
+              CLIQUE PARA REVISAR
+            </div>
+          </div>
+          <ChevronRight size={16} className="muted" style={{ flexShrink: 0 }} />
+        </div>
       )}
 
       <Drawer
