@@ -21,7 +21,7 @@ import type {
   PaymentExportTemplateListRow,
   PaymentExportTemplateRow,
   PaymentFileKind,
-  PaymentTargetField,
+  PaymentRuleField,
   PaymentTemplateFieldMapping,
   PaymentTemplateGroup,
   PaymentTemplateListRow,
@@ -1763,10 +1763,14 @@ export async function listLatestFieldDiffsForShifts(shiftIds: number[]): Promise
 
 /**
  * Same "latest check per source_url" scoping as `listLatestFieldDiffsForShifts`,
- * but for EVERY shift in the system, not a specific set — feeds the global
- * "bolinha" indicator (`PendingChangesBall`), which needs to know about a
- * change regardless of whether the affected turno happens to be on screen
- * right now.
+ * but for EVERY shift in the system (not a specific set) AND every
+ * `change_kind` (not just `'field'`/`'removed'`) — feeds the global
+ * "bolinha" indicator (`PendingChangesBall`), which is meant to surface
+ * ANYTHING the last check found (a changed field, a possible new turno, a
+ * possible removal, an unresolved row, a whole-config/URL error), not just
+ * the subset that can paint an existing Pagamentos row. That narrower
+ * subset is exactly what `listLatestFieldDiffsForShifts` is for — this is
+ * the unfiltered version.
  */
 export async function listAllLatestShiftDiffs(): Promise<CheckDiffRow[]> {
   const db = await getDb();
@@ -1779,8 +1783,7 @@ export async function listAllLatestShiftDiffs(): Promise<CheckDiffRow[]> {
             d.field_name AS fieldName, d.old_value AS oldValue, d.new_value AS newValue, d.message, d.applied
      FROM source_url_check_diffs d
      JOIN source_url_check_log l ON l.id = d.check_log_id
-     WHERE d.change_kind IN ('field', 'removed')
-       AND l.id = (SELECT MAX(l2.id) FROM source_url_check_log l2 WHERE l2.source_url = l.source_url)
+     WHERE l.id = (SELECT MAX(l2.id) FROM source_url_check_log l2 WHERE l2.source_url = l.source_url)
      ORDER BY d.id DESC`,
   );
   return rows.map(parseCheckDiffRow);
@@ -1947,7 +1950,7 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
   const ruleRows = await db.select<
     {
       kind: PaymentTemplateRuleKind;
-      field: PaymentTargetField | null;
+      field: PaymentRuleField | null;
       valuesJson: string | null;
       caseInsensitive: number;
       companyId: number;
@@ -1975,7 +1978,7 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
   const statusRuleRows = await db.select<
     {
       kind: PaymentTemplateRuleKind;
-      field: PaymentTargetField | null;
+      field: PaymentRuleField | null;
       valuesJson: string | null;
       caseInsensitive: number;
       status: PaymentShiftStatus;
@@ -2006,7 +2009,7 @@ export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow
 
 export interface PaymentTemplateRuleInput {
   kind: PaymentTemplateRuleKind;
-  field: PaymentTargetField | null;
+  field: PaymentRuleField | null;
   values: string[];
   caseInsensitive: boolean;
   companyId: number;
@@ -2015,7 +2018,7 @@ export interface PaymentTemplateRuleInput {
 
 export interface PaymentTemplateStatusRuleInput {
   kind: PaymentTemplateRuleKind;
-  field: PaymentTargetField | null;
+  field: PaymentRuleField | null;
   values: string[];
   caseInsensitive: boolean;
   status: PaymentShiftStatus;

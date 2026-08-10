@@ -23,6 +23,7 @@ import {
   resolvePaymentStatus,
   resolveReimportConfigLabel,
   resolveReimportPeriod,
+  withSheetNameField,
 } from "./format";
 import type { PaymentShiftStatus } from "./types";
 
@@ -168,8 +169,9 @@ export async function computeReimportDiff(
     if ((periodStart && workDate < periodStart) || (periodEnd && workDate > periodEnd)) continue;
 
     const parsedSchedule = parseScheduleToMinutes(row.fields.horario ?? "");
+    const fieldsWithSheet = withSheetNameField(row.fields, row.sheetName);
 
-    const route = resolvePaymentRoute(template.rules, row.fields);
+    const route = resolvePaymentRoute(template.rules, fieldsWithSheet);
     if (!route) {
       unresolvedEntries.push(
         unresolvedEntry(
@@ -214,7 +216,7 @@ export async function computeReimportDiff(
       scheduleEndMinutes: parsedSchedule?.endMinutes ?? null,
       sheetName: row.sheetName,
       rowNumber: row.rowNumber,
-      status: resolvePaymentStatus(template.statusRules, row.fields) ?? "pendente",
+      status: resolvePaymentStatus(template.statusRules, fieldsWithSheet) ?? "pendente",
       extraFields: row.extraFields,
     });
   }

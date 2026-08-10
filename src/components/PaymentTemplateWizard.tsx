@@ -51,9 +51,11 @@ import {
   PAYMENT_TARGET_FIELDS,
   PAYMENT_TARGET_FIELD_LABELS,
   REQUIRED_PAYMENT_FIELDS,
+  SHEET_NAME_RULE_FIELD,
   type IdentifierAttempt,
   type IdentifierField,
   type PaymentFileKind,
+  type PaymentRuleField,
   type PaymentShiftStatus,
   type PaymentTargetField,
   type PaymentTemplateGroup,
@@ -97,7 +99,7 @@ const DATE_FORMAT_OPTIONS = ["DD/MM/YYYY", "DD/MM/YY", "YYYY-MM-DD", "MM/DD/YYYY
 /** The wizard's editable draft of one step in a template's if/else-if/else routing chain — see `PaymentTemplateRule` in types.ts for the saved shape. */
 interface WizardRule {
   kind: PaymentTemplateRuleKind;
-  field: PaymentTargetField;
+  field: PaymentRuleField;
   /** Raw comma-separated input; ignored when `kind === "else"`. */
   valuesText: string;
   /** Ignored when `kind === "else"`. */
@@ -121,7 +123,7 @@ function isRuleValid(r: WizardRule): boolean {
  */
 interface WizardStatusRule {
   kind: PaymentTemplateRuleKind;
-  field: PaymentTargetField;
+  field: PaymentRuleField;
   /** Raw comma-separated input; ignored when `kind === "else"`. Left blank, matches rows where the mapped field is itself empty — see `resolvePaymentStatus`. */
   valuesText: string;
   /** Ignored when `kind === "else"`. */
@@ -1545,13 +1547,14 @@ export default function PaymentTemplateWizard({
                               <select
                                 className="glass-input"
                                 value={rule.field}
-                                onChange={(e) => updateRule(i, { field: e.target.value as PaymentTargetField })}
+                                onChange={(e) => updateRule(i, { field: e.target.value as PaymentRuleField })}
                               >
                                 {PAYMENT_TARGET_FIELDS.map((f) => (
                                   <option key={f} value={f}>
                                     {PAYMENT_TARGET_FIELD_LABELS[f]}
                                   </option>
                                 ))}
+                                <option value={SHEET_NAME_RULE_FIELD}>Aba (nome da planilha)</option>
                               </select>
                             </div>
                             <div className="field-code">
@@ -1685,7 +1688,7 @@ export default function PaymentTemplateWizard({
                                   className="glass-input"
                                   value={rule.field}
                                   onChange={(e) =>
-                                    updateStatusRule(i, { field: e.target.value as PaymentTargetField })
+                                    updateStatusRule(i, { field: e.target.value as PaymentRuleField })
                                   }
                                 >
                                   {PAYMENT_TARGET_FIELDS.map((f) => (
@@ -1693,6 +1696,7 @@ export default function PaymentTemplateWizard({
                                       {PAYMENT_TARGET_FIELD_LABELS[f]}
                                     </option>
                                   ))}
+                                  <option value={SHEET_NAME_RULE_FIELD}>Aba (nome da planilha)</option>
                                 </select>
                               </div>
                               <div className="field-code">

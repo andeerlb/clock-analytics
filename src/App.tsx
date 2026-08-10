@@ -2,7 +2,7 @@ import { AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { HashRouter, Link, Route, Routes } from "react-router-dom";
 import "./App.css";
-import PendingChangesBall from "./components/PendingChangesBall";
+import PendingChangesTab from "./components/PendingChangesTab";
 import Sidebar from "./components/Sidebar";
 import { FiltersProvider } from "./contexts/FiltersContext";
 import { RemoteFileUpdatesProvider } from "./contexts/RemoteFileUpdatesContext";
@@ -82,7 +82,7 @@ function App() {
                 <Route path="/settings" element={<SettingsPage />} />
               </Routes>
             </main>
-            <PendingChangesBall />
+            <PendingChangesTab />
           </div>
         </RemoteFileUpdatesProvider>
       </FiltersProvider>

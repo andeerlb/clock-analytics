@@ -1,10 +1,11 @@
 import { addDaysIso, todayUtc, toIso } from "./calendar";
-import type {
-  NightShiftRule,
-  PaymentShiftStatus,
-  PaymentValueRuleCondition,
-  PaymentValueRuleOperator,
-  ShiftPeriod,
+import {
+  SHEET_NAME_RULE_FIELD,
+  type NightShiftRule,
+  type PaymentShiftStatus,
+  type PaymentValueRuleCondition,
+  type PaymentValueRuleOperator,
+  type ShiftPeriod,
 } from "./types";
 
 /** 120 -> "R$ 120,00" */
@@ -515,6 +516,19 @@ export function classifyShiftPeriod(
       break;
   }
   return isNoturno ? "noturno" : "diurno";
+}
+
+/**
+ * Merges the `SHEET_NAME_RULE_FIELD` ("aba") pseudo-field into a parsed
+ * row's mapped fields, keyed to the aba/sheet name it came from — so
+ * `resolvePaymentRoute`/`resolvePaymentStatus`'s generic `fields[rule.field]`
+ * lookup can match a rule keyed on the row's aba without either function
+ * needing to special-case it. Every caller that builds a rule-evaluable
+ * `fields` object from a freshly parsed row should run it through this
+ * first (see `remoteCheckDiff.ts`/`ImportPaymentsPage.handleProcess`).
+ */
+export function withSheetNameField(fields: Record<string, string>, sheetName: string | null): Record<string, string> {
+  return { ...fields, [SHEET_NAME_RULE_FIELD]: sheetName ?? "" };
 }
 
 /**

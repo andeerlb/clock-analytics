@@ -292,6 +292,20 @@ export const PAYMENT_TARGET_FIELD_LABELS: Record<PaymentTargetField, string> = {
   status: "Status",
 };
 
+/**
+ * Sentinel `field` value a routing/status rule condition can key off of
+ * that ISN'T one of the template's mapped columns — the aba/sheet name a
+ * row came from (see `PaymentTemplateGroup.sheetNames`). Kept distinct from
+ * `PaymentTargetField` on purpose: it has no business showing up in the
+ * column-mapping UI ("map this column to Aba" doesn't mean anything — the
+ * aba is implicit, never read from a cell), only in a rule's own
+ * "Se [Campo]" selector. See `withSheetNameField` (format.ts) for how a
+ * parsed row's fields actually pick this up before a rule ever sees it.
+ */
+export const SHEET_NAME_RULE_FIELD = "aba";
+
+export type PaymentRuleField = PaymentTargetField | typeof SHEET_NAME_RULE_FIELD;
+
 export interface PaymentTemplateFieldMapping {
   columnLetter: string;
   targetField: PaymentTargetField;
@@ -345,7 +359,7 @@ export type PaymentTemplateRuleKind = "condition" | "else";
 
 export interface PaymentTemplateRule {
   kind: PaymentTemplateRuleKind;
-  field: PaymentTargetField | null;
+  field: PaymentRuleField | null;
   values: string[];
   /** Whether matching `values` against a row's field folds case — ignored when `kind === "else"`. */
   caseInsensitive: boolean;
@@ -365,7 +379,7 @@ export interface PaymentTemplateRule {
  */
 export interface PaymentStatusRule {
   kind: PaymentTemplateRuleKind;
-  field: PaymentTargetField | null;
+  field: PaymentRuleField | null;
   values: string[];
   /** Whether matching `values` against a row's field folds case — ignored when `kind === "else"`. */
   caseInsensitive: boolean;

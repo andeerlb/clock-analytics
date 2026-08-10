@@ -64,6 +64,7 @@ import {
   resolvePaymentRoute,
   resolvePaymentStatus,
   safeDecodeFileName,
+  withSheetNameField,
 } from "../lib/format";
 import {
   PAYMENT_SHIFT_STATUS_LABELS,
@@ -757,6 +758,7 @@ export default function ImportPaymentsPage() {
               : null;
             const scheduleRaw = applied_row.fields.horario ?? "";
             const parsedSchedule = parseScheduleToMinutes(scheduleRaw);
+            const fieldsWithSheet = withSheetNameField(applied_row.fields, applied_row.sheetName);
             const base = {
               fileHash,
               fileName,
@@ -769,8 +771,7 @@ export default function ImportPaymentsPage() {
               scheduleStartMinutes: parsedSchedule?.startMinutes ?? null,
               scheduleEndMinutes: parsedSchedule?.endMinutes ?? null,
               workDateRaw,
-              paymentStatus:
-                resolvePaymentStatus(selectedTemplate.statusRules, applied_row.fields) ?? "pendente",
+              paymentStatus: resolvePaymentStatus(selectedTemplate.statusRules, fieldsWithSheet) ?? "pendente",
               extraFields: applied_row.extraFields,
               // Filled in below, once `findDuplicatePaymentShifts` has actually run against the batch.
               matchedShiftId: null,
@@ -811,7 +812,7 @@ export default function ImportPaymentsPage() {
             // Which company/client this row belongs to is resolved here,
             // per row, by walking the template's if/else-if/else rule
             // chain — there's no upfront cliente/empresa choice anymore.
-            const route = resolvePaymentRoute(selectedTemplate.rules, applied_row.fields);
+            const route = resolvePaymentRoute(selectedTemplate.rules, fieldsWithSheet);
             const cpf = applied_row.fields.cpf || null;
             const matricula = applied_row.fields.matricula || null;
             const nome = applied_row.fields.nome || null;
