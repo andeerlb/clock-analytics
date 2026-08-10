@@ -887,23 +887,6 @@ export async function updateEmployee(
   ]);
 }
 
-export interface EmployeeHistoryCounts {
-  paymentShifts: number;
-  timesheetImports: number;
-}
-
-/** Counts everything `deleteEmployee` would wipe along with the colaborador — shown in its confirm modal so the deletion's real scope is never a surprise. */
-export async function countEmployeeHistory(employeeId: number): Promise<EmployeeHistoryCounts> {
-  const db = await getDb();
-  const shifts = await db.select<{ count: number }[]>("SELECT COUNT(*) AS count FROM payment_shifts WHERE employee_id = $1", [
-    employeeId,
-  ]);
-  const imports = await db.select<{ count: number }[]>("SELECT COUNT(*) AS count FROM imports WHERE employee_id = $1", [
-    employeeId,
-  ]);
-  return { paymentShifts: shifts[0].count, timesheetImports: imports[0].count };
-}
-
 /**
  * Hard-deletes a colaborador and everything tied to them: cartões de ponto
  * (imports, plus their day_records/punches), turnos de pagamento

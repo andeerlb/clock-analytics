@@ -5,7 +5,6 @@ import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
 import {
   addEmployeeAlias,
-  countEmployeeHistory,
   createEmployeeManual,
   deleteEmployee,
   getEmployee,
@@ -15,7 +14,6 @@ import {
   updateEmployee,
   type ClientRow,
   type EmployeeAliasRow,
-  type EmployeeHistoryCounts,
 } from "../lib/db";
 import { maskCpf } from "../lib/format";
 
@@ -61,19 +59,11 @@ export default function EmployeeFormPage() {
   const [aliasError, setAliasError] = useState<string | null>(null);
 
   // "Excluir colaborador" — irreversible, wipes payment_shifts/imports too
-  // (see `deleteEmployee`), so the confirm modal shows exactly how much of
-  // that this colaborador actually has before the user commits.
+  // (see `deleteEmployee`). No count query first — the confirm message
+  // just names what categories of data go with it, not exact numbers.
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [historyCounts, setHistoryCounts] = useState<EmployeeHistoryCounts | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-
-  async function handleOpenDeleteConfirm() {
-    setDeleteError(null);
-    setHistoryCounts(null);
-    setDeleteConfirmOpen(true);
-    setHistoryCounts(await countEmployeeHistory(Number(id)));
-  }
 
   async function handleConfirmDelete() {
     setDeleting(true);
@@ -358,7 +348,7 @@ export default function EmployeeFormPage() {
             vinculado a ele — turnos de pagamento, cartões de ponto e apelidos. Não pode ser
             desfeito.
           </p>
-          <button type="button" className="danger" onClick={handleOpenDeleteConfirm}>
+          <button type="button" className="danger" onClick={() => setDeleteConfirmOpen(true)}>
             <Trash2 size={14} style={{ marginRight: "0.4rem" }} />
             Excluir colaborador
           </button>
@@ -368,13 +358,9 @@ export default function EmployeeFormPage() {
       {deleteConfirmOpen && (
         <ConfirmModal
           title="Excluir colaborador?"
-          message={
-            historyCounts === null
-              ? "Carregando o que será excluído junto..."
-              : `Isso exclui ${name || "este colaborador"} permanentemente, junto com ${historyCounts.paymentShifts} turno(s) de pagamento e ${historyCounts.timesheetImports} cartão(ões) de ponto já importados, além dos apelidos cadastrados. Não pode ser desfeito.`
-          }
+          message={`Isso exclui ${name || "este colaborador"} permanentemente, junto com todo o histórico vinculado a ele — turnos de pagamento, cartões de ponto e apelidos cadastrados. Não pode ser desfeito.`}
           confirmLabel={deleting ? "Excluindo..." : "Excluir colaborador"}
-          confirmDisabled={deleting || historyCounts === null}
+          confirmDisabled={deleting}
           onConfirm={handleConfirmDelete}
           onCancel={() => setDeleteConfirmOpen(false)}
           error={deleteError}
