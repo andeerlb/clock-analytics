@@ -400,5 +400,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0066_dismissed_diff_fingerprints.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 67,
+            description: "employees.UNIQUE(company_id, cpf) widened to (company_id, client_id, cpf) — the old constraint predated client_id and blocked creating/moving an employee into a company that already has a different employee sharing that CPF under a different client, even though the app's own duplicate checks are already client-scoped",
+            sql: include_str!("../migrations/0067_employee_unique_per_client.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

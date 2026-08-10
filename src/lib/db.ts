@@ -926,6 +926,68 @@ export async function moveEmployeeToClient(employeeId: number, newClientId: numb
   ]);
 }
 
+/**
+ * Opt-in counterpart to `moveEmployeeToClient` — that one is forward-only
+ * on purpose (0060/0061's whole point), so this is what actually rewrites
+ * the snapshotted `client_id`/`company_id` on every already-imported
+ * `payment_shifts`/`imports` row for this colaborador, when the user
+ * explicitly asks the move to also apply to history instead of just future
+ * imports. Always called alongside `moveEmployeeToClient`, never alone —
+ * leaving the employee's own cadastro pointed at one cliente while its
+ * history stays snapshotted to another is exactly the confusing state
+ * 0060/0061 introduced snapshotting to avoid by default.
+ *
+ * `periodStart`/`periodEnd` mirror ImportPaymentsPage's own "Período
+ * (opcional)" filter — each bound independently optional, same convention
+ * used everywhere else that filter is read (e.g. `workDate < periodStart`
+ * checks around line 854). Both blank moves the colaborador's ENTIRE
+ * history; either one set scopes the move to just what falls in that
+ * window — `payment_shifts` by its own `work_date`, `imports` by whether
+ * its own `period_start`/`period_end` overlaps the given window at all
+ * (an import covers a date range, not a single day, so "contained" would
+ * be too strict — any overlap means at least part of it belongs to this
+ * reprocessing run).
+ */
+export async function moveEmployeeHistoryToClient(
+  employeeId: number,
+  newClientId: number,
+  newCompanyId: number,
+  periodStart: string | null,
+  periodEnd: string | null,
+): Promise<void> {
+  const db = await getDb();
+
+  const shiftConditions = ["employee_id = $3"];
+  const shiftParams: (string | number)[] = [newClientId, newCompanyId, employeeId];
+  if (periodStart) {
+    shiftParams.push(periodStart);
+    shiftConditions.push(`work_date >= $${shiftParams.length}`);
+  }
+  if (periodEnd) {
+    shiftParams.push(periodEnd);
+    shiftConditions.push(`work_date <= $${shiftParams.length}`);
+  }
+  await db.execute(
+    `UPDATE payment_shifts SET client_id = $1, company_id = $2 WHERE ${shiftConditions.join(" AND ")}`,
+    shiftParams,
+  );
+
+  const importConditions = ["employee_id = $3"];
+  const importParams: (string | number)[] = [newClientId, newCompanyId, employeeId];
+  if (periodEnd) {
+    importParams.push(periodEnd);
+    importConditions.push(`period_start <= $${importParams.length}`);
+  }
+  if (periodStart) {
+    importParams.push(periodStart);
+    importConditions.push(`period_end >= $${importParams.length}`);
+  }
+  await db.execute(
+    `UPDATE imports SET client_id = $1, company_id = $2 WHERE ${importConditions.join(" AND ")}`,
+    importParams,
+  );
+}
+
 const IMPORT_SELECT_COLUMNS = `
   i.id AS importId,
   i.provider AS provider,

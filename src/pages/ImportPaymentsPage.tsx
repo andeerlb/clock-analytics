@@ -50,6 +50,7 @@ import {
   listPaymentTemplates,
   logSourceFile,
   markSourceFileSaved,
+  moveEmployeeHistoryToClient,
   moveEmployeeToClient,
   savePaymentShifts,
   type DuplicatePaymentShiftMatch,
@@ -60,6 +61,7 @@ import {
 import {
   fileNameFromPath,
   formatDate,
+  formatDateSlash,
   formatDateTime,
   formatMinutesAsTime,
   parseDateWithFormat,
@@ -290,6 +292,8 @@ export default function ImportPaymentsPage() {
   const [confirmFullImport, setConfirmFullImport] = useState(false);
   /** Row index of a "colaborador não encontrado" row whose "Mover para Cliente Y" is pending confirmation — `null` when the modal is closed. */
   const [moveEmployeeConfirmIndex, setMoveEmployeeConfirmIndex] = useState<number | null>(null);
+  /** The move confirm modal's own "mover o histórico também?" checkbox — resets to off each time the modal opens, since it's a fresh choice per move, never remembered across colaboradores. */
+  const [moveEmployeeAlsoHistory, setMoveEmployeeAlsoHistory] = useState(false);
   const [rowFilter, setRowFilter] = useState<RowFilter>(restored?.rowFilter ?? "all");
   const [nameSearch, setNameSearch] = useState(restored?.nameSearch ?? "");
 
@@ -541,6 +545,11 @@ export default function ImportPaymentsPage() {
     if (!targetUrl || !template) return;
     setError(null);
     setUrlDownloading(true);
+    // Shown immediately, not only once the download lands below — an
+    // automatic reimport (`urlOverride` from "Reprocessar agora") starts
+    // with this field blank otherwise, so "Baixando..." runs with no URL
+    // visible at all until it finishes.
+    setUrlInput(targetUrl);
     try {
       const result = await downloadPaymentFileFromUrl(targetUrl);
       if (!template.acceptedFileKinds.includes(result.fileKind)) {
@@ -1073,7 +1082,7 @@ export default function ImportPaymentsPage() {
    * SAME person gets linked too, same "resolve the whole batch, not just
    * the clicked row" pattern as `handleLinkEmployee`.
    */
-  async function handleMoveEmployee(clickedIndex: number) {
+  async function handleMoveEmployee(clickedIndex: number, alsoMoveHistory: boolean) {
     const clicked = shiftRows[clickedIndex];
     if (!clicked?.foundInOtherClient || clicked.resolvedClientId === null || clicked.resolvedCompanyId === null) return;
     setError(null);
@@ -1081,6 +1090,15 @@ export default function ImportPaymentsPage() {
     let employee: EmployeeRow;
     try {
       await moveEmployeeToClient(movedEmployeeId, clicked.resolvedClientId, clicked.resolvedCompanyId);
+      if (alsoMoveHistory) {
+        await moveEmployeeHistoryToClient(
+          movedEmployeeId,
+          clicked.resolvedClientId,
+          clicked.resolvedCompanyId,
+          periodStart || null,
+          periodEnd || null,
+        );
+      }
       employee = await getEmployee(movedEmployeeId);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
@@ -1421,7 +1439,6 @@ export default function ImportPaymentsPage() {
         associe cada linha ao colaborador correspondente.
       </p>
 
-      {error && <div className="error-box">{error}</div>}
       {successMessage && <div className="success-box">{successMessage}</div>}
 
       <div className="import-layout" style={{ display: "block" }}>
@@ -1680,6 +1697,8 @@ export default function ImportPaymentsPage() {
               </button>
             </div>
           </div>
+
+          {error && <div className="error-box">{error}</div>}
 
           {fileResults.length > 0 && (
             <>
@@ -2094,7 +2113,10 @@ export default function ImportPaymentsPage() {
                                         type="button"
                                         className="link-button"
                                         style={{ fontSize: "0.78rem" }}
-                                        onClick={() => setMoveEmployeeConfirmIndex(index)}
+                                        onClick={() => {
+                                          setMoveEmployeeAlsoHistory(false);
+                                          setMoveEmployeeConfirmIndex(index);
+                                        }}
                                       >
                                         Mover {row.foundInOtherClient.employeeName} para {row.resolvedClientName}
                                       </button>
@@ -2292,16 +2314,36 @@ export default function ImportPaymentsPage() {
       {moveEmployeeConfirmIndex !== null && shiftRows[moveEmployeeConfirmIndex]?.foundInOtherClient && (
         <ConfirmModal
           title="Mover colaborador para outro cliente"
-          message={`Isso atualiza o cadastro de ${shiftRows[moveEmployeeConfirmIndex].foundInOtherClient!.employeeName} para ${shiftRows[moveEmployeeConfirmIndex].resolvedClientName} (${shiftRows[moveEmployeeConfirmIndex].resolvedCompanyName}). O histórico já importado (Pagamentos e Cartão Ponto) não muda — só as próximas importações passam a usar o novo cliente/empresa.`}
+          message={`Isso atualiza o cadastro de ${shiftRows[moveEmployeeConfirmIndex].foundInOtherClient!.employeeName} para ${shiftRows[moveEmployeeConfirmIndex].resolvedClientName} (${shiftRows[moveEmployeeConfirmIndex].resolvedCompanyName}). Por padrão o histórico já importado (Pagamentos e Cartão Ponto) não muda — só as próximas importações passam a usar o novo cliente/empresa.`}
           confirmLabel="Mover colaborador"
           danger={false}
           onConfirm={async () => {
             const idx = moveEmployeeConfirmIndex;
+            const alsoHistory = moveEmployeeAlsoHistory;
             setMoveEmployeeConfirmIndex(null);
-            await handleMoveEmployee(idx);
+            await handleMoveEmployee(idx, alsoHistory);
           }}
           onCancel={() => setMoveEmployeeConfirmIndex(null)}
-        />
+        >
+          <label
+            style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", fontWeight: 400, marginTop: "0.8rem", cursor: "pointer" }}
+          >
+            <input
+              type="checkbox"
+              checked={moveEmployeeAlsoHistory}
+              onChange={(e) => setMoveEmployeeAlsoHistory(e.target.checked)}
+              style={{ marginTop: "2px" }}
+            />
+            <span>
+              Mover o histórico já importado também
+              <div className="muted" style={{ fontSize: "0.76rem", marginTop: "2px" }}>
+                {periodStart || periodEnd
+                  ? `Só o que estiver no período ${periodStart ? formatDateSlash(periodStart) : "início"} → ${periodEnd ? formatDateSlash(periodEnd) : "fim"}. Fora dele, continua com o cliente/empresa atual.`
+                  : "Sem período definido — move TODO o histórico já importado deste colaborador."}
+              </div>
+            </span>
+          </label>
+        </ConfirmModal>
       )}
     </div>
   );

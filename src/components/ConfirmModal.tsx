@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 
 /**
  * Full-screen confirm dialog — same fixed-overlay recipe as
@@ -15,6 +15,7 @@ export default function ConfirmModal({
   danger = true,
   confirmDisabled = false,
   error,
+  children,
 }: {
   title: string;
   message: string;
@@ -27,6 +28,8 @@ export default function ConfirmModal({
   confirmDisabled?: boolean;
   /** Shown inside the modal instead of closing it on failure — the caller keeps the modal open (and its own busy/error state) so the user can retry. */
   error?: string | null;
+  /** Extra content between the message and the confirm/cancel row — e.g. a follow-up checkbox for a sub-choice tied to this same confirmation. */
+  children?: ReactNode;
 }) {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -52,6 +55,7 @@ export default function ConfirmModal({
       <div className="card" style={{ maxWidth: "26rem", margin: "1rem" }} onClick={(e) => e.stopPropagation()}>
         <h3 style={{ marginTop: 0 }}>{title}</h3>
         <p className="muted">{message}</p>
+        {children}
         {error && (
           <div className="error-box" style={{ marginTop: "0.8rem" }}>
             {error}
