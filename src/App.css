@@ -2204,6 +2204,10 @@ button.history-bar:hover {
   background: var(--success);
   opacity: 0.55;
 }
+.history-bar.changed {
+  background: var(--warning);
+  opacity: 0.7;
+}
 .history-bar.fail {
   background: var(--danger);
   opacity: 0.7;

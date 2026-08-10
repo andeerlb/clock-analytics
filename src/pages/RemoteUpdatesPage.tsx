@@ -40,7 +40,11 @@ const HISTORY_STRIP_SIZE = 7;
 const HISTORY_PAGE_SIZE = 30;
 
 const RESULT_BADGE: Record<UrlCheckResult, { className: string; label: string }> = {
-  changed: { className: "badge warn", label: "Mudou" },
+  // "warn" (this codebase's badge system, not this file's own vocabulary)
+  // renders red/danger — same weight as an actual failure, which read as
+  // "mudou" being just as urgent/bad as "erro". "overwrite" is the amber
+  // one, matching `.history-bar.changed` below.
+  changed: { className: "badge overwrite", label: "Mudou" },
   unchanged: { className: "badge ok", label: "Sem mudança" },
   unknown: { className: "badge neutral", label: "Indeterminado" },
   error: { className: "badge file-error", label: "Erro" },
@@ -677,11 +681,19 @@ export default function RemoteUpdatesPage() {
                         // here just because it happened to be checked too.
                         const configHistory = historyByConfig.get(c.id);
                         const configHistoryBars = configHistory
-                          ? configHistory.rows.map((h) => ({
-                              entry: h,
-                              diffCount: h.diffCount,
-                              failed: h.message !== null || h.hasOwnError,
-                            }))
+                          ? configHistory.rows.map((h) => {
+                              const failed = h.message !== null || h.hasOwnError;
+                              return {
+                                entry: h,
+                                diffCount: h.diffCount,
+                                failed,
+                                // Diffs found for THIS config specifically (never a
+                                // sibling's), excluding error rows — real changes to
+                                // review, distinct from "sem mudança" (both are
+                                // "no error", but only one has something to act on).
+                                changed: !failed && h.diffCount > 0,
+                              };
+                            })
                           : [];
 
                         return (
@@ -958,7 +970,7 @@ export default function RemoteUpdatesPage() {
                                         <button
                                           key={b.entry.id}
                                           type="button"
-                                          className={`history-bar ${b.failed ? "fail" : "ok"}`}
+                                          className={`history-bar ${b.failed ? "fail" : b.changed ? "changed" : "ok"}`}
                                           title={`${formatDateTimeAbbrevYY(b.entry.checkedAt, true)} — ${RESULT_BADGE[b.entry.result].label}${b.diffCount > 0 ? ` (${b.diffCount})` : ""} — clique para ver os detalhes`}
                                           onClick={() =>
                                             openLogDetail({
