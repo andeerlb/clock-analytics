@@ -455,7 +455,7 @@ export default function RemoteUpdatesPage() {
   // is edited or deleted. Shown both on the full-history list and the
   // single-entry detail, since knowing WHAT was checked (not just when and
   // whether it failed) is what actually informs a decision here.
-  function renderCheckMeta(entry: UrlCheckLogEntry) {
+  function renderCheckMeta(entry: UrlCheckLogEntry, showDismiss = true) {
     return (
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem 1.2rem", fontSize: "0.78rem" }} className="muted">
         <span>
@@ -490,7 +490,8 @@ export default function RemoteUpdatesPage() {
             entry.templateName ?? "—"
           )}
         </span>
-        {entry.errorDiffId !== null &&
+        {showDismiss &&
+          entry.errorDiffId !== null &&
           (entry.errorDismissedAt !== null ? (
             <span className="badge neutral" style={{ display: "inline-flex", fontSize: "0.68rem" }}>
               Visto
@@ -498,7 +499,7 @@ export default function RemoteUpdatesPage() {
           ) : (
             <button
               type="button"
-              className="ghost"
+              className="outline"
               style={{ fontSize: "0.72rem", padding: "0.15rem 0.5rem" }}
               disabled={dismissingErrorIds.has(entry.errorDiffId)}
               onClick={(e) => {
@@ -1378,10 +1379,7 @@ export default function RemoteUpdatesPage() {
                       {entry.diffCount > 0 ? ` (${entry.diffCount})` : ""}
                     </span>
                   </div>
-                  {entry.message && (
-                    <div style={{ fontSize: "0.78rem", color: "var(--danger)", marginTop: "0.35rem" }}>{entry.message}</div>
-                  )}
-                  <div style={{ marginTop: "0.35rem" }}>{renderCheckMeta(entry)}</div>
+                  <div style={{ marginTop: "0.35rem" }}>{renderCheckMeta(entry, false)}</div>
                 </div>
               );
             })}
