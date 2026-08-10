@@ -2104,6 +2104,7 @@ tr.row-error:hover {
 .stop-tracking-btn {
   background: transparent;
   border: none;
+  box-shadow: none;
   color: var(--danger);
   font-size: 0.72rem;
   font-weight: 700;
@@ -2115,6 +2116,7 @@ tr.row-error:hover {
 .tracked-chevron {
   background: transparent;
   border: none;
+  box-shadow: none;
   color: var(--text-muted);
   cursor: pointer;
   display: flex;

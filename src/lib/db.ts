@@ -1728,7 +1728,11 @@ export interface UrlCheckLogEntry {
  * `hasOwnError` are scoped to this config's own diff rows on that check, not
  * the shared HTTP check's combined outcome.
  */
-export async function listUrlCheckLogForConfig(configId: number, limit: number): Promise<UrlCheckLogEntry[]> {
+export async function listUrlCheckLogForConfig(
+  configId: number,
+  limit: number,
+  offset: number = 0,
+): Promise<UrlCheckLogEntry[]> {
   const db = await getDb();
   const rawRows = await db.select<(Omit<UrlCheckLogEntry, "hasOwnError"> & { hasOwnError: number })[]>(
     `SELECT l.id, l.source_url AS sourceUrl, l.file_name AS fileName, l.checked_at AS checkedAt, l.result, l.message,
@@ -1738,8 +1742,8 @@ export async function listUrlCheckLogForConfig(configId: number, limit: number):
      FROM source_url_check_log l
      JOIN source_url_check_log_configs jc ON jc.check_log_id = l.id AND jc.config_id = $1
      ORDER BY l.checked_at DESC
-     LIMIT $2`,
-    [configId, limit],
+     LIMIT $2 OFFSET $3`,
+    [configId, limit, offset],
   );
   return rawRows.map((r) => ({ ...r, hasOwnError: Boolean(r.hasOwnError) }));
 }

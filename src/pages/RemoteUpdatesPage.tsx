@@ -12,7 +12,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import ChangeDiffPanel from "../components/ChangeDiffPanel";
@@ -46,6 +46,9 @@ import type { PaymentTemplateListRow } from "../lib/types";
 
 /** How many of a URL's most recent checks the "Histórico recente" strip shows. */
 const HISTORY_STRIP_SIZE = 7;
+
+/** Page size for the "Histórico completo" drawer's infinite scroll. */
+const HISTORY_PAGE_SIZE = 30;
 
 const RESULT_BADGE: Record<UrlCheckResult, { className: string; label: string; icon: typeof CheckCircle2 }> = {
   changed: { className: "badge warn", label: "Mudou", icon: AlertTriangle },
@@ -155,12 +158,11 @@ export default function RemoteUpdatesPage() {
     }
   }
 
-  // Collapsed state per tracked URL — absent (not in the set) means
-  // expanded, so every file starts open (matches the page's previous,
-  // always-expanded behavior) and only collapses once the user asks.
-  const [collapsedUrls, setCollapsedUrls] = useState<Set<string>>(new Set());
+  // Expanded state per tracked URL — absent (not in the set) means
+  // collapsed, so every file starts closed and only opens once the user asks.
+  const [expandedUrls, setExpandedUrls] = useState<Set<string>>(new Set());
   function toggleFileExpanded(sourceUrl: string) {
-    setCollapsedUrls((prev) => {
+    setExpandedUrls((prev) => {
       const next = new Set(prev);
       if (next.has(sourceUrl)) next.delete(sourceUrl);
       else next.add(sourceUrl);
@@ -182,7 +184,7 @@ export default function RemoteUpdatesPage() {
 
   useEffect(() => {
     for (const c of reimportConfigs) {
-      if (collapsedUrls.has(c.sourceUrl) || loadingHistoryConfigId === c.id) continue;
+      if (!expandedUrls.has(c.sourceUrl) || loadingHistoryConfigId === c.id) continue;
       const cached = historyByConfig.get(c.id);
       if (cached && cached.checkedAt === c.lastCheckedAt) continue;
       setLoadingHistoryConfigId(c.id);
@@ -192,7 +194,7 @@ export default function RemoteUpdatesPage() {
       break; // one fetch at a time is plenty — the effect re-runs as soon as this one lands
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reimportConfigs, collapsedUrls, historyByConfig, loadingHistoryConfigId]);
+  }, [reimportConfigs, expandedUrls, historyByConfig, loadingHistoryConfigId]);
 
   // "Parar de rastrear" — one confirm modal at a time, across all files.
   const [untrackTarget, setUntrackTarget] = useState<TrackedPaymentUrl | null>(null);
@@ -397,6 +399,71 @@ export default function RemoteUpdatesPage() {
     }
   }
 
+  // "Ver histórico completo" — a paginated (infinite scroll) view of a
+  // config's full check history, shown in the same Drawer as the
+  // single-entry detail (`drawerRow`) but never both at once. Kept around
+  // while a row's detail is open (drilled into from the list) so closing
+  // that detail returns to the already-fetched list instead of re-fetching
+  // page 1.
+  const [historyDrawerConfig, setHistoryDrawerConfig] = useState<{ configId: number; configLabel: string } | null>(
+    null,
+  );
+  const [historyRows, setHistoryRows] = useState<UrlCheckLogEntry[]>([]);
+  const [historyLoadingPage, setHistoryLoadingPage] = useState(false);
+  const [historyExhausted, setHistoryExhausted] = useState(false);
+  const historySentinelRef = useRef<HTMLDivElement | null>(null);
+
+  async function openFullHistory(configId: number, configLabel: string) {
+    setHistoryDrawerConfig({ configId, configLabel });
+    setHistoryRows([]);
+    setHistoryExhausted(false);
+    setHistoryLoadingPage(true);
+    try {
+      const rows = await listUrlCheckLogForConfig(configId, HISTORY_PAGE_SIZE, 0);
+      setHistoryRows(rows);
+      if (rows.length < HISTORY_PAGE_SIZE) setHistoryExhausted(true);
+    } finally {
+      setHistoryLoadingPage(false);
+    }
+  }
+
+  async function loadMoreHistory() {
+    if (!historyDrawerConfig || historyLoadingPage || historyExhausted) return;
+    setHistoryLoadingPage(true);
+    try {
+      const rows = await listUrlCheckLogForConfig(historyDrawerConfig.configId, HISTORY_PAGE_SIZE, historyRows.length);
+      setHistoryRows((prev) => [...prev, ...rows]);
+      if (rows.length < HISTORY_PAGE_SIZE) setHistoryExhausted(true);
+    } finally {
+      setHistoryLoadingPage(false);
+    }
+  }
+
+  // Loads the next page once the sentinel at the bottom of the list scrolls
+  // into view — re-subscribes whenever the guard conditions change so the
+  // observer's callback always closes over fresh state.
+  useEffect(() => {
+    if (!historyDrawerConfig || historyExhausted) return;
+    const el = historySentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) loadMoreHistory();
+      },
+      { rootMargin: "150px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyDrawerConfig, historyRows, historyExhausted, historyLoadingPage]);
+
+  function closeDrawer() {
+    setDrawerRow(null);
+    setHistoryDrawerConfig(null);
+    setHistoryRows([]);
+    setHistoryExhausted(false);
+  }
+
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -417,42 +484,38 @@ export default function RemoteUpdatesPage() {
         </div>
       )}
 
-      <div className="card">
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.6rem", flexWrap: "wrap" }}>
-          <h3 style={{ margin: 0 }}>Arquivos rastreados</h3>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button
-              type="button"
-              className="ghost"
-              onClick={handleForceCheckAll}
-              disabled={trackedFiles.length === 0 || forcingAll}
-              title="Verifica todos os arquivos rastreados agora, ignorando os intervalos configurados"
-            >
-              <RefreshCw size={14} className={forcingAll ? "spin" : undefined} style={{ marginRight: "0.35rem" }} />
-              {forcingAll ? "Verificando..." : "Forçar verificação de todas"}
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate("/import/payments")}
-              title="Rastrear um novo arquivo — importe-o em Importar Pagamentos marcando 'Rastrear atualizações automaticamente'"
-            >
-              <Plus size={14} style={{ marginRight: "0.35rem", verticalAlign: "-2px" }} />
-              Novo Arquivo
-            </button>
-          </div>
-        </div>
-        {trackedFiles.length === 0 && (
-          <p className="muted">Nenhum arquivo importado por URL ainda.</p>
-        )}
-        {trackedFiles.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.7rem", marginTop: "1rem" }}>
-            {trackedFiles.map((t: TrackedPaymentUrl) => {
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginBottom: "1rem" }}>
+        <button
+          type="button"
+          className="ghost"
+          onClick={handleForceCheckAll}
+          disabled={trackedFiles.length === 0 || forcingAll}
+          title="Verifica todos os arquivos rastreados agora, ignorando os intervalos configurados"
+        >
+          <RefreshCw size={14} className={forcingAll ? "spin" : undefined} style={{ marginRight: "0.35rem" }} />
+          {forcingAll ? "Verificando..." : "Forçar verificação de todas"}
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate("/import/payments")}
+          title="Rastrear um novo arquivo — importe-o em Importar Pagamentos marcando 'Rastrear atualizações automaticamente'"
+        >
+          <Plus size={14} style={{ marginRight: "0.35rem", verticalAlign: "-2px" }} />
+          Novo Arquivo
+        </button>
+      </div>
+      {trackedFiles.length === 0 && (
+        <p className="muted">Nenhum arquivo importado por URL ainda.</p>
+      )}
+      {trackedFiles.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.7rem" }}>
+          {trackedFiles.map((t: TrackedPaymentUrl) => {
               const updatesForFile = remoteUpdates.filter((u) => u.sourceUrl === t.sourceUrl);
               const configsForFile = reimportConfigs.filter((c) => c.sourceUrl === t.sourceUrl);
               const activeCount = configsForFile.filter((c) => !c.checkDisabled).length;
               const statusVariant = activeCount > 0 ? "active" : "paused";
               const statusLabel = configsForFile.length === 0 ? "Sem config." : activeCount > 0 ? "Ativo" : "Pausado";
-              const expanded = !collapsedUrls.has(t.sourceUrl);
+              const expanded = expandedUrls.has(t.sourceUrl);
               const anyConfigChecking = configsForFile.some((c) => checkingConfigIds.has(c.id));
               return (
                 <div key={t.sourceUrl} className="tracked-card">
@@ -478,11 +541,6 @@ export default function RemoteUpdatesPage() {
                         <Link2 size={12} style={{ flexShrink: 0 }} />
                         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.sourceUrl}</span>
                       </button>
-                      {t.lastResult === "error" && t.lastErrorMessage && (
-                        <div className="muted" style={{ fontSize: "0.75rem", marginTop: "0.15rem" }}>
-                          {t.lastErrorMessage}
-                        </div>
-                      )}
                     </div>
                     <div className="tracked-card-actions" onClick={(e) => e.stopPropagation()}>
                       {anyConfigChecking && (
@@ -506,6 +564,7 @@ export default function RemoteUpdatesPage() {
                         type="button"
                         className={`tracked-chevron${expanded ? " expanded" : ""}`}
                         aria-label={expanded ? "Recolher" : "Expandir"}
+                        onClick={() => toggleFileExpanded(t.sourceUrl)}
                       >
                         <ChevronDown size={18} />
                       </button>
@@ -540,52 +599,9 @@ export default function RemoteUpdatesPage() {
                               failed: h.message !== null || h.hasOwnError,
                             }))
                           : [];
-                        const configSuccessRate =
-                          configHistoryBars.length > 0
-                            ? Math.round(
-                                (configHistoryBars.filter((b) => !b.failed).length / configHistoryBars.length) * 100,
-                              )
-                            : null;
 
                         return (
                           <div key={c.id}>
-                            <div className="history-strip" style={{ marginBottom: "0.6rem" }}>
-                              <div className="history-strip-head">
-                                <span className="history-strip-label">
-                                  HISTÓRICO RECENTE{configsForFile.length > 1 ? ` — ${c.templateName ?? "template removido"}` : ""}
-                                </span>
-                                {configSuccessRate !== null && (
-                                  <span style={{ fontSize: "0.75rem", color: "var(--success)", fontWeight: 600 }}>
-                                    <CheckCircle2 size={12} style={{ verticalAlign: "-2px", marginRight: "0.25rem" }} />
-                                    {configSuccessRate}% sem erro
-                                  </span>
-                                )}
-                              </div>
-                              <div className="history-bars">
-                                {configHistoryBars.length > 0
-                                  ? configHistoryBars.map((b) => (
-                                      <button
-                                        key={b.entry.id}
-                                        type="button"
-                                        className={`history-bar ${b.failed ? "fail" : "ok"}`}
-                                        title={`${formatDateTimeAbbrevYY(b.entry.checkedAt, true)} — ${RESULT_BADGE[b.entry.result].label}${b.diffCount > 0 ? ` (${b.diffCount})` : ""} — clique para ver os detalhes`}
-                                        onClick={() =>
-                                          openLogDetail({
-                                            key: `${b.entry.id}:${c.id}`,
-                                            entry: b.entry,
-                                            configId: c.id,
-                                            config: c,
-                                            configLabel: c.templateName ?? "Template removido",
-                                            diffCount: b.diffCount,
-                                          })
-                                        }
-                                      />
-                                    ))
-                                  : Array.from({ length: HISTORY_STRIP_SIZE }).map((_, i) => (
-                                      <div key={i} className="history-bar" />
-                                    ))}
-                              </div>
-                            </div>
                             {update && (
                               <div
                                 className="warning-box"
@@ -822,6 +838,45 @@ export default function RemoteUpdatesPage() {
                                   </div>
                                 </div>
                               </div>
+                              <div className="history-strip" style={{ gridColumn: "1 / -1" }}>
+                                <div className="history-strip-head">
+                                  <span className="history-strip-label">
+                                    HISTÓRICO RECENTE{configsForFile.length > 1 ? ` — ${c.templateName ?? "template removido"}` : ""}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="link-button"
+                                    style={{ fontSize: "0.75rem" }}
+                                    onClick={() => openFullHistory(c.id, c.templateName ?? "Template removido")}
+                                  >
+                                    Ver histórico completo
+                                  </button>
+                                </div>
+                                <div className="history-bars">
+                                  {configHistoryBars.length > 0
+                                    ? configHistoryBars.map((b) => (
+                                        <button
+                                          key={b.entry.id}
+                                          type="button"
+                                          className={`history-bar ${b.failed ? "fail" : "ok"}`}
+                                          title={`${formatDateTimeAbbrevYY(b.entry.checkedAt, true)} — ${RESULT_BADGE[b.entry.result].label}${b.diffCount > 0 ? ` (${b.diffCount})` : ""} — clique para ver os detalhes`}
+                                          onClick={() =>
+                                            openLogDetail({
+                                              key: `${b.entry.id}:${c.id}`,
+                                              entry: b.entry,
+                                              configId: c.id,
+                                              config: c,
+                                              configLabel: c.templateName ?? "Template removido",
+                                              diffCount: b.diffCount,
+                                            })
+                                          }
+                                        />
+                                      ))
+                                    : Array.from({ length: HISTORY_STRIP_SIZE }).map((_, i) => (
+                                        <div key={i} className="history-bar" />
+                                      ))}
+                                </div>
+                              </div>
                             </div>
                           </div>
                         );
@@ -1006,9 +1061,8 @@ export default function RemoteUpdatesPage() {
                 </div>
               );
             })}
-          </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {untrackTarget && (
         <ConfirmModal
@@ -1030,26 +1084,101 @@ export default function RemoteUpdatesPage() {
       )}
 
       <Drawer
-        open={drawerRow !== null}
-        onClose={() => setDrawerRow(null)}
-        title={drawerRow ? `${drawerRow.configLabel} — ${formatDateTimeAbbrevYY(drawerRow.entry.checkedAt, true)}` : ""}
+        open={drawerRow !== null || historyDrawerConfig !== null}
+        onClose={closeDrawer}
+        title={
+          drawerRow
+            ? `${drawerRow.configLabel} — ${formatDateTimeAbbrevYY(drawerRow.entry.checkedAt, true)}`
+            : historyDrawerConfig
+              ? `Histórico completo — ${historyDrawerConfig.configLabel}`
+              : ""
+        }
       >
-        {drawerRow?.entry.message && (
-          <div className="error-box" style={{ fontSize: "0.82rem" }}>
-            {drawerRow.entry.message}
+        {drawerRow && (
+          <>
+            {historyDrawerConfig && (
+              <button
+                type="button"
+                className="ghost"
+                style={{ marginBottom: "0.8rem", paddingLeft: 0 }}
+                onClick={() => setDrawerRow(null)}
+              >
+                ← Voltar ao histórico completo
+              </button>
+            )}
+            {drawerRow.entry.message && (
+              <div className="error-box" style={{ fontSize: "0.82rem" }}>
+                {drawerRow.entry.message}
+              </div>
+            )}
+            {isLoadingDrawerDiff && <p className="muted" style={{ margin: 0 }}>Carregando detalhes...</p>}
+            {!isLoadingDrawerDiff && drawerDiffRows.length === 0 && !drawerRow.entry.message && (
+              <p className="muted" style={{ margin: 0 }}>Nenhuma mudança encontrada nesta verificação.</p>
+            )}
+            {!isLoadingDrawerDiff && drawerDiffRows.length > 0 && (
+              <ChangeDiffPanel
+                rows={drawerDiffRows}
+                markingShiftId={markingDeletedShiftId}
+                markedShiftIds={markedDeletedShiftIds}
+                onMarkDeleted={handleMarkShiftDeleted}
+              />
+            )}
+          </>
+        )}
+
+        {!drawerRow && historyDrawerConfig && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+            {historyRows.length === 0 && historyLoadingPage && (
+              <p className="muted" style={{ margin: 0 }}>Carregando...</p>
+            )}
+            {historyRows.length === 0 && !historyLoadingPage && (
+              <p className="muted" style={{ margin: 0 }}>Nenhuma verificação registrada ainda.</p>
+            )}
+            {historyRows.map((entry) => {
+              const failed = entry.message !== null || entry.hasOwnError;
+              const badge = RESULT_BADGE[entry.result];
+              const Icon = badge.icon;
+              return (
+                <button
+                  key={entry.id}
+                  type="button"
+                  className="outline"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "0.6rem",
+                    textAlign: "left",
+                  }}
+                  onClick={() =>
+                    openLogDetail({
+                      key: `${entry.id}:${historyDrawerConfig.configId}`,
+                      entry,
+                      configId: historyDrawerConfig.configId,
+                      config: reimportConfigs.find((rc) => rc.id === historyDrawerConfig.configId) ?? null,
+                      configLabel: historyDrawerConfig.configLabel,
+                      diffCount: entry.diffCount,
+                    })
+                  }
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.82rem" }}>
+                    <Icon size={14} style={{ color: failed ? "var(--danger)" : "var(--text-muted)" }} />
+                    {formatDateTimeAbbrevYY(entry.checkedAt, true)}
+                  </span>
+                  <span className={badge.className} style={{ fontSize: "0.7rem" }}>
+                    {badge.label}
+                    {entry.diffCount > 0 ? ` (${entry.diffCount})` : ""}
+                  </span>
+                </button>
+              );
+            })}
+            {!historyExhausted && <div ref={historySentinelRef} style={{ height: 1 }} />}
+            {historyLoadingPage && historyRows.length > 0 && (
+              <p className="muted" style={{ margin: 0, textAlign: "center", fontSize: "0.78rem" }}>
+                Carregando mais...
+              </p>
+            )}
           </div>
-        )}
-        {isLoadingDrawerDiff && <p className="muted" style={{ margin: 0 }}>Carregando detalhes...</p>}
-        {!isLoadingDrawerDiff && drawerDiffRows.length === 0 && !drawerRow?.entry.message && (
-          <p className="muted" style={{ margin: 0 }}>Nenhuma mudança encontrada nesta verificação.</p>
-        )}
-        {!isLoadingDrawerDiff && drawerDiffRows.length > 0 && (
-          <ChangeDiffPanel
-            rows={drawerDiffRows}
-            markingShiftId={markingDeletedShiftId}
-            markedShiftIds={markedDeletedShiftIds}
-            onMarkDeleted={handleMarkShiftDeleted}
-          />
         )}
       </Drawer>
     </div>
