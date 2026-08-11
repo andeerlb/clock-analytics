@@ -146,7 +146,12 @@ CREATE TABLE employee_aliases_new (
 -- for any row here whose matched_shift_id isn't NULL. Every other column
 -- is a plain snapshot (no FK) or points at tables untouched by this
 -- migration (source_url_check_log, source_url_reimport_configs), so only
--- matched_shift_id's target changes.
+-- matched_shift_id's target changes. Full column list must match the
+-- table's CURRENT shape, not just its original 0053 definition — `applied`
+-- (0058_reimport_auto_apply.sql) and `dismissed_at`
+-- (0065_check_diffs_dismissed.sql) were added later; a first pass of this
+-- migration missed both and silently dropped them, caught the same way as
+-- matched_shift_id above (testing against a real copy of the data).
 CREATE TABLE source_url_check_diffs_new (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     check_log_id INTEGER NOT NULL REFERENCES source_url_check_log(id),
@@ -168,7 +173,9 @@ CREATE TABLE source_url_check_diffs_new (
     old_value TEXT,
     new_value TEXT,
     message TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    applied INTEGER NOT NULL DEFAULT 0,
+    dismissed_at TEXT
 );
 
 -- One row per canonical id, keeping its own current name/cpf/client_id —
@@ -216,10 +223,12 @@ JOIN employee_canonical ec ON ec.old_id = ps.employee_id;
 -- table it points at.
 INSERT INTO source_url_check_diffs_new (id, check_log_id, config_id, config_label, change_kind, matched_shift_id,
     employee_id, employee_name, work_date, local, role, schedule_start_minutes, schedule_end_minutes,
-    sheet_name, row_number, column_letter, field_name, old_value, new_value, message, created_at)
+    sheet_name, row_number, column_letter, field_name, old_value, new_value, message, created_at,
+    applied, dismissed_at)
 SELECT id, check_log_id, config_id, config_label, change_kind, matched_shift_id,
     employee_id, employee_name, work_date, local, role, schedule_start_minutes, schedule_end_minutes,
-    sheet_name, row_number, column_letter, field_name, old_value, new_value, message, created_at
+    sheet_name, row_number, column_letter, field_name, old_value, new_value, message, created_at,
+    applied, dismissed_at
 FROM source_url_check_diffs;
 
 -- Existing aliases, remapped to their canonical employee — de-duplicated
