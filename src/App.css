@@ -1603,6 +1603,18 @@ tr.row-active td:first-child {
   background: var(--surface-variant);
 }
 
+/* Scrolls (wheel/trackpad/keyboard) exactly as before — just without a
+   visible track/thumb. Meant for a short infinite-scroll list where the
+   scrollbar is one more thing to look at, not a landmark you navigate by
+   (unlike `.spreadsheet-grid-scroll`, a wide/tall grid where the thumb's
+   position and size are genuinely useful information). */
+.scrollbar-hidden {
+  scrollbar-width: none; /* Firefox */
+}
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/the Tauri webview */
+}
+
 .spreadsheet-grid {
   border-collapse: collapse;
   font-size: 0.82rem;

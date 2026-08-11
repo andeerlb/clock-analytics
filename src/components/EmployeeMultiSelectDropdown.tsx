@@ -1,8 +1,10 @@
 import { Search } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type UIEvent } from "react";
 import { listEmployeesGlobal, type EmployeeRow } from "../lib/db";
 
-const PAGE_SIZE = 8;
+const PAGE_SIZE = 20;
+/** How close (px) to the bottom of the results list triggers loading the next page. */
+const LOAD_MORE_THRESHOLD_PX = 48;
 
 /**
  * The "Colaborador" filter — search-as-you-type against the real employee
@@ -46,6 +48,7 @@ export default function EmployeeMultiSelectDropdown({
   const [rows, setRows] = useState<EmployeeRow[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -62,11 +65,16 @@ export default function EmployeeMultiSelectDropdown({
     inputRef.current?.focus();
   }, [open]);
 
+  // Loads (and replaces) page 0 whenever the dropdown opens or the query
+  // changes — infinite scroll (see `loadMore`/`handleResultsScroll` below)
+  // is what advances past it from there, not this effect re-running with a
+  // different `page`.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setLoading(true);
-    listEmployeesGlobal({ search, companyIds, clientIds, page, pageSize: PAGE_SIZE })
+    setPage(0);
+    listEmployeesGlobal({ search, companyIds, clientIds, page: 0, pageSize: PAGE_SIZE })
       .then(({ rows: r, total: t }) => {
         if (cancelled) return;
         setRows(r);
@@ -79,10 +87,28 @@ export default function EmployeeMultiSelectDropdown({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, search, page, JSON.stringify(companyIds), JSON.stringify(clientIds)]);
+  }, [open, search, JSON.stringify(companyIds), JSON.stringify(clientIds)]);
+
+  const hasMore = rows.length < total;
+
+  function loadMore() {
+    if (loading || loadingMore || !hasMore) return;
+    const nextPage = page + 1;
+    setLoadingMore(true);
+    listEmployeesGlobal({ search, companyIds, clientIds, page: nextPage, pageSize: PAGE_SIZE })
+      .then(({ rows: r }) => {
+        setRows((prev) => [...prev, ...r]);
+        setPage(nextPage);
+      })
+      .finally(() => setLoadingMore(false));
+  }
+
+  function handleResultsScroll(e: UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - LOAD_MORE_THRESHOLD_PX) loadMore();
+  }
 
   const label = selected.size === 0 ? "Nenhum colaborador" : `${selected.size} selecionado${selected.size > 1 ? "s" : ""}`;
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div
@@ -98,7 +124,6 @@ export default function EmployeeMultiSelectDropdown({
         className="secondary"
         onClick={() => {
           setSearch("");
-          setPage(0);
           setOpen((o) => !o);
         }}
         style={fullWidth ? { width: "100%", display: "flex", alignItems: "center", textAlign: "left" } : undefined}
@@ -117,7 +142,7 @@ export default function EmployeeMultiSelectDropdown({
             border: "1px solid var(--border)",
             borderRadius: 10,
             padding: "0.6rem",
-            minWidth: "260px",
+            minWidth: "320px",
             boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.4)",
             zIndex: 20,
           }}
@@ -131,10 +156,7 @@ export default function EmployeeMultiSelectDropdown({
               ref={inputRef}
               type="text"
               value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(0);
-              }}
+              onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar por nome..."
               style={{ width: "100%", paddingLeft: "1.8rem", fontSize: "0.85rem" }}
             />
@@ -151,7 +173,11 @@ export default function EmployeeMultiSelectDropdown({
             </p>
           )}
           {!loading && rows.length > 0 && (
-            <div style={{ display: "flex", flexDirection: "column", maxHeight: "14rem", overflowY: "auto" }}>
+            <div
+              className="scrollbar-hidden"
+              onScroll={handleResultsScroll}
+              style={{ display: "flex", flexDirection: "column", maxHeight: "22rem", overflowY: "auto" }}
+            >
               {rows.map((e) => (
                 <label
                   key={e.id}
@@ -172,32 +198,11 @@ export default function EmployeeMultiSelectDropdown({
                   })()}
                 </label>
               ))}
-            </div>
-          )}
-
-          {pageCount > 1 && (
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "0.5rem" }}>
-              <button
-                type="button"
-                className="ghost"
-                style={{ padding: "0.15rem 0.4rem", fontSize: "0.78rem" }}
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                disabled={page === 0}
-              >
-                Anterior
-              </button>
-              <span className="muted" style={{ fontSize: "0.75rem" }}>
-                Página {page + 1} de {pageCount}
-              </span>
-              <button
-                type="button"
-                className="ghost"
-                style={{ padding: "0.15rem 0.4rem", fontSize: "0.78rem" }}
-                onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-                disabled={page >= pageCount - 1}
-              >
-                Próxima
-              </button>
+              {loadingMore && (
+                <p className="muted" style={{ fontSize: "0.78rem", margin: "0.4rem 0 0", textAlign: "center" }}>
+                  Carregando mais...
+                </p>
+              )}
             </div>
           )}
         </div>
