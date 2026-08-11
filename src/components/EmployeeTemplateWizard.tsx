@@ -21,7 +21,17 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import Modal from "./Modal";
+import Modal, { useModalClose } from "./Modal";
+
+/** Header X, routed through `useModalClose` instead of the raw `onClose` prop so it plays the same animated exit `Modal` already uses for Escape/backdrop. */
+function CloseButton() {
+  const requestClose = useModalClose();
+  return (
+    <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={requestClose} aria-label="Fechar">
+      <X size={18} />
+    </button>
+  );
+}
 import {
   addRecentPaymentFile,
   downloadPaymentFileFromUrl,
@@ -752,9 +762,7 @@ export default function EmployeeTemplateWizard({
         <strong style={{ fontSize: "0.95rem" }}>
           {isEditing ? "Editar template de colaboradores" : "Novo template de colaboradores"}
         </strong>
-        <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={onClose} aria-label="Fechar">
-          <X size={18} />
-        </button>
+        <CloseButton />
       </div>
 
       <div className="wizard-steps" onClick={(e) => e.stopPropagation()}>

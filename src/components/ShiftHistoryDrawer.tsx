@@ -90,7 +90,7 @@ function HistoryEntry({
 /**
  * Read-only look at a shift's full status history — every row the append-
  * only chain (`previous_shift_id`) passed through before reaching the
- * current head, oldest first. Reached via the row's context menu's "Ver
+ * current head, most recent first. Reached via the row's context menu's "Ver
  * histórico", always offered regardless of whether there's actually
  * anything to show — `shiftId === null` means this turno IS the first
  * state (no `previousShiftId`), so nothing is fetched and the panel just

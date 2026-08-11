@@ -949,6 +949,66 @@ tr:last-child td {
   display: flex;
   align-items: center;
   justify-content: center;
+  animation: modal-overlay-in 0.18s ease;
+}
+
+@keyframes modal-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modal-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Only the small centered card gets the scale/slide — a `fullScreen` modal's
+   children render straight inside `.modal-overlay` with no `.card` wrapper,
+   so it only picks up the plain overlay fade above, not this. */
+.modal-overlay > .card {
+  animation: modal-card-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modal-overlay-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes modal-card-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+}
+
+/* Compound selectors (not just `.modal-overlay-closing`) so these win over
+   the `-in` rules above regardless of stylesheet order — `Modal` applies
+   both the base class and the `-closing` one together on the same element
+   while `requestClose`'s exit animation plays out, right before the delayed
+   `onClose` actually unmounts it (see `Modal.tsx`'s `requestClose`). */
+.modal-overlay.modal-overlay-closing {
+  animation: modal-overlay-out 0.18s ease forwards;
+}
+.modal-overlay > .card.modal-card-closing {
+  animation: modal-card-out 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 /* `Modal`'s optional `title`/`footer` structured layout — same bordered

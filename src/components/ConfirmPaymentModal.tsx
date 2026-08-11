@@ -12,7 +12,17 @@ import {
 import type { PaymentShiftRow } from "../lib/types";
 import Avatar from "./Avatar";
 import CurrencyInput from "./CurrencyInput";
-import Modal from "./Modal";
+import Modal, { useModalClose } from "./Modal";
+
+/** Cancelar button — routed through `useModalClose` so it plays the same exit animation as the header's X/Escape/backdrop instead of unmounting instantly; `requestClose` still resolves to the same `onCancel` passed to `<Modal onClose={onCancel}>` below. */
+function CancelButton({ busy }: { busy: boolean }) {
+  const requestClose = useModalClose();
+  return (
+    <button type="button" className="outline" onClick={requestClose} disabled={busy}>
+      Cancelar
+    </button>
+  );
+}
 
 /** A DATA/LOCAL/FUNÇÃO/TOTAL DE HORAS grid cell's small caps label — matches the uppercase letter-spacing style used elsewhere for this same "tiny label above a value" pattern (e.g. the pending-changes card's "CLIQUE PARA REVISAR"). */
 function SummaryLabel({ children }: { children: string }) {
@@ -60,9 +70,7 @@ export default function ConfirmPaymentModal({
       title="Fazer pagamento"
       footer={
         <>
-          <button type="button" className="outline" onClick={onCancel} disabled={busy}>
-            Cancelar
-          </button>
+          <CancelButton busy={busy} />
           <button type="button" onClick={() => onConfirm(centsMaskToAmount(digits))} disabled={!amountValid || busy}>
             Confirmar pagamento
           </button>

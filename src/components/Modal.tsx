@@ -1,6 +1,34 @@
 import { X } from "lucide-react";
-import { useEffect, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+
+/** How long the exit animation (`modal-overlay-out`/`modal-card-out` in App.css) takes to play before the real `onClose` actually fires and unmounts the modal. */
+const CLOSE_ANIMATION_MS = 180;
+
+const ModalCloseContext = createContext<() => void>(() => {});
+
+/**
+ * Lets a modal's own buttons (a "Cancelar", a header "X", ...) trigger the
+ * same animated exit `Modal` itself already plays for Escape/backdrop,
+ * instead of calling their `onClose`/`onCancel` prop straight through —
+ * which would unmount the modal instantly, skipping the exit transition
+ * entirely, since the parent's conditional render (`{open && <Modal/>}`)
+ * removes it from the tree the moment that prop fires.
+ */
+export function useModalClose(): () => void {
+  return useContext(ModalCloseContext);
+}
+
+/**
+ * Render-prop form of `useModalClose`, for a `fullScreen` surface's custom
+ * body — one that needs the animated close in more than one spot (a header
+ * X, a click-outside-the-content region) and would otherwise need a
+ * separate named component per spot just to call the hook at the right
+ * position in the tree.
+ */
+export function ModalClose({ children }: { children: (requestClose: () => void) => ReactNode }) {
+  return children(useModalClose());
+}
 
 /**
  * Shared full-screen overlay recipe — every modal/overlay in the app
@@ -59,6 +87,14 @@ export default function Modal({
   footer?: ReactNode;
   children: ReactNode;
 }) {
+  const [closing, setClosing] = useState(false);
+
+  function requestClose() {
+    if (closing) return;
+    setClosing(true);
+    setTimeout(onClose, CLOSE_ANIMATION_MS);
+  }
+
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -70,11 +106,12 @@ export default function Modal({
   useEffect(() => {
     if (!closeOnEscape) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") requestClose();
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [closeOnEscape, onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closeOnEscape, closing]);
 
   if (fullScreen) {
     return createPortal(
@@ -85,20 +122,24 @@ export default function Modal({
       // full width, not shrink to their own content width and float
       // centered in a column.
       <div
-        className="modal-overlay"
+        className={`modal-overlay${closing ? " modal-overlay-closing" : ""}`}
         style={{ zIndex, flexDirection: "column", alignItems: "stretch", justifyContent: "flex-start" }}
-        onClick={closeOnBackdrop ? onClose : undefined}
+        onClick={closeOnBackdrop ? requestClose : undefined}
       >
-        {children}
+        <ModalCloseContext.Provider value={requestClose}>{children}</ModalCloseContext.Provider>
       </div>,
       document.body,
     );
   }
 
   return createPortal(
-    <div className="modal-overlay" style={{ zIndex }} onClick={closeOnBackdrop ? onClose : undefined}>
+    <div
+      className={`modal-overlay${closing ? " modal-overlay-closing" : ""}`}
+      style={{ zIndex }}
+      onClick={closeOnBackdrop ? requestClose : undefined}
+    >
       <div
-        className="card"
+        className={`card${closing ? " modal-card-closing" : ""}`}
         style={
           title !== undefined
             ? { width, maxWidth, maxHeight, padding: 0, display: "flex", flexDirection: "column", margin: "1rem" }
@@ -106,22 +147,24 @@ export default function Modal({
         }
         onClick={(e) => e.stopPropagation()}
       >
-        {title !== undefined ? (
-          <>
-            <div className="modal-header">
-              <h3>{title}</h3>
-              <button type="button" className="ghost" onClick={onClose} aria-label="Fechar">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="modal-body" style={{ overflowY: maxHeight ? "auto" : undefined }}>
-              {children}
-            </div>
-            {footer && <div className="modal-footer">{footer}</div>}
-          </>
-        ) : (
-          children
-        )}
+        <ModalCloseContext.Provider value={requestClose}>
+          {title !== undefined ? (
+            <>
+              <div className="modal-header">
+                <h3>{title}</h3>
+                <button type="button" className="ghost" onClick={requestClose} aria-label="Fechar">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="modal-body" style={{ overflowY: maxHeight ? "auto" : undefined }}>
+                {children}
+              </div>
+              {footer && <div className="modal-footer">{footer}</div>}
+            </>
+          ) : (
+            children
+          )}
+        </ModalCloseContext.Provider>
       </div>
     </div>,
     document.body,

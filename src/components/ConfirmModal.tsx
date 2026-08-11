@@ -1,5 +1,21 @@
 import type { ReactNode } from "react";
-import Modal from "./Modal";
+import Modal, { useModalClose } from "./Modal";
+
+/**
+ * Cancelar button, wired through `useModalClose` instead of calling
+ * `onCancel` directly — `requestClose()` resolves to the exact same
+ * `onCancel` (it's what `<Modal onClose={onCancel}>` below was given), just
+ * plays the same exit animation `Modal` already uses for Escape/backdrop
+ * first, instead of unmounting the modal instantly.
+ */
+function CancelButton({ label }: { label: string }) {
+  const requestClose = useModalClose();
+  return (
+    <button type="button" className="outline" onClick={requestClose}>
+      {label}
+    </button>
+  );
+}
 
 /** Full-screen confirm dialog, through the shared `Modal` overlay — Escape/backdrop-click cancels, clicking the card doesn't. */
 export default function ConfirmModal({
@@ -39,9 +55,7 @@ export default function ConfirmModal({
         </div>
       )}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.2rem" }}>
-        <button type="button" className="outline" onClick={onCancel}>
-          {cancelLabel}
-        </button>
+        <CancelButton label={cancelLabel} />
         <button
           type="button"
           className={danger ? "danger" : undefined}

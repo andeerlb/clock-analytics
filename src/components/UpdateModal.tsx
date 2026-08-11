@@ -2,8 +2,18 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { useState } from "react";
-import Modal from "./Modal";
+import Modal, { useModalClose } from "./Modal";
 import { LATEST_RELEASE_URL } from "../lib/updateCheck";
+
+/** "Fechar"/"Depois" buttons, routed through `useModalClose` so they play the same exit animation as Escape/backdrop/header-X instead of unmounting instantly — `requestClose` still resolves to the same `handleClose` passed to `<Modal onClose={handleClose}>` below (so `update.close()` still runs). */
+function DismissButton({ label, disabled }: { label: string; disabled?: boolean }) {
+  const requestClose = useModalClose();
+  return (
+    <button type="button" className="outline" onClick={requestClose} disabled={disabled}>
+      {label}
+    </button>
+  );
+}
 
 type Phase = "prompt" | "downloading" | "installing" | "error";
 
@@ -118,18 +128,14 @@ export default function UpdateModal({ update, onClose }: { update: Update; onClo
       <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.2rem" }}>
         {phase === "error" ? (
           <>
-            <button type="button" className="outline" onClick={handleClose}>
-              Fechar
-            </button>
+            <DismissButton label="Fechar" />
             <button type="button" onClick={() => openUrl(LATEST_RELEASE_URL)}>
               Abrir no GitHub
             </button>
           </>
         ) : (
           <>
-            <button type="button" className="outline" onClick={handleClose} disabled={busy}>
-              Depois
-            </button>
+            <DismissButton label="Depois" disabled={busy} />
             <button type="button" onClick={handleUpdate} disabled={busy}>
               {phase === "downloading" ? "Baixando..." : phase === "installing" ? "Instalando..." : "Atualizar agora"}
             </button>

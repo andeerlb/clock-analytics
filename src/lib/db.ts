@@ -4418,20 +4418,37 @@ export async function applyAutoSyncedFieldUpdate(
 
 /**
  * Walks the append-only chain backward from `shiftId` via
- * `previousShiftId`, returning every row from oldest to most recent
+ * `previousShiftId`, returning every row from most recent to oldest
  * (including `shiftId` itself) — the full "Status anterior" history for a
  * shift, not just one hop back, since a shift can be paid, reverted to
- * pendente, and paid again more than once.
+ * pendente, and paid again more than once. A single recursive query, not
+ * a loop of one-row `getPaymentShift` calls. The recursion is only needed
+ * to find *which* rows belong to this chain (they're scattered across the
+ * table, linked by `previous_shift_id` pointers, not selectable by a plain
+ * WHERE) — once that set is known, ordering is a plain `ORDER BY ps.id
+ * DESC`: a child row's id is always higher than its parent's (the parent
+ * has to already exist, with a lower id, before anything can point back to
+ * it), which is unambiguous even when two transitions land in the same
+ * `imported_at` second (that column has only 1s resolution).
  */
 export async function getPaymentShiftHistory(shiftId: number): Promise<PaymentShiftRow[]> {
-  const chain: PaymentShiftRow[] = [];
-  let currentId: number | null = shiftId;
-  while (currentId !== null) {
-    const shift: PaymentShiftRow = await getPaymentShift(currentId);
-    chain.push(shift);
-    currentId = shift.previousShiftId;
-  }
-  return chain.reverse();
+  const db = await getDb();
+  const rows = await db.select<PaymentShiftRowRaw[]>(
+    `WITH RECURSIVE chain(id) AS (
+       SELECT $1
+       UNION ALL
+       SELECT ps.previous_shift_id
+       FROM payment_shifts ps
+       JOIN chain ON chain.id = ps.id
+       WHERE ps.previous_shift_id IS NOT NULL
+     )
+     SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS}
+     ${PAYMENT_SHIFT_FROM_CLAUSE}
+     JOIN chain ON chain.id = ps.id
+     ORDER BY ps.id DESC`,
+    [shiftId],
+  );
+  return rows.map(parsePaymentShiftRow);
 }
 
 /**

@@ -6,7 +6,7 @@ import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { useEffect, useRef, useState } from "react";
 import { copyPdfTo, readPdfBytes, revealInFileManager } from "../lib/api";
 import { sanitizeFileName } from "../lib/format";
-import Modal from "./Modal";
+import Modal, { ModalClose } from "./Modal";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 
@@ -214,119 +214,139 @@ export default function PdfViewerModal({
 
   return (
     <Modal fullScreen zIndex={100} onClose={onClose}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "0.8rem 1.2rem",
-          background: "var(--card-bg)",
-          borderBottom: "1px solid var(--border)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <strong style={{ fontSize: "0.95rem" }}>{title ?? "Documento"}</strong>
-        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-          {doc && doc.numPages > 1 && (
-            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-              <button
-                type="button"
-                className="ghost"
-                style={{ padding: "0.3rem" }}
-                onClick={() => goToPage(currentPage - 1)}
-                disabled={currentPage <= 1}
-                aria-label="Página anterior"
-              >
-                <ChevronLeft size={16} />
-              </button>
-              <span className="muted" style={{ fontSize: "0.85rem" }}>
-                Página {currentPage} de {doc.numPages}
-              </span>
-              <button
-                type="button"
-                className="ghost"
-                style={{ padding: "0.3rem" }}
-                onClick={() => goToPage(currentPage + 1)}
-                disabled={currentPage >= doc.numPages}
-                aria-label="Próxima página"
-              >
-                <ChevronRight size={16} />
-              </button>
-            </div>
-          )}
-          <button
-            type="button"
-            className="secondary"
-            onClick={handleReveal}
-            disabled={revealing || !doc}
-            title="Ver no explorador de arquivos"
-          >
-            <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-            Ver no explorador
-          </button>
-          {allowDownload && (
-            <button
-              type="button"
-              className="secondary"
-              onClick={handleDownload}
-              disabled={downloading || !doc}
-              title="Baixar"
-            >
-              <Download size={15} style={{ marginRight: "0.4rem" }} />
-              {downloading ? "Baixando..." : "Baixar"}
-            </button>
-          )}
-          <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={onClose} aria-label="Fechar">
-            <X size={18} />
-          </button>
-        </div>
-      </div>
-
-      <div
-        ref={scrollRef}
-        style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column", alignItems: "center", padding: "1.5rem", gap: "1.2rem" }}
-        onClick={onClose}
-      >
-        {(loading || (doc && !pageSize)) && <p className="muted">Carregando...</p>}
-        {error && (
-          <div className="error-box" onClick={(e) => e.stopPropagation()}>
-            {error}
-          </div>
-        )}
-        {downloadError && (
-          <div className="error-box" style={{ marginBottom: "1rem" }} onClick={(e) => e.stopPropagation()}>
-            {downloadError}
-          </div>
-        )}
-        {!error &&
-          doc &&
-          pageSize &&
-          Array.from({ length: doc.numPages }, (_, i) => i + 1).map((pageNum) => (
+      <ModalClose>
+        {(requestClose) => (
+          <>
             <div
-              key={pageNum}
-              data-page-number={pageNum}
-              ref={(el) => {
-                if (el) pageElRef.current.set(pageNum, el);
-                else pageElRef.current.delete(pageNum);
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "0.8rem 1.2rem",
+                background: "var(--card-bg)",
+                borderBottom: "1px solid var(--border)",
               }}
               onClick={(e) => e.stopPropagation()}
-              style={{
-                boxShadow: "0 10px 30px rgba(0, 0, 0, 0.5)",
-                minWidth: pageSize.width,
-                minHeight: pageSize.height,
-                flexShrink: 0,
-              }}
             >
-              <canvas
-                ref={(el) => {
-                  if (el) canvasElRef.current.set(pageNum, el);
-                  else canvasElRef.current.delete(pageNum);
-                }}
-                style={{ display: "block", height: "fit-content" }}
-              />
+              <strong style={{ fontSize: "0.95rem" }}>{title ?? "Documento"}</strong>
+              <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+                {doc && doc.numPages > 1 && (
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <button
+                      type="button"
+                      className="ghost"
+                      style={{ padding: "0.3rem" }}
+                      onClick={() => goToPage(currentPage - 1)}
+                      disabled={currentPage <= 1}
+                      aria-label="Página anterior"
+                    >
+                      <ChevronLeft size={16} />
+                    </button>
+                    <span className="muted" style={{ fontSize: "0.85rem" }}>
+                      Página {currentPage} de {doc.numPages}
+                    </span>
+                    <button
+                      type="button"
+                      className="ghost"
+                      style={{ padding: "0.3rem" }}
+                      onClick={() => goToPage(currentPage + 1)}
+                      disabled={currentPage >= doc.numPages}
+                      aria-label="Próxima página"
+                    >
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={handleReveal}
+                  disabled={revealing || !doc}
+                  title="Ver no explorador de arquivos"
+                >
+                  <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
+                  Ver no explorador
+                </button>
+                {allowDownload && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={handleDownload}
+                    disabled={downloading || !doc}
+                    title="Baixar"
+                  >
+                    <Download size={15} style={{ marginRight: "0.4rem" }} />
+                    {downloading ? "Baixando..." : "Baixar"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="ghost"
+                  style={{ padding: "0.3rem" }}
+                  onClick={requestClose}
+                  aria-label="Fechar"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
-          ))}
-      </div>
+
+            <div
+              ref={scrollRef}
+              style={{
+                flex: 1,
+                overflow: "auto",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                padding: "1.5rem",
+                gap: "1.2rem",
+              }}
+              onClick={requestClose}
+            >
+              {(loading || (doc && !pageSize)) && <p className="muted">Carregando...</p>}
+              {error && (
+                <div className="error-box" onClick={(e) => e.stopPropagation()}>
+                  {error}
+                </div>
+              )}
+              {downloadError && (
+                <div className="error-box" style={{ marginBottom: "1rem" }} onClick={(e) => e.stopPropagation()}>
+                  {downloadError}
+                </div>
+              )}
+              {!error &&
+                doc &&
+                pageSize &&
+                Array.from({ length: doc.numPages }, (_, i) => i + 1).map((pageNum) => (
+                  <div
+                    key={pageNum}
+                    data-page-number={pageNum}
+                    ref={(el) => {
+                      if (el) pageElRef.current.set(pageNum, el);
+                      else pageElRef.current.delete(pageNum);
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      boxShadow: "0 10px 30px rgba(0, 0, 0, 0.5)",
+                      minWidth: pageSize.width,
+                      minHeight: pageSize.height,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <canvas
+                      ref={(el) => {
+                        if (el) canvasElRef.current.set(pageNum, el);
+                        else canvasElRef.current.delete(pageNum);
+                      }}
+                      style={{ display: "block", height: "fit-content" }}
+                    />
+                  </div>
+                ))}
+            </div>
+          </>
+        )}
+      </ModalClose>
     </Modal>
   );
 }
