@@ -22,6 +22,7 @@ export default function EmployeesPage() {
   const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([listCompanies(), listClients()]).then(([companyRows, clientRows]) => {
@@ -34,6 +35,7 @@ export default function EmployeesPage() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setError(null);
     listEmployeesGlobal({
       search,
       companyIds: Array.from(selectedCompanyIds, Number),
@@ -45,6 +47,12 @@ export default function EmployeesPage() {
         if (cancelled) return;
         setEmployees(rows);
         setTotal(rowTotal);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setEmployees([]);
+        setTotal(0);
+        setError(String(e instanceof Error ? e.message : e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -96,6 +104,8 @@ export default function EmployeesPage() {
         Cadastro de colaboradores, independente de espelho de ponto ou pagamento importado. O CPF
         é único por cliente — o mesmo CPF pode existir para clientes diferentes.
       </p>
+
+      {error && <div className="error-box">{error}</div>}
 
       <div className="card">
         <div className="field-row" style={{ marginBottom: 0, alignItems: "flex-end" }}>
@@ -180,9 +190,8 @@ export default function EmployeesPage() {
                   <tr>
                     <th>Colaborador</th>
                     <th>CPF</th>
-                    <th>Matrícula</th>
                     <th>Cliente</th>
-                    <th>Empresa</th>
+                    <th>Empresas</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -195,9 +204,10 @@ export default function EmployeesPage() {
                         </div>
                       </td>
                       <td className="mono">{formatCpf(e.cpf)}</td>
-                      <td className="mono">{e.matricula ?? "—"}</td>
                       <td>{e.clientName}</td>
-                      <td>{e.companyName}</td>
+                      <td>
+                        {e.companies.map((c) => c.companyName + (c.matricula ? ` (${c.matricula})` : "")).join(", ")}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

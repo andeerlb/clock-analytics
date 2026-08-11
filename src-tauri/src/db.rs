@@ -418,5 +418,17 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0069_payment_shift_role_fk_only.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 70,
+            description: "backfill payment_shifts.edited_manually for markPaymentShiftPaid/revertPaymentShiftToPending rows written before those two transitions stopped forcing it to 1 — only a genuine editPaymentShift hop anywhere in a row's ancestry should still read edited_manually",
+            sql: include_str!("../migrations/0070_backfill_edited_manually.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 71,
+            description: "employees.UNIQUE(company_id, client_id, cpf) narrowed to UNIQUE(client_id, cpf) — a colaborador is one person per cliente now, not one person per (cliente, empresa); company_id/matricula move off employees onto the new employee_companies (one row per empresa a colaborador is linked to), fixing the same person showing up as a separate duplicate colaborador per empresa",
+            sql: include_str!("../migrations/0071_employee_company_link.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

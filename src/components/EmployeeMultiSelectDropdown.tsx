@@ -166,7 +166,10 @@ export default function EmployeeMultiSelectDropdown({
                 >
                   <input type="checkbox" checked={selected.has(String(e.id))} onChange={() => onToggle(String(e.id))} />
                   {e.name}
-                  {e.matricula && <span className="muted"> · {e.matricula}</span>}
+                  {(() => {
+                    const matriculas = e.companies.map((c) => c.matricula).filter(Boolean).join(", ");
+                    return matriculas && <span className="muted"> · {matriculas}</span>;
+                  })()}
                 </label>
               ))}
             </div>

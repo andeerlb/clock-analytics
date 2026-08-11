@@ -8,12 +8,16 @@ import {
   createEmployeeManual,
   deleteEmployee,
   getEmployee,
+  linkEmployeeToCompany,
   listClients,
   listEmployeeAliases,
   removeEmployeeAlias,
+  unlinkEmployeeCompany,
   updateEmployee,
+  updateEmployeeCompanyMatricula,
   type ClientRow,
   type EmployeeAliasRow,
+  type EmployeeCompanyLink,
 } from "../lib/db";
 import { maskCpf } from "../lib/format";
 
@@ -45,7 +49,12 @@ export default function EmployeeFormPage() {
     prefill?.prefillCompanyId !== undefined ? String(prefill.prefillCompanyId) : "",
   );
   const [clientName, setClientName] = useState("");
-  const [companyName, setCompanyName] = useState("");
+  // Edit mode only — the numeric clientId (`getEmployee`'s own, not the
+  // `clientId` state above, which stays whatever the create-mode select had
+  // it at) is what the "add empresa" picker below needs to know which
+  // client_companies options are even valid for this colaborador.
+  const [employeeClientId, setEmployeeClientId] = useState<number | null>(null);
+  const [companies, setCompanies] = useState<EmployeeCompanyLink[]>([]);
   const [name, setName] = useState(prefill?.prefillName ?? "");
   const [cpf, setCpf] = useState("");
   const [matricula, setMatricula] = useState("");
@@ -57,6 +66,12 @@ export default function EmployeeFormPage() {
   const [newAlias, setNewAlias] = useState("");
   const [aliasBusy, setAliasBusy] = useState(false);
   const [aliasError, setAliasError] = useState<string | null>(null);
+
+  // "Vincular a outra empresa" — edit mode only.
+  const [addCompanyId, setAddCompanyId] = useState("");
+  const [addMatricula, setAddMatricula] = useState("");
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
 
   // "Excluir colaborador" — irreversible, wipes payment_shifts/imports too
   // (see `deleteEmployee`). No count query first — the confirm message
@@ -79,22 +94,75 @@ export default function EmployeeFormPage() {
   }
 
   useEffect(() => {
+    listClients().then(setClients);
     if (isEditing) {
       getEmployee(Number(id))
         .then((e) => {
           setName(e.name);
           setCpf(maskCpf(e.cpf));
-          setMatricula(e.matricula ?? "");
           setClientName(e.clientName);
-          setCompanyName(e.companyName);
+          setEmployeeClientId(e.clientId);
+          setCompanies(e.companies);
         })
         .catch((e) => setError(String(e instanceof Error ? e.message : e)))
         .finally(() => setLoading(false));
       listEmployeeAliases(Number(id)).then(setAliases);
-    } else {
-      listClients().then(setClients);
     }
   }, [id, isEditing]);
+
+  async function refreshCompanies() {
+    setCompanies((await getEmployee(Number(id))).companies);
+  }
+
+  async function handleAddCompany(e: React.FormEvent) {
+    e.preventDefault();
+    setLinkError(null);
+    setLinkBusy(true);
+    try {
+      await linkEmployeeToCompany(Number(id), Number(addCompanyId), addMatricula.trim() || null);
+      setAddCompanyId("");
+      setAddMatricula("");
+      await refreshCompanies();
+    } catch (err) {
+      setLinkError(String(err instanceof Error ? err.message : err));
+    } finally {
+      setLinkBusy(false);
+    }
+  }
+
+  async function handleRemoveCompany(companyIdToRemove: number) {
+    setLinkError(null);
+    try {
+      await unlinkEmployeeCompany(Number(id), companyIdToRemove);
+      setCompanies((prev) => prev.filter((c) => c.companyId !== companyIdToRemove));
+    } catch (err) {
+      setLinkError(String(err instanceof Error ? err.message : err));
+    }
+  }
+
+  async function handleMatriculaChange(companyIdToUpdate: number, value: string) {
+    setCompanies((prev) => prev.map((c) => (c.companyId === companyIdToUpdate ? { ...c, matricula: value } : c)));
+  }
+
+  async function handleMatriculaBlur(companyIdToUpdate: number, value: string) {
+    setLinkError(null);
+    try {
+      await updateEmployeeCompanyMatricula(Number(id), companyIdToUpdate, value.trim() || null);
+    } catch (err) {
+      setLinkError(String(err instanceof Error ? err.message : err));
+    }
+  }
+
+  // Companies linked to this colaborador's cliente, minus the ones already
+  // linked to the colaborador — the "vincular a outra empresa" picker's
+  // option list.
+  const availableCompaniesToAdd = useMemo(
+    () =>
+      clients.filter(
+        (c) => c.id === employeeClientId && !companies.some((linked) => linked.companyId === c.companyId),
+      ),
+    [clients, employeeClientId, companies],
+  );
 
   async function handleAddAlias(e: React.FormEvent) {
     e.preventDefault();
@@ -146,10 +214,10 @@ export default function EmployeeFormPage() {
     setError(null);
     setBusy(true);
     try {
-      const trimmedMatricula = matricula.trim() || null;
       if (isEditing) {
-        await updateEmployee(Number(id), name, cpf, trimmedMatricula);
+        await updateEmployee(Number(id), name, cpf);
       } else {
+        const trimmedMatricula = matricula.trim() || null;
         await createEmployeeManual(Number(clientId), Number(companyId), name, cpf, trimmedMatricula);
       }
       // Same go-back-if-possible logic as `BackButton` — when this form was
@@ -176,7 +244,7 @@ export default function EmployeeFormPage() {
       </div>
       <p className="page-subtitle">
         {isEditing
-          ? "Cliente e empresa não podem ser alterados aqui — mudar de cliente é, na prática, um colaborador diferente."
+          ? "Cliente não pode ser alterado aqui — mudar de cliente é, na prática, um colaborador diferente. As empresas vinculadas ficam na seção abaixo."
           : "O CPF é único por cliente — o mesmo CPF pode existir para clientes diferentes."}
       </p>
 
@@ -188,15 +256,9 @@ export default function EmployeeFormPage() {
         <div className="card" style={{ maxWidth: "32rem" }}>
           <form onSubmit={handleSubmit}>
             {isEditing ? (
-              <div className="field-row" style={{ marginBottom: "1rem" }}>
-                <div className="field" style={{ flex: "1 1 200px" }}>
-                  <label>Cliente</label>
-                  <p className="muted" style={{ margin: 0 }}>{clientName}</p>
-                </div>
-                <div className="field" style={{ flex: "1 1 200px" }}>
-                  <label>Empresa</label>
-                  <p className="muted" style={{ margin: 0 }}>{companyName}</p>
-                </div>
+              <div className="field" style={{ marginBottom: "1rem" }}>
+                <label>Cliente</label>
+                <p className="muted" style={{ margin: 0 }}>{clientName}</p>
               </div>
             ) : (
               <div className="field-row" style={{ marginBottom: "1rem" }}>
@@ -269,23 +331,98 @@ export default function EmployeeFormPage() {
                   style={{ width: "100%" }}
                 />
               </div>
-              <div className="field" style={{ flex: "1 1 160px" }}>
-                <label htmlFor="employee-matricula">Matrícula (opcional)</label>
-                <input
-                  id="employee-matricula"
-                  type="text"
-                  value={matricula}
-                  onChange={(e) => setMatricula(e.target.value)}
-                  placeholder="Ex.: 00123"
-                  style={{ width: "100%" }}
-                />
-              </div>
+              {!isEditing && (
+                <div className="field" style={{ flex: "1 1 160px" }}>
+                  <label htmlFor="employee-matricula">Matrícula (opcional)</label>
+                  <input
+                    id="employee-matricula"
+                    type="text"
+                    value={matricula}
+                    onChange={(e) => setMatricula(e.target.value)}
+                    placeholder="Ex.: 00123"
+                    style={{ width: "100%" }}
+                  />
+                </div>
+              )}
             </div>
 
             <button type="submit" disabled={busy}>
               {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
             </button>
           </form>
+        </div>
+      )}
+
+      {!loading && isEditing && (
+        <div className="card" style={{ maxWidth: "32rem", marginTop: "1.2rem" }}>
+          <h3 style={{ marginTop: 0 }}>Empresas vinculadas</h3>
+          <p className="page-subtitle" style={{ marginTop: 0 }}>
+            Um colaborador pode estar vinculado a mais de uma empresa desse cliente (ex.: contratado
+            por duas empresas diferentes que atendem o mesmo cliente) — cada vínculo tem sua própria
+            matrícula, já que ela é emitida pela folha de pagamento de cada empresa.
+          </p>
+
+          {linkError && <div className="error-box">{linkError}</div>}
+
+          <div className="file-list" style={{ marginBottom: "0.8rem" }}>
+            {companies.map((c) => (
+              <div className="file-row" key={c.companyId}>
+                <div className="file-row-info">
+                  <div className="file-name">{c.companyName}</div>
+                </div>
+                <input
+                  type="text"
+                  value={c.matricula ?? ""}
+                  onChange={(e) => handleMatriculaChange(c.companyId, e.target.value)}
+                  onBlur={(e) => handleMatriculaBlur(c.companyId, e.target.value)}
+                  placeholder="Matrícula (opcional)"
+                  style={{ width: "10rem" }}
+                />
+                <div className="file-row-actions">
+                  <button
+                    type="button"
+                    className="ghost"
+                    style={{ padding: "0.3rem" }}
+                    onClick={() => handleRemoveCompany(c.companyId)}
+                    disabled={companies.length <= 1}
+                    title={companies.length <= 1 ? "O colaborador precisa de ao menos uma empresa" : "Remover vínculo"}
+                    aria-label="Remover vínculo"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {availableCompaniesToAdd.length > 0 && (
+            <form onSubmit={handleAddCompany} style={{ display: "flex", gap: "0.5rem" }}>
+              <select
+                value={addCompanyId}
+                onChange={(e) => setAddCompanyId(e.target.value)}
+                required
+                style={{ flex: "1 1 auto" }}
+              >
+                <option value="">Vincular a outra empresa...</option>
+                {availableCompaniesToAdd.map((c) => (
+                  <option key={c.companyId} value={c.companyId}>
+                    {c.companyName}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={addMatricula}
+                onChange={(e) => setAddMatricula(e.target.value)}
+                placeholder="Matrícula (opcional)"
+                style={{ width: "10rem" }}
+              />
+              <button type="submit" className="secondary" disabled={linkBusy || !addCompanyId}>
+                <Plus size={14} style={{ marginRight: "0.3rem" }} />
+                Vincular
+              </button>
+            </form>
+          )}
         </div>
       )}
 

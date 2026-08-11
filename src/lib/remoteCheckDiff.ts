@@ -220,7 +220,8 @@ export async function computeReimportDiff(
         ? `Colaborador não encontrado para "${row.fields.nome || "(nome vazio)"}" — nesta posição (${row.sheetName ? `aba ${row.sheetName}, ` : ""}linha ${row.rowNumber}) havia antes um turno de "${positional.employeeName}".`
         : `Colaborador não encontrado para "${row.fields.nome || "(nome vazio)"}".`;
       if (elsewhere) {
-        message += ` Existe um colaborador com esse nome cadastrado em ${elsewhere.clientName} (${elsewhere.companyName}), mas a regra desta linha aponta para ${route.clientName} (${route.companyName}) — reveja em "Importar pagamentos" para mover o cadastro, se for o caso.`;
+        const elsewhereCompanies = elsewhere.companies.map((c) => c.companyName).join(", ");
+        message += ` Existe um colaborador com esse nome cadastrado em ${elsewhere.clientName} (${elsewhereCompanies}), mas a regra desta linha aponta para ${route.clientName} (${route.companyName}) — reveja em "Importar pagamentos" para mover o cadastro, se for o caso.`;
       }
       unresolvedEntries.push(unresolvedEntry(row, workDate, parsedSchedule, message));
       continue;
