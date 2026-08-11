@@ -11,8 +11,8 @@ import Drawer from "./Drawer";
 const SIDEBAR_WIDTH = 220;
 /** Minimum gap kept between the card and the sidebar/viewport edges while dragging. */
 const CARD_MARGIN = 8;
-/** Above every modal in the app (the highest, ConfirmModal/Drawer's own overlay, is 200) — a full-screen wizard (PaymentTemplateWizard etc., z-index 100) used to tie with the old sidebar-edge tab and could paint over it; this always wins. */
-const CARD_Z_INDEX = 250;
+/** Above a full-screen wizard (PaymentTemplateWizard etc., z-index 100) — the old sidebar-edge tab used to tie with those and could get painted over — but below a real dialog (ConfirmModal/UpdateModal/Drawer's own overlay, z-index 200), which should never have this floating card sitting on top of it. */
+const CARD_Z_INDEX = 150;
 
 function clampCardPosition(top: number, left: number, width: number, height: number): { top: number; left: number } {
   const minLeft = SIDEBAR_WIDTH + CARD_MARGIN;

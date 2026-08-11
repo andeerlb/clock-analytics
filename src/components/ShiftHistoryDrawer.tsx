@@ -1,4 +1,3 @@
-import { AlertCircle, CheckCircle2, Clock3 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { getPaymentShiftHistory, type EffectivePaymentRules } from "../lib/db";
 import {
@@ -12,17 +11,17 @@ import {
   shiftDurationMinutes,
 } from "../lib/format";
 import type { PaymentShiftRow, PaymentShiftStatus } from "../lib/types";
-import Modal from "./Modal";
+import Drawer from "./Drawer";
 
-const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: string; icon: typeof CheckCircle2 }> = {
-  pendente: { className: "badge warn", label: "Pendente", icon: Clock3 },
-  erro: { className: "badge file-error", label: "Erro", icon: AlertCircle },
-  pago: { className: "badge ok", label: "Pago", icon: CheckCircle2 },
+const STATUS_LABEL: Record<PaymentShiftStatus, string> = {
+  pendente: "Pendente",
+  erro: "Erro",
+  pago: "Pago",
 };
 
 function DetailRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", padding: "0.3rem 0" }}>
+    <div className="drawer-detail-row" style={{ display: "flex", justifyContent: "space-between", gap: "1rem", paddingTop: "0.3rem", paddingBottom: "0.3rem" }}>
       <span className="muted" style={{ fontSize: "0.85rem" }}>
         {label}
       </span>
@@ -61,9 +60,6 @@ function HistoryEntry({
           scheduleEndMinutes: shift.scheduleEndMinutes,
         })
       : null);
-  const badge = STATUS_BADGE[shift.status];
-  const BadgeIcon = badge.icon;
-
   return (
     <div
       style={{
@@ -72,34 +68,17 @@ function HistoryEntry({
         borderBottom: isLast ? undefined : "1px solid var(--border)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.2rem" }}>
-        <span className={badge.className}>
-          <BadgeIcon size={13} />
-          {badge.label}
-        </span>
-        <span className="muted" style={{ fontSize: "0.78rem" }}>
-          {formatDateTime(shift.importedAt)}
-        </span>
-      </div>
+      <DetailRow label="Status">{STATUS_LABEL[shift.status]}</DetailRow>
+      <DetailRow label="Importado em">{formatDateTime(shift.importedAt)}</DetailRow>
       {shift.status === "erro" && shift.errorMessage && <DetailRow label="Erro">{shift.errorMessage}</DetailRow>}
       <DetailRow label="Data">{formatDate(shift.workDate)}</DetailRow>
       <DetailRow label="Local / Função">
         {shift.local} · {shift.role}
       </DetailRow>
       <DetailRow label="Horário">
-        {hasSchedule ? (
-          <>
-            {formatMinutesAsTime(shift.scheduleStartMinutes!)} – {formatMinutesAsTime(shift.scheduleEndMinutes!)}
-            {period && (
-              <span className={period === "noturno" ? "badge info" : "badge neutral"} style={{ marginLeft: "0.5rem" }}>
-                {period === "noturno" ? "Noturno" : "Diurno"}
-              </span>
-            )}
-          </>
-        ) : (
-          "—"
-        )}
+        {hasSchedule ? `${formatMinutesAsTime(shift.scheduleStartMinutes!)} – ${formatMinutesAsTime(shift.scheduleEndMinutes!)}` : "—"}
       </DetailRow>
+      {period && <DetailRow label="Turno">{period === "noturno" ? "Noturno" : "Diurno"}</DetailRow>}
       <DetailRow label="Horas trabalhadas">
         {durationMinutes !== null ? formatMinutesAsTime(durationMinutes) : "—"}
       </DetailRow>
@@ -111,16 +90,20 @@ function HistoryEntry({
 /**
  * Read-only look at a shift's full status history — every row the append-
  * only chain (`previous_shift_id`) passed through before reaching the
- * current head, oldest first. Reached via the "Status anterior" link, since
- * the Pagamentos list only ever shows head rows. Fetches by id itself, same
- * self-contained recipe as `PdfViewerModal`.
+ * current head, oldest first. Reached via the row's context menu's "Ver
+ * histórico", always offered regardless of whether there's actually
+ * anything to show — `shiftId === null` means this turno IS the first
+ * state (no `previousShiftId`), so nothing is fetched and the panel just
+ * says so instead of coming up empty with no explanation.
  */
-export default function ShiftHistoryModal({
+export default function ShiftHistoryDrawer({
+  open,
   shiftId,
   rules,
   onClose,
 }: {
-  /** `null` keeps the modal unmounted/closed. */
+  open: boolean;
+  /** The turno's `previousShiftId` — `null` means it genuinely has no earlier history, not "not loaded yet". */
   shiftId: number | null;
   rules: EffectivePaymentRules | null;
   onClose: () => void;
@@ -130,7 +113,7 @@ export default function ShiftHistoryModal({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (shiftId === null) {
+    if (!open || shiftId === null) {
       setHistory([]);
       return;
     }
@@ -150,25 +133,19 @@ export default function ShiftHistoryModal({
     return () => {
       cancelled = true;
     };
-  }, [shiftId]);
-
-  if (shiftId === null) return null;
+  }, [open, shiftId]);
 
   return (
-    <Modal onClose={onClose} width="26rem" maxHeight="80vh">
-      <h3 style={{ marginTop: 0 }}>Histórico do turno</h3>
+    <Drawer open={open} onClose={onClose} title="Histórico do turno">
       {loading && <p className="muted">Carregando...</p>}
       {error && <div className="error-box">{error}</div>}
+      {!loading && !error && shiftId === null && (
+        <p className="muted">Este turno não tem histórico — nenhuma alteração de status foi registrada para ele ainda.</p>
+      )}
       {!loading &&
         !error &&
-        history.map((shift, i) => (
-          <HistoryEntry key={shift.id} shift={shift} rules={rules} isLast={i === history.length - 1} />
-        ))}
-      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.4rem" }}>
-        <button type="button" className="outline" onClick={onClose}>
-          Fechar
-        </button>
-      </div>
-    </Modal>
+        shiftId !== null &&
+        history.map((shift, i) => <HistoryEntry key={shift.id} shift={shift} rules={rules} isLast={i === history.length - 1} />)}
+    </Drawer>
   );
 }

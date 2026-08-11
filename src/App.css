@@ -392,6 +392,18 @@ button.ghost:hover {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text);
 }
+/* Small pill-sized variant of button.outline — shared by "Visto"
+   acknowledgements and inline count triggers (e.g. Pagamentos' "extras"
+   column) so both use the exact same compact size and hover treatment
+   instead of each hand-rolling its own inline style. */
+button.pill-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+}
 /* The border-thickness input in TemplateGridEditor's border menu is small enough that the native up/down spinner covers most of its digits — hidden the same way search inputs usually hide their native "x" clear button. */
 .template-grid-number-input {
   -moz-appearance: textfield;
@@ -467,6 +479,22 @@ tr:last-child td {
   border-bottom-color: var(--accent);
 }
 
+/* Shared by every label/value Drawer row (`ShiftHistoryDrawer`,
+   `ExtraColumnsDrawer`) — each line highlights on its own as the mouse
+   moves over it, not the whole panel at once, so a long list is easier to
+   scan row by row. Negative margin/extra padding lets the highlight bleed
+   slightly past the text instead of hugging it exactly. */
+.drawer-detail-row {
+  margin: 0 -0.4rem;
+  padding-left: 0.4rem;
+  padding-right: 0.4rem;
+  border-radius: 6px;
+  transition: background 0.12s ease;
+}
+.drawer-detail-row:hover {
+  background: var(--surface-variant);
+}
+
 .avatar {
   width: 32px;
   height: 32px;
@@ -488,6 +516,22 @@ tr:last-child td {
   border-radius: 0;
   font-size: 0.75rem;
   font-weight: 600;
+  /* Two badges sitting side by side as inline-flex elements default to
+     vertical-align: baseline — since their baselines differ by content (a
+     text badge vs. an icon-only one), that leaves them at different
+     vertical offsets even once their heights match. */
+  vertical-align: middle;
+}
+/* A badge's natural height otherwise depends on its content — an icon-only
+   badge sizes to the icon's pixel height, a text badge sizes to the font's
+   line box — so two adjacent badges with different content (e.g. the
+   Pagamentos status pill and the icon-only "edited manually" shield next to
+   it) end up visibly different heights even with identical padding. Pinning
+   height explicitly with box-sizing: border-box makes it content-independent
+   instead of chasing a pixel value that matches by coincidence. */
+.badge:not(.duplicate) {
+  height: 1.4rem;
+  box-sizing: border-box;
 }
 
 .badge.warn {
@@ -824,7 +868,7 @@ tr:last-child td {
 }
 
 /* Shared by every `Modal`-based dialog (ConfirmModal, UpdateModal,
-   ExtraColumnsModal, ShiftHistoryModal, ConfirmPaymentModal) — a frosted-
+   ConfirmPaymentModal) — a frosted-
    glass backdrop instead of a flat dark scrim, so whatever's behind the
    modal stays legible as shapes/colors without competing for attention. */
 .modal-overlay {

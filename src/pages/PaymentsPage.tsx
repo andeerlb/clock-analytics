@@ -1,6 +1,4 @@
 import {
-  AlertCircle,
-  AlertTriangle,
   Briefcase,
   Building2,
   Calendar,
@@ -13,12 +11,10 @@ import {
   FileSpreadsheet,
   Filter,
   FolderOpen,
-  History,
   Info,
   Layers,
   ListFilter,
   Moon,
-  RotateCcw,
   Search,
   Settings2,
   ShieldCheck,
@@ -26,22 +22,24 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import AnchoredPopover from "../components/AnchoredPopover";
 import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
 import ConfirmPaymentModal from "../components/ConfirmPaymentModal";
+import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import DatePicker from "../components/DatePicker";
 import DateRangePicker from "../components/DateRangePicker";
 import Drawer from "../components/Drawer";
 import EmployeeMultiSelectDropdown from "../components/EmployeeMultiSelectDropdown";
-import ExtraColumnsModal from "../components/ExtraColumnsModal";
+import ExtraColumnsDrawer from "../components/ExtraColumnsDrawer";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
 import PdfViewerModal from "../components/PdfViewerModal";
+import PillButton from "../components/PillButton";
 import ScheduleTimeFilterDropdown from "../components/ScheduleTimeFilterDropdown";
-import ShiftHistoryModal from "../components/ShiftHistoryModal";
+import ShiftHistoryDrawer from "../components/ShiftHistoryDrawer";
 import { PAYMENTS_PAGE_SIZE_OPTIONS, usePaymentsFilters } from "../contexts/FiltersContext";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { revealInFileManager } from "../lib/api";
@@ -107,10 +105,10 @@ const SHIFT_PERIOD_OPTIONS: MultiSelectOption<ShiftPeriod>[] = [
   { id: "noturno", label: "Noturno" },
 ];
 
-const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: string; icon: typeof CheckCircle2 }> = {
-  pendente: { className: "badge warn", label: "Pendente", icon: Clock3 },
-  erro: { className: "badge file-error", label: "Erro", icon: AlertCircle },
-  pago: { className: "badge ok", label: "Pago", icon: CheckCircle2 },
+const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: string }> = {
+  pendente: { className: "badge warn", label: "Pendente" },
+  erro: { className: "badge file-error", label: "Erro" },
+  pago: { className: "badge ok", label: "Pago" },
 };
 
 /** Every column a turno row can show — `identityOnly` ones only ever appear in the flat (desagrupado) table, since a grouped row's expanded turno table already shows its colaborador/cliente/empresa once, in the summary header above it. */
@@ -473,14 +471,16 @@ function displayExtraData(s: PaymentShiftRow): Record<string, string> | null {
 }
 
 /**
- * One turno's cells (Data through Ações) — shared between the flat table
- * (which prepends Colaborador/Cliente/Empresa via `identity`) and a grouped
- * row's expanded turno table (no `identity`, since that's already the
- * group's own header). `visibleColumns` is an app-wide setting (see
- * `PaymentsPage`), not per-row state, but lives here since this is the only
- * place it changes what actually renders. Data/Local/Função/Horário/Valor
- * are always inline-editable for a `pendente`/`erro` shift — there's no
- * separate "modo edição" toggle to gate it.
+ * One turno's visible-column cells — shared between the flat table (which
+ * prepends Colaborador/Cliente/Empresa via `identity`) and a grouped row's
+ * expanded turno table (no `identity`, since that's already the group's own
+ * header). `visibleColumns` is an app-wide setting (see `PaymentsPage`), not
+ * per-row state, but lives here since this is the only place it changes what
+ * actually renders. Data/Local/Função/Horário/Valor are always inline-editable
+ * for a `pendente`/`erro` shift — there's no separate "modo edição" toggle to
+ * gate it. Row actions (pagar/reverter/excluir/histórico/revisar) aren't a
+ * visible column at all — right-clicking the row opens them as a
+ * `ContextMenu` instead (see `rowActions` below).
  */
 function ShiftRow({
   shift: s,
@@ -497,6 +497,7 @@ function ShiftRow({
   onViewHistory,
   onViewExtra,
   onReview,
+  onRowContextMenu,
 }: {
   shift: PaymentShiftRow & { shiftPeriod: ShiftPeriod | null };
   companyId: number;
@@ -510,13 +511,15 @@ function ShiftRow({
   onPay: (shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) => void;
   onRevert: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
   onDelete: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
-  onViewHistory: (shiftId: number, companyId: number, clientId: number) => void;
+  /** `shiftId` is the row's own `previousShiftId` — `null` when it genuinely has no earlier history, still opens the Drawer, just shows that instead of a list. */
+  onViewHistory: (shiftId: number | null, companyId: number, clientId: number) => void;
   onViewExtra: (data: Record<string, string>, sourceUrl: string | null) => void;
-  /** Opens the review Drawer — the only thing a blocked row's Ações column offers, and an optional "ver o que mudou" for an already-auto-applied one. */
+  /** Opens the review Drawer — the only other thing (besides "Ver histórico") a blocked row's right-click menu offers, and an optional "ver o que mudou" for an already-auto-applied one. */
   onReview: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
+  /** Right-clicking anywhere on the row opens this row's actions (same set the old Ações column used to render as buttons) as a context menu instead — see `ContextMenu`. */
+  onRowContextMenu: (e: MouseEvent, items: ContextMenuItem[]) => void;
 }) {
   const badge = STATUS_BADGE[s.status];
-  const BadgeIcon = badge.icon;
   const hasSchedule = s.scheduleStartMinutes !== null && s.scheduleEndMinutes !== null;
   const duration = hasSchedule ? shiftDurationMinutes(s.scheduleStartMinutes!, s.scheduleEndMinutes!) : null;
   const value =
@@ -543,8 +546,35 @@ function ShiftRow({
   const col = (id: string) => visibleColumns.has(id);
   const patch = (p: ShiftFieldPatch) => onCommitField(s, groupRef, p);
 
+  // Same actions the old Ações column rendered as buttons, now offered
+  // through a right-click menu instead (see `onRowContextMenu`) — a blocked
+  // row only offers "Revisar alteração" plus "Ver histórico", nothing else.
+  // "Ver histórico" is always present regardless of status/blocked state —
+  // unlike the rest, a turno with no previousShiftId still gets the item,
+  // it just opens the Drawer to a "no history yet" message instead of a list
+  // (see `ShiftHistoryDrawer`).
+  const rowActions: ContextMenuItem[] = [
+    ...(isBlocked
+      ? [{ label: "Revisar alteração", onClick: () => onReview(s, groupRef) }]
+      : [
+          ...(appliedChanges.length > 0 ? [{ label: "Ver o que mudou", onClick: () => onReview(s, groupRef) }] : []),
+          ...(s.status === "pendente" || s.status === "erro"
+            ? [{ label: "Fazer pagamento", onClick: () => onPay(s, companyId, groupRef) }]
+            : []),
+          ...(s.status === "pago" ? [{ label: "Voltar para pendente", onClick: () => onRevert(s, groupRef) }] : []),
+        ]),
+    { label: "Ver histórico", onClick: () => onViewHistory(s.previousShiftId, companyId, s.clientId) },
+    ...(isBlocked ? [] : [{ label: "Remover turno", danger: true, onClick: () => onDelete(s, groupRef) }]),
+  ];
+
   return (
-    <tr style={isBlocked ? { background: "var(--warning-soft)" } : appliedChanges.length > 0 ? { background: "var(--accent-soft)" } : undefined}>
+    <tr
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onRowContextMenu(e, rowActions);
+      }}
+      style={isBlocked ? { background: "var(--warning-soft)" } : appliedChanges.length > 0 ? { background: "var(--accent-soft)" } : undefined}
+    >
       {identity && col("colaborador") && (
         <td>
           <div className="person-cell">
@@ -578,15 +608,19 @@ function ShiftRow({
             endTime={s.scheduleEndMinutes !== null ? formatMinutesAsTime(s.scheduleEndMinutes) : ""}
             display={
               hasSchedule ? (
-                <>
-                  {formatMinutesAsTime(s.scheduleStartMinutes!)} – {formatMinutesAsTime(s.scheduleEndMinutes!)}
+                <span style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem" }}>
+                  <span>
+                    {formatMinutesAsTime(s.scheduleStartMinutes!)} – {formatMinutesAsTime(s.scheduleEndMinutes!)}
+                  </span>
                   {s.shiftPeriod && (
-                    <span className={s.shiftPeriod === "noturno" ? "badge info" : "badge neutral"} style={{ marginLeft: "0.5rem" }}>
+                    <span
+                      className={s.shiftPeriod === "noturno" ? "badge info" : "badge neutral"}
+                      title={s.shiftPeriod === "noturno" ? "Noturno" : "Diurno"}
+                    >
                       {s.shiftPeriod === "noturno" ? <Moon size={12} /> : <Sun size={12} />}
-                      {s.shiftPeriod === "noturno" ? "Noturno" : "Diurno"}
                     </span>
                   )}
-                </>
+                </span>
               ) : (
                 "—"
               )
@@ -613,19 +647,17 @@ function ShiftRow({
       )}
       {col("status") && (
         <td>
-          <span className={badge.className}>
-            <BadgeIcon size={13} />
-            {badge.label}
+          <span style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: "0.4rem" }}>
+            <span className={badge.className}>{badge.label}</span>
+            {s.editedManually && (
+              <span
+                className="badge info"
+                title="Atualizado manualmente — uma reimportação não sobrescreve este turno enquanto 'Manter registros atualizados manualmente' estiver ativado (Configurações → Zona de risco → Pagamentos)."
+              >
+                <ShieldCheck size={13} />
+              </span>
+            )}
           </span>
-          {s.editedManually && (
-            <span
-              className="badge info"
-              style={{ marginLeft: "0.4rem" }}
-              title="Atualizado manualmente — uma reimportação não sobrescreve este turno enquanto 'Manter registros atualizados manualmente' estiver ativado (Configurações → Zona de risco → Pagamentos)."
-            >
-              <ShieldCheck size={12} />
-            </span>
-          )}
           {s.status === "erro" && s.errorMessage && (
             <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.25rem" }}>
               {s.errorMessage}
@@ -643,80 +675,16 @@ function ShiftRow({
           {(() => {
             const extra = displayExtraData(s);
             return extra ? (
-              <button
-                type="button"
-                className="badge neutral"
-                style={{ border: "none", cursor: "pointer" }}
-                onClick={() => onViewExtra(extra, s.sourceUrl)}
-                title="Ver colunas não mapeadas lidas do arquivo"
-              >
+              <PillButton onClick={() => onViewExtra(extra, s.sourceUrl)} title="Ver colunas não mapeadas lidas do arquivo">
                 <Info size={12} />
                 {Object.keys(extra).length}
-              </button>
+              </PillButton>
             ) : (
               <span className="muted">—</span>
             );
           })()}
         </td>
       )}
-      <td>
-        {isBlocked ? (
-          <button type="button" className="secondary" onClick={() => onReview(s, groupRef)}>
-            <AlertTriangle size={13} style={{ marginRight: "0.35rem", verticalAlign: "-2px" }} />
-            Revisar alteração
-          </button>
-        ) : (
-          <>
-            {appliedChanges.length > 0 && (
-              <button
-                type="button"
-                className="ghost"
-                style={{ padding: "0.4rem" }}
-                onClick={() => onReview(s, groupRef)}
-                title="A verificação automática já atualizou este turno — ver o que mudou"
-              >
-                <Eye size={13} />
-              </button>
-            )}
-            {(s.status === "pendente" || s.status === "erro") && (
-              <button type="button" className="secondary" onClick={() => onPay(s, companyId, groupRef)}>
-                Fazer pagamento
-              </button>
-            )}
-            {s.status === "pago" && (
-              <button
-                type="button"
-                className="ghost"
-                style={{ padding: "0.4rem" }}
-                onClick={() => onRevert(s, groupRef)}
-                title="Voltar este turno para pendente"
-              >
-                <RotateCcw size={13} />
-              </button>
-            )}
-            {s.previousShiftId !== null && (
-              <button
-                type="button"
-                className="ghost"
-                style={{ padding: "0.4rem" }}
-                onClick={() => onViewHistory(s.previousShiftId!, companyId, s.clientId)}
-                title="Ver histórico de status deste turno"
-              >
-                <History size={13} />
-              </button>
-            )}
-            <button
-              type="button"
-              className="ghost"
-              style={{ padding: "0.4rem" }}
-              onClick={() => onDelete(s, groupRef)}
-              title="Remover este turno e todo o seu histórico"
-            >
-              <Trash2 size={13} />
-            </button>
-          </>
-        )}
-      </td>
     </tr>
   );
 }
@@ -804,7 +772,9 @@ export default function PaymentsPage() {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [inlineEditError, setInlineEditError] = useState<string | null>(null);
-  const [viewingHistory, setViewingHistory] = useState<{ shiftId: number; companyId: number; clientId: number } | null>(null);
+  const [viewingHistory, setViewingHistory] = useState<{ shiftId: number | null; companyId: number; clientId: number } | null>(
+    null,
+  );
   const [viewingExtraData, setViewingExtraData] = useState<{ data: Record<string, string>; sourceUrl: string | null } | null>(
     null,
   );
@@ -817,6 +787,13 @@ export default function PaymentsPage() {
   const [accepting, setAccepting] = useState(false);
   const [acceptError, setAcceptError] = useState<string | null>(null);
   const [markingReviewDeleted, setMarkingReviewDeleted] = useState(false);
+
+  // Right-click menu for a turno row — replaces the old always-visible
+  // Ações column (see `ShiftRow`'s `rowActions`).
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
+  function handleRowContextMenu(e: MouseEvent, items: ContextMenuItem[]) {
+    setContextMenu({ x: e.clientX, y: e.clientY, items });
+  }
 
   useEffect(() => {
     Promise.all([listCompanies(), listClients(), listRolesGlobal()]).then(([companyRows, clientRows, roleRows]) => {
@@ -1545,7 +1522,6 @@ export default function PaymentsPage() {
                                           {TURNO_COLUMNS.filter((c) => visibleColumns.has(c.id)).map((c) => (
                                             <th key={c.id}>{c.label}</th>
                                           ))}
-                                          <th>Ações</th>
                                         </tr>
                                       </thead>
                                       <tbody>
@@ -1565,6 +1541,7 @@ export default function PaymentsPage() {
                                             onViewHistory={(shiftId, companyId, clientId) => setViewingHistory({ shiftId, companyId, clientId })}
                                             onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
                                             onReview={(shift, groupRef) => setReviewingShift({ shift, groupRef })}
+                                            onRowContextMenu={handleRowContextMenu}
                                           />
                                         ))}
                                       </tbody>
@@ -1608,7 +1585,6 @@ export default function PaymentsPage() {
                     {FLAT_COLUMNS.filter((c) => visibleColumns.has(c.id)).map((c) => (
                       <th key={c.id}>{c.label}</th>
                     ))}
-                    <th>Ações</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1629,6 +1605,7 @@ export default function PaymentsPage() {
                       onViewHistory={(shiftId, companyId, clientId) => setViewingHistory({ shiftId, companyId, clientId })}
                       onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
                       onReview={(shift, groupRef) => setReviewingShift({ shift, groupRef })}
+                      onRowContextMenu={handleRowContextMenu}
                     />
                   ))}
                 </tbody>
@@ -1699,12 +1676,14 @@ export default function PaymentsPage() {
         />
       )}
 
-      <ShiftHistoryModal
+      <ShiftHistoryDrawer
+        open={viewingHistory !== null}
         shiftId={viewingHistory?.shiftId ?? null}
         rules={viewingHistory ? rulesByPair.get(`${viewingHistory.clientId}:${viewingHistory.companyId}`) ?? null : null}
         onClose={() => setViewingHistory(null)}
       />
-      <ExtraColumnsModal
+      <ExtraColumnsDrawer
+        open={viewingExtraData !== null}
         data={viewingExtraData?.data ?? null}
         sourceUrl={viewingExtraData?.sourceUrl ?? null}
         onClose={() => setViewingExtraData(null)}
@@ -1834,10 +1813,6 @@ export default function PaymentsPage() {
         open={filtersDrawerOpen}
         onClose={() => setFiltersDrawerOpen(false)}
         title="Filtros"
-        // Wider than the Drawer default — the Período field's calendar
-        // popover (two linked month panels, ~560px) needs the extra room to
-        // land fully inside the panel instead of spilling past its edge.
-        width="min(640px, 92vw)"
         footer={
           <>
             <button type="button" onClick={applyFilters}>
@@ -1983,6 +1958,10 @@ export default function PaymentsPage() {
           </div>
         </div>
       </Drawer>
+
+      {contextMenu && (
+        <ContextMenu x={contextMenu.x} y={contextMenu.y} items={contextMenu.items} onClose={() => setContextMenu(null)} />
+      )}
     </div>
   );
 }

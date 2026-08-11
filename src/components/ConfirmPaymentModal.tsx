@@ -42,7 +42,7 @@ export default function ConfirmPaymentModal({
   const amountValid = digits !== "";
 
   return (
-    <Modal onClose={onCancel} width="26rem">
+    <Modal onClose={onCancel}>
       <h3 style={{ marginTop: 0 }}>Fazer pagamento</h3>
       <p className="muted">
         {formatDate(shift.workDate)} · {shift.local} · {shift.role}

@@ -62,7 +62,7 @@ export default function UpdateModal({ update, onClose }: { update: Update; onClo
     progress.total !== null ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100)) : null;
 
   return (
-    <Modal onClose={handleClose} closeOnEscape={!busy} closeOnBackdrop={!busy} width="42rem">
+    <Modal onClose={handleClose} closeOnEscape={!busy} closeOnBackdrop={!busy}>
       <h3 style={{ marginTop: 0 }}>Nova versão disponível</h3>
       <p className="muted">
         {update.currentVersion} → <strong>{update.version}</strong>

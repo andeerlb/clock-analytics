@@ -1,6 +1,7 @@
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { diffFieldLabel, formatDateAbbrevYY } from "../lib/format";
 import type { CheckDiffRow } from "../lib/db";
+import PillButton from "./PillButton";
 
 /** Same identity a deep check matched a record by (employee+data+local+função+horário) — used only to group diff rows into one card per changed record, not to look anything up. `'unresolved'` rows have no `employeeId` at all (that's the whole point — the file's colaborador/rota didn't match anything) — grouped by their own row/aba instead, so two different unmatched rows never collapse into one card just because they share null identity fields. */
 function diffIdentityKey(r: CheckDiffRow): string {
@@ -69,15 +70,9 @@ export default function ChangeDiffPanel({
     const rowIds = groupRows.map((r) => r.id);
     const busy = dismissingIds !== undefined && rowIds.some((id) => dismissingIds.has(id));
     return (
-      <button
-        type="button"
-        className="outline"
-        style={{ fontSize: "0.76rem", padding: "0.25rem 0.5rem" }}
-        disabled={busy}
-        onClick={() => onDismiss(rowIds)}
-      >
+      <PillButton disabled={busy} onClick={() => onDismiss(rowIds)}>
         {busy ? "..." : "Visto"}
-      </button>
+      </PillButton>
     );
   }
 
@@ -169,14 +164,9 @@ export default function ChangeDiffPanel({
                   }}
                 >
                   {onReprocess && first.configId !== null && (
-                    <button
-                      type="button"
-                      className="outline"
-                      style={{ fontSize: "0.76rem", padding: "0.25rem 0.5rem" }}
-                      onClick={() => onReprocess(first.configId!, first.periodStart, first.periodEnd)}
-                    >
+                    <PillButton onClick={() => onReprocess(first.configId!, first.periodStart, first.periodEnd)}>
                       Reprocessar agora
-                    </button>
+                    </PillButton>
                   )}
                   {renderDismissButton(entries)}
                 </div>

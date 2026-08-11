@@ -21,6 +21,9 @@ function ContextMenuList({ items, onClose }: { items: ContextMenuItem[]; onClose
   return (
     <div
       style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.15rem",
         background: "var(--card-bg)",
         border: "1px solid var(--border)",
         borderRadius: 8,

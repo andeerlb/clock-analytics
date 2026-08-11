@@ -29,7 +29,7 @@ export default function ConfirmModal({
   children?: ReactNode;
 }) {
   return (
-    <Modal onClose={onCancel} width="26rem">
+    <Modal onClose={onCancel}>
       <h3 style={{ marginTop: 0 }}>{title}</h3>
       <p className="muted">{message}</p>
       {children}

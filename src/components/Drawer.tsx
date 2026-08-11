@@ -13,7 +13,7 @@ export default function Drawer({
   title,
   children,
   footer,
-  width = "min(460px, 92vw)",
+  width = "min(640px, 92vw)",
   side = "right",
 }: {
   open: boolean;

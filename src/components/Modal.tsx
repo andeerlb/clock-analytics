@@ -29,7 +29,7 @@ export default function Modal({
   onClose,
   closeOnEscape = true,
   closeOnBackdrop = true,
-  width = "28rem",
+  width = "42rem",
   maxWidth = "90vw",
   maxHeight,
   /** For a full-screen surface (PDF viewer, template wizard) instead of a small centered card — `children` renders directly inside the overlay, full width/height, with its own internal layout (header + scroll area) and its own backdrop-click handling; `width`/`maxWidth`/`maxHeight` and the `.card` wrapper are skipped entirely. */
