@@ -21,6 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import Modal from "./Modal";
 import {
   addRecentPaymentFile,
   downloadPaymentFileFromUrl,
@@ -192,14 +193,6 @@ export default function EmployeeTemplateWizard({
     hydrateFromTemplate(target);
   }, [target]);
 
-  useEffect(() => {
-    if (!target) return;
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [target, onClose]);
 
   useEffect(() => {
     if (!target) return;
@@ -744,17 +737,7 @@ export default function EmployeeTemplateWizard({
   if (!target) return null;
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0, 0, 0, 0.7)",
-        zIndex: 100,
-        display: "flex",
-        flexDirection: "column",
-      }}
-      onClick={onClose}
-    >
+    <Modal fullScreen zIndex={100} onClose={onClose}>
       <div
         style={{
           display: "flex",
@@ -1419,7 +1402,7 @@ export default function EmployeeTemplateWizard({
           </button>
         )}
       </div>
-    </div>
+    </Modal>
   );
 }
 

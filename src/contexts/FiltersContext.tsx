@@ -43,6 +43,8 @@ export interface PaymentsFilters {
   setSelectedCompanyIds: (v: Set<string>) => void;
   selectedClientIds: Set<string>;
   setSelectedClientIds: (v: Set<string>) => void;
+  selectedRoleIds: Set<string>;
+  setSelectedRoleIds: (v: Set<string>) => void;
   periodStart: string;
   periodEnd: string;
   setPeriod: (start: string, end: string) => void;
@@ -118,6 +120,7 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
   const [paymentsSearch, setPaymentsSearch] = useState("");
   const [paymentsCompanyIds, setPaymentsCompanyIds] = useState<Set<string>>(new Set());
   const [paymentsClientIds, setPaymentsClientIds] = useState<Set<string>>(new Set());
+  const [paymentsRoleIds, setPaymentsRoleIds] = useState<Set<string>>(new Set());
   const [paymentsPeriodStart, setPaymentsPeriodStart] = useState("");
   const [paymentsPeriodEnd, setPaymentsPeriodEnd] = useState("");
   const [paymentsSelectedStatuses, setPaymentsSelectedStatuses] = useState<Set<PaymentShiftStatus>>(
@@ -139,6 +142,8 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
     setSelectedCompanyIds: setPaymentsCompanyIds,
     selectedClientIds: paymentsClientIds,
     setSelectedClientIds: setPaymentsClientIds,
+    selectedRoleIds: paymentsRoleIds,
+    setSelectedRoleIds: setPaymentsRoleIds,
     periodStart: paymentsPeriodStart,
     periodEnd: paymentsPeriodEnd,
     setPeriod: (start, end) => {

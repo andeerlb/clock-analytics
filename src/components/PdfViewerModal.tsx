@@ -6,6 +6,7 @@ import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { useEffect, useRef, useState } from "react";
 import { copyPdfTo, readPdfBytes, revealInFileManager } from "../lib/api";
 import { sanitizeFileName } from "../lib/format";
+import Modal from "./Modal";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 
@@ -159,15 +160,13 @@ export default function PdfViewerModal({
     pageElRef.current.get(clamped)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  // Esc closes, same as clicking the backdrop; ↑/↓ (and PageUp/PageDown)
-  // jump a page directly instead of nudging the scroll position, like a
-  // dedicated PDF reader rather than a plain scrollable page.
+  // ↑/↓ (and PageUp/PageDown) jump a page directly instead of nudging the
+  // scroll position, like a dedicated PDF reader rather than a plain
+  // scrollable page. Escape itself is handled by `Modal`.
   useEffect(() => {
     if (!path) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        onClose();
-      } else if (e.key === "ArrowDown" || e.key === "PageDown") {
+      if (e.key === "ArrowDown" || e.key === "PageDown") {
         e.preventDefault();
         goToPage(currentPage + 1);
       } else if (e.key === "ArrowUp" || e.key === "PageUp") {
@@ -214,17 +213,7 @@ export default function PdfViewerModal({
   if (!path) return null;
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0, 0, 0, 0.7)",
-        zIndex: 100,
-        display: "flex",
-        flexDirection: "column",
-      }}
-      onClick={onClose}
-    >
+    <Modal fullScreen zIndex={100} onClose={onClose}>
       <div
         style={{
           display: "flex",
@@ -338,6 +327,6 @@ export default function PdfViewerModal({
             </div>
           ))}
       </div>
-    </div>
+    </Modal>
   );
 }

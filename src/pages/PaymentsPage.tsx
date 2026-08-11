@@ -1,6 +1,7 @@
 import {
   AlertCircle,
   AlertTriangle,
+  Briefcase,
   Building2,
   CheckCircle2,
   ChevronDown,
@@ -52,6 +53,7 @@ import {
   listPaymentShiftSummaries,
   listPaymentShiftsFlat,
   listPaymentShiftsForGroup,
+  listRolesGlobal,
   markPaymentShiftPaid,
   revertPaymentShiftToPending,
   setPaymentVisibleColumns,
@@ -61,6 +63,7 @@ import {
   type ListPaymentShiftSummariesQuery,
   type PaymentShiftFlatRow,
   type PaymentShiftGroupRow,
+  type RoleRow,
   type ShiftFieldDiffRow,
 } from "../lib/db";
 import {
@@ -707,6 +710,8 @@ export default function PaymentsPage() {
     setSelectedCompanyIds,
     selectedClientIds,
     setSelectedClientIds,
+    selectedRoleIds,
+    setSelectedRoleIds,
     periodStart,
     periodEnd,
     setPeriod,
@@ -731,8 +736,10 @@ export default function PaymentsPage() {
   const [summariesTotal, setSummariesTotal] = useState(0);
   const [flatRows, setFlatRows] = useState<PaymentShiftFlatRow[]>([]);
   const [flatTotal, setFlatTotal] = useState(0);
+  const [listError, setListError] = useState<string | null>(null);
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
+  const [roles, setRoles] = useState<RoleRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [generatingPdf, setGeneratingPdf] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
@@ -782,9 +789,10 @@ export default function PaymentsPage() {
   const [markingReviewDeleted, setMarkingReviewDeleted] = useState(false);
 
   useEffect(() => {
-    Promise.all([listCompanies(), listClients()]).then(([companyRows, clientRows]) => {
+    Promise.all([listCompanies(), listClients(), listRolesGlobal()]).then(([companyRows, clientRows, roleRows]) => {
       setCompanies(companyRows);
       setClients(clientRows);
+      setRoles(roleRows);
     });
     getPaymentVisibleColumns().then((cols) => {
       if (cols) setVisibleColumns(new Set(cols));
@@ -863,6 +871,7 @@ export default function PaymentsPage() {
       search,
       companyIds: Array.from(selectedCompanyIds, Number),
       clientIds: Array.from(selectedClientIds, Number),
+      roleIds: Array.from(selectedRoleIds, Number),
       periodStart: periodStart || undefined,
       periodEnd: periodEnd || undefined,
       statuses: Array.from(selectedStatuses),
@@ -895,12 +904,17 @@ export default function PaymentsPage() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setListError(null);
     setExpandedKeys(new Set());
     setGroupRows(new Map());
     const run = grouped ? refetchSummaries() : refetchFlat();
-    run.finally(() => {
-      if (!cancelled) setLoading(false);
-    });
+    run
+      .catch((e) => {
+        if (!cancelled) setListError(String(e instanceof Error ? e.message : e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -910,6 +924,7 @@ export default function PaymentsPage() {
     search,
     selectedCompanyIds,
     selectedClientIds,
+    selectedRoleIds,
     periodStart,
     periodEnd,
     selectedStatuses,
@@ -929,7 +944,7 @@ export default function PaymentsPage() {
     setGeneratedReport(null);
     setPdfError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, selectedCompanyIds, selectedClientIds, periodStart, periodEnd, selectedStatuses, selectedShiftPeriods, scheduleTimeFilter]);
+  }, [search, selectedCompanyIds, selectedClientIds, selectedRoleIds, periodStart, periodEnd, selectedStatuses, selectedShiftPeriods, scheduleTimeFilter]);
 
   async function afterMutation(groupRef: GroupRef) {
     if (groupRef === null) {
@@ -1086,12 +1101,19 @@ export default function PaymentsPage() {
     return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [clients, selectedCompanyIds]);
 
+  const roleOptions = useMemo(() => {
+    const scoped =
+      selectedCompanyIds.size > 0 ? roles.filter((r) => selectedCompanyIds.has(String(r.companyId))) : roles;
+    return [...scoped].sort((a, b) => a.name.localeCompare(b.name));
+  }, [roles, selectedCompanyIds]);
+
   function toggleCompany(id: string) {
     const next = new Set(selectedCompanyIds);
     if (next.has(id)) next.delete(id);
     else next.add(id);
     setSelectedCompanyIds(next);
     setSelectedClientIds(new Set());
+    setSelectedRoleIds(new Set());
     setPage(0);
   }
   function toggleClient(id: string) {
@@ -1099,6 +1121,13 @@ export default function PaymentsPage() {
     if (next.has(id)) next.delete(id);
     else next.add(id);
     setSelectedClientIds(next);
+    setPage(0);
+  }
+  function toggleRole(id: string) {
+    const next = new Set(selectedRoleIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedRoleIds(next);
     setPage(0);
   }
   function toggleStatus(id: PaymentShiftStatus) {
@@ -1185,6 +1214,7 @@ export default function PaymentsPage() {
     search.trim() ||
       selectedCompanyIds.size > 0 ||
       selectedClientIds.size > 0 ||
+      selectedRoleIds.size > 0 ||
       periodStart ||
       periodEnd ||
       selectedStatuses.size < STATUS_OPTIONS.length ||
@@ -1265,6 +1295,25 @@ export default function PaymentsPage() {
               icon={Users}
               allLabel="Todos os clientes"
               noneLabel="Nenhum cliente"
+            />
+          </div>
+          <div className="field">
+            <label>Função</label>
+            <MultiSelectDropdown
+              options={roleOptions.map((r) => ({ id: String(r.id), label: r.name }))}
+              selected={selectedRoleIds}
+              onToggle={toggleRole}
+              onSelectAll={() => {
+                setSelectedRoleIds(new Set(roleOptions.map((r) => String(r.id))));
+                setPage(0);
+              }}
+              onSelectNone={() => {
+                setSelectedRoleIds(new Set());
+                setPage(0);
+              }}
+              icon={Briefcase}
+              allLabel="Todas as funções"
+              noneLabel="Nenhuma função"
             />
           </div>
           <div className="field">
@@ -1458,17 +1507,22 @@ export default function PaymentsPage() {
       </div>
 
       <div className="card table-card">
+        {listError && (
+          <div className="error-box" style={{ margin: "1.4rem" }}>
+            Não foi possível carregar os pagamentos: {listError}
+          </div>
+        )}
         {loading && (grouped ? summaries.length === 0 : flatRows.length === 0) && (
           <p className="muted" style={{ padding: "1.4rem" }}>
             Carregando...
           </p>
         )}
-        {!loading && total === 0 && !hasFilters && (
+        {!loading && !listError && total === 0 && !hasFilters && (
           <p className="muted" style={{ padding: "1.4rem" }}>
             Nenhum pagamento importado ainda.
           </p>
         )}
-        {!loading && total === 0 && hasFilters && (
+        {!loading && !listError && total === 0 && hasFilters && (
           <p className="muted" style={{ padding: "1.4rem" }}>
             Nenhum resultado para os filtros selecionados.
           </p>

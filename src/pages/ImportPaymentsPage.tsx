@@ -24,8 +24,10 @@ import Drawer from "../components/Drawer";
 import EmployeePicker from "../components/EmployeePicker";
 import Pagination from "../components/Pagination";
 import PickFilesButton from "../components/PickFilesButton";
+import RolePicker from "../components/RolePicker";
 import { useRemoteFileUpdates, type RemoteUpdateFlag } from "../contexts/RemoteFileUpdatesContext";
 import type { EmployeeFormNavState } from "./EmployeeFormPage";
+import type { RoleFormNavState } from "./RoleFormPage";
 import {
   applyPaymentTemplate,
   downloadPaymentFileFromUrl,
@@ -37,12 +39,14 @@ import {
 } from "../lib/api";
 import {
   addEmployeeAlias,
+  addRoleAlias,
   DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES,
   deletePaymentShift,
   findDuplicatePaymentShifts,
   findEmployeeAnywhereByAttempts,
   findEmployeeByAttempts,
   findPaymentShiftByPosition,
+  findRoleByName,
   getEmployee,
   getPaymentTemplate,
   listHeadShiftsForSourceUrl,
@@ -56,6 +60,7 @@ import {
   type DuplicatePaymentShiftMatch,
   type EmployeeRow,
   type PaymentShiftInput,
+  type RoleRow,
   type SourceUrlHeadShift,
 } from "../lib/db";
 import {
@@ -124,8 +129,21 @@ function formatFileKindList(kinds: PaymentFileKind[]): string {
  * earlier candidate row in this same import batch — a source-file
  * artifact, not importable at all, since keeping both would just
  * double-import the same shift within one run.
+ * "role-not-found" mirrors "not-found" but for the Função column instead of
+ * the colaborador: route AND colaborador both resolved, but the row's raw
+ * função text (non-blank) doesn't match any cadastro/apelido for that
+ * empresa. Checked after employee resolution — only ever reached once a row
+ * would otherwise be "valid".
  */
-type RowCategory = "valid" | "duplicate" | "deleted" | "duplicate-in-file" | "not-found" | "unresolved-route" | "skipped";
+type RowCategory =
+  | "valid"
+  | "duplicate"
+  | "deleted"
+  | "duplicate-in-file"
+  | "not-found"
+  | "role-not-found"
+  | "unresolved-route"
+  | "skipped";
 type RowFilter = RowCategory | "error" | "all" | "selected";
 
 interface PaymentPreviewRow {
@@ -138,6 +156,8 @@ interface PaymentPreviewRow {
   nameRaw: string;
   local: string;
   role: string;
+  /** The função `role`'s text resolved to (see `findRoleByName`), scoped to `resolvedCompanyId` — `null` when it didn't match any cadastro/apelido (or `role` is blank). */
+  roleId: number | null;
   /** Raw Horário text, kept only to display when `parseScheduleToMinutes` can't make sense of it. */
   scheduleRaw: string;
   scheduleStartMinutes: number | null;
@@ -723,6 +743,7 @@ export default function ImportPaymentsPage() {
       deleted: 0,
       "duplicate-in-file": 0,
       "not-found": 0,
+      "role-not-found": 0,
       "unresolved-route": 0,
       skipped: 0,
     };
@@ -746,6 +767,7 @@ export default function ImportPaymentsPage() {
   const isSelectable = (r: PaymentPreviewRow) =>
     Boolean(r.employee) &&
     r.category !== "duplicate-in-file" &&
+    r.category !== "role-not-found" &&
     !(r.category === "duplicate" && r.matchedEditedManually && effectiveKeepManualEdits);
   const selectableCount = shiftRows.filter(isSelectable).length;
   const allSelected = selectableCount > 0 && shiftRows.every((r, i) => selectedRows.has(i) || !isSelectable(r));
@@ -835,6 +857,7 @@ export default function ImportPaymentsPage() {
               rows.push({
                 ...base,
                 employee: null,
+                roleId: null,
                 workDate: null,
                 isDuplicate: false,
                 unresolvedRoute: false,
@@ -879,9 +902,11 @@ export default function ImportPaymentsPage() {
               route && !employee
                 ? await findEmployeeAnywhereByAttempts(selectedTemplate.identifierPriority, { cpf, matricula, nome })
                 : null;
+            const role = route ? await findRoleByName(route.companyId, base.role) : null;
             rows.push({
               ...base,
               employee,
+              roleId: role?.id ?? null,
               workDate,
               isDuplicate: false,
               unresolvedRoute: !route,
@@ -899,7 +924,13 @@ export default function ImportPaymentsPage() {
                     currentCompanyName: elsewhere.companyName,
                   }
                 : null,
-              category: !route ? "unresolved-route" : !employee ? "not-found" : "valid",
+              category: !route
+                ? "unresolved-route"
+                : !employee
+                  ? "not-found"
+                  : base.role.trim() && !role
+                    ? "role-not-found"
+                    : "valid",
             });
           }
           results.push({ fileHash, fileName, path, rows, error: null });
@@ -909,7 +940,11 @@ export default function ImportPaymentsPage() {
       }
 
       const allRows = results.flatMap((r) => r.rows);
-      const candidates = allRows.filter((r) => r.employee);
+      // "role-not-found" rows are excluded the same way "not-found" already
+      // is (there, `.employee` itself is null) — blocked until "Vincular
+      // função"/"Cadastrar função" resolves them, so they can't be silently
+      // recategorized as "duplicate-in-file"/"duplicate"/"deleted" below.
+      const candidates = allRows.filter((r) => r.employee && r.category !== "role-not-found");
 
       // Within this same batch, two candidate rows that agree on every
       // column are the same shift repeated in the source file — only the
@@ -931,7 +966,7 @@ export default function ImportPaymentsPage() {
           employeeId: r.employee!.id,
           workDate: r.workDate!,
           local: r.local,
-          role: r.role,
+          roleId: r.roleId,
           scheduleStartMinutes: r.scheduleStartMinutes,
           scheduleEndMinutes: r.scheduleEndMinutes,
         })),
@@ -1054,7 +1089,81 @@ export default function ImportPaymentsPage() {
           employeeId: employee.id,
           workDate: r.workDate!,
           local: r.local,
-          role: r.role,
+          roleId: r.roleId,
+          scheduleStartMinutes: r.scheduleStartMinutes,
+          scheduleEndMinutes: r.scheduleEndMinutes,
+        })),
+      );
+      dupMatches.forEach((match, i) => applyDuplicateMatch(dbCheckTargets[i], match));
+    }
+
+    setSelectedRows((prev) => {
+      const next = new Set(prev);
+      allRows.forEach((r, i) => {
+        if (newlyResolved.includes(r) && r.category === "valid") next.add(i);
+      });
+      return next;
+    });
+    setFileResults([...fileResults]);
+  }
+
+  /**
+   * "Vincular função" on a "função não encontrada" row: registers the
+   * row's raw função text as an apelido for `role`, then resolves every
+   * still-unresolved row in this same batch that shares that exact raw
+   * função text and empresa — not just the one clicked, same "resolve the
+   * whole batch" pattern as `handleLinkEmployee`. A "função não encontrada"
+   * row always already has a resolved `employee` (see `handleProcess`'s
+   * categorization order), so turning it "valid" only needs the same
+   * within-batch/payment_shifts duplicate checks `handleLinkEmployee` reruns
+   * — never another identity resolution.
+   */
+  async function handleLinkRole(clickedIndex: number, role: RoleRow) {
+    const clicked = shiftRows[clickedIndex];
+    if (!clicked || clicked.resolvedCompanyId === null) return;
+    setError(null);
+    try {
+      await addRoleAlias(role.id, clicked.role);
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+      return;
+    }
+
+    const targetRoleRaw = clicked.role.trim().toLowerCase();
+    const allRows = fileResults.flatMap((r) => r.rows);
+
+    const seenInBatch = new Set<string>();
+    for (const r of allRows) {
+      if (r.employee) seenInBatch.add(shiftDedupKey(r.employee.id, r));
+    }
+
+    const newlyResolved = allRows.filter(
+      (r) =>
+        r.category === "role-not-found" &&
+        r.resolvedCompanyId === clicked.resolvedCompanyId &&
+        r.role.trim().toLowerCase() === targetRoleRaw,
+    );
+
+    const dbCheckTargets: PaymentPreviewRow[] = [];
+    for (const r of newlyResolved) {
+      r.roleId = role.id;
+      const key = shiftDedupKey(r.employee!.id, r);
+      if (seenInBatch.has(key)) {
+        r.category = "duplicate-in-file";
+      } else {
+        seenInBatch.add(key);
+        r.category = "valid";
+        dbCheckTargets.push(r);
+      }
+    }
+
+    if (dbCheckTargets.length > 0) {
+      const dupMatches = await findDuplicatePaymentShifts(
+        dbCheckTargets.map((r) => ({
+          employeeId: r.employee!.id,
+          workDate: r.workDate!,
+          local: r.local,
+          roleId: r.roleId,
           scheduleStartMinutes: r.scheduleStartMinutes,
           scheduleEndMinutes: r.scheduleEndMinutes,
         })),
@@ -1140,7 +1249,7 @@ export default function ImportPaymentsPage() {
           employeeId: employee.id,
           workDate: r.workDate!,
           local: r.local,
-          role: r.role,
+          roleId: r.roleId,
           scheduleStartMinutes: r.scheduleStartMinutes,
           scheduleEndMinutes: r.scheduleEndMinutes,
         })),
@@ -1183,6 +1292,7 @@ export default function ImportPaymentsPage() {
 
     const nameAttempt: IdentifierAttempt[] = [{ fields: ["nome"], caseInsensitive: true }];
     const dbCheckTargets: PaymentPreviewRow[] = [];
+    let resolvedAny = false;
     for (const r of notFound) {
       const employee = await findEmployeeByAttempts(r.resolvedClientId!, r.resolvedCompanyId!, nameAttempt, {
         cpf: null,
@@ -1191,6 +1301,16 @@ export default function ImportPaymentsPage() {
       });
       if (!employee) continue;
       r.employee = employee;
+      resolvedAny = true;
+      // `roleId` was already resolved back in `handleProcess` regardless of
+      // whether the employee was found — a "colaborador não encontrado" row
+      // whose função ALSO never matched anything falls through to
+      // "função não encontrada" here instead of jumping straight to
+      // "valid", same precedence `handleProcess` itself applies.
+      if (r.role.trim() && r.roleId === null) {
+        r.category = "role-not-found";
+        continue;
+      }
       const key = shiftDedupKey(employee.id, r);
       if (seenInBatch.has(key)) {
         r.category = "duplicate-in-file";
@@ -1200,19 +1320,80 @@ export default function ImportPaymentsPage() {
         dbCheckTargets.push(r);
       }
     }
-    if (dbCheckTargets.length === 0) return;
+    if (!resolvedAny) return;
 
-    const dupMatches = await findDuplicatePaymentShifts(
-      dbCheckTargets.map((r) => ({
-        employeeId: r.employee!.id,
-        workDate: r.workDate!,
-        local: r.local,
-        role: r.role,
-        scheduleStartMinutes: r.scheduleStartMinutes,
-        scheduleEndMinutes: r.scheduleEndMinutes,
-      })),
-    );
-    dupMatches.forEach((match, i) => applyDuplicateMatch(dbCheckTargets[i], match));
+    if (dbCheckTargets.length > 0) {
+      const dupMatches = await findDuplicatePaymentShifts(
+        dbCheckTargets.map((r) => ({
+          employeeId: r.employee!.id,
+          workDate: r.workDate!,
+          local: r.local,
+          roleId: r.roleId,
+          scheduleStartMinutes: r.scheduleStartMinutes,
+          scheduleEndMinutes: r.scheduleEndMinutes,
+        })),
+      );
+      dupMatches.forEach((match, i) => applyDuplicateMatch(dbCheckTargets[i], match));
+    }
+
+    setSelectedRows((prev) => {
+      const next = new Set(prev);
+      allRows.forEach((r, i) => {
+        if (dbCheckTargets.includes(r) && r.category === "valid") next.add(i);
+      });
+      return next;
+    });
+    setFileResults([...currentFileResults]);
+  }
+
+  /**
+   * Same idea as `reresolveNotFoundRows`, but for "Cadastrar função" —
+   * "função não encontrada" rows already have a resolved `employee` (see
+   * `handleProcess`'s categorization order), so this only needs to
+   * re-resolve `roleId` by name/apelido, scoped to the row's own
+   * `resolvedCompanyId`, then rerun the same duplicate checks.
+   */
+  async function reresolveRoleNotFoundRows(currentFileResults: PaymentFileResult[]) {
+    const allRows = currentFileResults.flatMap((r) => r.rows);
+    const roleNotFound = allRows.filter((r) => r.category === "role-not-found" && r.resolvedCompanyId !== null);
+    if (roleNotFound.length === 0) return;
+
+    const seenInBatch = new Set<string>();
+    for (const r of allRows) {
+      if (r.employee) seenInBatch.add(shiftDedupKey(r.employee.id, r));
+    }
+
+    const dbCheckTargets: PaymentPreviewRow[] = [];
+    let resolvedAny = false;
+    for (const r of roleNotFound) {
+      const role = await findRoleByName(r.resolvedCompanyId!, r.role);
+      if (!role) continue;
+      r.roleId = role.id;
+      resolvedAny = true;
+      const key = shiftDedupKey(r.employee!.id, r);
+      if (seenInBatch.has(key)) {
+        r.category = "duplicate-in-file";
+      } else {
+        seenInBatch.add(key);
+        r.category = "valid";
+        dbCheckTargets.push(r);
+      }
+    }
+    if (!resolvedAny) return;
+
+    if (dbCheckTargets.length > 0) {
+      const dupMatches = await findDuplicatePaymentShifts(
+        dbCheckTargets.map((r) => ({
+          employeeId: r.employee!.id,
+          workDate: r.workDate!,
+          local: r.local,
+          roleId: r.roleId,
+          scheduleStartMinutes: r.scheduleStartMinutes,
+          scheduleEndMinutes: r.scheduleEndMinutes,
+        })),
+      );
+      dupMatches.forEach((match, i) => applyDuplicateMatch(dbCheckTargets[i], match));
+    }
 
     setSelectedRows((prev) => {
       const next = new Set(prev);
@@ -1225,9 +1406,12 @@ export default function ImportPaymentsPage() {
   }
 
   useEffect(() => {
-    if (restored?.fileResults?.length) reresolveNotFoundRows(restored.fileResults);
-    // Only on this exact mount, from a "Cadastrar colaborador" restore —
-    // `fileResults`/`restored` deliberately excluded, see the comment above.
+    if (restored?.fileResults?.length) {
+      reresolveNotFoundRows(restored.fileResults).then(() => reresolveRoleNotFoundRows(restored.fileResults));
+    }
+    // Only on this exact mount, from a "Cadastrar colaborador"/"Cadastrar
+    // função" restore — `fileResults`/`restored` deliberately excluded, see
+    // the comment above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1264,6 +1448,34 @@ export default function ImportPaymentsPage() {
       prefillCompanyId: row.resolvedCompanyId ?? undefined,
     };
     navigate("/employees/new", { state: employeeFormState });
+  }
+
+  /**
+   * "Cadastrar função" on a "função não encontrada" row — same snapshot-
+   * then-navigate pattern as `handleRegisterEmployee`.
+   */
+  function handleRegisterRole(row: PaymentPreviewRow) {
+    const snapshot: PaymentImportNavState = {
+      templateId,
+      periodStart,
+      periodEnd,
+      paths,
+      importMode,
+      urlSourceByPath,
+      fileResults,
+      selectedRows,
+      rowFilter,
+      nameSearch,
+      previewPage,
+      previewPageSize,
+      keepManualEdits: processedKeepManualEdits ?? keepManualEdits,
+    };
+    navigate(".", { replace: true, state: snapshot });
+    const roleFormState: RoleFormNavState = {
+      prefillName: row.role,
+      prefillCompanyId: row.resolvedCompanyId ?? undefined,
+    };
+    navigate("/roles/new", { state: roleFormState });
   }
 
   /** Shared by "Processar arquivo(s)" and the "processar o arquivo inteiro?" confirm — in URL mode, nothing's been downloaded yet the first time this runs (there's no separate "Baixar arquivo" step anymore), so it downloads first, then falls into the same `pendingAutoProcess` effect "Reimportar" already uses to process right after. Already-downloaded paths (local files, or a URL reprocessed after an error) skip straight to processing. */
@@ -1325,7 +1537,7 @@ export default function ImportPaymentsPage() {
           companyId: row.resolvedCompanyId!,
           local: row.local,
           workDate: row.workDate,
-          role: row.role,
+          roleId: row.roleId,
           scheduleStartMinutes: row.scheduleStartMinutes,
           scheduleEndMinutes: row.scheduleEndMinutes,
           status: row.paymentStatus,
@@ -1841,6 +2053,16 @@ export default function ImportPaymentsPage() {
                         {categoryCounts["not-found"]} colaborador não encontrado
                       </button>
                     )}
+                    {categoryCounts["role-not-found"] > 0 && (
+                      <button
+                        type="button"
+                        className={`badge warn chip-filter${rowFilter === "role-not-found" ? " active" : ""}`}
+                        onClick={() => toggleRowFilter("role-not-found")}
+                        title="Clique para filtrar"
+                      >
+                        {categoryCounts["role-not-found"]} função não encontrada
+                      </button>
+                    )}
                     {categoryCounts["unresolved-route"] > 0 && (
                       <button
                         type="button"
@@ -1961,7 +2183,10 @@ export default function ImportPaymentsPage() {
                         const protectedByManualEdit =
                           row.category === "duplicate" && row.matchedEditedManually && effectiveKeepManualEdits;
                         const canSelect =
-                          Boolean(row.employee) && row.category !== "duplicate-in-file" && !protectedByManualEdit;
+                          Boolean(row.employee) &&
+                          row.category !== "duplicate-in-file" &&
+                          row.category !== "role-not-found" &&
+                          !protectedByManualEdit;
                         return (
                           <tr key={index}>
                             <td className="checkbox-cell">
@@ -2132,6 +2357,24 @@ export default function ImportPaymentsPage() {
                                   </div>
                                 </div>
                               )}
+                              {row.category === "role-not-found" && (
+                                <div style={{ marginBottom: "0.3rem" }}>
+                                  <span className="badge warn">
+                                    <AlertTriangle size={13} />
+                                    Função não encontrada
+                                  </span>
+                                  <div style={{ marginTop: "0.25rem", display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
+                                    <button
+                                      type="button"
+                                      className="link-button"
+                                      style={{ fontSize: "0.78rem" }}
+                                      onClick={() => handleRegisterRole(row)}
+                                    >
+                                      Cadastrar função
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
                               {row.category === "skipped" && (
                                 <span className="badge neutral" title="A coluna mapeada como Data não pôde ser interpretada nesta linha">
                                   Data não reconhecida
@@ -2149,6 +2392,13 @@ export default function ImportPaymentsPage() {
                                     placeholder="Vincular"
                                   />
                                 )}
+                              {row.category === "role-not-found" && row.resolvedCompanyId !== null && (
+                                <RolePicker
+                                  companyId={row.resolvedCompanyId}
+                                  onSelect={(role) => handleLinkRole(index, role)}
+                                  placeholder="Vincular"
+                                />
+                              )}
                             </td>
                           </tr>
                         );

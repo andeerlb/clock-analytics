@@ -823,18 +823,40 @@ tr:last-child td {
   gap: 1rem;
 }
 
+/* Shared by every `Modal`-based dialog (ConfirmModal, UpdateModal,
+   ExtraColumnsModal, ShiftHistoryModal, ConfirmPaymentModal) — a frosted-
+   glass backdrop instead of a flat dark scrim, so whatever's behind the
+   modal stays legible as shapes/colors without competing for attention. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 9, 16, 0.45);
+  backdrop-filter: blur(28px) saturate(1.4);
+  -webkit-backdrop-filter: blur(28px) saturate(1.4);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .drawer-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0);
+  background: rgba(6, 9, 16, 0);
+  backdrop-filter: blur(0px);
+  -webkit-backdrop-filter: blur(0px);
   z-index: 200;
   display: flex;
   justify-content: flex-end;
-  transition: background 0.22s ease;
+  transition: background 0.22s ease, backdrop-filter 0.22s ease, -webkit-backdrop-filter 0.22s ease;
 }
 
 .drawer-overlay-visible {
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(6, 9, 16, 0.45);
+  backdrop-filter: blur(28px) saturate(1.4);
+  -webkit-backdrop-filter: blur(28px) saturate(1.4);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .drawer-panel {

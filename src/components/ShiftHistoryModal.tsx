@@ -12,6 +12,7 @@ import {
   shiftDurationMinutes,
 } from "../lib/format";
 import type { PaymentShiftRow, PaymentShiftStatus } from "../lib/types";
+import Modal from "./Modal";
 
 const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: string; icon: typeof CheckCircle2 }> = {
   pendente: { className: "badge warn", label: "Pendente", icon: Clock3 },
@@ -151,49 +152,23 @@ export default function ShiftHistoryModal({
     };
   }, [shiftId]);
 
-  useEffect(() => {
-    if (shiftId === null) return;
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [shiftId, onClose]);
-
   if (shiftId === null) return null;
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0, 0, 0, 0.7)",
-        zIndex: 200,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-      onClick={onClose}
-    >
-      <div
-        className="card"
-        style={{ maxWidth: "26rem", margin: "1rem", maxHeight: "80vh", overflowY: "auto" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 style={{ marginTop: 0 }}>Histórico do turno</h3>
-        {loading && <p className="muted">Carregando...</p>}
-        {error && <div className="error-box">{error}</div>}
-        {!loading &&
-          !error &&
-          history.map((shift, i) => (
-            <HistoryEntry key={shift.id} shift={shift} rules={rules} isLast={i === history.length - 1} />
-          ))}
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.4rem" }}>
-          <button type="button" className="outline" onClick={onClose}>
-            Fechar
-          </button>
-        </div>
+    <Modal onClose={onClose} width="26rem" maxHeight="80vh">
+      <h3 style={{ marginTop: 0 }}>Histórico do turno</h3>
+      {loading && <p className="muted">Carregando...</p>}
+      {error && <div className="error-box">{error}</div>}
+      {!loading &&
+        !error &&
+        history.map((shift, i) => (
+          <HistoryEntry key={shift.id} shift={shift} rules={rules} isLast={i === history.length - 1} />
+        ))}
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.4rem" }}>
+        <button type="button" className="outline" onClick={onClose}>
+          Fechar
+        </button>
       </div>
-    </div>
+    </Modal>
   );
 }

@@ -1,6 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Link2 } from "lucide-react";
-import { useEffect } from "react";
+import Modal from "./Modal";
 
 /**
  * Read-only look at a payment shift's unmapped columns — whatever the
@@ -19,15 +19,6 @@ export default function ExtraColumnsModal({
   sourceUrl: string | null;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    if (!data) return;
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [data, onClose]);
-
   if (!data) return null;
 
   // Lexicographic order alone misorders past column Z ("AA" < "B") — sort
@@ -43,64 +34,47 @@ export default function ExtraColumnsModal({
   }
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0, 0, 0, 0.7)",
-        zIndex: 200,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-      onClick={onClose}
-    >
-      <div
-        className="card"
-        style={{ maxWidth: "26rem", margin: "1rem", maxHeight: "80vh", overflowY: "auto" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 style={{ marginTop: 0 }}>Colunas não mapeadas</h3>
-        <p className="muted" style={{ fontSize: "0.85rem" }}>
-          Valores lidos do arquivo original em colunas que o template não usa — guardados aqui só
-          para consulta.
-        </p>
-        {entries.map(([letter, value]) => (
-          <div
-            key={letter}
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: "1rem",
-              padding: "0.4rem 0",
-              borderBottom: "1px solid var(--border)",
-            }}
-          >
-            <span className="muted" style={{ fontSize: "0.85rem" }}>
-              {labelFor(letter)}
-            </span>
-            {letter === "arquivo de origem" && sourceUrl ? (
-              <button
-                type="button"
-                className="link-button"
-                onClick={() => openUrl(sourceUrl)}
-                title={sourceUrl}
-                style={{ display: "flex", alignItems: "center", gap: "0.3rem", textAlign: "right" }}
-              >
-                <Link2 size={12} style={{ flexShrink: 0 }} />
-                {value}
-              </button>
-            ) : (
-              <span style={{ textAlign: "right" }}>{value}</span>
-            )}
-          </div>
-        ))}
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1.2rem" }}>
-          <button type="button" className="outline" onClick={onClose}>
-            Fechar
-          </button>
+    <Modal onClose={onClose} width="26rem" maxHeight="80vh">
+      <h3 style={{ marginTop: 0 }}>Colunas não mapeadas</h3>
+      <p className="muted" style={{ fontSize: "0.85rem" }}>
+        Valores lidos do arquivo original em colunas que o template não usa — guardados aqui só
+        para consulta.
+      </p>
+      {entries.map(([letter, value]) => (
+        <div
+          key={letter}
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: "1rem",
+            padding: "0.4rem 0",
+            borderBottom: "1px solid var(--border)",
+          }}
+        >
+          <span className="muted" style={{ fontSize: "0.85rem" }}>
+            {labelFor(letter)}
+          </span>
+          {letter === "arquivo de origem" && sourceUrl ? (
+            <button
+              type="button"
+              className="link-button"
+              onClick={() => openUrl(sourceUrl)}
+              title={sourceUrl}
+              style={{ display: "flex", alignItems: "center", gap: "0.3rem", textAlign: "right" }}
+            >
+              <Link2 size={12} style={{ flexShrink: 0 }} />
+              {value}
+            </button>
+          ) : (
+            <span style={{ textAlign: "right" }}>{value}</span>
+          )}
         </div>
+      ))}
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1.2rem" }}>
+        <button type="button" className="outline" onClick={onClose}>
+          Fechar
+        </button>
       </div>
-    </div>
+    </Modal>
   );
 }

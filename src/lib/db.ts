@@ -2971,6 +2971,176 @@ export async function removeEmployeeAlias(aliasId: number): Promise<void> {
   await db.execute("DELETE FROM employee_aliases WHERE id = $1", [aliasId]);
 }
 
+export interface RoleRow {
+  id: number;
+  companyId: number;
+  name: string;
+}
+
+/**
+ * A "função" cadastro, scoped per empresa only (not per cliente like
+ * `EmployeeRow` — the same função vocabulary is shared across every cliente
+ * that empresa serves).
+ */
+export async function listRoles(companyId: number): Promise<RoleRow[]> {
+  const db = await getDb();
+  return db.select<RoleRow[]>(
+    `SELECT id, company_id AS companyId, name FROM roles WHERE company_id = $1 ORDER BY name`,
+    [companyId],
+  );
+}
+
+/** Every função across every empresa — the Pagamentos "Função" filter's option list, narrowed client-side to whichever empresas are currently selected (same pattern `clientOptions` already uses for Cliente vs Empresa). */
+export async function listRolesGlobal(): Promise<RoleRow[]> {
+  const db = await getDb();
+  return db.select<RoleRow[]>(`SELECT id, company_id AS companyId, name FROM roles ORDER BY name`);
+}
+
+export async function getRole(id: number): Promise<RoleRow> {
+  const db = await getDb();
+  const rows = await db.select<RoleRow[]>(
+    `SELECT id, company_id AS companyId, name FROM roles WHERE id = $1`,
+    [id],
+  );
+  if (rows.length === 0) throw new Error("Função não encontrada.");
+  return rows[0];
+}
+
+export async function createRole(companyId: number, name: string): Promise<number> {
+  const db = await getDb();
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Nome não pode ser vazio.");
+
+  const existing = await db.select<{ id: number }[]>(
+    "SELECT id FROM roles WHERE company_id = $1 AND lower(name) = lower($2)",
+    [companyId, trimmed],
+  );
+  if (existing.length > 0) throw new Error("Já existe uma função com esse nome para essa empresa.");
+
+  const result = await db.execute("INSERT INTO roles (company_id, name) VALUES ($1, $2)", [companyId, trimmed]);
+  return result.lastInsertId as number;
+}
+
+export async function updateRole(id: number, name: string): Promise<void> {
+  const db = await getDb();
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Nome não pode ser vazio.");
+
+  const current = await db.select<{ companyId: number }[]>(
+    "SELECT company_id AS companyId FROM roles WHERE id = $1",
+    [id],
+  );
+  if (current.length === 0) throw new Error("Função não encontrada.");
+
+  const existing = await db.select<{ id: number }[]>(
+    "SELECT id FROM roles WHERE company_id = $1 AND lower(name) = lower($2) AND id != $3",
+    [current[0].companyId, trimmed, id],
+  );
+  if (existing.length > 0) throw new Error("Já existe uma função com esse nome para essa empresa.");
+
+  await db.execute("UPDATE roles SET name = $1 WHERE id = $2", [trimmed, id]);
+}
+
+/**
+ * Deletes a função and its apelidos. Unlike `deleteEmployee`, this doesn't
+ * touch `payment_shifts` — a turno isn't "about" its função the way it's
+ * about its colaborador, so existing shifts just lose the link
+ * (`role_id` → NULL) and keep their raw `role` text untouched, instead of
+ * being deleted along with the função.
+ */
+export async function deleteRole(roleId: number): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE payment_shifts SET role_id = NULL WHERE role_id = $1", [roleId]);
+  await db.execute("DELETE FROM role_aliases WHERE role_id = $1", [roleId]);
+  await db.execute("DELETE FROM roles WHERE id = $1", [roleId]);
+}
+
+export interface RoleAliasRow {
+  id: number;
+  roleId: number;
+  alias: string;
+}
+
+/** Every "possível nome" registered for one função, most recent first. */
+export async function listRoleAliases(roleId: number): Promise<RoleAliasRow[]> {
+  const db = await getDb();
+  return db.select<RoleAliasRow[]>(
+    `SELECT id, role_id AS roleId, alias FROM role_aliases WHERE role_id = $1 ORDER BY id DESC`,
+    [roleId],
+  );
+}
+
+/**
+ * Whether `alias` is already registered to some função within `companyId`
+ * — `null` when it's free. Scoped per empresa only, same granularity as
+ * `roles` itself. Case-insensitive, same ASCII-only limitation already
+ * accepted for name search elsewhere.
+ */
+export async function findRoleAliasOwner(companyId: number, alias: string): Promise<{ id: number; name: string } | null> {
+  const db = await getDb();
+  const rows = await db.select<{ id: number; name: string }[]>(
+    `SELECT r.id, r.name
+     FROM role_aliases ra
+     JOIN roles r ON r.id = ra.role_id
+     WHERE r.company_id = $1 AND lower(ra.alias) = lower($2)`,
+    [companyId, alias.trim()],
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Registers `alias` for `roleId` — throws a message naming the current
+ * owner if it's already someone else's within the same empresa. Already
+ * registered to this same função is a silent no-op, not an error, mirroring
+ * `addEmployeeAlias`.
+ */
+export async function addRoleAlias(roleId: number, alias: string): Promise<void> {
+  const db = await getDb();
+  const trimmed = alias.trim();
+  if (!trimmed) throw new Error("Nome não pode ser vazio.");
+
+  const roleRows = await db.select<{ companyId: number }[]>(
+    "SELECT company_id AS companyId FROM roles WHERE id = $1",
+    [roleId],
+  );
+  if (roleRows.length === 0) throw new Error("Função não encontrada.");
+
+  const owner = await findRoleAliasOwner(roleRows[0].companyId, trimmed);
+  if (owner && owner.id !== roleId) {
+    throw new Error(`Esse nome já está vinculado à função ${owner.name}.`);
+  }
+  if (owner) return;
+
+  await db.execute("INSERT INTO role_aliases (role_id, alias) VALUES ($1, $2)", [roleId, trimmed]);
+}
+
+export async function removeRoleAlias(aliasId: number): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM role_aliases WHERE id = $1", [aliasId]);
+}
+
+/**
+ * Resolves a payment row's função within `companyId` by name or apelido —
+ * simplified sibling of `findEmployeeByAttempts` (just one field, no
+ * identifier precedence to walk since função only ever matches on its own
+ * text). Case-insensitive, same as the "nome" tentativa there.
+ */
+export async function findRoleByName(companyId: number, text: string | null): Promise<RoleRow | null> {
+  const trimmed = text?.trim();
+  if (!trimmed) return null;
+  const db = await getDb();
+  const rows = await db.select<RoleRow[]>(
+    `SELECT r.id, r.company_id AS companyId, r.name
+     FROM roles r
+     WHERE r.company_id = $1
+       AND (lower(r.name) = lower($2) OR EXISTS (
+         SELECT 1 FROM role_aliases ra WHERE ra.role_id = r.id AND lower(ra.alias) = lower($2)
+       ))`,
+    [companyId, trimmed],
+  );
+  return rows[0] ?? null;
+}
+
 /**
  * Resolves a payment row's employee within `clientId` **and** `companyId`
  * by walking a template's `identifierPriority` — every field in one
@@ -3191,7 +3361,7 @@ export async function findDuplicatePaymentShifts(
     employeeId: number;
     workDate: string;
     local: string;
-    role: string;
+    roleId: number | null;
     scheduleStartMinutes: number | null;
     scheduleEndMinutes: number | null;
   }[],
@@ -3207,14 +3377,15 @@ export async function findDuplicatePaymentShifts(
         deletedAt: string | null;
         currentWorkDate: string;
         currentLocal: string;
-        currentRole: string;
+        currentRoleId: number | null;
         currentScheduleStart: number | null;
         currentScheduleEnd: number | null;
       }[]
     >(
       `WITH RECURSIVE lineage(id) AS (
          SELECT ps.id FROM payment_shifts ps
-         WHERE ps.employee_id = $1 AND ps.work_date = $2 AND ps.local = $3 AND ps.role = $4
+         WHERE ps.employee_id = $1 AND ps.work_date = $2 AND ps.local = $3
+           AND IFNULL(ps.role_id, -1) = IFNULL($4, -1)
            AND IFNULL(ps.schedule_start_minutes, -1) = IFNULL($5, -1)
            AND IFNULL(ps.schedule_end_minutes, -1) = IFNULL($6, -1)
          UNION ALL
@@ -3222,20 +3393,20 @@ export async function findDuplicatePaymentShifts(
          JOIN lineage ON next_ps.previous_shift_id = lineage.id
        )
        SELECT ps.id, ps.edited_manually AS editedManually, ps.deleted_at AS deletedAt,
-              ps.work_date AS currentWorkDate, ps.local AS currentLocal, ps.role AS currentRole,
+              ps.work_date AS currentWorkDate, ps.local AS currentLocal, ps.role_id AS currentRoleId,
               ps.schedule_start_minutes AS currentScheduleStart, ps.schedule_end_minutes AS currentScheduleEnd
        FROM payment_shifts ps
        WHERE ps.id IN (SELECT id FROM lineage) AND ${STRUCTURAL_HEAD_CONDITION}
        ORDER BY ps.id DESC
        LIMIT 1`,
-      [r.employeeId, r.workDate, r.local, r.role, r.scheduleStartMinutes, r.scheduleEndMinutes],
+      [r.employeeId, r.workDate, r.local, r.roleId, r.scheduleStartMinutes, r.scheduleEndMinutes],
     );
     if (existing.length > 0) {
       const head = existing[0];
       const identityChanged =
         head.currentWorkDate !== r.workDate ||
         head.currentLocal !== r.local ||
-        head.currentRole !== r.role ||
+        (head.currentRoleId ?? null) !== r.roleId ||
         (head.currentScheduleStart ?? null) !== r.scheduleStartMinutes ||
         (head.currentScheduleEnd ?? null) !== r.scheduleEndMinutes;
       matches.set(i, {
@@ -3255,7 +3426,9 @@ export interface PositionMatchedShift {
   employeeName: string;
   workDate: string;
   local: string;
+  /** Joined from `roles.name` via `roleId` — `''` when `roleId` is `null`. */
   role: string;
+  roleId: number | null;
   scheduleStartMinutes: number | null;
   scheduleEndMinutes: number | null;
   status: PaymentShiftStatus;
@@ -3297,12 +3470,13 @@ export async function findPaymentShiftByPosition(
   const db = await getDb();
   const rows = await db.select<PositionMatchedShiftRaw[]>(
     `SELECT ps.id AS shiftId, ps.employee_id AS employeeId, e.name AS employeeName, ps.work_date AS workDate,
-            ps.local, ps.role,
+            ps.local, COALESCE(r.name, '') AS role, ps.role_id AS roleId,
             ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
             ps.status, ps.extra_data AS extraData, ps.edited_manually AS editedManually
      FROM payment_shifts ps
      JOIN employees e ON e.id = ps.employee_id
      JOIN source_files sf ON sf.id = ps.source_file_id
+     LEFT JOIN roles r ON r.id = ps.role_id
      WHERE sf.source_url = $1
        AND IFNULL(ps.source_sheet_name, '') = IFNULL($2, '')
        AND ps.source_row_number = $3
@@ -3322,7 +3496,9 @@ export interface SourceUrlHeadShift {
   employeeName: string;
   workDate: string;
   local: string;
+  /** Joined from `roles.name` via `roleId` — `''` when `roleId` is `null`. */
   role: string;
+  roleId: number | null;
   scheduleStartMinutes: number | null;
   scheduleEndMinutes: number | null;
   status: PaymentShiftStatus;
@@ -3364,12 +3540,14 @@ export async function listHeadShiftsForSourceUrl(
   }
   const rows = await db.select<SourceUrlHeadShiftRaw[]>(
     `SELECT ps.id AS shiftId, ps.employee_id AS employeeId, e.name AS employeeName, ps.work_date AS workDate,
-            ps.local, ps.role, ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
+            ps.local, COALESCE(r.name, '') AS role, ps.role_id AS roleId,
+            ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
             ps.status, ps.source_sheet_name AS sheetName, ps.source_row_number AS rowNumber,
             ps.edited_manually AS editedManually
      FROM payment_shifts ps
      JOIN employees e ON e.id = ps.employee_id
      JOIN source_files sf ON sf.id = ps.source_file_id
+     LEFT JOIN roles r ON r.id = ps.role_id
      WHERE ${conditions.join(" AND ")}`,
     params,
   );
@@ -3384,7 +3562,8 @@ export interface PaymentShiftInput {
   companyId: number;
   local: string;
   workDate: string;
-  role: string;
+  /** The função resolved at import time by matching the file's raw text against `roles`/`role_aliases` (see `findRoleByName`) — `null` when it didn't match any cadastro. There is no raw-text column anymore: this FK is the only representation of a turno's função, same as `employeeId`. */
+  roleId: number | null;
   scheduleStartMinutes: number | null;
   scheduleEndMinutes: number | null;
   /** Resolved from the template's status rules (see `resolvePaymentStatus`), falling back to `"pendente"` when none match — not always `"pendente"` anymore. */
@@ -3404,7 +3583,7 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
   for (const r of rows) {
     await db.execute(
       `INSERT INTO payment_shifts
-         (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role,
+         (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
           schedule_start_minutes, schedule_end_minutes, status, extra_data, previous_shift_id,
           source_row_number, source_sheet_name)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
@@ -3416,7 +3595,7 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
         r.companyId,
         r.local,
         r.workDate,
-        r.role,
+        r.roleId,
         r.scheduleStartMinutes,
         r.scheduleEndMinutes,
         r.status,
@@ -3588,6 +3767,8 @@ function buildPaymentShiftRowConditions(
   if (companyClause) conditions.push(companyClause);
   const clientClause = inClause("cl.id", query.clientIds ?? [], params);
   if (clientClause) conditions.push(clientClause);
+  const roleClause = inClause("ps.role_id", query.roleIds ?? [], params);
+  if (roleClause) conditions.push(roleClause);
   if (query.periodStart) {
     params.push(query.periodStart);
     conditions.push(`ps.work_date >= $${params.length}`);
@@ -3627,6 +3808,7 @@ export interface ListPaymentShiftSummariesQuery {
   search?: string;
   companyIds?: number[];
   clientIds?: number[];
+  roleIds?: number[];
   /** "YYYY-MM-DD", inclusive on both ends — either can be omitted to leave that side open. Same day-level `DateRangePicker` as Cartão Ponto, not competência-granularity. */
   periodStart?: string;
   periodEnd?: string;
@@ -3667,6 +3849,8 @@ export async function listPaymentShiftSummaries(
   if (companyClause) conditions.push(companyClause);
   const clientClause = inClause("cl.id", query.clientIds ?? [], params);
   if (clientClause) conditions.push(clientClause);
+  const roleClause = inClause("ps.role_id", query.roleIds ?? [], params);
+  if (roleClause) conditions.push(roleClause);
   if (query.periodStart) {
     params.push(query.periodStart);
     conditions.push(`ps.work_date >= $${params.length}`);
@@ -3769,13 +3953,14 @@ export async function listPaymentShiftsForReport(
   return db.select<PaymentShiftReportRow[]>(
     `SELECT e.name AS employeeName, c.id AS companyId, c.name AS companyName,
             cl.id AS clientId, cl.name AS clientName,
-            ps.work_date AS workDate, ps.local, ps.role,
+            ps.work_date AS workDate, ps.local, COALESCE(r.name, '') AS role,
             ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
             ps.status, ps.amount, ${shiftPeriodSelectSql()} AS shiftPeriod
      FROM payment_shifts ps
      JOIN employees e ON e.id = ps.employee_id
      JOIN clients cl ON cl.id = ps.client_id
      JOIN companies c ON c.id = ps.company_id
+     LEFT JOIN roles r ON r.id = ps.role_id
      WHERE ${conditions.join(" AND ")}
      ORDER BY ps.work_date, ps.local, e.name`,
     params,
@@ -3815,7 +4000,8 @@ export async function listPaymentShiftsFlat(
     JOIN employees e ON e.id = ps.employee_id
     JOIN clients cl ON cl.id = ps.client_id
     JOIN companies c ON c.id = ps.company_id
-    LEFT JOIN source_files sf ON sf.id = ps.source_file_id`;
+    LEFT JOIN source_files sf ON sf.id = ps.source_file_id
+    LEFT JOIN roles r ON r.id = ps.role_id`;
   const whereClause = `WHERE ${conditions.join(" AND ")}`;
 
   const countRows = await db.select<{ count: number }[]>(`SELECT COUNT(*) AS count ${from} ${whereClause}`, params);
@@ -3838,7 +4024,7 @@ export async function listPaymentShiftsFlat(
 const PAYMENT_SHIFT_SELECT_COLUMNS = `
   ps.id, ps.employee_id AS employeeId, e.name AS employeeName,
   ps.client_id AS clientId, ps.company_id AS companyId,
-  ps.local, ps.work_date AS workDate, ps.role,
+  ps.local, ps.work_date AS workDate, COALESCE(r.name, '') AS role, ps.role_id AS roleId,
   ps.schedule_start_minutes AS scheduleStartMinutes,
   ps.schedule_end_minutes AS scheduleEndMinutes,
   ps.status, ps.error_message AS errorMessage, ps.amount, ps.imported_at AS importedAt,
@@ -3852,6 +4038,7 @@ const PAYMENT_SHIFT_FROM_CLAUSE = `
   FROM payment_shifts ps
   JOIN employees e ON e.id = ps.employee_id
   LEFT JOIN source_files sf ON sf.id = ps.source_file_id
+  LEFT JOIN roles r ON r.id = ps.role_id
 `;
 
 type PaymentShiftRowRaw = Omit<PaymentShiftRow, "extraData" | "editedManually"> & {
@@ -3908,6 +4095,7 @@ export async function listPaymentShiftsForGroup(
      JOIN companies c ON c.id = ps.company_id
      JOIN clients cl ON cl.id = ps.client_id
      LEFT JOIN source_files sf ON sf.id = ps.source_file_id
+     LEFT JOIN roles r ON r.id = ps.role_id
      WHERE ${conditions.join(" AND ")}
      ORDER BY ps.work_date, ps.id`,
     params,
@@ -3940,7 +4128,8 @@ interface PaymentShiftCoreFields {
   companyId: number;
   local: string;
   workDate: string;
-  role: string;
+  /** The função turno, as a role_id only — no raw-text column exists anymore, same as `employeeId`. Carried forward unchanged by every plain status/value transition; only `editPaymentShift`/`applyAutoSyncedFieldUpdate` (which can change the função) re-resolve it instead of copying it. */
+  roleId: number | null;
   scheduleStartMinutes: number | null;
   scheduleEndMinutes: number | null;
   /** Raw JSON string as stored (or NULL) — passed straight through into the new row, not re-parsed, since a status transition never changes what was in the original file. */
@@ -3957,7 +4146,7 @@ async function readPaymentShiftCoreFields(db: Database, shiftId: number): Promis
   const rows = await db.select<PaymentShiftCoreFields[]>(
     `SELECT employee_id AS employeeId, template_id AS templateId, source_file_id AS sourceFileId,
             client_id AS clientId, company_id AS companyId,
-            local, work_date AS workDate, role,
+            local, work_date AS workDate, role_id AS roleId,
             schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes,
             extra_data AS extraData, status,
             source_row_number AS sourceRowNumber, source_sheet_name AS sourceSheetName, amount
@@ -3985,7 +4174,7 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
 
   const result = await db.execute(
     `INSERT INTO payment_shifts
-       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role,
+       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
         schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
         source_row_number, source_sheet_name)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pago', $11, $12, $13, 1, $14, $15)`,
@@ -3997,7 +4186,7 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
       s.companyId,
       s.local,
       s.workDate,
-      s.role,
+      s.roleId,
       s.scheduleStartMinutes,
       s.scheduleEndMinutes,
       amount,
@@ -4024,7 +4213,7 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
 
   const result = await db.execute(
     `INSERT INTO payment_shifts
-       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role,
+       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
         schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
         source_row_number, source_sheet_name)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pendente', NULL, $11, $12, 1, $13, $14)`,
@@ -4036,7 +4225,7 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
       s.companyId,
       s.local,
       s.workDate,
-      s.role,
+      s.roleId,
       s.scheduleStartMinutes,
       s.scheduleEndMinutes,
       shiftId,
@@ -4078,9 +4267,23 @@ export async function editPaymentShift(
   const s = await readPaymentShiftCoreFields(db, shiftId);
   if (s.status === "pago") throw new Error("Não é possível editar um turno já pago.");
 
+  // Função is only ever a role_id now — the edited text must resolve to a
+  // cadastro (by name or apelido, scoped to this shift's própria empresa)
+  // or be blank (clearing the função), same requirement the import flow's
+  // "função não encontrada" block already enforces at import time.
+  const trimmedRole = fields.role.trim();
+  let roleId: number | null = null;
+  if (trimmedRole) {
+    const role = await findRoleByName(s.companyId, trimmedRole);
+    if (!role) {
+      throw new Error(`Função "${trimmedRole}" não encontrada. Cadastre-a em Funções antes de vincular a este turno.`);
+    }
+    roleId = role.id;
+  }
+
   const result = await db.execute(
     `INSERT INTO payment_shifts
-       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role,
+       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
         schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
         source_row_number, source_sheet_name)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, $15, $16)`,
@@ -4092,7 +4295,7 @@ export async function editPaymentShift(
       s.companyId,
       fields.local,
       fields.workDate,
-      fields.role,
+      roleId,
       fields.scheduleStartMinutes,
       fields.scheduleEndMinutes,
       s.status,
@@ -4154,10 +4357,16 @@ export async function applyAutoSyncedFieldUpdate(
 ): Promise<number> {
   const db = await getDb();
   const s = await readPaymentShiftCoreFields(db, shiftId);
+  // Re-resolved against `fields.companyId` (this sync's own fresh route),
+  // not `s.companyId` — same reasoning as `fields.clientId`/`fields.companyId`
+  // themselves being fresh instead of carried over: a routing change can
+  // move this shift to a different empresa, whose função cadastro is a
+  // different scope entirely.
+  const role = await findRoleByName(fields.companyId, fields.role);
 
   const result = await db.execute(
     `INSERT INTO payment_shifts
-       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role,
+       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
         schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data,
         edited_manually, source_row_number, source_sheet_name)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16)`,
@@ -4169,7 +4378,7 @@ export async function applyAutoSyncedFieldUpdate(
       fields.companyId,
       fields.local,
       fields.workDate,
-      fields.role,
+      role?.id ?? null,
       fields.scheduleStartMinutes,
       fields.scheduleEndMinutes,
       fields.status,

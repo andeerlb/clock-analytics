@@ -1,5 +1,5 @@
 import type { Update } from "@tauri-apps/plugin-updater";
-import { Briefcase, Building2, Clock, FileUp, RefreshCw, Settings, Users, Wallet } from "lucide-react";
+import { Briefcase, Building2, Clock, FileUp, RefreshCw, Settings, Tag, Users, Wallet } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import UpdateModal from "./UpdateModal";
@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { to: "/companies", label: "Empresas", icon: Building2, end: false },
   { to: "/clients", label: "Clientes", icon: Briefcase, end: false },
   { to: "/employees", label: "Colaboradores", icon: Users, end: false },
+  { to: "/roles", label: "Funções", icon: Tag, end: false },
   { to: "/", label: "Cartão Ponto", icon: Clock, end: true },
   { to: "/payments", label: "Pagamentos", icon: Wallet, end: false },
 ];

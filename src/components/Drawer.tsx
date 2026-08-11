@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
 /**
@@ -64,7 +65,11 @@ export default function Drawer({
 
   if (!rendered) return null;
 
-  return (
+  // Portaled to `document.body`, same reasoning as `Modal` — a Drawer
+  // mounted deep in the tree (e.g. inside `PaymentsPage`) only reliably
+  // covers the whole viewport and stacks above everything else this way,
+  // not just via `position: fixed` + a high `z-index`.
+  return createPortal(
     <div className={`drawer-overlay${visible ? " drawer-overlay-visible" : ""}`} onClick={onClose}>
       <div
         className={`drawer-panel drawer-panel-${side}${visible ? " drawer-panel-visible" : ""}`}
@@ -79,6 +84,7 @@ export default function Drawer({
         </div>
         <div className="drawer-body">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

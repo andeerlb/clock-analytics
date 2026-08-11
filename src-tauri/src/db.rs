@@ -406,5 +406,17 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0067_employee_unique_per_client.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 68,
+            description: "add roles/role_aliases — função moves from free-text payment_shifts.role to a real cadastro (scoped per company, mirroring employees/employee_aliases), plus payment_shifts.role_id and a backfill linking every existing shift's role text to a função",
+            sql: include_str!("../migrations/0068_roles.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 69,
+            description: "drop payment_shifts.role — role_id (backfilled 100% in 0068) is now the only representation of a turno's função, exactly mirroring how employee_id (not a redundant employee-name text column) already works",
+            sql: include_str!("../migrations/0069_payment_shift_role_fk_only.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

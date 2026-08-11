@@ -1,10 +1,7 @@
-import { useEffect, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import Modal from "./Modal";
 
-/**
- * Full-screen confirm dialog — same fixed-overlay recipe as
- * `PdfViewerModal`/`PaymentTemplateWizard` (dark backdrop, Escape to
- * cancel, clicking the backdrop cancels, clicking the card doesn't).
- */
+/** Full-screen confirm dialog, through the shared `Modal` overlay — Escape/backdrop-click cancels, clicking the card doesn't. */
 export default function ConfirmModal({
   title,
   message,
@@ -31,50 +28,29 @@ export default function ConfirmModal({
   /** Extra content between the message and the confirm/cancel row — e.g. a follow-up checkbox for a sub-choice tied to this same confirmation. */
   children?: ReactNode;
 }) {
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onCancel]);
-
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0, 0, 0, 0.7)",
-        zIndex: 200,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-      onClick={onCancel}
-    >
-      <div className="card" style={{ maxWidth: "26rem", margin: "1rem" }} onClick={(e) => e.stopPropagation()}>
-        <h3 style={{ marginTop: 0 }}>{title}</h3>
-        <p className="muted">{message}</p>
-        {children}
-        {error && (
-          <div className="error-box" style={{ marginTop: "0.8rem" }}>
-            {error}
-          </div>
-        )}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.2rem" }}>
-          <button type="button" className="outline" onClick={onCancel}>
-            {cancelLabel}
-          </button>
-          <button
-            type="button"
-            className={danger ? "danger" : undefined}
-            onClick={onConfirm}
-            disabled={confirmDisabled}
-          >
-            {confirmLabel}
-          </button>
+    <Modal onClose={onCancel} width="26rem">
+      <h3 style={{ marginTop: 0 }}>{title}</h3>
+      <p className="muted">{message}</p>
+      {children}
+      {error && (
+        <div className="error-box" style={{ marginTop: "0.8rem" }}>
+          {error}
         </div>
+      )}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.2rem" }}>
+        <button type="button" className="outline" onClick={onCancel}>
+          {cancelLabel}
+        </button>
+        <button
+          type="button"
+          className={danger ? "danger" : undefined}
+          onClick={onConfirm}
+          disabled={confirmDisabled}
+        >
+          {confirmLabel}
+        </button>
       </div>
-    </div>
+    </Modal>
   );
 }

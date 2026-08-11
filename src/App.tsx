@@ -25,6 +25,8 @@ import PaymentExportTemplatesPage from "./pages/PaymentExportTemplatesPage";
 import PaymentsPage from "./pages/PaymentsPage";
 import PaymentTemplatesPage from "./pages/PaymentTemplatesPage";
 import RemoteUpdatesPage from "./pages/RemoteUpdatesPage";
+import RoleFormPage from "./pages/RoleFormPage";
+import RolesPage from "./pages/RolesPage";
 import SettingsPage from "./pages/SettingsPage";
 
 function App() {
@@ -67,6 +69,9 @@ function App() {
                 <Route path="/employees" element={<EmployeesPage />} />
                 <Route path="/employees/new" element={<EmployeeFormPage />} />
                 <Route path="/employees/:id" element={<EmployeeFormPage />} />
+                <Route path="/roles" element={<RolesPage />} />
+                <Route path="/roles/new" element={<RoleFormPage />} />
+                <Route path="/roles/:id" element={<RoleFormPage />} />
                 <Route path="/import" element={<ImportChooserPage />} />
                 <Route path="/import/timesheet" element={<ImportTimesheetPage />} />
                 <Route path="/import/payments" element={<ImportPaymentsPage />} />

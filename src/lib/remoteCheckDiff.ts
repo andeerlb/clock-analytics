@@ -6,6 +6,7 @@ import {
   findEmployeeAnywhereByAttempts,
   findEmployeeByAttempts,
   findPaymentShiftByPosition,
+  findRoleByName,
   getPaymentShiftsByIds,
   getPaymentTemplate,
   listHeadShiftsForSourceUrl,
@@ -71,6 +72,8 @@ interface ParsedCandidate {
   workDate: string;
   local: string;
   role: string;
+  /** The função `role`'s text resolved to (see `findRoleByName`), scoped to this row's own fresh `companyId` — `null` when it didn't match any cadastro. */
+  roleId: number | null;
   scheduleStartMinutes: number | null;
   scheduleEndMinutes: number | null;
   sheetName: string | null;
@@ -223,6 +226,7 @@ export async function computeReimportDiff(
       continue;
     }
 
+    const role = await findRoleByName(route.companyId, row.fields.funcao);
     candidates.push({
       employeeId: employee.id,
       employeeName: employee.name,
@@ -231,6 +235,7 @@ export async function computeReimportDiff(
       workDate,
       local: row.fields.local ?? "",
       role: row.fields.funcao ?? "",
+      roleId: role?.id ?? null,
       scheduleStartMinutes: parsedSchedule?.startMinutes ?? null,
       scheduleEndMinutes: parsedSchedule?.endMinutes ?? null,
       sheetName: row.sheetName,
@@ -256,7 +261,7 @@ export async function computeReimportDiff(
       employeeId: c.employeeId,
       workDate: c.workDate,
       local: c.local,
-      role: c.role,
+      roleId: c.roleId,
       scheduleStartMinutes: c.scheduleStartMinutes,
       scheduleEndMinutes: c.scheduleEndMinutes,
     })),
@@ -287,6 +292,7 @@ export async function computeReimportDiff(
     workDate: string;
     local: string;
     role: string;
+    roleId: number | null;
     scheduleStartMinutes: number | null;
     scheduleEndMinutes: number | null;
     status: PaymentShiftStatus;
@@ -331,6 +337,7 @@ export async function computeReimportDiff(
           workDate: matched.workDate,
           local: matched.local,
           role: matched.role,
+          roleId: matched.roleId,
           scheduleStartMinutes: matched.scheduleStartMinutes,
           scheduleEndMinutes: matched.scheduleEndMinutes,
           status: matched.status,
@@ -352,6 +359,7 @@ export async function computeReimportDiff(
           workDate: positional.workDate,
           local: positional.local,
           role: positional.role,
+          roleId: positional.roleId,
           scheduleStartMinutes: positional.scheduleStartMinutes,
           scheduleEndMinutes: positional.scheduleEndMinutes,
           status: positional.status,
@@ -377,7 +385,7 @@ export async function computeReimportDiff(
           companyId: c.companyId,
           local: c.local,
           workDate: c.workDate,
-          role: c.role,
+          roleId: c.roleId,
           scheduleStartMinutes: c.scheduleStartMinutes,
           scheduleEndMinutes: c.scheduleEndMinutes,
           status: c.status,
@@ -427,7 +435,7 @@ export async function computeReimportDiff(
     if (reportIdentityFieldChanges) {
       if (shift.workDate !== c.workDate) fieldDiff("data", shift.workDate, c.workDate);
       if (shift.local !== c.local) fieldDiff("local", shift.local, c.local);
-      if (shift.role !== c.role) fieldDiff("função", shift.role, c.role);
+      if (shift.roleId !== c.roleId) fieldDiff("função", shift.role, c.role);
       if (shift.scheduleStartMinutes !== c.scheduleStartMinutes || shift.scheduleEndMinutes !== c.scheduleEndMinutes) {
         fieldDiff(
           "horário",

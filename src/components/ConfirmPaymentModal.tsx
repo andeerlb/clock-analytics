@@ -1,5 +1,5 @@
 import { AlertTriangle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { ShiftFieldDiffRow } from "../lib/db";
 import {
   centsMaskToAmount,
@@ -10,12 +10,13 @@ import {
   formatMinutesAsTime,
 } from "../lib/format";
 import type { PaymentShiftRow } from "../lib/types";
+import Modal from "./Modal";
 
 /**
- * "Fazer pagamento" confirm dialog — same fixed-overlay recipe as
- * `ConfirmModal`, but with an editable Valor field pre-filled from the
- * company's rules. Confirming always creates a brand-new `payment_shifts`
- * row (see `markPaymentShiftPaid`); this modal never touches `shift` itself.
+ * "Fazer pagamento" confirm dialog, through the shared `Modal` overlay —
+ * with an editable Valor field pre-filled from the company's rules.
+ * Confirming always creates a brand-new `payment_shifts` row (see
+ * `markPaymentShiftPaid`); this modal never touches `shift` itself.
  */
 export default function ConfirmPaymentModal({
   shift,
@@ -38,94 +39,69 @@ export default function ConfirmPaymentModal({
 }) {
   const [digits, setDigits] = useState(suggestedAmount !== null ? String(Math.round(suggestedAmount * 100)) : "");
 
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onCancel]);
-
   const amountValid = digits !== "";
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0, 0, 0, 0.7)",
-        zIndex: 200,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-      onClick={onCancel}
-    >
-      <div className="card" style={{ maxWidth: "26rem", margin: "1rem" }} onClick={(e) => e.stopPropagation()}>
-        <h3 style={{ marginTop: 0 }}>Fazer pagamento</h3>
-        <p className="muted">
-          {formatDate(shift.workDate)} · {shift.local} · {shift.role}
-          {shift.scheduleStartMinutes !== null && shift.scheduleEndMinutes !== null && (
-            <>
-              {" · "}
-              {formatMinutesAsTime(shift.scheduleStartMinutes)} – {formatMinutesAsTime(shift.scheduleEndMinutes)}
-            </>
-          )}
-        </p>
-        <p className="muted" style={{ fontSize: "0.85rem" }}>
-          Isso cria um novo registro com status "Pago". O registro atual não será alterado, ficando disponível como
-          histórico.
-        </p>
-        {changes.length > 0 && (
-          <div className="warning-box">
-            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 600, fontSize: "0.85rem" }}>
-              <AlertTriangle size={14} />
-              Mudança encontrada na fonte desde a importação
-            </div>
-            <div style={{ marginTop: "0.4rem", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-              {changes.map((c, i) => (
-                <div key={i} style={{ fontSize: "0.8rem" }}>
-                  {diffFieldLabel(c.fieldName, c.columnLetter)}: <s>{c.oldValue ?? "—"}</s> → <strong>{c.newValue ?? "—"}</strong>
-                </div>
-              ))}
-            </div>
-            <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.3rem" }}>
-              Verificado em {formatDateTimeAbbrevYY(changes[0].checkedAt)}
-            </div>
-          </div>
+    <Modal onClose={onCancel} width="26rem">
+      <h3 style={{ marginTop: 0 }}>Fazer pagamento</h3>
+      <p className="muted">
+        {formatDate(shift.workDate)} · {shift.local} · {shift.role}
+        {shift.scheduleStartMinutes !== null && shift.scheduleEndMinutes !== null && (
+          <>
+            {" · "}
+            {formatMinutesAsTime(shift.scheduleStartMinutes)} – {formatMinutesAsTime(shift.scheduleEndMinutes)}
+          </>
         )}
-        <div className="field">
-          <label htmlFor="confirm-payment-amount">Valor</label>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-            <span className="muted">R$</span>
-            <input
-              id="confirm-payment-amount"
-              type="text"
-              inputMode="numeric"
-              autoFocus
-              value={digits === "" ? "" : formatCentsMask(digits)}
-              onChange={(e) => setDigits(e.target.value.replace(/\D/g, ""))}
-            />
+      </p>
+      <p className="muted" style={{ fontSize: "0.85rem" }}>
+        Isso cria um novo registro com status "Pago". O registro atual não será alterado, ficando disponível como
+        histórico.
+      </p>
+      {changes.length > 0 && (
+        <div className="warning-box">
+          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 600, fontSize: "0.85rem" }}>
+            <AlertTriangle size={14} />
+            Mudança encontrada na fonte desde a importação
+          </div>
+          <div style={{ marginTop: "0.4rem", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            {changes.map((c, i) => (
+              <div key={i} style={{ fontSize: "0.8rem" }}>
+                {diffFieldLabel(c.fieldName, c.columnLetter)}: <s>{c.oldValue ?? "—"}</s> → <strong>{c.newValue ?? "—"}</strong>
+              </div>
+            ))}
+          </div>
+          <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.3rem" }}>
+            Verificado em {formatDateTimeAbbrevYY(changes[0].checkedAt)}
           </div>
         </div>
-        {error && (
-          <div className="error-box" style={{ marginTop: "0.8rem" }}>
-            {error}
-          </div>
-        )}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.2rem" }}>
-          <button type="button" className="outline" onClick={onCancel} disabled={busy}>
-            Cancelar
-          </button>
-          <button
-            type="button"
-            onClick={() => onConfirm(centsMaskToAmount(digits))}
-            disabled={!amountValid || busy}
-          >
-            Confirmar pagamento
-          </button>
+      )}
+      <div className="field">
+        <label htmlFor="confirm-payment-amount">Valor</label>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+          <span className="muted">R$</span>
+          <input
+            id="confirm-payment-amount"
+            type="text"
+            inputMode="numeric"
+            autoFocus
+            value={digits === "" ? "" : formatCentsMask(digits)}
+            onChange={(e) => setDigits(e.target.value.replace(/\D/g, ""))}
+          />
         </div>
       </div>
-    </div>
+      {error && (
+        <div className="error-box" style={{ marginTop: "0.8rem" }}>
+          {error}
+        </div>
+      )}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.2rem" }}>
+        <button type="button" className="outline" onClick={onCancel} disabled={busy}>
+          Cancelar
+        </button>
+        <button type="button" onClick={() => onConfirm(centsMaskToAmount(digits))} disabled={!amountValid || busy}>
+          Confirmar pagamento
+        </button>
+      </div>
+    </Modal>
   );
 }

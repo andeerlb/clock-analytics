@@ -546,6 +546,8 @@ export interface PaymentShiftRow {
   local: string;
   workDate: string;
   role: string;
+  /** The função `role`'s text currently resolves to, via `roles`/`role_aliases` scoped to `companyId` — `null` when the text doesn't match any cadastro (or is blank). */
+  roleId: number | null;
   scheduleStartMinutes: number | null;
   scheduleEndMinutes: number | null;
   status: PaymentShiftStatus;

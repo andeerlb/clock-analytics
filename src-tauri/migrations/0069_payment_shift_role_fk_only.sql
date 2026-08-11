@@ -1,0 +1,17 @@
+-- Completes the 0068 migration: função stops being a free-text column
+-- duplicated alongside role_id and becomes purely a foreign key, exactly
+-- mirroring how employee_id (not a redundant "employee name" text column)
+-- already works. Every row's role_id was already backfilled in 0068 (and
+-- verified 59/59 linked against production data before this was written),
+-- so there is nothing left to migrate here — this is a pure schema
+-- simplification.
+--
+-- Safe as a plain `DROP COLUMN` (no `_new`-suffix rebuild dance needed, per
+-- the CLAUDE.md 0067 write-up): that dance is only required when DROPPING/
+-- RENAMING A WHOLE TABLE another table has an FK into, because SQLite's
+-- FK-rewrite triggers on `RENAME TO`/implicit `DROP TABLE` deletes. Dropping
+-- one column off `payment_shifts` doesn't delete any row and nothing has an
+-- FK into `payment_shifts.role` (it was never a FK target — role_id is the
+-- FK, in the other direction, into `roles`), so there's no FK surface for
+-- this statement to disturb.
+ALTER TABLE payment_shifts DROP COLUMN role;
