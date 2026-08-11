@@ -38,16 +38,23 @@ export interface PaymentsReportResult {
 
 /**
  * Generates the Pagamentos "Gerar PDF" report for whatever filters are
- * currently active on the list — a flat table (one line per turno, not
- * grouped by colaborador) with Colaborador/Data/Local/Função/Horário (com
- * Diurno/Noturno)/Horas trabalhadas/Valor/Status, and a totals row at the
- * end. Prompts the native save dialog right away (the destination is the
- * user's own choice, not app-managed), then writes there — the caller can
- * open that same path in `PdfViewerModal` (with downloading disabled,
- * since it's already exactly where the user put it) right after.
+ * currently active on the list — a flat table (one line per turno, never
+ * collapsed into one row per colaborador) with Colaborador/Data/Local/
+ * Função/Horário (com Diurno/Noturno)/Horas trabalhadas/Valor/Status.
+ * `grouped` mirrors the list's own "Agrupar por colaborador" toggle: rows
+ * are still printed one turno per line either way, but when on, they're
+ * sorted so each colaborador's turnos are contiguous and followed by a
+ * subtotal row, replacing the single grand-total row used when off — see
+ * `PaymentsPage`'s `grouped` state, whose only other effect is how the
+ * on-screen table is displayed. Prompts the native save dialog right away
+ * (the destination is the user's own choice, not app-managed), then writes
+ * there — the caller can open that same path in `PdfViewerModal` (with
+ * downloading disabled, since it's already exactly where the user put it)
+ * right after.
  */
 export async function generatePaymentsReportPdf(
   query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
+  grouped: boolean = false,
 ): Promise<PaymentsReportResult> {
   const allRows = await listPaymentShiftsForReport(query);
   const title = reportTitle(query.statuses);
@@ -70,15 +77,50 @@ export async function generatePaymentsReportPdf(
     return { rowCount: 0, path: null, title };
   }
 
+  // Grouped: each colaborador's turnos need to sit together so a subtotal
+  // can follow them, so rows are re-sorted by employee (then by date, same
+  // order the ungrouped report already used) instead of the SQL's own
+  // work_date-first order.
+  const orderedRows = grouped
+    ? [...rows].sort(
+        (a, b) => a.employeeId - b.employeeId || a.workDate.localeCompare(b.workDate) || a.local.localeCompare(b.local),
+      )
+    : rows;
+
   let totalMinutes = 0;
   let totalValue = 0;
-  const body = rows.map((r) => {
+  const body: string[][] = [];
+  const subtotalRowIndexes = new Set<number>();
+
+  let currentEmployeeId: number | null = null;
+  let currentEmployeeName = "";
+  let employeeMinutes = 0;
+  let employeeValue = 0;
+
+  function pushSubtotalRow() {
+    body.push(["", "", "Subtotal", formatMinutesAsTime(employeeMinutes), "", formatCurrencyBRL(employeeValue), currentEmployeeName, ""]);
+    subtotalRowIndexes.add(body.length - 1);
+  }
+
+  for (const r of orderedRows) {
+    if (grouped && currentEmployeeId !== null && r.employeeId !== currentEmployeeId) {
+      pushSubtotalRow();
+      employeeMinutes = 0;
+      employeeValue = 0;
+    }
+    currentEmployeeId = r.employeeId;
+    currentEmployeeName = r.employeeName;
+
     const hasSchedule = r.scheduleStartMinutes !== null && r.scheduleEndMinutes !== null;
     const duration = hasSchedule ? shiftDurationMinutes(r.scheduleStartMinutes!, r.scheduleEndMinutes!) : null;
-    if (duration !== null) totalMinutes += duration;
+    if (duration !== null) {
+      totalMinutes += duration;
+      employeeMinutes += duration;
+    }
     // Guaranteed non-null/non-zero by the filter above.
     const value = shiftValue(r)!;
     totalValue += value;
+    employeeValue += value;
 
     const horario = hasSchedule
       ? `${formatMinutesAsTime(r.scheduleStartMinutes!)} – ${formatMinutesAsTime(r.scheduleEndMinutes!)}${
@@ -86,7 +128,7 @@ export async function generatePaymentsReportPdf(
         }`
       : "—";
 
-    return [
+    body.push([
       r.local,
       formatDateAbbrev(r.workDate),
       r.role,
@@ -95,8 +137,9 @@ export async function generatePaymentsReportPdf(
       formatCurrencyBRL(value),
       r.employeeName,
       STATUS_LABELS[r.status],
-    ];
-  });
+    ]);
+  }
+  if (grouped) pushSubtotalRow();
 
   const doc = new jsPDF({ orientation: "landscape" });
   doc.setFontSize(14);
@@ -114,14 +157,27 @@ export async function generatePaymentsReportPdf(
     margin: { top: 26, right: PAGE_MARGIN, bottom: PAGE_MARGIN, left: PAGE_MARGIN },
     head: [["Local", "Data", "Função", "Qtd/h", "Horário", "Valor", "Nome", "Status"]],
     body,
-    foot: [["", "", "Total", formatMinutesAsTime(totalMinutes), "", formatCurrencyBRL(totalValue), "", ""]],
+    // Ungrouped: one grand total after the last row. Grouped: a subtotal
+    // row already sits after each colaborador's turnos (in `body` itself,
+    // styled by `didParseCell` below), so there's no separate grand-total
+    // foot row.
+    foot: grouped ? undefined : [["", "", "Total", formatMinutesAsTime(totalMinutes), "", formatCurrencyBRL(totalValue), "", ""]],
     // Total is a sum over every row in the report, not just the ones on a
     // given page — showing it on every page would misleadingly look like a
     // per-page subtotal, so it only prints once, after the last row.
-    showFoot: "lastPage",
+    showFoot: grouped ? undefined : "lastPage",
     styles: { fontSize: 8, cellPadding: CELL_PADDING },
     headStyles: { fillColor: [45, 52, 73] },
     footStyles: { fillColor: [230, 230, 230], textColor: 20, fontStyle: "bold" },
+    didParseCell: grouped
+      ? (data) => {
+          if (data.section === "body" && subtotalRowIndexes.has(data.row.index)) {
+            data.cell.styles.fillColor = [230, 230, 230];
+            data.cell.styles.textColor = 20;
+            data.cell.styles.fontStyle = "bold";
+          }
+        }
+      : undefined,
   });
 
   const destPath = await save({

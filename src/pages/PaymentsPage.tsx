@@ -10,6 +10,7 @@ import {
   Eye,
   FileDown,
   FileSpreadsheet,
+  Filter,
   FolderOpen,
   History,
   Info,
@@ -87,6 +88,7 @@ import type {
   PaymentShiftRow,
   PaymentShiftStatus,
   PaymentShiftSummaryRow,
+  ScheduleTimeFilter,
   ShiftPeriod,
 } from "../lib/types";
 
@@ -934,17 +936,18 @@ export default function PaymentsPage() {
     pageSize,
   ]);
 
-  // A previously generated PDF reflects a specific set of filters — changing
-  // any of them means the next "Gerar PDF" would produce different rows, so
-  // the stale "PDF gerado com sucesso" banner (and any leftover error) no
-  // longer applies. Deliberately excludes `grouped`/`page`/`pageSize`: those
-  // change how the table is displayed, not which rows would end up in a
-  // report.
+  // A previously generated PDF reflects a specific set of filters (and,
+  // since it now adds a per-colaborador subtotal when grouped, `grouped`
+  // itself) — changing any of them means the next "Gerar PDF" would produce
+  // a different document, so the stale "PDF gerado com sucesso" banner (and
+  // any leftover error) no longer applies. Deliberately excludes
+  // `page`/`pageSize`: those change how the table is paginated on screen,
+  // not which rows (or how they're grouped) end up in a report.
   useEffect(() => {
     setGeneratedReport(null);
     setPdfError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, selectedCompanyIds, selectedClientIds, selectedRoleIds, periodStart, periodEnd, selectedStatuses, selectedShiftPeriods, scheduleTimeFilter]);
+  }, [search, selectedCompanyIds, selectedClientIds, selectedRoleIds, periodStart, periodEnd, selectedStatuses, selectedShiftPeriods, scheduleTimeFilter, grouped]);
 
   async function afterMutation(groupRef: GroupRef) {
     if (groupRef === null) {
@@ -1091,58 +1094,106 @@ export default function PaymentsPage() {
     });
   }
 
+  // Drawer draft state — every field the "Filtros" Drawer edits lives here,
+  // separate from the applied (`search`/`selectedCompanyIds`/...) filters
+  // from `usePaymentsFilters`, so the query/table/PDF only ever see a new
+  // value once "Aplicar filtros" commits the draft. `openFiltersDrawer`
+  // reseeds this from the applied filters every time the Drawer opens, so a
+  // cancelled edit never leaks into the next time it's opened.
+  const [filtersDrawerOpen, setFiltersDrawerOpen] = useState(false);
+  const [draftSearch, setDraftSearch] = useState(search);
+  const [draftCompanyIds, setDraftCompanyIds] = useState<Set<string>>(selectedCompanyIds);
+  const [draftClientIds, setDraftClientIds] = useState<Set<string>>(selectedClientIds);
+  const [draftRoleIds, setDraftRoleIds] = useState<Set<string>>(selectedRoleIds);
+  const [draftPeriodStart, setDraftPeriodStart] = useState(periodStart);
+  const [draftPeriodEnd, setDraftPeriodEnd] = useState(periodEnd);
+  const [draftStatuses, setDraftStatuses] = useState<Set<PaymentShiftStatus>>(selectedStatuses);
+  const [draftShiftPeriods, setDraftShiftPeriods] = useState<Set<ShiftPeriod>>(selectedShiftPeriods);
+  const [draftScheduleTimeFilter, setDraftScheduleTimeFilter] = useState<ScheduleTimeFilter | null>(scheduleTimeFilter);
+
   const clientOptions = useMemo(() => {
     const scoped =
-      selectedCompanyIds.size > 0
-        ? clients.filter((c) => selectedCompanyIds.has(String(c.companyId)))
-        : clients;
+      draftCompanyIds.size > 0 ? clients.filter((c) => draftCompanyIds.has(String(c.companyId))) : clients;
     const seen = new Map<number, ClientRow>();
     for (const c of scoped) if (!seen.has(c.id)) seen.set(c.id, c);
     return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [clients, selectedCompanyIds]);
+  }, [clients, draftCompanyIds]);
 
   const roleOptions = useMemo(() => {
-    const scoped =
-      selectedCompanyIds.size > 0 ? roles.filter((r) => selectedCompanyIds.has(String(r.companyId))) : roles;
+    const scoped = draftCompanyIds.size > 0 ? roles.filter((r) => draftCompanyIds.has(String(r.companyId))) : roles;
     return [...scoped].sort((a, b) => a.name.localeCompare(b.name));
-  }, [roles, selectedCompanyIds]);
+  }, [roles, draftCompanyIds]);
 
-  function toggleCompany(id: string) {
-    const next = new Set(selectedCompanyIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelectedCompanyIds(next);
-    setSelectedClientIds(new Set());
-    setSelectedRoleIds(new Set());
-    setPage(0);
+  function openFiltersDrawer() {
+    setDraftSearch(search);
+    setDraftCompanyIds(selectedCompanyIds);
+    setDraftClientIds(selectedClientIds);
+    setDraftRoleIds(selectedRoleIds);
+    setDraftPeriodStart(periodStart);
+    setDraftPeriodEnd(periodEnd);
+    setDraftStatuses(selectedStatuses);
+    setDraftShiftPeriods(selectedShiftPeriods);
+    setDraftScheduleTimeFilter(scheduleTimeFilter);
+    setFiltersDrawerOpen(true);
   }
-  function toggleClient(id: string) {
-    const next = new Set(selectedClientIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelectedClientIds(next);
+
+  function applyFilters() {
+    setSearch(draftSearch);
+    setSelectedCompanyIds(draftCompanyIds);
+    setSelectedClientIds(draftClientIds);
+    setSelectedRoleIds(draftRoleIds);
+    setPeriod(draftPeriodStart, draftPeriodEnd);
+    setSelectedStatuses(draftStatuses);
+    setSelectedShiftPeriods(draftShiftPeriods);
+    setScheduleTimeFilter(draftScheduleTimeFilter);
     setPage(0);
+    setFiltersDrawerOpen(false);
   }
-  function toggleRole(id: string) {
-    const next = new Set(selectedRoleIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelectedRoleIds(next);
-    setPage(0);
+
+  /** Resets just the Drawer's own draft fields — still requires "Aplicar filtros" to take effect, same as every other change made inside the Drawer. */
+  function clearDraftFilters() {
+    setDraftSearch("");
+    setDraftCompanyIds(new Set());
+    setDraftClientIds(new Set());
+    setDraftRoleIds(new Set());
+    setDraftPeriodStart("");
+    setDraftPeriodEnd("");
+    setDraftStatuses(new Set(STATUS_OPTIONS.map((o) => o.id)));
+    setDraftShiftPeriods(new Set(SHIFT_PERIOD_OPTIONS.map((o) => o.id)));
+    setDraftScheduleTimeFilter(null);
   }
-  function toggleStatus(id: PaymentShiftStatus) {
-    const next = new Set(selectedStatuses);
+
+  function toggleDraftCompany(id: string) {
+    const next = new Set(draftCompanyIds);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    setSelectedStatuses(next);
-    setPage(0);
+    setDraftCompanyIds(next);
+    setDraftClientIds(new Set());
+    setDraftRoleIds(new Set());
   }
-  function toggleShiftPeriod(id: ShiftPeriod) {
-    const next = new Set(selectedShiftPeriods);
+  function toggleDraftClient(id: string) {
+    const next = new Set(draftClientIds);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    setSelectedShiftPeriods(next);
-    setPage(0);
+    setDraftClientIds(next);
+  }
+  function toggleDraftRole(id: string) {
+    const next = new Set(draftRoleIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setDraftRoleIds(next);
+  }
+  function toggleDraftStatus(id: PaymentShiftStatus) {
+    const next = new Set(draftStatuses);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setDraftStatuses(next);
+  }
+  function toggleDraftShiftPeriod(id: ShiftPeriod) {
+    const next = new Set(draftShiftPeriods);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setDraftShiftPeriods(next);
   }
 
   /** Every turno matching the current filters, not just the visible page — see `generatePaymentsReportPdf`. */
@@ -1151,7 +1202,7 @@ export default function PaymentsPage() {
     setGeneratedReport(null);
     setGeneratingPdf(true);
     try {
-      const result = await generatePaymentsReportPdf(baseQuery());
+      const result = await generatePaymentsReportPdf(baseQuery(), grouped);
       if (result.rowCount === 0) {
         setPdfError("Nenhum turno para os filtros selecionados.");
       } else if (result.path) {
@@ -1221,6 +1272,17 @@ export default function PaymentsPage() {
       selectedShiftPeriods.size < SHIFT_PERIOD_OPTIONS.length ||
       scheduleTimeFilter !== null,
   );
+  /** How many filter categories are currently applied — shown as a count badge on the "Filtros" button so it's clear at a glance the list isn't unfiltered, without opening the Drawer. */
+  const activeFilterCount = [
+    search.trim().length > 0,
+    selectedCompanyIds.size > 0,
+    selectedClientIds.size > 0,
+    selectedRoleIds.size > 0,
+    Boolean(periodStart || periodEnd),
+    selectedStatuses.size < STATUS_OPTIONS.length,
+    selectedShiftPeriods.size < SHIFT_PERIOD_OPTIONS.length,
+    scheduleTimeFilter !== null,
+  ].filter(Boolean).length;
   const total = grouped ? summariesTotal : flatTotal;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
@@ -1238,139 +1300,11 @@ export default function PaymentsPage() {
       {inlineEditError && <div className="error-box">{inlineEditError}</div>}
 
       <div className="card">
-        <div className="field-row" style={{ marginBottom: 0, alignItems: "flex-end" }}>
-          <div className="field" style={{ flex: "2 1 220px" }}>
-            <label htmlFor="payments-search">Colaborador</label>
-            <div style={{ position: "relative" }}>
-              <Search
-                size={14}
-                style={{ position: "absolute", left: "0.65rem", top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }}
-              />
-              <input
-                id="payments-search"
-                type="text"
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(0);
-                }}
-                placeholder="Buscar por nome..."
-                style={{ width: "100%", paddingLeft: "2rem" }}
-              />
-            </div>
-          </div>
-          <div className="field">
-            <label>Empresa</label>
-            <MultiSelectDropdown
-              options={companies.map((c) => ({ id: String(c.id), label: c.name }))}
-              selected={selectedCompanyIds}
-              onToggle={toggleCompany}
-              onSelectAll={() => {
-                setSelectedCompanyIds(new Set(companies.map((c) => String(c.id))));
-                setPage(0);
-              }}
-              onSelectNone={() => {
-                setSelectedCompanyIds(new Set());
-                setPage(0);
-              }}
-              icon={Building2}
-              allLabel="Todas as empresas"
-              noneLabel="Nenhuma empresa"
-            />
-          </div>
-          <div className="field">
-            <label>Cliente</label>
-            <MultiSelectDropdown
-              options={clientOptions.map((c) => ({ id: String(c.id), label: c.name }))}
-              selected={selectedClientIds}
-              onToggle={toggleClient}
-              onSelectAll={() => {
-                setSelectedClientIds(new Set(clientOptions.map((c) => String(c.id))));
-                setPage(0);
-              }}
-              onSelectNone={() => {
-                setSelectedClientIds(new Set());
-                setPage(0);
-              }}
-              icon={Users}
-              allLabel="Todos os clientes"
-              noneLabel="Nenhum cliente"
-            />
-          </div>
-          <div className="field">
-            <label>Função</label>
-            <MultiSelectDropdown
-              options={roleOptions.map((r) => ({ id: String(r.id), label: r.name }))}
-              selected={selectedRoleIds}
-              onToggle={toggleRole}
-              onSelectAll={() => {
-                setSelectedRoleIds(new Set(roleOptions.map((r) => String(r.id))));
-                setPage(0);
-              }}
-              onSelectNone={() => {
-                setSelectedRoleIds(new Set());
-                setPage(0);
-              }}
-              icon={Briefcase}
-              allLabel="Todas as funções"
-              noneLabel="Nenhuma função"
-            />
-          </div>
-          <div className="field">
-            <label>Período</label>
-            <DateRangePicker
-              startValue={periodStart}
-              endValue={periodEnd}
-              onChange={(start, end) => {
-                setPeriod(start, end);
-                setPage(0);
-              }}
-            />
-          </div>
-          <div className="field">
-            <label>Horário</label>
-            <ScheduleTimeFilterDropdown value={scheduleTimeFilter} onChange={setScheduleTimeFilter} />
-          </div>
-          <div className="field">
-            <label>Diurno/Noturno</label>
-            <MultiSelectDropdown
-              options={SHIFT_PERIOD_OPTIONS}
-              selected={selectedShiftPeriods}
-              onToggle={toggleShiftPeriod}
-              onSelectAll={() => {
-                setSelectedShiftPeriods(new Set(SHIFT_PERIOD_OPTIONS.map((o) => o.id)));
-                setPage(0);
-              }}
-              onSelectNone={() => {
-                setSelectedShiftPeriods(new Set());
-                setPage(0);
-              }}
-              icon={Moon}
-              allLabel="Diurno e noturno"
-              noneLabel="Nenhum"
-            />
-          </div>
-          <div className="field">
-            <label>Status</label>
-            <MultiSelectDropdown
-              options={STATUS_OPTIONS}
-              selected={selectedStatuses}
-              onToggle={toggleStatus}
-              onSelectAll={() => {
-                setSelectedStatuses(new Set(STATUS_OPTIONS.map((o) => o.id)));
-                setPage(0);
-              }}
-              onSelectNone={() => {
-                setSelectedStatuses(new Set());
-                setPage(0);
-              }}
-              allLabel="Todos os status"
-              noneLabel="Nenhum status"
-            />
-          </div>
-        </div>
-
-        <div className="field-row" style={{ marginTop: "1rem", marginBottom: 0, alignItems: "center" }}>
+        <div className="field-row" style={{ marginBottom: 0, alignItems: "center" }}>
+          <button type="button" className="secondary" onClick={openFiltersDrawer}>
+            <Filter size={15} style={{ marginRight: "0.4rem" }} />
+            {activeFilterCount > 0 ? `Filtros (${activeFilterCount})` : "Filtros"}
+          </button>
           <div style={{ marginLeft: "auto", display: "flex", gap: "0.6rem", alignItems: "center" }}>
             {exportTemplates.length > 0 && (
               <select
@@ -1874,6 +1808,130 @@ export default function PaymentsPage() {
               </div>
             );
           })()}
+      </Drawer>
+
+      <Drawer
+        open={filtersDrawerOpen}
+        onClose={() => setFiltersDrawerOpen(false)}
+        title="Filtros"
+        // Wider than the Drawer default — the Período field's calendar
+        // popover (two linked month panels, ~560px) needs the extra room to
+        // land fully inside the panel instead of spilling past its edge.
+        width="min(640px, 92vw)"
+        footer={
+          <>
+            <button type="button" onClick={applyFilters}>
+              Aplicar filtros
+            </button>
+            <button type="button" className="ghost" onClick={clearDraftFilters}>
+              Limpar filtros
+            </button>
+          </>
+        }
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: "1.1rem" }}>
+          <div className="field">
+            <label htmlFor="payments-search">Colaborador</label>
+            <div style={{ position: "relative" }}>
+              <Search
+                size={14}
+                style={{ position: "absolute", left: "0.65rem", top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }}
+              />
+              <input
+                id="payments-search"
+                type="text"
+                value={draftSearch}
+                onChange={(e) => setDraftSearch(e.target.value)}
+                placeholder="Buscar por nome..."
+                style={{ width: "100%", paddingLeft: "2rem" }}
+              />
+            </div>
+          </div>
+          <div className="field">
+            <label>Empresa</label>
+            <MultiSelectDropdown
+              options={companies.map((c) => ({ id: String(c.id), label: c.name }))}
+              selected={draftCompanyIds}
+              onToggle={toggleDraftCompany}
+              onSelectAll={() => setDraftCompanyIds(new Set(companies.map((c) => String(c.id))))}
+              onSelectNone={() => setDraftCompanyIds(new Set())}
+              icon={Building2}
+              allLabel="Todas as empresas"
+              noneLabel="Nenhuma empresa"
+              align="left"
+            />
+          </div>
+          <div className="field">
+            <label>Cliente</label>
+            <MultiSelectDropdown
+              options={clientOptions.map((c) => ({ id: String(c.id), label: c.name }))}
+              selected={draftClientIds}
+              onToggle={toggleDraftClient}
+              onSelectAll={() => setDraftClientIds(new Set(clientOptions.map((c) => String(c.id))))}
+              onSelectNone={() => setDraftClientIds(new Set())}
+              icon={Users}
+              allLabel="Todos os clientes"
+              noneLabel="Nenhum cliente"
+              align="left"
+            />
+          </div>
+          <div className="field">
+            <label>Função</label>
+            <MultiSelectDropdown
+              options={roleOptions.map((r) => ({ id: String(r.id), label: r.name }))}
+              selected={draftRoleIds}
+              onToggle={toggleDraftRole}
+              onSelectAll={() => setDraftRoleIds(new Set(roleOptions.map((r) => String(r.id))))}
+              onSelectNone={() => setDraftRoleIds(new Set())}
+              icon={Briefcase}
+              allLabel="Todas as funções"
+              noneLabel="Nenhuma função"
+              align="left"
+            />
+          </div>
+          <div className="field">
+            <label>Período</label>
+            <DateRangePicker
+              startValue={draftPeriodStart}
+              endValue={draftPeriodEnd}
+              onChange={(start, end) => {
+                setDraftPeriodStart(start);
+                setDraftPeriodEnd(end);
+              }}
+            />
+          </div>
+          <div className="field">
+            <label>Horário</label>
+            <ScheduleTimeFilterDropdown value={draftScheduleTimeFilter} onChange={setDraftScheduleTimeFilter} align="left" />
+          </div>
+          <div className="field">
+            <label>Diurno/Noturno</label>
+            <MultiSelectDropdown
+              options={SHIFT_PERIOD_OPTIONS}
+              selected={draftShiftPeriods}
+              onToggle={toggleDraftShiftPeriod}
+              onSelectAll={() => setDraftShiftPeriods(new Set(SHIFT_PERIOD_OPTIONS.map((o) => o.id)))}
+              onSelectNone={() => setDraftShiftPeriods(new Set())}
+              icon={Moon}
+              allLabel="Diurno e noturno"
+              noneLabel="Nenhum"
+              align="left"
+            />
+          </div>
+          <div className="field">
+            <label>Status</label>
+            <MultiSelectDropdown
+              options={STATUS_OPTIONS}
+              selected={draftStatuses}
+              onToggle={toggleDraftStatus}
+              onSelectAll={() => setDraftStatuses(new Set(STATUS_OPTIONS.map((o) => o.id)))}
+              onSelectNone={() => setDraftStatuses(new Set())}
+              allLabel="Todos os status"
+              noneLabel="Nenhum status"
+              align="left"
+            />
+          </div>
+        </div>
       </Drawer>
     </div>
   );

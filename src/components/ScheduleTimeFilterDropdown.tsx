@@ -14,9 +14,12 @@ const SCHEDULE_TIME_RULES: ScheduleTimeRule[] = ["start-before", "start-after", 
 export default function ScheduleTimeFilterDropdown({
   value,
   onChange,
+  align = "right",
 }: {
   value: ScheduleTimeFilter | null;
   onChange: (v: ScheduleTimeFilter | null) => void;
+  /** Same idea as `MultiSelectDropdown`'s `align` — "left" keeps the popover from overflowing past a container's left edge when the trigger sits near that edge (e.g. inside a narrow Drawer). */
+  align?: "left" | "right";
 }) {
   const [open, setOpen] = useState(false);
   const [draftRule, setDraftRule] = useState<ScheduleTimeRule>(value?.rule ?? "start-after");
@@ -49,7 +52,8 @@ export default function ScheduleTimeFilterDropdown({
         <div
           style={{
             position: "absolute",
-            right: 0,
+            left: align === "left" ? 0 : undefined,
+            right: align === "left" ? undefined : 0,
             top: "calc(100% + 0.4rem)",
             background: "var(--card-bg)",
             border: "1px solid var(--border)",

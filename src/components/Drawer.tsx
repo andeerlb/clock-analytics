@@ -12,6 +12,7 @@ export default function Drawer({
   onClose,
   title,
   children,
+  footer,
   width = "min(460px, 92vw)",
   side = "right",
 }: {
@@ -19,6 +20,8 @@ export default function Drawer({
   onClose: () => void;
   title: string;
   children: ReactNode;
+  /** Rendered below the scrollable body, pinned to the bottom of the panel — for action buttons that should stay reachable without scrolling (e.g. "Aplicar filtros"). Omit for a Drawer with no persistent actions. */
+  footer?: ReactNode;
   /** Any valid CSS width — defaults to a comfortable panel on wide windows, nearly full-width on narrow ones. */
   width?: string;
   side?: "left" | "right";
@@ -83,6 +86,7 @@ export default function Drawer({
           </button>
         </div>
         <div className="drawer-body">{children}</div>
+        {footer && <div className="drawer-footer">{footer}</div>}
       </div>
     </div>,
     document.body,

@@ -3916,6 +3916,7 @@ export async function listPaymentShiftSummaries(
 }
 
 export interface PaymentShiftReportRow {
+  employeeId: number;
   employeeName: string;
   companyId: number;
   /** companyName/clientId/clientName: added for the Excel export template's groupBy/column bindings — the PDF report only ever used companyId (for the per-shift value-rule lookup). */
@@ -3951,7 +3952,7 @@ export async function listPaymentShiftsForReport(
   const conditions = buildPaymentShiftRowConditions(query, params);
 
   return db.select<PaymentShiftReportRow[]>(
-    `SELECT e.name AS employeeName, c.id AS companyId, c.name AS companyName,
+    `SELECT e.id AS employeeId, e.name AS employeeName, c.id AS companyId, c.name AS companyName,
             cl.id AS clientId, cl.name AS clientName,
             ps.work_date AS workDate, ps.local, COALESCE(r.name, '') AS role,
             ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,

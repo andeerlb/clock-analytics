@@ -25,6 +25,7 @@ export default function MultiSelectDropdown<T extends string>({
   allLabel = "Todos selecionados",
   noneLabel = "Nenhum selecionado",
   countLabel,
+  align = "right",
 }: {
   options: MultiSelectOption<T>[];
   selected: Set<T>;
@@ -35,6 +36,8 @@ export default function MultiSelectDropdown<T extends string>({
   allLabel?: string;
   noneLabel?: string;
   countLabel?: (selectedCount: number, total: number) => string;
+  /** Which edge the popover hangs from — "right" (default) suits a trigger near a row's right edge; "left" keeps it from overflowing past a container's left edge when the trigger itself sits near that edge (e.g. inside a narrow Drawer). */
+  align?: "left" | "right";
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -66,7 +69,8 @@ export default function MultiSelectDropdown<T extends string>({
         <div
           style={{
             position: "absolute",
-            right: 0,
+            left: align === "left" ? 0 : undefined,
+            right: align === "left" ? undefined : 0,
             top: "calc(100% + 0.4rem)",
             background: "var(--card-bg)",
             border: "1px solid var(--border)",

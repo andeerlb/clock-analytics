@@ -902,6 +902,15 @@ tr:last-child td {
   flex: 1;
 }
 
+.drawer-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem 1.4rem;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
 .tip-row {
   display: flex;
   flex-wrap: wrap;
