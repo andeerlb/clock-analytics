@@ -1,10 +1,9 @@
-import { AlertTriangle, Info, X } from "lucide-react";
+import { AlertTriangle, Info } from "lucide-react";
 import { useState } from "react";
 import type { ShiftFieldDiffRow } from "../lib/db";
 import {
   centsMaskToAmount,
   diffFieldLabel,
-  formatCentsMask,
   formatDate,
   formatDateTimeAbbrevYY,
   formatMinutesAsTime,
@@ -12,6 +11,7 @@ import {
 } from "../lib/format";
 import type { PaymentShiftRow } from "../lib/types";
 import Avatar from "./Avatar";
+import CurrencyInput from "./CurrencyInput";
 import Modal from "./Modal";
 
 /** A DATA/LOCAL/FUNÇÃO/TOTAL DE HORAS grid cell's small caps label — matches the uppercase letter-spacing style used elsewhere for this same "tiny label above a value" pattern (e.g. the pending-changes card's "CLIQUE PARA REVISAR"). */
@@ -55,15 +55,21 @@ export default function ConfirmPaymentModal({
   const duration = hasSchedule ? shiftDurationMinutes(shift.scheduleStartMinutes!, shift.scheduleEndMinutes!) : null;
 
   return (
-    <Modal onClose={onCancel}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-        <h3 style={{ margin: 0 }}>Fazer pagamento</h3>
-        <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={onCancel} disabled={busy} aria-label="Fechar">
-          <X size={18} />
-        </button>
-      </div>
-
-      <div style={{ background: "var(--surface-variant)", border: "1px solid var(--border)", borderRadius: 10, padding: "0.9rem 1rem", marginBottom: "1rem" }}>
+    <Modal
+      onClose={onCancel}
+      title="Fazer pagamento"
+      footer={
+        <>
+          <button type="button" className="outline" onClick={onCancel} disabled={busy}>
+            Cancelar
+          </button>
+          <button type="button" onClick={() => onConfirm(centsMaskToAmount(digits))} disabled={!amountValid || busy}>
+            Confirmar pagamento
+          </button>
+        </>
+      }
+    >
+      <div style={{ background: "var(--surface-variant)", border: "1px solid var(--border)", borderRadius: 8, padding: "0.9rem 1rem", marginBottom: "1rem" }}>
         <div className="person-cell" style={{ fontWeight: 600, marginBottom: "0.9rem" }}>
           <Avatar name={shift.employeeName} />
           {shift.employeeName}
@@ -113,37 +119,19 @@ export default function ConfirmPaymentModal({
           </div>
         </div>
       )}
-      <div className="field">
+      <div className="field" style={{ marginBottom: "1rem" }}>
         <label htmlFor="confirm-payment-amount">Valor</label>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-          <span className="muted">R$</span>
-          <input
-            id="confirm-payment-amount"
-            type="text"
-            inputMode="numeric"
-            autoFocus
-            value={digits === "" ? "" : formatCentsMask(digits)}
-            onChange={(e) => setDigits(e.target.value.replace(/\D/g, ""))}
-          />
-        </div>
+        <CurrencyInput id="confirm-payment-amount" size="md" digits={digits} onChange={setDigits} autoFocus />
       </div>
       <div className="info-box">
         <Info size={14} style={{ flexShrink: 0, marginTop: "0.15rem" }} />
         <span>Isso criará um novo registro com status "Pago". O registro original será arquivado no histórico.</span>
       </div>
       {error && (
-        <div className="error-box" style={{ marginTop: "0.8rem" }}>
+        <div className="error-box" style={{ marginTop: "0.8rem", marginBottom: 0 }}>
           {error}
         </div>
       )}
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.2rem" }}>
-        <button type="button" className="outline" onClick={onCancel} disabled={busy}>
-          Cancelar
-        </button>
-        <button type="button" onClick={() => onConfirm(centsMaskToAmount(digits))} disabled={!amountValid || busy}>
-          Confirmar pagamento
-        </button>
-      </div>
     </Modal>
   );
 }

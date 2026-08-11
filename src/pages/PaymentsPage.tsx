@@ -29,6 +29,7 @@ import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
 import ConfirmPaymentModal from "../components/ConfirmPaymentModal";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
+import CurrencyInput from "../components/CurrencyInput";
 import DatePicker from "../components/DatePicker";
 import DateRangePicker from "../components/DateRangePicker";
 import Drawer from "../components/Drawer";
@@ -71,7 +72,6 @@ import {
 import {
   centsMaskToAmount,
   diffFieldLabel,
-  formatCentsMask,
   formatCurrencyBRL,
   formatDate,
   formatDateAbbrevYY,
@@ -322,26 +322,21 @@ function EditableCurrencyCell({
   }
 
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
-      <span className="muted">R$</span>
-      <input
-        autoFocus
-        type="text"
-        inputMode="numeric"
-        value={digits === "" ? "" : formatCentsMask(digits)}
-        placeholder="Automático"
-        onChange={(e) => {
-          setDigits(e.target.value.replace(/\D/g, ""));
-          setTouched(true);
-        }}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") commit();
-          if (e.key === "Escape") setEditing(false);
-        }}
-        style={{ width: "6rem" }}
-      />
-    </span>
+    <CurrencyInput
+      size="sm"
+      autoFocus
+      digits={digits}
+      placeholder="Automático"
+      onChange={(d) => {
+        setDigits(d);
+        setTouched(true);
+      }}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+        if (e.key === "Escape") setEditing(false);
+      }}
+    />
   );
 }
 

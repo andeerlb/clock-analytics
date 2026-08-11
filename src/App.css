@@ -479,6 +479,50 @@ tr:last-child td {
   border-bottom-color: var(--accent);
 }
 
+/* `CurrencyInput` — shared "R$ 1.234,56" masked field. `-sm` (Pagamentos
+   table's inline Valor edit) keeps the old label-beside-input look at a
+   fixed compact width; `-md` (form/modal use, e.g. ConfirmPaymentModal)
+   insets the "R$" prefix into a full-width, monospace, darker-than-usual
+   field instead. */
+.currency-input {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.currency-input-prefix {
+  position: absolute;
+  color: var(--text-muted);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  pointer-events: none;
+}
+.currency-input input {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+.currency-input-sm {
+  gap: 0.3rem;
+}
+.currency-input-sm .currency-input-prefix {
+  position: static;
+  font-size: 0.9em;
+}
+.currency-input-sm input {
+  width: 6rem;
+}
+.currency-input-md {
+  display: flex;
+  width: 100%;
+}
+.currency-input-md .currency-input-prefix {
+  left: 0.85rem;
+  font-size: 0.95em;
+}
+.currency-input-md input {
+  width: 100%;
+  background: var(--surface-container-lowest);
+  padding-left: 2.5rem;
+  font-size: 1rem;
+}
+
 /* Shared by every label/value Drawer row (`ShiftHistoryDrawer`,
    `ExtraColumnsDrawer`) — each line highlights on its own as the mouse
    moves over it, not the whole panel at once, so a long list is easier to
@@ -884,9 +928,9 @@ tr:last-child td {
 }
 
 /* Shared by every `Modal`-based dialog (ConfirmModal, UpdateModal,
-   ConfirmPaymentModal) — a frosted-
-   glass backdrop instead of a flat dark scrim, so whatever's behind the
-   modal stays legible as shapes/colors without competing for attention. */
+   ConfirmPaymentModal) — a frosted-glass backdrop instead of a flat dark
+   scrim, so whatever's behind the modal stays legible as shapes/colors
+   without competing for attention. */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -897,6 +941,32 @@ tr:last-child td {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* `Modal`'s optional `title`/`footer` structured layout — same bordered
+   header/footer recipe `Drawer` uses (`.drawer-header`/`.drawer-footer`),
+   so a modal opting into it looks and feels consistent with every Drawer in
+   the app instead of each modal hand-rolling a slightly different header. */
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 1.1rem 1.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.modal-header h3 {
+  margin: 0;
+}
+.modal-body {
+  padding: 1.2rem 1.4rem;
+}
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  padding: 1rem 1.4rem;
+  border-top: 1px solid var(--border);
 }
 
 .drawer-overlay {
