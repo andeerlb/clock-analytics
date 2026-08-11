@@ -3869,6 +3869,25 @@ function scheduleTimeConditionSql(filter: ScheduleTimeFilter, params: (string | 
 }
 
 /**
+ * Every distinct "Local" used across current (head) payment_shifts — the
+ * Pagamentos "Local" filter's option list. Unlike Função/Cliente/Empresa,
+ * `local` has no cadastro table of its own (a plain freeform `TEXT` column
+ * directly on `payment_shifts`, never normalized like `role`→`roles` was) —
+ * options come straight from what's actually been imported, not a separate
+ * lookup table.
+ */
+export async function listDistinctPaymentShiftLocals(): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.select<{ local: string }[]>(
+    `SELECT DISTINCT ps.local AS local
+     FROM payment_shifts ps
+     WHERE ${HEAD_SHIFT_CONDITION} AND ps.local <> ''
+     ORDER BY ps.local`,
+  );
+  return rows.map((r) => r.local);
+}
+
+/**
  * Row-level WHERE conditions shared by every flat (non-aggregated) shift
  * query — `listPaymentShiftsForReport`, `listPaymentShiftsFlat`, and
  * `listPaymentShiftsForGroup`. `listPaymentShiftSummaries` doesn't use
@@ -3888,6 +3907,8 @@ function buildPaymentShiftRowConditions(
   if (clientClause) conditions.push(clientClause);
   const roleClause = inClause("ps.role_id", query.roleIds ?? [], params);
   if (roleClause) conditions.push(roleClause);
+  const localClause = inClause("ps.local", query.locals ?? [], params);
+  if (localClause) conditions.push(localClause);
   if (query.periodStart) {
     params.push(query.periodStart);
     conditions.push(`ps.work_date >= $${params.length}`);
@@ -3923,11 +3944,13 @@ function shiftPeriodSelectSql(): string {
 }
 
 export interface ListPaymentShiftSummariesQuery {
-  /** Specific colaboradores picked from the "Colaborador" filter's search-and-select — an empty/omitted array means unfiltered, same as `companyIds`/`clientIds`/`roleIds`. */
+  /** Specific colaboradores picked from the "Colaborador" filter's search-and-select — an empty/omitted array means unfiltered, same as `companyIds`/`clientIds`/`roleIds`/`locals`. */
   employeeIds?: number[];
   companyIds?: number[];
   clientIds?: number[];
   roleIds?: number[];
+  /** Exact-match against `payment_shifts.local` — options come from `listDistinctPaymentShiftLocals`, not a cadastro table (see its own doc comment). */
+  locals?: string[];
   /** "YYYY-MM-DD", inclusive on both ends — either can be omitted to leave that side open. Same day-level `DateRangePicker` as Cartão Ponto, not competência-granularity. */
   periodStart?: string;
   periodEnd?: string;
@@ -3967,6 +3990,8 @@ export async function listPaymentShiftSummaries(
   if (clientClause) conditions.push(clientClause);
   const roleClause = inClause("ps.role_id", query.roleIds ?? [], params);
   if (roleClause) conditions.push(roleClause);
+  const localClause = inClause("ps.local", query.locals ?? [], params);
+  if (localClause) conditions.push(localClause);
   if (query.periodStart) {
     params.push(query.periodStart);
     conditions.push(`ps.work_date >= $${params.length}`);

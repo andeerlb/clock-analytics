@@ -14,6 +14,7 @@ import {
   Info,
   Layers,
   ListFilter,
+  MapPin,
   Moon,
   Search,
   Settings2,
@@ -51,6 +52,7 @@ import {
   getPaymentVisibleColumns,
   listClients,
   listCompanies,
+  listDistinctPaymentShiftLocals,
   listLatestFieldDiffsForShifts,
   listPaymentExportTemplates,
   listPaymentShiftSummaries,
@@ -721,6 +723,8 @@ export default function PaymentsPage() {
     setSelectedClientIds,
     selectedRoleIds,
     setSelectedRoleIds,
+    selectedLocals,
+    setSelectedLocals,
     periodStart,
     periodEnd,
     setPeriod,
@@ -749,6 +753,7 @@ export default function PaymentsPage() {
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [roles, setRoles] = useState<RoleRow[]>([]);
+  const [locals, setLocals] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [generatingPdf, setGeneratingPdf] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
@@ -816,11 +821,14 @@ export default function PaymentsPage() {
   }
 
   useEffect(() => {
-    Promise.all([listCompanies(), listClients(), listRolesGlobal()]).then(([companyRows, clientRows, roleRows]) => {
-      setCompanies(companyRows);
-      setClients(clientRows);
-      setRoles(roleRows);
-    });
+    Promise.all([listCompanies(), listClients(), listRolesGlobal(), listDistinctPaymentShiftLocals()]).then(
+      ([companyRows, clientRows, roleRows, localValues]) => {
+        setCompanies(companyRows);
+        setClients(clientRows);
+        setRoles(roleRows);
+        setLocals(localValues);
+      },
+    );
     getPaymentVisibleColumns().then((cols) => {
       if (cols) setVisibleColumns(new Set(cols));
     });
@@ -899,6 +907,7 @@ export default function PaymentsPage() {
       companyIds: Array.from(selectedCompanyIds, Number),
       clientIds: Array.from(selectedClientIds, Number),
       roleIds: Array.from(selectedRoleIds, Number),
+      locals: Array.from(selectedLocals),
       periodStart: periodStart || undefined,
       periodEnd: periodEnd || undefined,
       statuses: Array.from(selectedStatuses),
@@ -952,6 +961,7 @@ export default function PaymentsPage() {
     selectedCompanyIds,
     selectedClientIds,
     selectedRoleIds,
+    selectedLocals,
     periodStart,
     periodEnd,
     selectedStatuses,
@@ -1139,6 +1149,7 @@ export default function PaymentsPage() {
   const [draftCompanyIds, setDraftCompanyIds] = useState<Set<string>>(selectedCompanyIds);
   const [draftClientIds, setDraftClientIds] = useState<Set<string>>(selectedClientIds);
   const [draftRoleIds, setDraftRoleIds] = useState<Set<string>>(selectedRoleIds);
+  const [draftLocals, setDraftLocals] = useState<Set<string>>(selectedLocals);
   const [draftPeriodStart, setDraftPeriodStart] = useState(periodStart);
   const [draftPeriodEnd, setDraftPeriodEnd] = useState(periodEnd);
   const [draftStatuses, setDraftStatuses] = useState<Set<PaymentShiftStatus>>(selectedStatuses);
@@ -1164,6 +1175,7 @@ export default function PaymentsPage() {
     setDraftCompanyIds(selectedCompanyIds);
     setDraftClientIds(selectedClientIds);
     setDraftRoleIds(selectedRoleIds);
+    setDraftLocals(selectedLocals);
     setDraftPeriodStart(periodStart);
     setDraftPeriodEnd(periodEnd);
     setDraftStatuses(selectedStatuses);
@@ -1178,6 +1190,7 @@ export default function PaymentsPage() {
     setSelectedCompanyIds(draftCompanyIds);
     setSelectedClientIds(draftClientIds);
     setSelectedRoleIds(draftRoleIds);
+    setSelectedLocals(draftLocals);
     setPeriod(draftPeriodStart, draftPeriodEnd);
     setSelectedStatuses(draftStatuses);
     setSelectedShiftPeriods(draftShiftPeriods);
@@ -1193,6 +1206,7 @@ export default function PaymentsPage() {
     setDraftCompanyIds(new Set());
     setDraftClientIds(new Set());
     setDraftRoleIds(new Set());
+    setDraftLocals(new Set());
     setDraftPeriodStart("");
     setDraftPeriodEnd("");
     setDraftStatuses(new Set(STATUS_OPTIONS.map((o) => o.id)));
@@ -1226,6 +1240,12 @@ export default function PaymentsPage() {
     if (next.has(id)) next.delete(id);
     else next.add(id);
     setDraftRoleIds(next);
+  }
+  function toggleDraftLocal(id: string) {
+    const next = new Set(draftLocals);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setDraftLocals(next);
   }
   function toggleDraftStatus(id: PaymentShiftStatus) {
     const next = new Set(draftStatuses);
@@ -1310,6 +1330,7 @@ export default function PaymentsPage() {
       selectedCompanyIds.size > 0 ||
       selectedClientIds.size > 0 ||
       selectedRoleIds.size > 0 ||
+      selectedLocals.size > 0 ||
       periodStart ||
       periodEnd ||
       selectedStatuses.size < STATUS_OPTIONS.length ||
@@ -1322,6 +1343,7 @@ export default function PaymentsPage() {
     selectedCompanyIds.size > 0,
     selectedClientIds.size > 0,
     selectedRoleIds.size > 0,
+    selectedLocals.size > 0,
     Boolean(periodStart || periodEnd),
     selectedStatuses.size < STATUS_OPTIONS.length,
     selectedShiftPeriods.size < SHIFT_PERIOD_OPTIONS.length,
@@ -1943,6 +1965,21 @@ export default function PaymentsPage() {
             />
           </div>
           <div className="field" style={{ position: "relative", zIndex: 4 }}>
+            <FieldLabel icon={MapPin}>Local</FieldLabel>
+            <MultiSelectDropdown
+              options={locals.map((l) => ({ id: l, label: l }))}
+              selected={draftLocals}
+              onToggle={toggleDraftLocal}
+              onSelectAll={() => setDraftLocals(new Set(locals))}
+              onSelectNone={() => setDraftLocals(new Set())}
+              allLabel="Todos os locais"
+              noneLabel="Nenhum local"
+              align="left"
+              fullWidth
+              showIcon={false}
+            />
+          </div>
+          <div className="field" style={{ position: "relative", zIndex: 3 }}>
             <FieldLabel icon={Clock3}>Horário</FieldLabel>
             <ScheduleTimeFilterDropdown
               value={draftScheduleTimeFilter}
@@ -1952,7 +1989,7 @@ export default function PaymentsPage() {
               showIcon={false}
             />
           </div>
-          <div className="field" style={{ position: "relative", zIndex: 3 }}>
+          <div className="field" style={{ position: "relative", zIndex: 2 }}>
             <FieldLabel icon={Moon}>Diurno/Noturno</FieldLabel>
             <MultiSelectDropdown
               options={SHIFT_PERIOD_OPTIONS}
@@ -1967,7 +2004,7 @@ export default function PaymentsPage() {
               showIcon={false}
             />
           </div>
-          <div className="field" style={{ position: "relative", zIndex: 2 }}>
+          <div className="field" style={{ position: "relative", zIndex: 1 }}>
             <FieldLabel icon={ListFilter}>Status</FieldLabel>
             <MultiSelectDropdown
               options={STATUS_OPTIONS}
@@ -1982,7 +2019,7 @@ export default function PaymentsPage() {
               showIcon={false}
             />
           </div>
-          <div className="field" style={{ position: "relative", zIndex: 1 }}>
+          <div className="field" style={{ position: "relative", zIndex: 0 }}>
             <FieldLabel icon={Layers}>Exibição</FieldLabel>
             <label className="drawer-checkbox-field">
               <input type="checkbox" checked={draftGrouped} onChange={(e) => setDraftGrouped(e.target.checked)} />

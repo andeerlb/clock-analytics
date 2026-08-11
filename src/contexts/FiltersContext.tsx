@@ -46,6 +46,9 @@ export interface PaymentsFilters {
   setSelectedClientIds: (v: Set<string>) => void;
   selectedRoleIds: Set<string>;
   setSelectedRoleIds: (v: Set<string>) => void;
+  /** Exact `payment_shifts.local` text values, not ids — `local` has no cadastro table of its own (see `listDistinctPaymentShiftLocals`). */
+  selectedLocals: Set<string>;
+  setSelectedLocals: (v: Set<string>) => void;
   periodStart: string;
   periodEnd: string;
   setPeriod: (start: string, end: string) => void;
@@ -122,6 +125,7 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
   const [paymentsCompanyIds, setPaymentsCompanyIds] = useState<Set<string>>(new Set());
   const [paymentsClientIds, setPaymentsClientIds] = useState<Set<string>>(new Set());
   const [paymentsRoleIds, setPaymentsRoleIds] = useState<Set<string>>(new Set());
+  const [paymentsLocals, setPaymentsLocals] = useState<Set<string>>(new Set());
   const [paymentsPeriodStart, setPaymentsPeriodStart] = useState("");
   const [paymentsPeriodEnd, setPaymentsPeriodEnd] = useState("");
   const [paymentsSelectedStatuses, setPaymentsSelectedStatuses] = useState<Set<PaymentShiftStatus>>(
@@ -145,6 +149,8 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
     setSelectedClientIds: setPaymentsClientIds,
     selectedRoleIds: paymentsRoleIds,
     setSelectedRoleIds: setPaymentsRoleIds,
+    selectedLocals: paymentsLocals,
+    setSelectedLocals: setPaymentsLocals,
     periodStart: paymentsPeriodStart,
     periodEnd: paymentsPeriodEnd,
     setPeriod: (start, end) => {
