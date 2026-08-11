@@ -79,7 +79,7 @@ export default function MultiSelectDropdown<T extends string>({
         className="secondary"
         onClick={() => setOpen((o) => !o)}
         disabled={options.length === 0}
-        style={fullWidth ? { width: "100%" } : undefined}
+        style={fullWidth ? { width: "100%", display: "flex", alignItems: "center", textAlign: "left" } : undefined}
       >
         {showIcon && <Icon size={15} style={{ marginRight: "0.4rem" }} />}
         {label}

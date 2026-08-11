@@ -35,6 +35,7 @@ import ConfirmPaymentModal from "../components/ConfirmPaymentModal";
 import DatePicker from "../components/DatePicker";
 import DateRangePicker from "../components/DateRangePicker";
 import Drawer from "../components/Drawer";
+import EmployeeMultiSelectDropdown from "../components/EmployeeMultiSelectDropdown";
 import ExtraColumnsModal from "../components/ExtraColumnsModal";
 import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
@@ -132,6 +133,21 @@ const ALL_COLUMN_IDS = FLAT_COLUMNS.map((c) => c.id);
 const DEFAULT_VISIBLE_COLUMN_IDS = ALL_COLUMN_IDS.filter((id) => id !== "importado");
 const IDENTITY_COLUMN_IDS = new Set(["colaborador", "cliente", "empresa"]);
 const TURNO_COLUMNS = FLAT_COLUMNS.filter((c) => !IDENTITY_COLUMN_IDS.has(c.id));
+
+/**
+ * The "Gerar PDF"/"Exportar Excel" empty-result message — `matchedCount`
+ * (turnos matching the filters, before the report's own "has a value" cut)
+ * vs. an always-zero `rowCount` at this point is what tells apart "no
+ * turno matches these filters at all" from "turnos matched, but none has a
+ * payment value yet to report" — collapsing both into one generic "Nenhum
+ * turno" message reads as a bug when turnos are plainly visible in the
+ * table (see `generatePaymentsReportPdf`/`generatePaymentsExportXlsx`).
+ */
+function noReportRowsMessage(matchedCount: number): string {
+  return matchedCount === 0
+    ? "Nenhum turno para os filtros selecionados."
+    : "Os turnos encontrados ainda não têm um valor de pagamento definido, então não há nada para incluir no relatório. Configure uma regra de valor para o cliente/empresa ou informe o valor manualmente em cada turno.";
+}
 
 /** "2026-02" -> "fev/2026" */
 function formatCompetencia(competencia: string): string {
@@ -718,8 +734,8 @@ function FieldLabel({ icon: Icon, htmlFor, children }: { icon: typeof Building2;
 export default function PaymentsPage() {
   const navigate = useNavigate();
   const {
-    search,
-    setSearch,
+    selectedEmployeeIds,
+    setSelectedEmployeeIds,
     selectedCompanyIds,
     setSelectedCompanyIds,
     selectedClientIds,
@@ -882,7 +898,7 @@ export default function PaymentsPage() {
 
   function baseQuery(): Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize"> {
     return {
-      search,
+      employeeIds: Array.from(selectedEmployeeIds, Number),
       companyIds: Array.from(selectedCompanyIds, Number),
       clientIds: Array.from(selectedClientIds, Number),
       roleIds: Array.from(selectedRoleIds, Number),
@@ -935,7 +951,7 @@ export default function PaymentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     grouped,
-    search,
+    selectedEmployeeIds,
     selectedCompanyIds,
     selectedClientIds,
     selectedRoleIds,
@@ -959,7 +975,7 @@ export default function PaymentsPage() {
     setGeneratedReport(null);
     setPdfError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, selectedCompanyIds, selectedClientIds, selectedRoleIds, periodStart, periodEnd, selectedStatuses, selectedShiftPeriods, scheduleTimeFilter, grouped]);
+  }, [selectedEmployeeIds, selectedCompanyIds, selectedClientIds, selectedRoleIds, periodStart, periodEnd, selectedStatuses, selectedShiftPeriods, scheduleTimeFilter, grouped]);
 
   async function afterMutation(groupRef: GroupRef) {
     if (groupRef === null) {
@@ -1107,13 +1123,13 @@ export default function PaymentsPage() {
   }
 
   // Drawer draft state — every field the "Filtros" Drawer edits lives here,
-  // separate from the applied (`search`/`selectedCompanyIds`/...) filters
-  // from `usePaymentsFilters`, so the query/table/PDF only ever see a new
+  // separate from the applied (`selectedEmployeeIds`/`selectedCompanyIds`/...)
+  // filters from `usePaymentsFilters`, so the query/table/PDF only ever see a new
   // value once "Aplicar filtros" commits the draft. `openFiltersDrawer`
   // reseeds this from the applied filters every time the Drawer opens, so a
   // cancelled edit never leaks into the next time it's opened.
   const [filtersDrawerOpen, setFiltersDrawerOpen] = useState(false);
-  const [draftSearch, setDraftSearch] = useState(search);
+  const [draftEmployeeIds, setDraftEmployeeIds] = useState<Set<string>>(selectedEmployeeIds);
   const [draftCompanyIds, setDraftCompanyIds] = useState<Set<string>>(selectedCompanyIds);
   const [draftClientIds, setDraftClientIds] = useState<Set<string>>(selectedClientIds);
   const [draftRoleIds, setDraftRoleIds] = useState<Set<string>>(selectedRoleIds);
@@ -1138,7 +1154,7 @@ export default function PaymentsPage() {
   }, [roles, draftCompanyIds]);
 
   function openFiltersDrawer() {
-    setDraftSearch(search);
+    setDraftEmployeeIds(selectedEmployeeIds);
     setDraftCompanyIds(selectedCompanyIds);
     setDraftClientIds(selectedClientIds);
     setDraftRoleIds(selectedRoleIds);
@@ -1152,7 +1168,7 @@ export default function PaymentsPage() {
   }
 
   function applyFilters() {
-    setSearch(draftSearch);
+    setSelectedEmployeeIds(draftEmployeeIds);
     setSelectedCompanyIds(draftCompanyIds);
     setSelectedClientIds(draftClientIds);
     setSelectedRoleIds(draftRoleIds);
@@ -1167,7 +1183,7 @@ export default function PaymentsPage() {
 
   /** Resets just the Drawer's own draft fields — still requires "Aplicar filtros" to take effect, same as every other change made inside the Drawer. */
   function clearDraftFilters() {
-    setDraftSearch("");
+    setDraftEmployeeIds(new Set());
     setDraftCompanyIds(new Set());
     setDraftClientIds(new Set());
     setDraftRoleIds(new Set());
@@ -1179,6 +1195,12 @@ export default function PaymentsPage() {
     setDraftGrouped(false);
   }
 
+  function toggleDraftEmployee(id: string) {
+    const next = new Set(draftEmployeeIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setDraftEmployeeIds(next);
+  }
   function toggleDraftCompany(id: string) {
     const next = new Set(draftCompanyIds);
     if (next.has(id)) next.delete(id);
@@ -1220,7 +1242,7 @@ export default function PaymentsPage() {
     try {
       const result = await generatePaymentsReportPdf(baseQuery(), grouped);
       if (result.rowCount === 0) {
-        setPdfError("Nenhum turno para os filtros selecionados.");
+        setPdfError(noReportRowsMessage(result.matchedCount));
       } else if (result.path) {
         // `path === null` with rows > 0 means the user cancelled the save
         // dialog — nothing to show, same as LibraryPage's "Gerar zip".
@@ -1254,7 +1276,7 @@ export default function PaymentsPage() {
     try {
       const result = await generatePaymentsExportXlsx(Number(selectedExportTemplateId), baseQuery());
       if (result.rowCount === 0) {
-        setExportError("Nenhum turno para os filtros selecionados.");
+        setExportError(noReportRowsMessage(result.matchedCount));
       } else if (result.path) {
         setGeneratedExport(result);
       }
@@ -1278,7 +1300,7 @@ export default function PaymentsPage() {
   }
 
   const hasFilters = Boolean(
-    search.trim() ||
+    selectedEmployeeIds.size > 0 ||
       selectedCompanyIds.size > 0 ||
       selectedClientIds.size > 0 ||
       selectedRoleIds.size > 0 ||
@@ -1290,7 +1312,7 @@ export default function PaymentsPage() {
   );
   /** How many filter categories are currently applied — shown as a count badge on the "Filtros" button so it's clear at a glance the list isn't unfiltered, without opening the Drawer. */
   const activeFilterCount = [
-    search.trim().length > 0,
+    selectedEmployeeIds.size > 0,
     selectedCompanyIds.size > 0,
     selectedClientIds.size > 0,
     selectedRoleIds.size > 0,
@@ -1313,6 +1335,7 @@ export default function PaymentsPage() {
           : "Turnos importados, um turno por linha."}
       </p>
       {pdfError && <div className="error-box">{pdfError}</div>}
+      {exportError && <div className="error-box">{exportError}</div>}
       {inlineEditError && <div className="error-box">{inlineEditError}</div>}
 
       <div className="card">
@@ -1363,12 +1386,6 @@ export default function PaymentsPage() {
             </button>
           </div>
         </div>
-
-        {exportError && (
-          <div className="error-box" style={{ marginTop: "1rem", marginBottom: 0 }}>
-            {exportError}
-          </div>
-        )}
 
         {generatedExport && generatedExport.path && (
           <div
@@ -1839,20 +1856,40 @@ export default function PaymentsPage() {
             fixed exception, always alone on a full-width row, since a name
             search reads oddly sharing a row with an unrelated dropdown. */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1.1rem" }}>
-          <div className="field" style={{ gridColumn: "1 / -1" }}>
-            <FieldLabel icon={Search} htmlFor="payments-search">
-              Colaborador
-            </FieldLabel>
-            <input
-              id="payments-search"
-              type="text"
-              value={draftSearch}
-              onChange={(e) => setDraftSearch(e.target.value)}
-              placeholder="Buscar por nome..."
-              style={{ width: "100%" }}
+          {/* `zIndex` counts down in DOM order (top-to-bottom, left-to-right)
+              — every field's popover can extend downward past its own row
+              (e.g. Período's two-month calendar is wider than one column,
+              Status's checklist is taller than one row), so without this an
+              earlier field's open popover gets visually painted over by a
+              *later* field's grid cell, which has no z-index of its own to
+              lose to (CSS Grid gives every item an implicit stacking level
+              in DOM order once any sibling sets an explicit z-index). */}
+          <div className="field" style={{ gridColumn: "1 / -1", position: "relative", zIndex: 9 }}>
+            <FieldLabel icon={Search}>Colaborador</FieldLabel>
+            <EmployeeMultiSelectDropdown
+              selected={draftEmployeeIds}
+              onToggle={toggleDraftEmployee}
+              companyIds={draftCompanyIds.size > 0 ? Array.from(draftCompanyIds, Number) : undefined}
+              clientIds={draftClientIds.size > 0 ? Array.from(draftClientIds, Number) : undefined}
+              align="left"
+              fullWidth
+              showIcon={false}
             />
           </div>
-          <div className="field">
+          <div className="field" style={{ position: "relative", zIndex: 8 }}>
+            <FieldLabel icon={Calendar}>Período</FieldLabel>
+            <DateRangePicker
+              startValue={draftPeriodStart}
+              endValue={draftPeriodEnd}
+              onChange={(start, end) => {
+                setDraftPeriodStart(start);
+                setDraftPeriodEnd(end);
+              }}
+              showIcon={false}
+              fullWidth
+            />
+          </div>
+          <div className="field" style={{ position: "relative", zIndex: 7 }}>
             <FieldLabel icon={Building2}>Empresa</FieldLabel>
             <MultiSelectDropdown
               options={companies.map((c) => ({ id: String(c.id), label: c.name }))}
@@ -1867,20 +1904,7 @@ export default function PaymentsPage() {
               showIcon={false}
             />
           </div>
-          <div className="field">
-            <FieldLabel icon={Calendar}>Período</FieldLabel>
-            <DateRangePicker
-              startValue={draftPeriodStart}
-              endValue={draftPeriodEnd}
-              onChange={(start, end) => {
-                setDraftPeriodStart(start);
-                setDraftPeriodEnd(end);
-              }}
-              showIcon={false}
-              fullWidth
-            />
-          </div>
-          <div className="field">
+          <div className="field" style={{ position: "relative", zIndex: 6 }}>
             <FieldLabel icon={Users}>Cliente</FieldLabel>
             <MultiSelectDropdown
               options={clientOptions.map((c) => ({ id: String(c.id), label: c.name }))}
@@ -1895,7 +1919,7 @@ export default function PaymentsPage() {
               showIcon={false}
             />
           </div>
-          <div className="field">
+          <div className="field" style={{ position: "relative", zIndex: 5 }}>
             <FieldLabel icon={Briefcase}>Função</FieldLabel>
             <MultiSelectDropdown
               options={roleOptions.map((r) => ({ id: String(r.id), label: r.name }))}
@@ -1910,7 +1934,7 @@ export default function PaymentsPage() {
               showIcon={false}
             />
           </div>
-          <div className="field">
+          <div className="field" style={{ position: "relative", zIndex: 4 }}>
             <FieldLabel icon={Clock3}>Horário</FieldLabel>
             <ScheduleTimeFilterDropdown
               value={draftScheduleTimeFilter}
@@ -1920,7 +1944,7 @@ export default function PaymentsPage() {
               showIcon={false}
             />
           </div>
-          <div className="field">
+          <div className="field" style={{ position: "relative", zIndex: 3 }}>
             <FieldLabel icon={Moon}>Diurno/Noturno</FieldLabel>
             <MultiSelectDropdown
               options={SHIFT_PERIOD_OPTIONS}
@@ -1935,7 +1959,7 @@ export default function PaymentsPage() {
               showIcon={false}
             />
           </div>
-          <div className="field">
+          <div className="field" style={{ position: "relative", zIndex: 2 }}>
             <FieldLabel icon={ListFilter}>Status</FieldLabel>
             <MultiSelectDropdown
               options={STATUS_OPTIONS}
@@ -1950,7 +1974,7 @@ export default function PaymentsPage() {
               showIcon={false}
             />
           </div>
-          <div className="field">
+          <div className="field" style={{ position: "relative", zIndex: 1 }}>
             <FieldLabel icon={Layers}>Exibição</FieldLabel>
             <label className="drawer-checkbox-field">
               <input type="checkbox" checked={draftGrouped} onChange={(e) => setDraftGrouped(e.target.checked)} />

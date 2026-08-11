@@ -30,7 +30,10 @@ function reportTitle(statuses: PaymentShiftStatus[]): string {
 }
 
 export interface PaymentsReportResult {
+  /** How many turnos actually made it into the PDF — can be 0 even when `matchedCount` isn't, since a turno with no computed value yet is excluded (see the filter below). */
   rowCount: number;
+  /** How many turnos matched the filters *before* the "has a value" filter — lets the caller tell "no turno matches these filters" apart from "turnos matched, but none has a payment value yet" instead of collapsing both into one ambiguous "Nenhum turno" message. */
+  matchedCount: number;
   /** Wherever the user chose to save it — `null` when there were no matching rows (nothing was generated) or the save dialog was cancelled. Hand this straight to `PdfViewerModal`. */
   path: string | null;
   title: string;
@@ -60,7 +63,7 @@ export async function generatePaymentsReportPdf(
   const title = reportTitle(query.statuses);
 
   if (allRows.length === 0) {
-    return { rowCount: 0, path: null, title };
+    return { rowCount: 0, matchedCount: 0, path: null, title };
   }
 
   const shiftValue = await buildShiftValueResolver(allRows);
@@ -74,7 +77,7 @@ export async function generatePaymentsReportPdf(
   });
 
   if (rows.length === 0) {
-    return { rowCount: 0, path: null, title };
+    return { rowCount: 0, matchedCount: allRows.length, path: null, title };
   }
 
   // Grouped: each colaborador's turnos need to sit together so a subtotal
@@ -184,10 +187,10 @@ export async function generatePaymentsReportPdf(
     defaultPath: `${sanitizeFileName(title)}-${formatTimestampForFileName()}.pdf`,
     filters: [{ name: "PDF", extensions: ["pdf"] }],
   });
-  if (!destPath) return { rowCount: rows.length, path: null, title };
+  if (!destPath) return { rowCount: rows.length, matchedCount: allRows.length, path: null, title };
 
   const bytes = new Uint8Array(doc.output("arraybuffer"));
   await writeBinaryFile(destPath, bytes);
 
-  return { rowCount: rows.length, path: destPath, title };
+  return { rowCount: rows.length, matchedCount: allRows.length, path: destPath, title };
 }

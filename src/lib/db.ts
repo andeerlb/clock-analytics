@@ -3758,11 +3758,8 @@ function buildPaymentShiftRowConditions(
   params: (string | number)[],
 ): string[] {
   const conditions: string[] = [HEAD_SHIFT_CONDITION];
-  const search = query.search?.trim();
-  if (search) {
-    params.push(search);
-    conditions.push(`LOWER(e.name) LIKE '%' || LOWER($${params.length}) || '%'`);
-  }
+  const employeeClause = inClause("e.id", query.employeeIds ?? [], params);
+  if (employeeClause) conditions.push(employeeClause);
   const companyClause = inClause("c.id", query.companyIds ?? [], params);
   if (companyClause) conditions.push(companyClause);
   const clientClause = inClause("cl.id", query.clientIds ?? [], params);
@@ -3804,8 +3801,8 @@ function shiftPeriodSelectSql(): string {
 }
 
 export interface ListPaymentShiftSummariesQuery {
-  /** Substring match on employee name — case-insensitive only for ASCII (SQLite's `LOWER()` doesn't case-fold accents). */
-  search?: string;
+  /** Specific colaboradores picked from the "Colaborador" filter's search-and-select — an empty/omitted array means unfiltered, same as `companyIds`/`clientIds`/`roleIds`. */
+  employeeIds?: number[];
   companyIds?: number[];
   clientIds?: number[];
   roleIds?: number[];
@@ -3840,11 +3837,8 @@ export async function listPaymentShiftSummaries(
   const params: (string | number)[] = [];
 
   conditions.push(HEAD_SHIFT_CONDITION);
-  const search = query.search?.trim();
-  if (search) {
-    params.push(search);
-    conditions.push(`LOWER(e.name) LIKE '%' || LOWER($${params.length}) || '%'`);
-  }
+  const employeeClause = inClause("e.id", query.employeeIds ?? [], params);
+  if (employeeClause) conditions.push(employeeClause);
   const companyClause = inClause("c.id", query.companyIds ?? [], params);
   if (companyClause) conditions.push(companyClause);
   const clientClause = inClause("cl.id", query.clientIds ?? [], params);

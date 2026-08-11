@@ -37,8 +37,9 @@ export interface LibraryFilters {
 }
 
 export interface PaymentsFilters {
-  search: string;
-  setSearch: (v: string) => void;
+  /** Specific colaboradores picked from the "Colaborador" search-and-select — not a freeform text filter, so a name that never turns up a suggestion is visibly "not in the database" rather than just failing to match. */
+  selectedEmployeeIds: Set<string>;
+  setSelectedEmployeeIds: (v: Set<string>) => void;
   selectedCompanyIds: Set<string>;
   setSelectedCompanyIds: (v: Set<string>) => void;
   selectedClientIds: Set<string>;
@@ -117,7 +118,7 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
     setPageSize,
   };
 
-  const [paymentsSearch, setPaymentsSearch] = useState("");
+  const [paymentsEmployeeIds, setPaymentsEmployeeIds] = useState<Set<string>>(new Set());
   const [paymentsCompanyIds, setPaymentsCompanyIds] = useState<Set<string>>(new Set());
   const [paymentsClientIds, setPaymentsClientIds] = useState<Set<string>>(new Set());
   const [paymentsRoleIds, setPaymentsRoleIds] = useState<Set<string>>(new Set());
@@ -136,8 +137,8 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
   const [paymentsSelectedExportTemplateId, setPaymentsSelectedExportTemplateId] = useState("");
 
   const payments: PaymentsFilters = {
-    search: paymentsSearch,
-    setSearch: setPaymentsSearch,
+    selectedEmployeeIds: paymentsEmployeeIds,
+    setSelectedEmployeeIds: setPaymentsEmployeeIds,
     selectedCompanyIds: paymentsCompanyIds,
     setSelectedCompanyIds: setPaymentsCompanyIds,
     selectedClientIds: paymentsClientIds,

@@ -17,7 +17,10 @@ import {
 import type { PaymentExportTemplateConfig } from "./types";
 
 export interface PaymentExportResult {
+  /** How many turnos actually made it into the sheet — can be 0 even when `matchedCount` isn't, since a turno with no computed value yet is excluded (see the filter below). */
   rowCount: number;
+  /** Same idea as `PaymentsReportResult.matchedCount` in `paymentsReport.ts` — how many turnos matched the filters *before* the "has a value" filter, so the caller can tell "nothing matched" apart from "turnos matched, but none has a payment value yet". */
+  matchedCount: number;
   /** Wherever the user chose to save it — `null` when there were no matching rows (nothing was generated) or the save dialog was cancelled. */
   path: string | null;
   title: string;
@@ -46,7 +49,7 @@ export async function generatePaymentsExportXlsx(
 
   const allRows = await listPaymentShiftsForReport(query);
   if (allRows.length === 0) {
-    return { rowCount: 0, path: null, title: template.name };
+    return { rowCount: 0, matchedCount: 0, path: null, title: template.name };
   }
 
   const shiftValue = await buildShiftValueResolver(allRows);
@@ -59,7 +62,7 @@ export async function generatePaymentsExportXlsx(
     return value !== null && value !== 0;
   });
   if (rows.length === 0) {
-    return { rowCount: 0, path: null, title: template.name };
+    return { rowCount: 0, matchedCount: allRows.length, path: null, title: template.name };
   }
 
   const amounts = new Map<PaymentShiftReportRow, number | null>(rows.map((r) => [r, shiftValue(r)]));
@@ -191,9 +194,9 @@ export async function generatePaymentsExportXlsx(
     defaultPath: `${sanitizeFileName(template.name)}-${formatTimestampForFileName()}.xlsx`,
     filters: [{ name: "Excel", extensions: ["xlsx"] }],
   });
-  if (!destPath) return { rowCount: rows.length, path: null, title: template.name };
+  if (!destPath) return { rowCount: rows.length, matchedCount: allRows.length, path: null, title: template.name };
 
   await writeBinaryFile(destPath, new Uint8Array(buffer));
 
-  return { rowCount: rows.length, path: destPath, title: template.name };
+  return { rowCount: rows.length, matchedCount: allRows.length, path: destPath, title: template.name };
 }

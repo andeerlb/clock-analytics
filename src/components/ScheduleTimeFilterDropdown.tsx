@@ -57,7 +57,12 @@ export default function ScheduleTimeFilterDropdown({
       }
       ref={rootRef}
     >
-      <button type="button" className="secondary" onClick={openPopover} style={fullWidth ? { width: "100%" } : undefined}>
+      <button
+        type="button"
+        className="secondary"
+        onClick={openPopover}
+        style={fullWidth ? { width: "100%", display: "flex", alignItems: "center", textAlign: "left" } : undefined}
+      >
         {showIcon && <Clock3 size={15} style={{ marginRight: "0.4rem" }} />}
         {label}
       </button>
