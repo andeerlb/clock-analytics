@@ -3304,8 +3304,10 @@ export async function findEmployeeAnywhereByAttempts(
 export interface DuplicatePaymentShiftMatch {
   /** The *current* (head) row for this identity — see `HEAD_SHIFT_CONDITION`. Reprocessing links its new row back to exactly this one via `PaymentShiftInput.previousShiftId`, not to whichever row happens to be oldest. */
   shiftId: number;
-  /** Whether that head row was a deliberate manual action (see the transition functions above) rather than an import — the caller uses this to refuse to supersede it (unless `payment_settings.keep_manual_edits` is off). */
+  /** Whether that head row was a deliberate manual field edit (see `editPaymentShift`) — the caller uses this to refuse to supersede it (unless `payment_settings.keep_manual_edits` is off). Does NOT by itself mean the row is paid — see `status`, which is the unconditional guard for that. */
   editedManually: boolean;
+  /** The head row's own status — a `'pago'` match must never be silently superseded, independent of `editedManually`/`keep_manual_edits` (that setting is about optional protection for a hand-edited-but-unpaid row, not about money already recorded as paid). */
+  status: PaymentShiftStatus;
   /**
    * True when the match was only found by walking history — the *head*
    * row's own Local/Função/Horário/Data no longer equal the candidate's,
@@ -3347,8 +3349,12 @@ export interface DuplicatePaymentShiftMatch {
  * find whichever head it eventually became — same append-only chain
  * `getPaymentShiftHistory` walks, just forward instead of backward. Every
  * row reachable that way was necessarily produced by one of the manual
- * transition functions above (only those ever set `previous_shift_id`), so
- * landing on a head this way always means `editedManually` is true for it.
+ * transition functions above (only those ever set `previous_shift_id`) —
+ * but landing on a head this way does NOT by itself mean `editedManually`
+ * is true for it: `markPaymentShiftPaid`/`revertPaymentShiftToPending`
+ * inherit the flag from the row they transitioned rather than forcing it,
+ * so a plain pay/revert with no field ever hand-edited stays `false` all
+ * the way down the chain. `status` is what's unconditionally reliable here.
  *
  * Uses `STRUCTURAL_HEAD_CONDITION`, not `HEAD_SHIFT_CONDITION` — a
  * soft-deleted chain's head is still structurally "the head" (nothing
@@ -3374,6 +3380,7 @@ export async function findDuplicatePaymentShifts(
       {
         id: number;
         editedManually: number;
+        status: PaymentShiftStatus;
         deletedAt: string | null;
         currentWorkDate: string;
         currentLocal: string;
@@ -3392,7 +3399,7 @@ export async function findDuplicatePaymentShifts(
          SELECT next_ps.id FROM payment_shifts next_ps
          JOIN lineage ON next_ps.previous_shift_id = lineage.id
        )
-       SELECT ps.id, ps.edited_manually AS editedManually, ps.deleted_at AS deletedAt,
+       SELECT ps.id, ps.edited_manually AS editedManually, ps.status, ps.deleted_at AS deletedAt,
               ps.work_date AS currentWorkDate, ps.local AS currentLocal, ps.role_id AS currentRoleId,
               ps.schedule_start_minutes AS currentScheduleStart, ps.schedule_end_minutes AS currentScheduleEnd
        FROM payment_shifts ps
@@ -3412,6 +3419,7 @@ export async function findDuplicatePaymentShifts(
       matches.set(i, {
         shiftId: head.id,
         editedManually: Boolean(head.editedManually),
+        status: head.status,
         identityChanged,
         deleted: head.deletedAt !== null,
       });
@@ -4134,6 +4142,8 @@ interface PaymentShiftCoreFields {
   sourceSheetName: string | null;
   /** Only read by `applyAutoSyncedFieldUpdate` (to preserve a paid shift's recorded amount across an auto-synced field fix) — every other caller of `readPaymentShiftCoreFields` supplies its own `amount` explicitly instead of carrying this one over. */
   amount: number | null;
+  /** 0/1 as stored — read so `markPaymentShiftPaid`/`revertPaymentShiftToPending` can carry it forward instead of forcing it, since neither of those touches a field (see their own doc comments for why forcing it was wrong). */
+  editedManually: number;
 }
 
 /** Shared by every status-transition function below — the fields that always carry over unchanged into the new row. */
@@ -4144,7 +4154,8 @@ async function readPaymentShiftCoreFields(db: Database, shiftId: number): Promis
             local, work_date AS workDate, role_id AS roleId,
             schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes,
             extra_data AS extraData, status,
-            source_row_number AS sourceRowNumber, source_sheet_name AS sourceSheetName, amount
+            source_row_number AS sourceRowNumber, source_sheet_name AS sourceSheetName, amount,
+            edited_manually AS editedManually
      FROM payment_shifts WHERE id = $1`,
     [shiftId],
   );
@@ -4157,11 +4168,18 @@ async function readPaymentShiftCoreFields(db: Database, shiftId: number): Promis
  * `shiftId`'s row — copies its core shift fields, sets status = 'pago',
  * the confirmed `amount`, and links `previousShiftId` back to it. From
  * this point on `shiftId`'s row is frozen (only ever read, never written)
- * and drops out of every head-only list/summary/total. Marked
- * `edited_manually` like every other transition below — a deliberate user
- * action, not an import — so a later reimport that matches this shift's
- * identity refuses to supersede it (see `findDuplicatePaymentShifts` and
- * `payment_settings.keep_manual_edits`).
+ * and drops out of every head-only list/summary/total.
+ *
+ * `edited_manually` is INHERITED from `shiftId`, not forced to `1` — paying
+ * a shift doesn't itself edit any field, so a plain "Fazer pagamento" on an
+ * untouched import shouldn't read as "editado manualmente" in the UI. A
+ * paid shift is still unconditionally protected from reimport supersession
+ * on its own merit (`status === 'pago'`, checked directly by
+ * `findDuplicatePaymentShifts`'s callers and `canAutoApply`'s
+ * `autoApplyOverwritePaid` gate) — that protection was never what
+ * `edited_manually` needed to carry. What it SHOULD carry forward is a real
+ * prior hand-edit: if `shiftId` was itself `editPaymentShift`'d before being
+ * paid, that fact isn't erased by paying it.
  */
 export async function markPaymentShiftPaid(shiftId: number, amount: number): Promise<number> {
   const db = await getDb();
@@ -4172,7 +4190,7 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
        (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
         schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
         source_row_number, source_sheet_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pago', $11, $12, $13, 1, $14, $15)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pago', $11, $12, $13, $14, $15, $16)`,
     [
       s.employeeId,
       s.templateId,
@@ -4187,6 +4205,7 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
       amount,
       shiftId,
       s.extraData,
+      s.editedManually,
       s.sourceRowNumber,
       s.sourceSheetName,
     ],
@@ -4201,6 +4220,15 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
  * linked back to `shiftId`. `shiftId`'s `pago` row is never mutated, just
  * like every other transition — it stays reachable as history, and a shift
  * can be paid and reverted more than once, each hop its own row.
+ *
+ * `edited_manually` is INHERITED from `shiftId`, same reasoning as
+ * `markPaymentShiftPaid`: reverting doesn't edit a field, so it shouldn't
+ * force the flag on. But it shouldn't force it OFF either — if `shiftId`'s
+ * own chain was manually edited before being paid, that protection has to
+ * survive the revert, not reset just because the row passed through
+ * `status = 'pago'` on the way. Inheriting is what makes that automatic
+ * either direction: pay, then revert, then pay again all just carry
+ * whatever the flag already was.
  */
 export async function revertPaymentShiftToPending(shiftId: number): Promise<number> {
   const db = await getDb();
@@ -4211,7 +4239,7 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
        (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
         schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
         source_row_number, source_sheet_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pendente', NULL, $11, $12, 1, $13, $14)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pendente', NULL, $11, $12, $13, $14, $15)`,
     [
       s.employeeId,
       s.templateId,
@@ -4225,6 +4253,7 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
       s.scheduleEndMinutes,
       shiftId,
       s.extraData,
+      s.editedManually,
       s.sourceRowNumber,
       s.sourceSheetName,
     ],
@@ -4326,11 +4355,11 @@ export async function editPaymentShift(
  *    `amount` column at all — this is the one write path that has to be
  *    careful not to repeat that gap for an ALREADY-paid shift).
  *
- * `edited_manually` is left `0` (unlike every manual transition, which sets
- * it `1`) — this row's data still authoritatively comes from the tracked
- * file, not a human decision, so it stays eligible for a future auto-apply
- * or manual reimport to correct again, instead of being permanently
- * "protected" the way a genuine manual edit is.
+ * `edited_manually` is left `0` unconditionally (unlike `editPaymentShift`,
+ * which always sets it `1`) — this row's data still authoritatively comes
+ * from the tracked file, not a human decision, so it stays eligible for a
+ * future auto-apply or manual reimport to correct again, instead of being
+ * permanently "protected" the way a genuine manual edit is.
  */
 export async function applyAutoSyncedFieldUpdate(
   shiftId: number,

@@ -184,8 +184,10 @@ interface PaymentPreviewRow {
   category: RowCategory;
   /** Set alongside `isDuplicate`/`category === "duplicate"` — the current payment_shifts row this one matches (see `findDuplicatePaymentShifts`), linked via `previousShiftId` if reprocessed. `null` for every other category. */
   matchedShiftId: number | null;
-  /** Whether that matched row was a deliberate manual action (editar valor/fazer pagamento/voltar para pendente), not an import — combined with the `keepManualEdits` setting, this decides whether the row can even be selected for reprocessing. */
+  /** Whether that matched row was a deliberate manual FIELD edit (`editPaymentShift`) — combined with the `keepManualEdits` setting, this decides whether the row can even be selected for reprocessing. A `'pago'` match is protected separately and unconditionally (see `matchedStatus`), independent of this flag/setting. */
   matchedEditedManually: boolean;
+  /** The matched row's own status — a `'pago'` match is never selectable for reprocessing, full stop, regardless of `matchedEditedManually`/`keepManualEdits` (those govern optional protection for a hand-edited-but-unpaid row, not money already recorded as paid). */
+  matchedStatus: PaymentShiftStatus | null;
   /** Whether the match was only found by walking the matched shift's history — its own Local/Função/Horário/Data have since been hand-edited away from what's still in this file (see `findDuplicatePaymentShifts`). Only meaningful alongside `matchedEditedManually`. */
   matchedIdentityChanged: boolean;
   /**
@@ -228,7 +230,23 @@ function applyDuplicateMatch(row: PaymentPreviewRow, match: DuplicatePaymentShif
   row.category = match.deleted ? "deleted" : "duplicate";
   row.matchedShiftId = match.shiftId;
   row.matchedEditedManually = match.editedManually;
+  row.matchedStatus = match.status;
   row.matchedIdentityChanged = match.identityChanged;
+}
+
+/**
+ * A "duplicate" row reprocessing must refuse to touch — two independent
+ * reasons, checked separately:
+ * 1. The match is `'pago'` — money already recorded as paid, never
+ *    silently superseded by a reimport, no setting can override this.
+ * 2. The match was hand-edited (`editPaymentShift`) and "Manter registros
+ *    atualizados manualmente" is on — a softer, user-toggleable protection
+ *    for an unpaid row someone corrected by hand.
+ */
+function isProtectedDuplicateMatch(row: PaymentPreviewRow, keepManualEdits: boolean): boolean {
+  if (row.category !== "duplicate") return false;
+  if (row.matchedStatus === "pago") return true;
+  return row.matchedEditedManually && keepManualEdits;
 }
 
 interface PaymentFileResult {
@@ -768,7 +786,7 @@ export default function ImportPaymentsPage() {
     Boolean(r.employee) &&
     r.category !== "duplicate-in-file" &&
     r.category !== "role-not-found" &&
-    !(r.category === "duplicate" && r.matchedEditedManually && effectiveKeepManualEdits);
+    !isProtectedDuplicateMatch(r, effectiveKeepManualEdits);
   const selectableCount = shiftRows.filter(isSelectable).length;
   const allSelected = selectableCount > 0 && shiftRows.every((r, i) => selectedRows.has(i) || !isSelectable(r));
 
@@ -844,6 +862,7 @@ export default function ImportPaymentsPage() {
               // Filled in below, once `findDuplicatePaymentShifts` has actually run against the batch.
               matchedShiftId: null,
               matchedEditedManually: false,
+              matchedStatus: null,
               matchedIdentityChanged: false,
             };
 
@@ -2174,19 +2193,18 @@ export default function ImportPaymentsPage() {
                         }
 
                         const { row, index } = item;
-                        // A duplicate whose current match was edited by hand (Fazer
-                        // pagamento/Voltar para pendente/Editar valor) and the
-                        // "Manter registros atualizados manualmente" setting is on
-                        // — reprocessing it would be a no-op at save time, so it's
-                        // not offered as selectable in the first place, instead of a
-                        // checkbox that silently does nothing once checked.
-                        const protectedByManualEdit =
-                          row.category === "duplicate" && row.matchedEditedManually && effectiveKeepManualEdits;
+                        // A protected duplicate (see `isProtectedDuplicateMatch`) —
+                        // reprocessing it would be a no-op at save time (or, for a
+                        // paid match, something reprocessing must never do at all),
+                        // so it's not offered as selectable in the first place,
+                        // instead of a checkbox that silently does nothing (or worse)
+                        // once checked.
+                        const protectedMatch = isProtectedDuplicateMatch(row, effectiveKeepManualEdits);
                         const canSelect =
                           Boolean(row.employee) &&
                           row.category !== "duplicate-in-file" &&
                           row.category !== "role-not-found" &&
-                          !protectedByManualEdit;
+                          !protectedMatch;
                         return (
                           <tr key={index}>
                             <td className="checkbox-cell">
@@ -2196,9 +2214,11 @@ export default function ImportPaymentsPage() {
                                 onChange={() => toggleRow(index)}
                                 disabled={!canSelect}
                                 title={
-                                  protectedByManualEdit
-                                    ? 'Este turno foi atualizado manualmente e está protegido contra reprocessamento — desative "Manter registros atualizados manualmente" acima para permitir.'
-                                    : undefined
+                                  row.matchedStatus === "pago"
+                                    ? "Este turno já foi pago — não pode ser reprocessado."
+                                    : protectedMatch
+                                      ? 'Este turno foi atualizado manualmente e está protegido contra reprocessamento — desative "Manter registros atualizados manualmente" acima para permitir.'
+                                      : undefined
                                 }
                                 aria-label={`Selecionar linha ${row.rowNumber}`}
                               />
@@ -2254,7 +2274,12 @@ export default function ImportPaymentsPage() {
                                 </span>
                               )}
                               {row.category === "duplicate" &&
-                                (protectedByManualEdit ? (
+                                (row.matchedStatus === "pago" ? (
+                                  <span className="badge info" title="Esse turno já foi pago — reprocessar nunca vai sobrescrevê-lo.">
+                                    <AlertTriangle size={13} />
+                                    Pago — mantido
+                                  </span>
+                                ) : protectedMatch ? (
                                   <span
                                     className="badge info"
                                     title={
