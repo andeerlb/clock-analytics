@@ -6,6 +6,8 @@ export interface ContextMenuItem {
   onClick?: () => void;
   submenu?: ContextMenuItem[];
   danger?: boolean;
+  /** Grays the row out and blocks the click instead of omitting it — for an action that's conceptually always there but not currently possible (e.g. "Fazer pagamento" on a turno with no horário to compute a valor from), so the option stays discoverable instead of the menu silently shrinking depending on the row. */
+  disabled?: boolean;
   /** Renders a horizontal divider instead of a row — every other field is ignored when this is set. */
   separator?: boolean;
   /** Fully custom row content (e.g. a color swatch) instead of a plain label — receives `close` to call once its own interaction is done (a color `<input>`'s `onChange`, for instance). Takes precedence over `label`/`onClick` when present. */
@@ -48,6 +50,7 @@ function ContextMenuList({ items, onClose }: { items: ContextMenuItem[]; onClose
             <button
               type="button"
               className="ghost"
+              disabled={item.disabled}
               style={{
                 display: "flex",
                 width: "100%",
@@ -56,7 +59,10 @@ function ContextMenuList({ items, onClose }: { items: ContextMenuItem[]; onClose
                 textAlign: "left",
                 padding: "0.4rem 0.6rem",
                 border: "none",
-                color: item.danger ? "var(--danger)" : "inherit",
+                color: item.disabled ? "var(--text-muted)" : item.danger ? "var(--danger)" : "inherit",
+                opacity: item.disabled ? 0.5 : 1,
+                cursor: item.disabled ? "not-allowed" : "pointer",
+                pointerEvents: item.disabled ? "none" : undefined,
               }}
               onClick={() => {
                 if (item.submenu) return;

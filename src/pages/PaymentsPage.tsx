@@ -498,6 +498,8 @@ function ShiftRow({
   onViewExtra,
   onReview,
   onRowContextMenu,
+  activeShiftId,
+  onRowMouseDown,
 }: {
   shift: PaymentShiftRow & { shiftPeriod: ShiftPeriod | null };
   companyId: number;
@@ -516,8 +518,12 @@ function ShiftRow({
   onViewExtra: (data: Record<string, string>, sourceUrl: string | null) => void;
   /** Opens the review Drawer — the only other thing (besides "Ver histórico") a blocked row's right-click menu offers, and an optional "ver o que mudou" for an already-auto-applied one. */
   onReview: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
-  /** Right-clicking anywhere on the row opens this row's actions (same set the old Ações column used to render as buttons) as a context menu instead — see `ContextMenu`. */
-  onRowContextMenu: (e: MouseEvent, items: ContextMenuItem[]) => void;
+  /** Right-clicking anywhere on the row opens this row's actions (same set the old Ações column used to render as buttons) as a context menu instead — see `ContextMenu`. Also marks this row "active" (see `activeShiftId`), same as picking any of the items themselves. */
+  onRowContextMenu: (e: MouseEvent, items: ContextMenuItem[], shiftId: number) => void;
+  /** The shift id last right-clicked (or whose action is still open in a Drawer/modal) — kept highlighted so closing that Drawer/modal doesn't leave you wondering which row it was for. `null` once cleared. */
+  activeShiftId: number | null;
+  /** A left-click landing on a *different* row than `activeShiftId` clears the highlight — same row is a no-op, so editing a field on the already-active row doesn't flicker it off. */
+  onRowMouseDown: (shiftId: number) => void;
 }) {
   const badge = STATUS_BADGE[s.status];
   const hasSchedule = s.scheduleStartMinutes !== null && s.scheduleEndMinutes !== null;
@@ -549,29 +555,34 @@ function ShiftRow({
   // Same actions the old Ações column rendered as buttons, now offered
   // through a right-click menu instead (see `onRowContextMenu`) — a blocked
   // row only offers "Revisar alteração" plus "Ver histórico", nothing else.
-  // "Ver histórico" is always present regardless of status/blocked state —
-  // unlike the rest, a turno with no previousShiftId still gets the item,
-  // it just opens the Drawer to a "no history yet" message instead of a list
-  // (see `ShiftHistoryDrawer`).
+  // Two items are always present but individually `disabled` rather than
+  // omitted when they don't currently apply, so the option stays
+  // discoverable instead of the menu's shape shifting row to row:
+  // "Fazer pagamento" needs an horário to compute horas/valor from, and
+  // "Ver histórico" needs an earlier state in the chain (`previousShiftId`).
   const rowActions: ContextMenuItem[] = [
     ...(isBlocked
       ? [{ label: "Revisar alteração", onClick: () => onReview(s, groupRef) }]
       : [
           ...(appliedChanges.length > 0 ? [{ label: "Ver o que mudou", onClick: () => onReview(s, groupRef) }] : []),
           ...(s.status === "pendente" || s.status === "erro"
-            ? [{ label: "Fazer pagamento", onClick: () => onPay(s, companyId, groupRef) }]
+            ? [{ label: "Fazer pagamento", disabled: !hasSchedule, onClick: () => onPay(s, companyId, groupRef) }]
             : []),
           ...(s.status === "pago" ? [{ label: "Voltar para pendente", onClick: () => onRevert(s, groupRef) }] : []),
         ]),
-    { label: "Ver histórico", onClick: () => onViewHistory(s.previousShiftId, companyId, s.clientId) },
+    { label: "Ver histórico", disabled: s.previousShiftId === null, onClick: () => onViewHistory(s.previousShiftId, companyId, s.clientId) },
     ...(isBlocked ? [] : [{ label: "Remover turno", danger: true, onClick: () => onDelete(s, groupRef) }]),
   ];
 
   return (
     <tr
+      className={s.id === activeShiftId ? "row-active" : undefined}
+      onMouseDownCapture={(e) => {
+        if (e.button === 0) onRowMouseDown(s.id);
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
-        onRowContextMenu(e, rowActions);
+        onRowContextMenu(e, rowActions, s.id);
       }}
       style={isBlocked ? { background: "var(--warning-soft)" } : appliedChanges.length > 0 ? { background: "var(--accent-soft)" } : undefined}
     >
@@ -791,8 +802,17 @@ export default function PaymentsPage() {
   // Right-click menu for a turno row — replaces the old always-visible
   // Ações column (see `ShiftRow`'s `rowActions`).
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
-  function handleRowContextMenu(e: MouseEvent, items: ContextMenuItem[]) {
+  // Which row's action is "in flight" — set on right-click and kept lit
+  // (`.row-active`, see `ShiftRow`) through whatever Drawer/modal the picked
+  // action opens, so closing it doesn't leave you guessing which turno it
+  // was for. Cleared only by a left-click landing on a *different* row.
+  const [activeShiftId, setActiveShiftId] = useState<number | null>(null);
+  function handleRowContextMenu(e: MouseEvent, items: ContextMenuItem[], shiftId: number) {
+    setActiveShiftId(shiftId);
     setContextMenu({ x: e.clientX, y: e.clientY, items });
+  }
+  function handleRowMouseDown(shiftId: number) {
+    setActiveShiftId((prev) => (prev === shiftId ? prev : null));
   }
 
   useEffect(() => {
@@ -1030,8 +1050,14 @@ export default function PaymentsPage() {
     setPaying(true);
     setPayError(null);
     try {
-      await markPaymentShiftPaid(payingShift.shift.id, amount);
+      // "Pagar" always appends a brand-new row instead of touching
+      // `payingShift.shift` itself (see `markPaymentShiftPaid`'s own doc
+      // comment) — without re-pointing `activeShiftId` at it, the highlight
+      // this action was for would vanish the moment the list refetches,
+      // since no row still has the old id.
+      const newShiftId = await markPaymentShiftPaid(payingShift.shift.id, amount);
       await afterMutation(payingShift.groupRef);
+      setActiveShiftId(newShiftId);
       setPayingShift(null);
     } catch (e) {
       setPayError(String(e instanceof Error ? e.message : e));
@@ -1045,8 +1071,11 @@ export default function PaymentsPage() {
     setReverting(true);
     setRevertError(null);
     try {
-      await revertPaymentShiftToPending(revertingShift.shift.id);
+      // Same append-only move as "Pagar" — re-point the highlight at the
+      // new head row (see the comment in `handleConfirmPayment`).
+      const newShiftId = await revertPaymentShiftToPending(revertingShift.shift.id);
       await afterMutation(revertingShift.groupRef);
+      setActiveShiftId(newShiftId);
       setRevertingShift(null);
     } catch (e) {
       setRevertError(String(e instanceof Error ? e.message : e));
@@ -1542,6 +1571,8 @@ export default function PaymentsPage() {
                                             onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
                                             onReview={(shift, groupRef) => setReviewingShift({ shift, groupRef })}
                                             onRowContextMenu={handleRowContextMenu}
+                                            activeShiftId={activeShiftId}
+                                            onRowMouseDown={handleRowMouseDown}
                                           />
                                         ))}
                                       </tbody>
@@ -1606,6 +1637,8 @@ export default function PaymentsPage() {
                       onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
                       onReview={(shift, groupRef) => setReviewingShift({ shift, groupRef })}
                       onRowContextMenu={handleRowContextMenu}
+                      activeShiftId={activeShiftId}
+                      onRowMouseDown={handleRowMouseDown}
                     />
                   ))}
                 </tbody>

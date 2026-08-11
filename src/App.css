@@ -686,6 +686,22 @@ tr:last-child td {
   margin-bottom: 1rem;
 }
 
+/* Neutral counterpart to error/success/warning-box — purely informational,
+   no severity of its own (e.g. "this creates a new record" before a
+   confirm action), so it stays muted instead of borrowing any status color. */
+.info-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  background: var(--surface-variant);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+}
+
 .summary-row {
   display: flex;
   gap: 1rem;
@@ -1193,6 +1209,19 @@ tr.row-error {
 
 tr.row-error:hover {
   background: var(--error-container-soft);
+}
+
+/* Marks the turno a right-click (or the action picked from its menu) was
+   for — see `PaymentsPage`'s `activeShiftId`. The left-edge stripe (via the
+   first cell's box-shadow, not the `tr`'s own border/box-shadow, which
+   render unreliably on table rows) always shows; the background tint is a
+   plain CSS rule so an inline `style` background set for a blocked/applied
+   row (see `ShiftRow`) still wins over it instead of the two competing. */
+tr.row-active {
+  background: var(--accent-soft);
+}
+tr.row-active td:first-child {
+  box-shadow: inset 3px 0 0 0 var(--accent);
 }
 
 /* Payment template wizard — spacing/radii below mirror the reference
