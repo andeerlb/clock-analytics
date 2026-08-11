@@ -952,7 +952,7 @@ tr:last-child td {
   align-items: center;
   justify-content: space-between;
   gap: 0.8rem;
-  padding: 1.1rem 1.4rem;
+  padding: 1.2rem 1.4rem;
   border-bottom: 1px solid var(--border);
 }
 .modal-header h3 {
@@ -1054,9 +1054,12 @@ tr:last-child td {
   margin: 0;
 }
 
+/* Row, right-aligned — same as `.modal-footer`, so a Cancelar/Confirmar-style
+   button pair lines up identically whether it's sitting in a Drawer or a
+   Modal. */
 .drawer-footer {
   display: flex;
-  flex-direction: column;
+  justify-content: flex-end;
   gap: 0.6rem;
   padding: 1rem 1.4rem;
   border-top: 1px solid var(--border);
