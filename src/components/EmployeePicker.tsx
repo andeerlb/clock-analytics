@@ -206,7 +206,7 @@ export default function EmployeePicker({
                   >
                     {e.name}
                     {(() => {
-                      const matricula = e.companies.find((c) => c.companyId === companyId)?.matricula;
+                      const matricula = e.links.find((l) => l.clientId === clientId && l.companyId === companyId)?.matricula;
                       return matricula && <span className="muted"> · {matricula}</span>;
                     })()}
                   </button>

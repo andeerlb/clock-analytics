@@ -206,11 +206,11 @@ export async function computeReimportDiff(
       // that used to resolve suddenly stops resolving.
       const positional = await findPaymentShiftByPosition(config.sourceUrl, row.sheetName, row.rowNumber);
       if (positional) accountedForIds.add(positional.shiftId);
-      // Purely informational — enriches the message so a review knows
-      // WHY the scoped search failed, without moving anyone: moving stays
-      // exclusive to the manual "Mover para Cliente Y" action on the import
-      // preview, a deliberate human decision, never something a background
-      // check does on its own.
+      // Purely informational — enriches the message so a review knows WHY
+      // the scoped search failed, without linking anyone: linking stays
+      // exclusive to the manual "Vincular" action on the import preview, a
+      // deliberate human decision, never something a background check does
+      // on its own.
       const elsewhere = await findEmployeeAnywhereByAttempts(template.identifierPriority, {
         cpf: row.fields.cpf || null,
         matricula: row.fields.matricula || null,
@@ -220,8 +220,8 @@ export async function computeReimportDiff(
         ? `Colaborador não encontrado para "${row.fields.nome || "(nome vazio)"}" — nesta posição (${row.sheetName ? `aba ${row.sheetName}, ` : ""}linha ${row.rowNumber}) havia antes um turno de "${positional.employeeName}".`
         : `Colaborador não encontrado para "${row.fields.nome || "(nome vazio)"}".`;
       if (elsewhere) {
-        const elsewhereCompanies = elsewhere.companies.map((c) => c.companyName).join(", ");
-        message += ` Existe um colaborador com esse nome cadastrado em ${elsewhere.clientName} (${elsewhereCompanies}), mas a regra desta linha aponta para ${route.clientName} (${route.companyName}) — reveja em "Importar pagamentos" para mover o cadastro, se for o caso.`;
+        const elsewherePairs = elsewhere.links.map((l) => `${l.clientName} (${l.companyName})`).join(", ");
+        message += ` Existe um colaborador com esse nome cadastrado em ${elsewherePairs}, mas a regra desta linha aponta para ${route.clientName} (${route.companyName}) — reveja em "Importar pagamentos" para vincular o cadastro, se for o caso.`;
       }
       unresolvedEntries.push(unresolvedEntry(row, workDate, parsedSchedule, message));
       continue;

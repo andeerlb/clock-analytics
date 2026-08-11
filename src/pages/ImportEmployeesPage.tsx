@@ -73,12 +73,13 @@ function formatFileKindList(kinds: PaymentFileKind[]): string {
 
 /**
  * Every row lands in exactly one bucket. "duplicate" means already linked
- * to THIS pair's empresa — flagged for manual review (see `/employees/:id`),
- * never auto-created or auto-updated. "valid" is everything else, including
- * a colaborador that already exists for this cliente under a *different*
- * empresa (`findEmployeeByAttempts` is scoped per-empresa, so that's not a
- * "duplicate" here) — importing it links the new empresa to the existing
- * colaborador instead of creating a second person (see
+ * to THIS exact (cliente, empresa) pair — flagged for manual review (see
+ * `/employees/:id`), never auto-created or auto-updated. "valid" is
+ * everything else, including a colaborador that already exists somewhere
+ * else entirely — a different cliente, a different empresa of the same
+ * cliente, or both (`findEmployeeByAttempts` is scoped to one exact pair,
+ * so that's not a "duplicate" here) — importing it links the new pair to
+ * the existing colaborador instead of creating a second person (see
  * `createEmployeesFromImport`), so "valid" isn't only ever "brand new".
  */
 type RowCategory = "valid" | "duplicate" | "duplicate-in-file" | "skipped";

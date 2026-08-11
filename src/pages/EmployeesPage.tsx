@@ -195,21 +195,23 @@ export default function EmployeesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {employees.map((e) => (
-                    <tr key={e.id}>
-                      <td>
-                        <div className="person-cell">
-                          <Avatar name={e.name} />
-                          <Link to={`/employees/${e.id}`}>{e.name}</Link>
-                        </div>
-                      </td>
-                      <td className="mono">{formatCpf(e.cpf)}</td>
-                      <td>{e.clientName}</td>
-                      <td>
-                        {e.companies.map((c) => c.companyName + (c.matricula ? ` (${c.matricula})` : "")).join(", ")}
-                      </td>
-                    </tr>
-                  ))}
+                  {employees.map((e) => {
+                    const distinctClients = Array.from(new Set(e.links.map((l) => l.clientName)));
+                    const distinctCompanies = Array.from(new Set(e.links.map((l) => l.companyName)));
+                    return (
+                      <tr key={e.id}>
+                        <td>
+                          <div className="person-cell">
+                            <Avatar name={e.name} />
+                            <Link to={`/employees/${e.id}`}>{e.name}</Link>
+                          </div>
+                        </td>
+                        <td className="mono">{formatCpf(e.cpf)}</td>
+                        <td>{distinctClients.join(", ")}</td>
+                        <td>{distinctCompanies.join(", ")}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

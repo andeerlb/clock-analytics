@@ -430,5 +430,17 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0071_employee_company_link.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 72,
+            description: "employees.UNIQUE(client_id, cpf) narrowed to UNIQUE(cpf) — a colaborador is one person globally now, not one person per cliente; employee_companies (employee_id, company_id, matricula) replaced by employee_client_companies (employee_id, client_id, company_id, matricula), since a empresa can already serve more than one cliente, so a colaborador's empresa link has to say which cliente it's for",
+            sql: include_str!("../migrations/0072_employee_client_link.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 73,
+            description: "one-time cleanup: merges employees rows sharing the exact same name (case/whitespace-insensitive) but different CPFs — 0072's CPF-based merge can't catch these since the CPFs themselves differ; user-confirmed these are genuinely the same person (data-entry mistake on the CPF), not a general auto-merge rule",
+            sql: include_str!("../migrations/0073_merge_duplicate_names.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

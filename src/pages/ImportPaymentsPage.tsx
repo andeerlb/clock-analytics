@@ -45,19 +45,17 @@ import {
   findDuplicatePaymentShifts,
   findEmployeeAnywhereByAttempts,
   findEmployeeByAttempts,
-  findEmployeeInClientByAttempts,
   findPaymentShiftByPosition,
   findRoleByName,
   getEmployee,
   getPaymentTemplate,
-  linkEmployeeToCompany,
+  linkEmployeeToClientCompany,
   listHeadShiftsForSourceUrl,
   listImportFiles,
   listPaymentTemplates,
   logSourceFile,
   markSourceFileSaved,
-  moveEmployeeHistoryToClient,
-  moveEmployeeToClient,
+  reassignEmployeeHistoryToClientCompany,
   savePaymentShifts,
   type DuplicatePaymentShiftMatch,
   type EmployeeRow,
@@ -194,32 +192,18 @@ interface PaymentPreviewRow {
   matchedIdentityChanged: boolean;
   /**
    * Set (only for `category === "not-found"`) when the scoped search under
-   * the route's resolved client/empresa failed, but the same person is
-   * already registered under a DIFFERENT client/empresa — usually because a
-   * routing rule changed since they were first imported. Offers "Mover
-   * [Nome] para [Cliente Y]" instead of (or alongside) "Cadastrar
-   * colaborador"/"Vincular" — safe to do without touching any historical
-   * turno, since `payment_shifts`/`imports` snapshot their own client/
-   * empresa at import time (see `moveEmployeeToClient`).
+   * the route's resolved cliente+empresa pair failed, but the same person
+   * is already a colaborador somewhere else — a different cliente, a
+   * different empresa of the same cliente, or both (see
+   * `findEmployeeAnywhereByAttempts`) — usually because a routing rule
+   * changed, or because this is the first import that resolves them to this
+   * particular pair. Offers "Vincular [Nome] a [Cliente] ([Empresa])"
+   * instead of (or alongside) "Cadastrar colaborador" — purely additive
+   * (`linkEmployeeToClientCompany`), safe to do without touching any
+   * historical turno, since `payment_shifts`/`imports` snapshot their own
+   * cliente/empresa at import time.
    */
-  foundInOtherClient: {
-    employeeId: number;
-    employeeName: string;
-    currentClientId: number;
-    currentClientName: string;
-  } | null;
-  /**
-   * Set (only for `category === "not-found"`, and only when
-   * `foundInOtherClient` is not) when the scoped search under the route's
-   * resolved empresa failed, but the same person is already a colaborador
-   * of this SAME cliente, just not (yet) linked to this empresa — usually
-   * someone contracted through more than one empresa for the same cliente
-   * (see `findEmployeeInClientByAttempts`). Offers "Vincular [Nome] a
-   * [Empresa]" — purely additive (`linkEmployeeToCompany`), unlike
-   * `foundInOtherClient`'s "Mover" this never rewrites anything that
-   * already exists on the colaborador's cadastro.
-   */
-  foundInOtherCompany: {
+  foundElsewhere: {
     employeeId: number;
     employeeName: string;
   } | null;
@@ -343,10 +327,10 @@ export default function ImportPaymentsPage() {
   const [periodStart, setPeriodStart] = useState(restored?.periodStart ?? "");
   const [periodEnd, setPeriodEnd] = useState(restored?.periodEnd ?? "");
   const [confirmFullImport, setConfirmFullImport] = useState(false);
-  /** Row index of a "colaborador não encontrado" row whose "Mover para Cliente Y" is pending confirmation — `null` when the modal is closed. */
-  const [moveEmployeeConfirmIndex, setMoveEmployeeConfirmIndex] = useState<number | null>(null);
-  /** The move confirm modal's own "mover o histórico também?" checkbox — resets to off each time the modal opens, since it's a fresh choice per move, never remembered across colaboradores. */
-  const [moveEmployeeAlsoHistory, setMoveEmployeeAlsoHistory] = useState(false);
+  /** Row index of a "colaborador não encontrado" row whose "Vincular a [Cliente] ([Empresa])" is pending confirmation — `null` when the modal is closed. */
+  const [linkElsewhereConfirmIndex, setLinkElsewhereConfirmIndex] = useState<number | null>(null);
+  /** The link confirm modal's own "vincular o histórico também?" checkbox — resets to off each time the modal opens, since it's a fresh choice per link, never remembered across colaboradores. */
+  const [linkElsewhereAlsoHistory, setLinkElsewhereAlsoHistory] = useState(false);
   const [rowFilter, setRowFilter] = useState<RowFilter>(restored?.rowFilter ?? "all");
   const [nameSearch, setNameSearch] = useState(restored?.nameSearch ?? "");
 
@@ -899,8 +883,7 @@ export default function ImportPaymentsPage() {
                 resolvedClientName: null,
                 resolvedCompanyId: null,
                 resolvedCompanyName: null,
-                foundInOtherClient: null,
-                foundInOtherCompany: null,
+                foundElsewhere: null,
                 category: "skipped",
               });
               continue;
@@ -929,26 +912,12 @@ export default function ImportPaymentsPage() {
                 })
               : null;
             // Scoped search failed — before giving up, check whether this
-            // same person is already a colaborador of this SAME cliente,
-            // just not linked to this empresa yet (typically someone
-            // contracted through more than one empresa for the same
-            // cliente). Offers "Vincular [Nome] a [Empresa]" — purely
-            // additive, so this takes priority over the (more disruptive)
-            // "Mover" suggestion below when both would apply.
-            const foundSameClient =
-              route && !employee
-                ? await findEmployeeInClientByAttempts(route.clientId, selectedTemplate.identifierPriority, {
-                    cpf,
-                    nome,
-                  })
-                : null;
-            // Still nothing — check whether this same person is already
-            // registered under a DIFFERENT cliente/empresa entirely
-            // (typically because a routing rule changed since they were
-            // first imported). Offers "Mover para Cliente Y" instead of
-            // leaving the row a dead end.
+            // same person is already a colaborador somewhere else (a
+            // different cliente, a different empresa of the same cliente,
+            // or both). Offers "Vincular [Nome] a [Cliente] ([Empresa])"
+            // instead of leaving the row a dead end.
             const elsewhere =
-              route && !employee && !foundSameClient
+              route && !employee
                 ? await findEmployeeAnywhereByAttempts(selectedTemplate.identifierPriority, { cpf, matricula, nome })
                 : null;
             const role = route ? await findRoleByName(route.companyId, base.role) : null;
@@ -963,17 +932,7 @@ export default function ImportPaymentsPage() {
               resolvedClientName: route?.clientName ?? null,
               resolvedCompanyId: route?.companyId ?? null,
               resolvedCompanyName: route?.companyName ?? null,
-              foundInOtherCompany: foundSameClient
-                ? { employeeId: foundSameClient.id, employeeName: foundSameClient.name }
-                : null,
-              foundInOtherClient: elsewhere
-                ? {
-                    employeeId: elsewhere.id,
-                    employeeName: elsewhere.name,
-                    currentClientId: elsewhere.clientId,
-                    currentClientName: elsewhere.clientName,
-                  }
-                : null,
+              foundElsewhere: elsewhere ? { employeeId: elsewhere.id, employeeName: elsewhere.name } : null,
               category: !route
                 ? "unresolved-route"
                 : !employee
@@ -1232,110 +1191,36 @@ export default function ImportPaymentsPage() {
   }
 
   /**
-   * "Mover [Nome] para [Cliente Y]" on a "colaborador não encontrado" row
-   * that's actually registered under a different cliente/empresa (see
-   * `row.foundInOtherClient`) — updates only the colaborador's own cadastro
-   * (`moveEmployeeToClient`), safe to do without touching any historical
-   * turno now that `payment_shifts`/`imports` snapshot their own client/
-   * empresa at import time. Every other row in this batch blocked on the
-   * SAME person gets linked too, same "resolve the whole batch, not just
-   * the clicked row" pattern as `handleLinkEmployee`.
+   * "Vincular [Nome] a [Cliente] ([Empresa])" on a "colaborador não
+   * encontrado" row that's actually already a colaborador somewhere else
+   * (see `row.foundElsewhere`) — links the (cliente, empresa) pair
+   * (`linkEmployeeToClientCompany`) and, if `alsoLinkHistory` is set, also
+   * reassigns already-imported history to that same pair
+   * (`reassignEmployeeHistoryToClientCompany`). Purely additive either way
+   * — nothing about the colaborador's existing cadastro or other links
+   * changes, only a new pair is added (and, optionally, old
+   * payment_shifts/imports rows get relabeled to it). Every other row in
+   * this batch blocked on the SAME person and pair gets resolved too, same
+   * "resolve the whole batch, not just the clicked row" pattern as
+   * `handleLinkEmployee`.
    */
-  async function handleMoveEmployee(clickedIndex: number, alsoMoveHistory: boolean) {
+  async function handleLinkEmployeeElsewhere(clickedIndex: number, alsoLinkHistory: boolean) {
     const clicked = shiftRows[clickedIndex];
-    if (!clicked?.foundInOtherClient || clicked.resolvedClientId === null || clicked.resolvedCompanyId === null) return;
+    if (!clicked?.foundElsewhere || clicked.resolvedClientId === null || clicked.resolvedCompanyId === null) return;
     setError(null);
-    const movedEmployeeId = clicked.foundInOtherClient.employeeId;
+    const linkedEmployeeId = clicked.foundElsewhere.employeeId;
     let employee: EmployeeRow;
     try {
-      await moveEmployeeToClient(movedEmployeeId, clicked.resolvedClientId, clicked.resolvedCompanyId);
-      if (alsoMoveHistory) {
-        await moveEmployeeHistoryToClient(
-          movedEmployeeId,
+      await linkEmployeeToClientCompany(linkedEmployeeId, clicked.resolvedClientId, clicked.resolvedCompanyId);
+      if (alsoLinkHistory) {
+        await reassignEmployeeHistoryToClientCompany(
+          linkedEmployeeId,
           clicked.resolvedClientId,
           clicked.resolvedCompanyId,
           periodStart || null,
           periodEnd || null,
         );
       }
-      employee = await getEmployee(movedEmployeeId);
-    } catch (e) {
-      setError(String(e instanceof Error ? e.message : e));
-      return;
-    }
-
-    const allRows = fileResults.flatMap((r) => r.rows);
-
-    const seenInBatch = new Set<string>();
-    for (const r of allRows) {
-      if (r.employee) seenInBatch.add(shiftDedupKey(r.employee.id, r));
-    }
-
-    const newlyResolved = allRows.filter(
-      (r) =>
-        r.category === "not-found" &&
-        r.foundInOtherClient?.employeeId === movedEmployeeId &&
-        r.resolvedClientId === clicked.resolvedClientId &&
-        r.resolvedCompanyId === clicked.resolvedCompanyId,
-    );
-
-    const dbCheckTargets: PaymentPreviewRow[] = [];
-    for (const r of newlyResolved) {
-      r.employee = employee;
-      r.foundInOtherClient = null;
-      const key = shiftDedupKey(employee.id, r);
-      if (seenInBatch.has(key)) {
-        r.category = "duplicate-in-file";
-      } else {
-        seenInBatch.add(key);
-        r.category = "valid";
-        dbCheckTargets.push(r);
-      }
-    }
-
-    if (dbCheckTargets.length > 0) {
-      const dupMatches = await findDuplicatePaymentShifts(
-        dbCheckTargets.map((r) => ({
-          employeeId: employee.id,
-          workDate: r.workDate!,
-          local: r.local,
-          roleId: r.roleId,
-          scheduleStartMinutes: r.scheduleStartMinutes,
-          scheduleEndMinutes: r.scheduleEndMinutes,
-        })),
-      );
-      dupMatches.forEach((match, i) => applyDuplicateMatch(dbCheckTargets[i], match));
-    }
-
-    setSelectedRows((prev) => {
-      const next = new Set(prev);
-      allRows.forEach((r, i) => {
-        if (newlyResolved.includes(r) && r.category === "valid") next.add(i);
-      });
-      return next;
-    });
-    setFileResults([...fileResults]);
-  }
-
-  /**
-   * "Vincular [Nome] a [Empresa]" on a "colaborador não encontrado" row
-   * that's actually already a colaborador of this same cliente, just not
-   * linked to this empresa yet (see `row.foundInOtherCompany`) — links the
-   * empresa (`linkEmployeeToCompany`) and resolves every other still-blocked
-   * row in this batch for the same person and empresa, same "resolve the
-   * whole batch" pattern as `handleMoveEmployee`/`handleLinkEmployee`. Purely
-   * additive — unlike `handleMoveEmployee` there's no history-rewrite
-   * question, since nothing about the colaborador's existing cadastro or
-   * history changes, only a new empresa link is added.
-   */
-  async function handleLinkEmployeeCompany(clickedIndex: number) {
-    const clicked = shiftRows[clickedIndex];
-    if (!clicked?.foundInOtherCompany || clicked.resolvedCompanyId === null) return;
-    setError(null);
-    const linkedEmployeeId = clicked.foundInOtherCompany.employeeId;
-    let employee: EmployeeRow;
-    try {
-      await linkEmployeeToCompany(linkedEmployeeId, clicked.resolvedCompanyId);
       employee = await getEmployee(linkedEmployeeId);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
@@ -1352,14 +1237,15 @@ export default function ImportPaymentsPage() {
     const newlyResolved = allRows.filter(
       (r) =>
         r.category === "not-found" &&
-        r.foundInOtherCompany?.employeeId === linkedEmployeeId &&
+        r.foundElsewhere?.employeeId === linkedEmployeeId &&
+        r.resolvedClientId === clicked.resolvedClientId &&
         r.resolvedCompanyId === clicked.resolvedCompanyId,
     );
 
     const dbCheckTargets: PaymentPreviewRow[] = [];
     for (const r of newlyResolved) {
       r.employee = employee;
-      r.foundInOtherCompany = null;
+      r.foundElsewhere = null;
       const key = shiftDedupKey(employee.id, r);
       if (seenInBatch.has(key)) {
         r.category = "duplicate-in-file";
@@ -2459,34 +2345,19 @@ export default function ImportPaymentsPage() {
                                     <AlertTriangle size={13} />
                                     Colaborador não encontrado
                                   </span>
-                                  {row.foundInOtherClient && (
-                                    <div style={{ marginTop: "0.25rem", fontSize: "0.78rem", color: "var(--text-muted)" }}>
-                                      Já cadastrado em {row.foundInOtherClient.currentClientName} —
-                                      a regra agora aponta para {row.resolvedClientName}.
-                                    </div>
-                                  )}
                                   <div style={{ marginTop: "0.25rem", display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
-                                    {row.foundInOtherCompany && (
-                                      <button
-                                        type="button"
-                                        className="link-button"
-                                        style={{ fontSize: "0.78rem" }}
-                                        onClick={() => handleLinkEmployeeCompany(index)}
-                                      >
-                                        Vincular {row.foundInOtherCompany.employeeName} a {row.resolvedCompanyName}
-                                      </button>
-                                    )}
-                                    {row.foundInOtherClient && (
+                                    {row.foundElsewhere && (
                                       <button
                                         type="button"
                                         className="link-button"
                                         style={{ fontSize: "0.78rem" }}
                                         onClick={() => {
-                                          setMoveEmployeeAlsoHistory(false);
-                                          setMoveEmployeeConfirmIndex(index);
+                                          setLinkElsewhereAlsoHistory(false);
+                                          setLinkElsewhereConfirmIndex(index);
                                         }}
                                       >
-                                        Mover {row.foundInOtherClient.employeeName} para {row.resolvedClientName}
+                                        Vincular {row.foundElsewhere.employeeName} a {row.resolvedClientName} (
+                                        {row.resolvedCompanyName})
                                       </button>
                                     )}
                                     <button
@@ -2704,35 +2575,35 @@ export default function ImportPaymentsPage() {
         />
       )}
 
-      {moveEmployeeConfirmIndex !== null && shiftRows[moveEmployeeConfirmIndex]?.foundInOtherClient && (
+      {linkElsewhereConfirmIndex !== null && shiftRows[linkElsewhereConfirmIndex]?.foundElsewhere && (
         <ConfirmModal
-          title="Mover colaborador para outro cliente"
-          message={`Isso atualiza o cadastro de ${shiftRows[moveEmployeeConfirmIndex].foundInOtherClient!.employeeName} para ${shiftRows[moveEmployeeConfirmIndex].resolvedClientName} (${shiftRows[moveEmployeeConfirmIndex].resolvedCompanyName}). Por padrão o histórico já importado (Pagamentos e Cartão Ponto) não muda — só as próximas importações passam a usar o novo cliente/empresa.`}
-          confirmLabel="Mover colaborador"
+          title="Vincular colaborador a este cliente/empresa"
+          message={`Isso vincula o cadastro de ${shiftRows[linkElsewhereConfirmIndex].foundElsewhere!.employeeName} a ${shiftRows[linkElsewhereConfirmIndex].resolvedClientName} (${shiftRows[linkElsewhereConfirmIndex].resolvedCompanyName}) — sem afetar nenhum outro vínculo que já exista. Por padrão o histórico já importado (Pagamentos e Cartão Ponto) não muda — só as próximas importações passam a usar esse cliente/empresa.`}
+          confirmLabel="Vincular colaborador"
           danger={false}
           onConfirm={async () => {
-            const idx = moveEmployeeConfirmIndex;
-            const alsoHistory = moveEmployeeAlsoHistory;
-            setMoveEmployeeConfirmIndex(null);
-            await handleMoveEmployee(idx, alsoHistory);
+            const idx = linkElsewhereConfirmIndex;
+            const alsoHistory = linkElsewhereAlsoHistory;
+            setLinkElsewhereConfirmIndex(null);
+            await handleLinkEmployeeElsewhere(idx, alsoHistory);
           }}
-          onCancel={() => setMoveEmployeeConfirmIndex(null)}
+          onCancel={() => setLinkElsewhereConfirmIndex(null)}
         >
           <label
             style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", fontWeight: 400, marginTop: "0.8rem", cursor: "pointer" }}
           >
             <input
               type="checkbox"
-              checked={moveEmployeeAlsoHistory}
-              onChange={(e) => setMoveEmployeeAlsoHistory(e.target.checked)}
+              checked={linkElsewhereAlsoHistory}
+              onChange={(e) => setLinkElsewhereAlsoHistory(e.target.checked)}
               style={{ marginTop: "2px" }}
             />
             <span>
-              Mover o histórico já importado também
+              Vincular o histórico já importado também
               <div className="muted" style={{ fontSize: "0.76rem", marginTop: "2px" }}>
                 {periodStart || periodEnd
                   ? `Só o que estiver no período ${periodStart ? formatDateSlash(periodStart) : "início"} → ${periodEnd ? formatDateSlash(periodEnd) : "fim"}. Fora dele, continua com o cliente/empresa atual.`
-                  : "Sem período definido — move TODO o histórico já importado deste colaborador."}
+                  : "Sem período definido — vincula TODO o histórico já importado deste colaborador."}
               </div>
             </span>
           </label>

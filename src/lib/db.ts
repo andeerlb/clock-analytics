@@ -75,37 +75,32 @@ async function upsertEmployee(
   // `findEmployeeByAttempts`'s digits-only comparison would then silently
   // never match again.
   const normalizedCpf = normalizeCpf(cpf);
-  // Scoped to client + cpf only — since 0071_employee_company_link.sql a
-  // colaborador is one person (client_id, cpf), not one person-per-empresa.
-  // `companyId` no longer picks out *which* employee row this is; it's just
-  // which empresa this particular timesheet import links them to, recorded
-  // below in `employee_companies` alongside every other empresa they've
-  // already been imported under. Auto-linking a new empresa here (instead
-  // of asking first, the way `createEmployeeManual`/`findEmployeeByAttempts`
-  // do for the same situation) mirrors this function's own prior behavior:
-  // it already silently auto-created a brand-new employee on an unmatched
-  // pair with no confirmation step, and importing one specific PDF under an
-  // explicitly-chosen cliente/empresa is already a single deliberate action,
-  // not an ambiguous bulk match.
-  const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM employees WHERE client_id = $1 AND cpf = $2",
-    [clientId, normalizedCpf],
-  );
+  // Scoped to cpf alone — since 0072_employee_client_link.sql a colaborador
+  // is one person globally, not one person per cliente (and, since 0071,
+  // not one person per empresa either). Neither `clientId` nor `companyId`
+  // pick out *which* employee row this is anymore; they're just which
+  // (cliente, empresa) pair this particular timesheet import links them to,
+  // recorded below in `employee_client_companies` alongside every other
+  // pair they've already been imported under. Auto-linking a new pair here
+  // (instead of asking first, the way `createEmployeeManual`/
+  // `findEmployeeByAttempts` do for the same situation) mirrors this
+  // function's own prior behavior: it already silently auto-created a
+  // brand-new employee on an unmatched cpf with no confirmation step, and
+  // importing one specific PDF under an explicitly-chosen cliente/empresa is
+  // already a single deliberate action, not an ambiguous bulk match.
+  const existing = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1", [normalizedCpf]);
   let employeeId: number;
   if (existing.length > 0) {
     employeeId = existing[0].id;
     await db.execute("UPDATE employees SET name = $1 WHERE id = $2", [name, employeeId]);
   } else {
-    const result = await db.execute("INSERT INTO employees (client_id, name, cpf) VALUES ($1, $2, $3)", [
-      clientId,
-      name,
-      normalizedCpf,
-    ]);
+    const result = await db.execute("INSERT INTO employees (name, cpf) VALUES ($1, $2)", [name, normalizedCpf]);
     employeeId = result.lastInsertId as number;
   }
   await db.execute(
-    "INSERT INTO employee_companies (employee_id, company_id) VALUES ($1, $2) ON CONFLICT (employee_id, company_id) DO NOTHING",
-    [employeeId, companyId],
+    `INSERT INTO employee_client_companies (employee_id, client_id, company_id) VALUES ($1, $2, $3)
+     ON CONFLICT (employee_id, client_id, company_id) DO NOTHING`,
+    [employeeId, clientId, companyId],
   );
   return employeeId;
 }
@@ -732,36 +727,47 @@ export async function getEffectivePaymentRules(clientId: number, companyId: numb
   };
 }
 
-/** One empresa a colaborador is linked to — `matricula` is per-empresa (issued by that empresa's own payroll), not shared across every empresa the same person works for. */
-export interface EmployeeCompanyLink {
+/**
+ * One (cliente, empresa) pairing a colaborador is linked to — the atomic
+ * fact `employee_client_companies` records (see
+ * 0072_employee_client_link.sql): "this person works at this cliente via
+ * this empresa," with its own `matricula` (issued per-empresa, by that
+ * empresa's own payroll — not shared across every pairing the same person
+ * has). Needed as a pair, not two independent lists, because a single
+ * empresa can already serve more than one cliente (`client_companies`) —
+ * knowing someone is linked to empresa X and, separately, to cliente A
+ * wouldn't say whether they work at A via X specifically.
+ */
+export interface EmployeeClientCompanyLink {
+  clientId: number;
+  clientName: string;
   companyId: number;
   companyName: string;
   matricula: string | null;
 }
 
 /**
- * A colaborador is one person at one cliente (`UNIQUE(client_id, cpf)`,
- * see 0071_employee_company_link.sql) — `companies` is the empresa(s) they're
- * linked to, at least one, since importing anything for them requires
- * picking an empresa. Before 0071 a colaborador belonged to exactly one
- * empresa and a second one meant a second, duplicate `employees` row; this
- * is what replaced that.
+ * A colaborador is one person, globally (`UNIQUE(cpf)`, see
+ * 0072_employee_client_link.sql) — `links` is every (cliente, empresa) pair
+ * they're linked to, at least one, since importing anything for them
+ * requires resolving to a specific pair. Before 0072 a colaborador belonged
+ * to exactly one cliente (and, before 0071, exactly one empresa); a second
+ * one of either meant a second, duplicate `employees` row — this is what
+ * replaced that.
  */
 export interface EmployeeRow {
   id: number;
   name: string;
   cpf: string;
-  clientId: number;
-  clientName: string;
-  companies: EmployeeCompanyLink[];
+  links: EmployeeClientCompanyLink[];
 }
 
 /**
- * Builds full `EmployeeRow`s (including each one's `companies`) for a batch
- * of employee ids in two queries total instead of one per id — every
+ * Builds full `EmployeeRow`s (including each one's `links`) for a batch of
+ * employee ids in two queries total instead of one per id — every
  * `employees` read path (`getEmployee`, `listEmployeesGlobal`,
  * `findEmployeeByAttempts` and its siblings) goes through this so the
- * "attach companies" logic can't drift between them. Order of the returned
+ * "attach links" logic can't drift between them. Order of the returned
  * array is NOT guaranteed to match `employeeIds` — callers that care about
  * order (e.g. `listEmployeesGlobal`'s `ORDER BY name`) re-sort by id
  * themselves.
@@ -769,30 +775,42 @@ export interface EmployeeRow {
 async function hydrateEmployeeRows(db: Database, employeeIds: number[]): Promise<EmployeeRow[]> {
   if (employeeIds.length === 0) return [];
   const placeholders = employeeIds.map((_, i) => `$${i + 1}`).join(", ");
-  const base = await db.select<{ id: number; name: string; cpf: string; clientId: number; clientName: string }[]>(
-    `SELECT e.id, e.name, e.cpf, cl.id AS clientId, cl.name AS clientName
-     FROM employees e
-     JOIN clients cl ON cl.id = e.client_id
-     WHERE e.id IN (${placeholders})`,
+  const base = await db.select<{ id: number; name: string; cpf: string }[]>(
+    `SELECT e.id, e.name, e.cpf FROM employees e WHERE e.id IN (${placeholders})`,
     employeeIds,
   );
-  const companyRows = await db.select<
-    { employeeId: number; companyId: number; companyName: string; matricula: string | null }[]
+  const linkRows = await db.select<
+    {
+      employeeId: number;
+      clientId: number;
+      clientName: string;
+      companyId: number;
+      companyName: string;
+      matricula: string | null;
+    }[]
   >(
-    `SELECT ec.employee_id AS employeeId, c.id AS companyId, c.name AS companyName, ec.matricula
-     FROM employee_companies ec
-     JOIN companies c ON c.id = ec.company_id
-     WHERE ec.employee_id IN (${placeholders})
-     ORDER BY c.name`,
+    `SELECT ecc.employee_id AS employeeId, cl.id AS clientId, cl.name AS clientName,
+            c.id AS companyId, c.name AS companyName, ecc.matricula
+     FROM employee_client_companies ecc
+     JOIN clients cl ON cl.id = ecc.client_id
+     JOIN companies c ON c.id = ecc.company_id
+     WHERE ecc.employee_id IN (${placeholders})
+     ORDER BY cl.name, c.name`,
     employeeIds,
   );
-  const companiesByEmployee = new Map<number, EmployeeCompanyLink[]>();
-  for (const row of companyRows) {
-    const list = companiesByEmployee.get(row.employeeId) ?? [];
-    list.push({ companyId: row.companyId, companyName: row.companyName, matricula: row.matricula });
-    companiesByEmployee.set(row.employeeId, list);
+  const linksByEmployee = new Map<number, EmployeeClientCompanyLink[]>();
+  for (const row of linkRows) {
+    const list = linksByEmployee.get(row.employeeId) ?? [];
+    list.push({
+      clientId: row.clientId,
+      clientName: row.clientName,
+      companyId: row.companyId,
+      companyName: row.companyName,
+      matricula: row.matricula,
+    });
+    linksByEmployee.set(row.employeeId, list);
   }
-  return base.map((e) => ({ ...e, companies: companiesByEmployee.get(e.id) ?? [] }));
+  return base.map((e) => ({ ...e, links: linksByEmployee.get(e.id) ?? [] }));
 }
 
 export interface EmployeesGlobalQuery {
@@ -805,14 +823,17 @@ export interface EmployeesGlobalQuery {
 }
 
 /**
- * Every employee, across every client — the Colaboradores cadastro list.
- * Not scoped to a single client up front (unlike the import flows) since
- * this is meant as a master directory; `clientName`/`companies` disambiguate
- * a CPF that happens to exist under more than one client. Filtered and
- * paginated in SQL, not in memory — `total` is the count of matching
- * *colaboradores* (not company links) before `page`/`pageSize` apply.
- * `companyIds` filters "linked to at least one of these empresas", via
- * `employee_companies` — an employee can match on more than one.
+ * Every employee, globally — the Colaboradores cadastro list. Not scoped to
+ * a single cliente/empresa up front (unlike the import flows) since this is
+ * meant as a master directory; each row's `links` disambiguate a colaborador
+ * linked to more than one cliente and/or empresa. Filtered and paginated in
+ * SQL, not in memory — `total` is the count of matching *colaboradores*
+ * (not links) before `page`/`pageSize` apply. `companyIds`/`clientIds` are
+ * independent facets — "linked to at least one of these empresas" AND
+ * "linked to at least one of these clientes," not necessarily via the same
+ * link row (a colaborador linked to cliente A via empresa X still matches a
+ * `clientIds=[A], companyIds=[Y]` filter if they're separately linked to Y
+ * for some other cliente).
  */
 export async function listEmployeesGlobal(query: EmployeesGlobalQuery): Promise<PagedResult<EmployeeRow>> {
   const db = await getDb();
@@ -824,12 +845,18 @@ export async function listEmployeesGlobal(query: EmployeesGlobalQuery): Promise<
     params.push(search);
     conditions.push(`LOWER(e.name) LIKE '%' || LOWER($${params.length}) || '%'`);
   }
-  const companyClause = inClause("ec.company_id", query.companyIds ?? [], params);
+  const companyClause = inClause("ecc_company.company_id", query.companyIds ?? [], params);
   if (companyClause) {
-    conditions.push(`EXISTS (SELECT 1 FROM employee_companies ec WHERE ec.employee_id = e.id AND ${companyClause})`);
+    conditions.push(
+      `EXISTS (SELECT 1 FROM employee_client_companies ecc_company WHERE ecc_company.employee_id = e.id AND ${companyClause})`,
+    );
   }
-  const clientClause = inClause("e.client_id", query.clientIds ?? [], params);
-  if (clientClause) conditions.push(clientClause);
+  const clientClause = inClause("ecc_client.client_id", query.clientIds ?? [], params);
+  if (clientClause) {
+    conditions.push(
+      `EXISTS (SELECT 1 FROM employee_client_companies ecc_client WHERE ecc_client.employee_id = e.id AND ${clientClause})`,
+    );
+  }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const from = `FROM employees e`;
@@ -856,11 +883,11 @@ export async function listEmployeesGlobal(query: EmployeesGlobalQuery): Promise<
 /**
  * Registers an employee directly (not via a timesheet import) — the
  * Colaboradores cadastro's "Cadastrar" action. Errors if a colaborador with
- * this CPF already exists for this cliente (regardless of empresa) — the
- * caller is expected to have already checked for that (e.g. via
- * `findEmployeeInClientByAttempts`) and offered "vincular a esta empresa"
- * on the *existing* record instead of getting here; this is a safety net,
- * not the primary UX for that case.
+ * this CPF already exists at all (globally — CPF is one person, period) —
+ * the caller is expected to have already checked for that (e.g. via
+ * `findEmployeeAnywhereByAttempts`) and offered "vincular a este
+ * cliente/empresa" on the *existing* record instead of getting here; this
+ * is a safety net, not the primary UX for that case.
  */
 export async function createEmployeeManual(
   clientId: number,
@@ -883,21 +910,14 @@ export async function createEmployeeManual(
     throw new Error("Esse cliente não está vinculado à empresa selecionada.");
   }
 
-  const existing = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE client_id = $1 AND cpf = $2", [
-    clientId,
-    normalizedCpf,
-  ]);
+  const existing = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1", [normalizedCpf]);
   if (existing.length > 0) {
-    throw new Error("Já existe um colaborador com esse CPF para esse cliente.");
+    throw new Error("Já existe um colaborador com esse CPF.");
   }
 
-  const result = await db.execute("INSERT INTO employees (client_id, name, cpf) VALUES ($1, $2, $3)", [
-    clientId,
-    name.trim(),
-    normalizedCpf,
-  ]);
+  const result = await db.execute("INSERT INTO employees (name, cpf) VALUES ($1, $2)", [name.trim(), normalizedCpf]);
   const employeeId = result.lastInsertId as number;
-  await linkEmployeeToCompany(employeeId, companyId, matricula);
+  await linkEmployeeToClientCompany(employeeId, clientId, companyId, matricula);
   return employeeId;
 }
 
@@ -909,68 +929,78 @@ export async function getEmployee(id: number): Promise<EmployeeRow> {
 }
 
 /**
- * Links `employeeId` to `companyId` — creates the colaborador's presence
- * under that empresa if it doesn't exist yet, or just updates the matrícula
- * if it does (an existing link is not an error: the payment-import
- * "vincular colaborador" flow can call this repeatedly for several rows
- * under the same empresa). Used both by `createEmployeeManual` (for the
- * empresa picked at creation) and directly, for the "colaborador já existe
- * sob outra empresa — vincular também?" confirmation
- * (`findEmployeeInClientByAttempts`'s caller).
+ * Links `employeeId` to the (`clientId`, `companyId`) pair — creates the
+ * colaborador's presence there if it doesn't exist yet, or just updates the
+ * matrícula if it does (an existing link is not an error: the
+ * payment-import "vincular colaborador" flow can call this repeatedly for
+ * several rows under the same pair). Used both by `createEmployeeManual`
+ * (for the pair picked at creation) and directly, for the "colaborador já
+ * existe — vincular também?" confirmation
+ * (`findEmployeeAnywhereByAttempts`'s caller).
  */
-export async function linkEmployeeToCompany(
+export async function linkEmployeeToClientCompany(
   employeeId: number,
+  clientId: number,
   companyId: number,
   matricula: string | null = null,
 ): Promise<void> {
   const db = await getDb();
+  const link = await db.select<{ clientId: number }[]>(
+    "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
+    [clientId, companyId],
+  );
+  if (link.length === 0) {
+    throw new Error("Esse cliente não está vinculado à empresa selecionada.");
+  }
+
   await db.execute(
-    `INSERT INTO employee_companies (employee_id, company_id, matricula) VALUES ($1, $2, $3)
-     ON CONFLICT (employee_id, company_id) DO UPDATE SET matricula = excluded.matricula`,
-    [employeeId, companyId, matricula?.trim() || null],
+    `INSERT INTO employee_client_companies (employee_id, client_id, company_id, matricula) VALUES ($1, $2, $3, $4)
+     ON CONFLICT (employee_id, client_id, company_id) DO UPDATE SET matricula = excluded.matricula`,
+    [employeeId, clientId, companyId, matricula?.trim() || null],
   );
 }
 
-/** Just the matrícula for one of a colaborador's empresa links — the rest of `employee_companies` isn't user-editable after creation (the link itself is added/removed via `linkEmployeeToCompany`/`unlinkEmployeeCompany`). */
-export async function updateEmployeeCompanyMatricula(
+/** Just the matrícula for one of a colaborador's (cliente, empresa) links — the rest of `employee_client_companies` isn't user-editable after creation (the link itself is added/removed via `linkEmployeeToClientCompany`/`unlinkEmployeeClientCompany`). */
+export async function updateEmployeeClientCompanyMatricula(
   employeeId: number,
+  clientId: number,
   companyId: number,
   matricula: string | null,
 ): Promise<void> {
   const db = await getDb();
-  await db.execute("UPDATE employee_companies SET matricula = $1 WHERE employee_id = $2 AND company_id = $3", [
-    matricula?.trim() || null,
-    employeeId,
-    companyId,
-  ]);
+  await db.execute(
+    "UPDATE employee_client_companies SET matricula = $1 WHERE employee_id = $2 AND client_id = $3 AND company_id = $4",
+    [matricula?.trim() || null, employeeId, clientId, companyId],
+  );
 }
 
 /**
- * Removes one of a colaborador's empresa links — refuses to drop the last
- * one, since a colaborador with zero empresa links can't be resolved by any
- * future import (every import path requires a `companyId`).
+ * Removes one of a colaborador's (cliente, empresa) links — refuses to drop
+ * the last one, since a colaborador with zero links can't be resolved by
+ * any future import (every import path requires a resolved cliente+empresa
+ * pair).
  */
-export async function unlinkEmployeeCompany(employeeId: number, companyId: number): Promise<void> {
+export async function unlinkEmployeeClientCompany(employeeId: number, clientId: number, companyId: number): Promise<void> {
   const db = await getDb();
-  const count = await db.select<{ n: number }[]>("SELECT COUNT(*) AS n FROM employee_companies WHERE employee_id = $1", [
-    employeeId,
-  ]);
+  const count = await db.select<{ n: number }[]>(
+    "SELECT COUNT(*) AS n FROM employee_client_companies WHERE employee_id = $1",
+    [employeeId],
+  );
   if ((count[0]?.n ?? 0) <= 1) {
-    throw new Error("O colaborador precisa estar vinculado a pelo menos uma empresa.");
+    throw new Error("O colaborador precisa estar vinculado a pelo menos um cliente/empresa.");
   }
-  await db.execute("DELETE FROM employee_companies WHERE employee_id = $1 AND company_id = $2", [
-    employeeId,
-    companyId,
-  ]);
+  await db.execute(
+    "DELETE FROM employee_client_companies WHERE employee_id = $1 AND client_id = $2 AND company_id = $3",
+    [employeeId, clientId, companyId],
+  );
 }
 
 /**
- * Updates name/CPF only — client isn't editable here, since a colaborador
- * is really "this person at this client"; moving them to a different one is
- * conceptually a new colaborador, not an edit (see `moveEmployeeToClient`).
- * Empresa links and their matrículas are managed separately
- * (`linkEmployeeToCompany`/`unlinkEmployeeCompany`/`updateEmployeeCompanyMatricula`)
- * since there can be more than one.
+ * Updates name/CPF only — every (cliente, empresa) link and its matrícula
+ * is managed separately (`linkEmployeeToClientCompany`/
+ * `unlinkEmployeeClientCompany`/`updateEmployeeClientCompanyMatricula`)
+ * since there can be more than one, and none of them are "the" identity
+ * anymore — CPF alone is (see 0072_employee_client_link.sql).
  */
 export async function updateEmployee(id: number, name: string, cpf: string): Promise<void> {
   const db = await getDb();
@@ -979,17 +1009,15 @@ export async function updateEmployee(id: number, name: string, cpf: string): Pro
     throw new Error("CPF deve ter 11 dígitos.");
   }
 
-  const current = await db.select<{ clientId: number }[]>("SELECT client_id AS clientId FROM employees WHERE id = $1", [
-    id,
-  ]);
+  const current = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE id = $1", [id]);
   if (current.length === 0) throw new Error("Colaborador não encontrado.");
 
-  const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM employees WHERE client_id = $1 AND cpf = $2 AND id != $3",
-    [current[0].clientId, normalizedCpf, id],
-  );
+  const existing = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1 AND id != $2", [
+    normalizedCpf,
+    id,
+  ]);
   if (existing.length > 0) {
-    throw new Error("Já existe um colaborador com esse CPF para esse cliente.");
+    throw new Error("Já existe um colaborador com esse CPF.");
   }
 
   await db.execute("UPDATE employees SET name = $1, cpf = $2 WHERE id = $3", [name.trim(), normalizedCpf, id]);
@@ -1000,9 +1028,9 @@ export async function updateEmployee(id: number, name: string, cpf: string): Pro
  * (imports, plus their day_records/punches), turnos de pagamento
  * (payment_shifts — the real rows, not the usual soft `deleted_at`, since
  * there's no colaborador left for a soft-deleted row to still belong to),
- * apelidos, and empresa links. Cascades done by hand rather than relying on
- * `ON DELETE CASCADE`, same reasoning as `deleteImport` — sqlite only
- * enforces foreign keys when `PRAGMA foreign_keys = ON` was set on the
+ * apelidos, and cliente/empresa links. Cascades done by hand rather than
+ * relying on `ON DELETE CASCADE`, same reasoning as `deleteImport` — sqlite
+ * only enforces foreign keys when `PRAGMA foreign_keys = ON` was set on the
  * connection, which isn't guaranteed here. Irreversible.
  */
 export async function deleteEmployee(employeeId: number): Promise<void> {
@@ -1020,76 +1048,35 @@ export async function deleteEmployee(employeeId: number): Promise<void> {
   await db.execute("DELETE FROM imports WHERE employee_id = $1", [employeeId]);
   await db.execute("DELETE FROM payment_shifts WHERE employee_id = $1", [employeeId]);
   await db.execute("DELETE FROM employee_aliases WHERE employee_id = $1", [employeeId]);
-  await db.execute("DELETE FROM employee_companies WHERE employee_id = $1", [employeeId]);
+  await db.execute("DELETE FROM employee_client_companies WHERE employee_id = $1", [employeeId]);
   await db.execute("DELETE FROM employees WHERE id = $1", [employeeId]);
 }
 
 /**
- * Moves a colaborador's home cadastro to a different cliente, linking them
- * to `newCompanyId` there (creating the link if needed) — safe to do after
- * the client/company snapshot migration (0060/0061): every already-imported
- * `payment_shifts`/`imports` row keeps its own snapshotted `client_id`/
- * `company_id`, so this never rewrites historical data, only where FUTURE
- * imports for this employee resolve to. Used by `ImportPaymentsPage`'s
- * "Mover para Cliente Y" action, when a routing rule now resolves an
- * already-registered employee to a different cliente than the one they're
- * currently under.
- *
- * Existing empresa links from the old cliente are left as-is (not carried
- * over meaningfully, but not deleted either) — this only ever fires for a
- * genuine cross-cliente move, a rare manual action, so erring toward not
- * silently discarding data is the safer default; revisit if that ever
- * proves confusing in the colaborador's empresa list.
- */
-export async function moveEmployeeToClient(employeeId: number, newClientId: number, newCompanyId: number): Promise<void> {
-  const db = await getDb();
-  const current = await db.select<{ cpf: string }[]>("SELECT cpf FROM employees WHERE id = $1", [employeeId]);
-  if (current.length === 0) throw new Error("Colaborador não encontrado.");
-
-  const link = await db.select<{ clientId: number }[]>(
-    "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
-    [newClientId, newCompanyId],
-  );
-  if (link.length === 0) throw new Error("Esse cliente não está vinculado à empresa selecionada.");
-
-  // Same collision guard as `updateEmployee` — moving into a cliente that
-  // already has a different colaborador with this CPF would silently create
-  // two rows sharing an identity there.
-  const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM employees WHERE client_id = $1 AND cpf = $2 AND id != $3",
-    [newClientId, current[0].cpf, employeeId],
-  );
-  if (existing.length > 0) {
-    throw new Error("Já existe um colaborador com esse CPF para esse cliente.");
-  }
-
-  await db.execute("UPDATE employees SET client_id = $1 WHERE id = $2", [newClientId, employeeId]);
-  await linkEmployeeToCompany(employeeId, newCompanyId);
-}
-
-/**
- * Opt-in counterpart to `moveEmployeeToClient` — that one is forward-only
- * on purpose (0060/0061's whole point), so this is what actually rewrites
- * the snapshotted `client_id`/`company_id` on every already-imported
- * `payment_shifts`/`imports` row for this colaborador, when the user
- * explicitly asks the move to also apply to history instead of just future
- * imports. Always called alongside `moveEmployeeToClient`, never alone —
- * leaving the employee's own cadastro pointed at one cliente while its
- * history stays snapshotted to another is exactly the confusing state
- * 0060/0061 introduced snapshotting to avoid by default.
+ * Opt-in — rewrites the snapshotted `client_id`/`company_id` on every
+ * already-imported `payment_shifts`/`imports` row for this colaborador to a
+ * given (cliente, empresa) pair, when the user explicitly asks a newly
+ * linked pair (`linkEmployeeToClientCompany`) to also apply to already-
+ * imported history instead of just future imports. Independent of the
+ * link/identity model — this never touches `employees` or
+ * `employee_client_companies` itself, only the snapshot 0060/0061 added so
+ * that linking a colaborador to a new pair is forward-only by default (a
+ * colaborador can be legitimately linked to several pairs at once now, so
+ * there's no single "right" cliente/empresa to retroactively force
+ * history into — this stays a deliberate, explicit choice).
  *
  * `periodStart`/`periodEnd` mirror ImportPaymentsPage's own "Período
  * (opcional)" filter — each bound independently optional, same convention
  * used everywhere else that filter is read (e.g. `workDate < periodStart`
- * checks around line 854). Both blank moves the colaborador's ENTIRE
- * history; either one set scopes the move to just what falls in that
- * window — `payment_shifts` by its own `work_date`, `imports` by whether
- * its own `period_start`/`period_end` overlaps the given window at all
- * (an import covers a date range, not a single day, so "contained" would
- * be too strict — any overlap means at least part of it belongs to this
+ * checks around line 854). Both blank reassigns the colaborador's ENTIRE
+ * history; either one set scopes it to just what falls in that window —
+ * `payment_shifts` by its own `work_date`, `imports` by whether its own
+ * `period_start`/`period_end` overlaps the given window at all (an import
+ * covers a date range, not a single day, so "contained" would be too
+ * strict — any overlap means at least part of it belongs to this
  * reprocessing run).
  */
-export async function moveEmployeeHistoryToClient(
+export async function reassignEmployeeHistoryToClientCompany(
   employeeId: number,
   newClientId: number,
   newCompanyId: number,
@@ -1413,13 +1400,12 @@ export async function findDuplicateFiles(
  * Looks for an existing import of the same employee at the same client
  * **and empresa** whose period overlaps the given range — the "you already
  * imported this person for this period" check, independent of which file it
- * came from. Scoped by the import's own `company_id` snapshot (not
- * `employees` — since 0071_employee_company_link.sql a colaborador can be
- * linked to more than one empresa, so it no longer picks out "which
- * empresa" on its own): a cliente linked to more than one empresa can have
- * separate imports per empresa sharing the same colaborador/CPF — scoping
- * only by client would flag a false conflict against the *other* empresa's
- * import.
+ * came from. Scoped by the import's own `client_id`/`company_id` snapshot
+ * (not `employees` — since 0072_employee_client_link.sql a colaborador can
+ * be linked to more than one cliente and more than one empresa, so neither
+ * picks out "which pair" on its own): the same colaborador can have
+ * separate imports per pair — scoping only by cpf would flag a false
+ * conflict against a *different* pair's import.
  */
 export async function findConflictingImport(
   employeeCpf: string,
@@ -1437,7 +1423,7 @@ export async function findConflictingImport(
            i.imported_at AS importedAt
     FROM imports i
     JOIN employees e ON e.id = i.employee_id
-    WHERE e.cpf = $1 AND e.client_id = $2 AND i.company_id = $3
+    WHERE e.cpf = $1 AND i.client_id = $2 AND i.company_id = $3
       AND i.period_start <= $5 AND i.period_end >= $4
     ORDER BY i.imported_at DESC
     LIMIT 1
@@ -3001,33 +2987,30 @@ export interface EmployeeImportRow {
 
 /**
  * Upsert, not a plain bulk insert — a row here can now match an
- * already-registered colaborador under a *different* empresa (the whole
- * point of 0071_employee_company_link.sql), in which case this links
- * `companyId` to that existing colaborador instead of creating a duplicate
- * person. ImportEmployeesPage is expected to have already surfaced that
- * distinction to the user (new colaborador vs. "vincular a esta empresa")
- * before calling this — see `findEmployeeInClientByAttempts`.
+ * already-registered colaborador under a *different* cliente and/or empresa
+ * (the whole point of 0071/0072_employee_*_link.sql), in which case this
+ * links the (clientId, companyId) pair to that existing colaborador instead
+ * of creating a duplicate person. ImportEmployeesPage is expected to have
+ * already surfaced that distinction to the user (new colaborador vs.
+ * "vincular a este cliente/empresa") before calling this — see
+ * `findEmployeeAnywhereByAttempts`.
  */
 export async function createEmployeesFromImport(rows: EmployeeImportRow[]): Promise<void> {
   const db = await getDb();
   for (const row of rows) {
     const normalizedCpf = normalizeCpf(row.cpf);
-    const existing = await db.select<{ id: number }[]>(
-      "SELECT id FROM employees WHERE client_id = $1 AND cpf = $2",
-      [row.clientId, normalizedCpf],
-    );
+    const existing = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1", [normalizedCpf]);
     let employeeId: number;
     if (existing.length > 0) {
       employeeId = existing[0].id;
     } else {
-      const result = await db.execute("INSERT INTO employees (client_id, name, cpf) VALUES ($1, $2, $3)", [
-        row.clientId,
+      const result = await db.execute("INSERT INTO employees (name, cpf) VALUES ($1, $2)", [
         row.name.trim(),
         normalizedCpf,
       ]);
       employeeId = result.lastInsertId as number;
     }
-    await linkEmployeeToCompany(employeeId, row.companyId, row.matricula);
+    await linkEmployeeToClientCompany(employeeId, row.clientId, row.companyId, row.matricula);
   }
 }
 
@@ -3047,52 +3030,66 @@ export async function listEmployeeAliases(employeeId: number): Promise<EmployeeA
 }
 
 /**
- * Whether `alias` is already registered to some colaborador within
- * `clientId` — `null` when it's free. Scoped per client, same as CPF
- * uniqueness (the same alias text can be reused across different clients,
- * just not within the same client — since 0071_employee_company_link.sql a
- * colaborador is one person per client regardless of how many empresas
- * they're linked to, so there's no longer a per-empresa split to also scope
- * by). Case-insensitive, same ASCII-only limitation already accepted for
- * name search elsewhere.
+ * Whether `alias` is already registered to some OTHER colaborador who
+ * shares at least one (cliente, empresa) pair with `employeeId` — `null`
+ * when it's free. Scoped to shared pairs, not globally: since
+ * 0072_employee_client_link.sql a colaborador can be linked to several
+ * clientes and empresas, and two colaboradores who never share a single
+ * (cliente, empresa) pair can never actually be confused with each other by
+ * `findEmployeeByAttempts` (always scoped to one specific pair) — so
+ * letting them coincidentally share a raw name/alias is harmless. A
+ * collision only matters where it could actually cause a wrong match.
+ * Case-insensitive, same ASCII-only limitation already accepted for name
+ * search elsewhere.
  */
 export async function findEmployeeAliasOwner(
-  clientId: number,
+  employeeId: number,
   alias: string,
 ): Promise<{ id: number; name: string } | null> {
   const db = await getDb();
   const rows = await db.select<{ id: number; name: string }[]>(
-    `SELECT e.id, e.name
+    `SELECT DISTINCT e.id, e.name
      FROM employee_aliases ea
      JOIN employees e ON e.id = ea.employee_id
-     WHERE e.client_id = $1 AND lower(ea.alias) = lower($2)`,
-    [clientId, alias.trim()],
+     WHERE lower(ea.alias) = lower($1)
+       AND e.id != $2
+       AND EXISTS (
+         SELECT 1 FROM employee_client_companies mine
+         JOIN employee_client_companies theirs
+           ON theirs.client_id = mine.client_id AND theirs.company_id = mine.company_id
+         WHERE mine.employee_id = $2 AND theirs.employee_id = e.id
+       )`,
+    [alias.trim(), employeeId],
   );
   return rows[0] ?? null;
 }
 
 /**
  * Registers `alias` for `employeeId` — throws a message naming the current
- * owner if it's already someone else's within the same client. Already
- * registered to this same employee is a silent no-op, not an error, since
- * the payment-import "vincular colaborador" flow can call this repeatedly
- * for several rows that share the same raw name.
+ * owner if it's already someone else's within a shared (cliente, empresa)
+ * pair (see `findEmployeeAliasOwner`). Already registered to this same
+ * employee is a silent no-op, not an error, since the payment-import
+ * "vincular colaborador" flow can call this repeatedly for several rows
+ * that share the same raw name.
  */
 export async function addEmployeeAlias(employeeId: number, alias: string): Promise<void> {
   const db = await getDb();
   const trimmed = alias.trim();
   if (!trimmed) throw new Error("Nome não pode ser vazio.");
 
-  const employeeRows = await db.select<{ clientId: number }[]>("SELECT client_id AS clientId FROM employees WHERE id = $1", [
-    employeeId,
-  ]);
+  const employeeRows = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE id = $1", [employeeId]);
   if (employeeRows.length === 0) throw new Error("Colaborador não encontrado.");
 
-  const owner = await findEmployeeAliasOwner(employeeRows[0].clientId, trimmed);
-  if (owner && owner.id !== employeeId) {
+  const owner = await findEmployeeAliasOwner(employeeId, trimmed);
+  if (owner) {
     throw new Error(`Esse nome já está vinculado a ${owner.name}.`);
   }
-  if (owner) return;
+
+  const alreadyMine = await db.select<{ id: number }[]>(
+    "SELECT id FROM employee_aliases WHERE employee_id = $1 AND lower(alias) = lower($2)",
+    [employeeId, trimmed],
+  );
+  if (alreadyMine.length > 0) return;
 
   await db.execute("INSERT INTO employee_aliases (employee_id, alias) VALUES ($1, $2)", [employeeId, trimmed]);
 }
@@ -3279,14 +3276,14 @@ export async function findRoleByName(companyId: number, text: string | null): Pr
  * *same* employee (an AND); the first tentativa that finds someone wins (an
  * OR across tentativas). A tentativa is skipped outright if any of its
  * fields has no raw value for this row — there's nothing to match on.
- * `matricula` lives on `employee_companies` now (per-empresa), not
- * `employees`, so its condition is an `EXISTS` against `ec2` rather than a
- * plain column comparison — `skipMatricula` lets a caller that has no
- * empresa context at all (`findEmployeeInClientByAttempts`) skip matrícula
- * tentativas instead of matching against every empresa's matrícula
- * indiscriminately. Returns the first matching employee's id, hydrated by
- * the caller — shared by `findEmployeeByAttempts`,
- * `findEmployeeInClientByAttempts`, and `findEmployeeAnywhereByAttempts`.
+ * `matricula` lives on `employee_client_companies` now (per cliente+empresa
+ * pair), not `employees` — `matriculaCondition` builds that field's SQL
+ * condition given a `$n` placeholder and the tentativa's `caseInsensitive`
+ * flag, since the two callers need different scopes: `findEmployeeByAttempts`
+ * already joined one specific pair (`ecc`) so it can compare that column
+ * directly, while `findEmployeeAnywhereByAttempts` has no pair in scope and
+ * needs an `EXISTS` across all of an employee's pairs instead. Returns the
+ * first matching employee's id, hydrated by the caller.
  */
 async function findEmployeeIdByAttempts(
   db: Database,
@@ -3294,11 +3291,10 @@ async function findEmployeeIdByAttempts(
   baseParams: (string | number)[],
   attempts: IdentifierAttempt[],
   values: { cpf: string | null; matricula: string | null; nome: string | null },
-  skipMatricula: boolean,
+  matriculaCondition: (placeholder: string, caseInsensitive: boolean) => string,
 ): Promise<number | null> {
   for (const attempt of attempts) {
     if (attempt.fields.length === 0) continue;
-    if (skipMatricula && attempt.fields.includes("matricula")) continue;
     const conditions: string[] = [];
     const params: (string | number)[] = [...baseParams];
     let skip = false;
@@ -3320,10 +3316,7 @@ async function findEmployeeIdByAttempts(
           break;
         }
         params.push(trimmed);
-        const cmp = attempt.caseInsensitive
-          ? `lower(ec2.matricula) = lower($${params.length})`
-          : `ec2.matricula = $${params.length}`;
-        conditions.push(`EXISTS (SELECT 1 FROM employee_companies ec2 WHERE ec2.employee_id = e.id AND ${cmp})`);
+        conditions.push(matriculaCondition(`$${params.length}`, attempt.caseInsensitive));
       } else {
         const trimmed = values.nome?.trim();
         if (!trimmed) {
@@ -3359,17 +3352,19 @@ async function findEmployeeIdByAttempts(
  * to** `companyId` — by walking a template's `identifierPriority` (see
  * `findEmployeeIdByAttempts`). Both are required, not just `clientId`: a
  * cliente can be linked to more than one empresa (`client_companies`), and
- * this only matches a colaborador who's actually linked to `companyId` via
- * `employee_companies` — scoping only by client would match a colaborador
- * linked to a *different* empresa of the same cliente (e.g. a routing
- * rule's "senão" pointing at the same cliente as a condition rule, but a
- * different empresa), silently misrouting the shift to that other empresa.
+ * this only matches a colaborador who's actually linked to that exact
+ * (cliente, empresa) pair via `employee_client_companies` — scoping only by
+ * cliente would match a colaborador linked to a *different* empresa of the
+ * same cliente (e.g. a routing rule's "senão" pointing at the same cliente
+ * as a condition rule, but a different empresa), silently misrouting the
+ * shift to that other empresa.
  *
  * Returns `null` both when no colaborador matches at all, and when one
- * matches by `clientId` but isn't linked to `companyId` yet — the caller
- * can't tell those apart from this alone; use
- * `findEmployeeInClientByAttempts` to distinguish "genuinely new person" from
- * "existing person, new empresa" before deciding whether to create or link.
+ * matches by `clientId` but isn't linked to that specific `companyId` yet —
+ * the caller can't tell those apart from this alone; use
+ * `findEmployeeAnywhereByAttempts` to distinguish "genuinely new person" from
+ * "existing person, new cliente/empresa" before deciding whether to create
+ * or link.
  */
 export async function findEmployeeByAttempts(
   clientId: number,
@@ -3380,39 +3375,10 @@ export async function findEmployeeByAttempts(
   const db = await getDb();
   const select = `SELECT e.id
     FROM employees e
-    JOIN employee_companies ec ON ec.employee_id = e.id AND ec.company_id = $2
-    WHERE e.client_id = $1`;
-  const id = await findEmployeeIdByAttempts(db, select, [clientId, companyId], attempts, values, false);
-  if (id === null) return null;
-  const rows = await hydrateEmployeeRows(db, [id]);
-  return rows[0] ?? null;
-}
-
-/**
- * Same idea as `findEmployeeByAttempts`, but scoped to just `clientId` — no
- * empresa requirement at all. Used when a row didn't resolve under the
- * routed empresa, to check "does this person already exist as a colaborador
- * of this cliente, just not (yet) linked to this empresa?" before offering
- * to link them (`linkEmployeeToCompany`) instead of silently registering a
- * second, duplicate colaborador — the exact bug 0071_employee_company_link.sql
- * fixed at the data level. Matrícula tentativas are skipped (a matrícula is
- * issued per-empresa, so it can't identify someone across an empresa link
- * that doesn't exist yet) — only cpf/nome tentativas apply.
- */
-export async function findEmployeeInClientByAttempts(
-  clientId: number,
-  attempts: IdentifierAttempt[],
-  values: { cpf: string | null; nome: string | null },
-): Promise<EmployeeRow | null> {
-  const db = await getDb();
-  const select = `SELECT e.id FROM employees e WHERE e.client_id = $1`;
-  const id = await findEmployeeIdByAttempts(
-    db,
-    select,
-    [clientId],
-    attempts,
-    { ...values, matricula: null },
-    true,
+    JOIN employee_client_companies ecc ON ecc.employee_id = e.id AND ecc.client_id = $1 AND ecc.company_id = $2
+    WHERE 1=1`;
+  const id = await findEmployeeIdByAttempts(db, select, [clientId, companyId], attempts, values, (p, ci) =>
+    ci ? `lower(ecc.matricula) = lower(${p})` : `ecc.matricula = ${p}`,
   );
   if (id === null) return null;
   const rows = await hydrateEmployeeRows(db, [id]);
@@ -3421,12 +3387,18 @@ export async function findEmployeeInClientByAttempts(
 
 /**
  * Same identifier-matching algorithm as `findEmployeeByAttempts`, but with
- * no client/company scope at all — used only after a scoped search already
- * failed, to answer "does this person exist somewhere else?" (see
- * `moveEmployeeToClient`). Never used to resolve who a payment row actually
- * belongs to during import — that always stays scoped to the route's own
- * resolved client/empresa, so a coincidental CPF/nome match under an
- * unrelated cliente can never silently misroute a shift.
+ * no cliente/empresa scope at all — used when a row didn't resolve under
+ * the routed pair, to answer "does this person already exist somewhere
+ * else?" (a different cliente, a different empresa of the same cliente, or
+ * both) before offering to link them (`linkEmployeeToClientCompany`)
+ * instead of silently registering a second, duplicate colaborador — the
+ * exact bug 0071/0072_employee_*_link.sql fixed at the data level. Never
+ * used to resolve who a payment row actually belongs to during import —
+ * that always stays scoped to the route's own resolved cliente/empresa
+ * (`findEmployeeByAttempts`), so a coincidental CPF/nome match under an
+ * unrelated pair can never silently misroute a shift. Matrícula tentativas
+ * match against ANY of the employee's existing pairs' matrícula, since
+ * there's no single pair in scope here to compare against directly.
  */
 export async function findEmployeeAnywhereByAttempts(
   attempts: IdentifierAttempt[],
@@ -3434,7 +3406,10 @@ export async function findEmployeeAnywhereByAttempts(
 ): Promise<EmployeeRow | null> {
   const db = await getDb();
   const select = `SELECT e.id FROM employees e WHERE 1=1`;
-  const id = await findEmployeeIdByAttempts(db, select, [], attempts, values, false);
+  const id = await findEmployeeIdByAttempts(db, select, [], attempts, values, (p, ci) => {
+    const cmp = ci ? `lower(ecc.matricula) = lower(${p})` : `ecc.matricula = ${p}`;
+    return `EXISTS (SELECT 1 FROM employee_client_companies ecc WHERE ecc.employee_id = e.id AND ${cmp})`;
+  });
   if (id === null) return null;
   const rows = await hydrateEmployeeRows(db, [id]);
   return rows[0] ?? null;

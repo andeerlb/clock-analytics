@@ -8,16 +8,16 @@ import {
   createEmployeeManual,
   deleteEmployee,
   getEmployee,
-  linkEmployeeToCompany,
+  linkEmployeeToClientCompany,
   listClients,
   listEmployeeAliases,
   removeEmployeeAlias,
-  unlinkEmployeeCompany,
+  unlinkEmployeeClientCompany,
   updateEmployee,
-  updateEmployeeCompanyMatricula,
+  updateEmployeeClientCompanyMatricula,
   type ClientRow,
   type EmployeeAliasRow,
-  type EmployeeCompanyLink,
+  type EmployeeClientCompanyLink,
 } from "../lib/db";
 import { maskCpf } from "../lib/format";
 
@@ -48,13 +48,10 @@ export default function EmployeeFormPage() {
   const [companyId, setCompanyId] = useState(
     prefill?.prefillCompanyId !== undefined ? String(prefill.prefillCompanyId) : "",
   );
-  const [clientName, setClientName] = useState("");
-  // Edit mode only — the numeric clientId (`getEmployee`'s own, not the
-  // `clientId` state above, which stays whatever the create-mode select had
-  // it at) is what the "add empresa" picker below needs to know which
-  // client_companies options are even valid for this colaborador.
-  const [employeeClientId, setEmployeeClientId] = useState<number | null>(null);
-  const [companies, setCompanies] = useState<EmployeeCompanyLink[]>([]);
+  // Edit mode only — every (cliente, empresa) pair this colaborador is
+  // linked to. Unlike the create-mode `clientId`/`companyId` above (a single
+  // starting pair), a colaborador can have any number of these once created.
+  const [links, setLinks] = useState<EmployeeClientCompanyLink[]>([]);
   const [name, setName] = useState(prefill?.prefillName ?? "");
   const [cpf, setCpf] = useState("");
   const [matricula, setMatricula] = useState("");
@@ -67,7 +64,8 @@ export default function EmployeeFormPage() {
   const [aliasBusy, setAliasBusy] = useState(false);
   const [aliasError, setAliasError] = useState<string | null>(null);
 
-  // "Vincular a outra empresa" — edit mode only.
+  // "Vincular a outro cliente/empresa" — edit mode only.
+  const [addClientId, setAddClientId] = useState("");
   const [addCompanyId, setAddCompanyId] = useState("");
   const [addMatricula, setAddMatricula] = useState("");
   const [linkBusy, setLinkBusy] = useState(false);
@@ -100,9 +98,7 @@ export default function EmployeeFormPage() {
         .then((e) => {
           setName(e.name);
           setCpf(maskCpf(e.cpf));
-          setClientName(e.clientName);
-          setEmployeeClientId(e.clientId);
-          setCompanies(e.companies);
+          setLinks(e.links);
         })
         .catch((e) => setError(String(e instanceof Error ? e.message : e)))
         .finally(() => setLoading(false));
@@ -110,19 +106,20 @@ export default function EmployeeFormPage() {
     }
   }, [id, isEditing]);
 
-  async function refreshCompanies() {
-    setCompanies((await getEmployee(Number(id))).companies);
+  async function refreshLinks() {
+    setLinks((await getEmployee(Number(id))).links);
   }
 
-  async function handleAddCompany(e: React.FormEvent) {
+  async function handleAddLink(e: React.FormEvent) {
     e.preventDefault();
     setLinkError(null);
     setLinkBusy(true);
     try {
-      await linkEmployeeToCompany(Number(id), Number(addCompanyId), addMatricula.trim() || null);
+      await linkEmployeeToClientCompany(Number(id), Number(addClientId), Number(addCompanyId), addMatricula.trim() || null);
+      setAddClientId("");
       setAddCompanyId("");
       setAddMatricula("");
-      await refreshCompanies();
+      await refreshLinks();
     } catch (err) {
       setLinkError(String(err instanceof Error ? err.message : err));
     } finally {
@@ -130,38 +127,41 @@ export default function EmployeeFormPage() {
     }
   }
 
-  async function handleRemoveCompany(companyIdToRemove: number) {
+  async function handleRemoveLink(clientIdToRemove: number, companyIdToRemove: number) {
     setLinkError(null);
     try {
-      await unlinkEmployeeCompany(Number(id), companyIdToRemove);
-      setCompanies((prev) => prev.filter((c) => c.companyId !== companyIdToRemove));
+      await unlinkEmployeeClientCompany(Number(id), clientIdToRemove, companyIdToRemove);
+      setLinks((prev) => prev.filter((l) => !(l.clientId === clientIdToRemove && l.companyId === companyIdToRemove)));
     } catch (err) {
       setLinkError(String(err instanceof Error ? err.message : err));
     }
   }
 
-  async function handleMatriculaChange(companyIdToUpdate: number, value: string) {
-    setCompanies((prev) => prev.map((c) => (c.companyId === companyIdToUpdate ? { ...c, matricula: value } : c)));
-  }
-
-  async function handleMatriculaBlur(companyIdToUpdate: number, value: string) {
-    setLinkError(null);
-    try {
-      await updateEmployeeCompanyMatricula(Number(id), companyIdToUpdate, value.trim() || null);
-    } catch (err) {
-      setLinkError(String(err instanceof Error ? err.message : err));
-    }
-  }
-
-  // Companies linked to this colaborador's cliente, minus the ones already
-  // linked to the colaborador — the "vincular a outra empresa" picker's
-  // option list.
-  const availableCompaniesToAdd = useMemo(
-    () =>
-      clients.filter(
-        (c) => c.id === employeeClientId && !companies.some((linked) => linked.companyId === c.companyId),
+  async function handleMatriculaChange(clientIdToUpdate: number, companyIdToUpdate: number, value: string) {
+    setLinks((prev) =>
+      prev.map((l) =>
+        l.clientId === clientIdToUpdate && l.companyId === companyIdToUpdate ? { ...l, matricula: value } : l,
       ),
-    [clients, employeeClientId, companies],
+    );
+  }
+
+  async function handleMatriculaBlur(clientIdToUpdate: number, companyIdToUpdate: number, value: string) {
+    setLinkError(null);
+    try {
+      await updateEmployeeClientCompanyMatricula(Number(id), clientIdToUpdate, companyIdToUpdate, value.trim() || null);
+    } catch (err) {
+      setLinkError(String(err instanceof Error ? err.message : err));
+    }
+  }
+
+  // `clients` has one row per (client, company) link — same pattern the
+  // create-mode Cliente/Empresa selects already use. The "add vínculo"
+  // picker narrows to whichever cliente is currently selected there, minus
+  // pairs already linked to this colaborador.
+  const addClientCompanies = useMemo(() => clients.filter((c) => String(c.id) === addClientId), [clients, addClientId]);
+  const availableLinksToAdd = useMemo(
+    () => addClientCompanies.filter((c) => !links.some((l) => l.clientId === c.id && l.companyId === c.companyId)),
+    [addClientCompanies, links],
   );
 
   async function handleAddAlias(e: React.FormEvent) {
@@ -244,8 +244,8 @@ export default function EmployeeFormPage() {
       </div>
       <p className="page-subtitle">
         {isEditing
-          ? "Cliente não pode ser alterado aqui — mudar de cliente é, na prática, um colaborador diferente. As empresas vinculadas ficam na seção abaixo."
-          : "O CPF é único por cliente — o mesmo CPF pode existir para clientes diferentes."}
+          ? "O CPF é único, globalmente — o mesmo colaborador pode estar vinculado a vários clientes e empresas, gerenciados na seção abaixo."
+          : "O CPF é único, globalmente — o mesmo CPF não pode ser cadastrado duas vezes; depois de criado, o colaborador pode ser vinculado a outros clientes/empresas na tela de edição."}
       </p>
 
       {error && <div className="error-box">{error}</div>}
@@ -255,12 +255,7 @@ export default function EmployeeFormPage() {
       ) : (
         <div className="card" style={{ maxWidth: "32rem" }}>
           <form onSubmit={handleSubmit}>
-            {isEditing ? (
-              <div className="field" style={{ marginBottom: "1rem" }}>
-                <label>Cliente</label>
-                <p className="muted" style={{ margin: 0 }}>{clientName}</p>
-              </div>
-            ) : (
+            {!isEditing && (
               <div className="field-row" style={{ marginBottom: "1rem" }}>
                 <div className="field" style={{ flex: "1 1 200px" }}>
                   <label htmlFor="employee-client">Cliente</label>
@@ -355,26 +350,38 @@ export default function EmployeeFormPage() {
 
       {!loading && isEditing && (
         <div className="card" style={{ maxWidth: "32rem", marginTop: "1.2rem" }}>
-          <h3 style={{ marginTop: 0 }}>Empresas vinculadas</h3>
+          <h3 style={{ marginTop: 0 }}>Clientes e empresas vinculados</h3>
           <p className="page-subtitle" style={{ marginTop: 0 }}>
-            Um colaborador pode estar vinculado a mais de uma empresa desse cliente (ex.: contratado
-            por duas empresas diferentes que atendem o mesmo cliente) — cada vínculo tem sua própria
-            matrícula, já que ela é emitida pela folha de pagamento de cada empresa.
+            Um colaborador pode estar vinculado a mais de um cliente e, para cada cliente, a mais de
+            uma empresa (ex.: contratado por duas empresas diferentes que atendem o mesmo cliente) —
+            cada vínculo tem sua própria matrícula, já que ela é emitida pela folha de pagamento de
+            cada empresa.
           </p>
 
           {linkError && <div className="error-box">{linkError}</div>}
 
           <div className="file-list" style={{ marginBottom: "0.8rem" }}>
-            {companies.map((c) => (
-              <div className="file-row" key={c.companyId}>
+            {links.map((l) => (
+              <div className="file-row" key={`${l.clientId}-${l.companyId}`}>
                 <div className="file-row-info">
-                  <div className="file-name">{c.companyName}</div>
+                  <div className="file-name">
+                    <span className="muted" style={{ fontWeight: 400 }}>
+                      Empresa:{" "}
+                    </span>
+                    {l.companyName}
+                  </div>
+                  <div className="file-name">
+                    <span className="muted" style={{ fontWeight: 400 }}>
+                      Cliente:{" "}
+                    </span>
+                    {l.clientName}
+                  </div>
                 </div>
                 <input
                   type="text"
-                  value={c.matricula ?? ""}
-                  onChange={(e) => handleMatriculaChange(c.companyId, e.target.value)}
-                  onBlur={(e) => handleMatriculaBlur(c.companyId, e.target.value)}
+                  value={l.matricula ?? ""}
+                  onChange={(e) => handleMatriculaChange(l.clientId, l.companyId, e.target.value)}
+                  onBlur={(e) => handleMatriculaBlur(l.clientId, l.companyId, e.target.value)}
                   placeholder="Matrícula (opcional)"
                   style={{ width: "10rem" }}
                 />
@@ -383,9 +390,9 @@ export default function EmployeeFormPage() {
                     type="button"
                     className="ghost"
                     style={{ padding: "0.3rem" }}
-                    onClick={() => handleRemoveCompany(c.companyId)}
-                    disabled={companies.length <= 1}
-                    title={companies.length <= 1 ? "O colaborador precisa de ao menos uma empresa" : "Remover vínculo"}
+                    onClick={() => handleRemoveLink(l.clientId, l.companyId)}
+                    disabled={links.length <= 1}
+                    title={links.length <= 1 ? "O colaborador precisa de ao menos um vínculo" : "Remover vínculo"}
                     aria-label="Remover vínculo"
                   >
                     <X size={14} />
@@ -395,34 +402,49 @@ export default function EmployeeFormPage() {
             ))}
           </div>
 
-          {availableCompaniesToAdd.length > 0 && (
-            <form onSubmit={handleAddCompany} style={{ display: "flex", gap: "0.5rem" }}>
-              <select
-                value={addCompanyId}
-                onChange={(e) => setAddCompanyId(e.target.value)}
-                required
-                style={{ flex: "1 1 auto" }}
-              >
-                <option value="">Vincular a outra empresa...</option>
-                {availableCompaniesToAdd.map((c) => (
-                  <option key={c.companyId} value={c.companyId}>
-                    {c.companyName}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="text"
-                value={addMatricula}
-                onChange={(e) => setAddMatricula(e.target.value)}
-                placeholder="Matrícula (opcional)"
-                style={{ width: "10rem" }}
-              />
-              <button type="submit" className="secondary" disabled={linkBusy || !addCompanyId}>
-                <Plus size={14} style={{ marginRight: "0.3rem" }} />
-                Vincular
-              </button>
-            </form>
-          )}
+          <form onSubmit={handleAddLink} style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+            <select
+              value={addClientId}
+              onChange={(e) => {
+                setAddClientId(e.target.value);
+                setAddCompanyId("");
+              }}
+              required
+              style={{ flex: "1 1 160px" }}
+            >
+              <option value="">Vincular a outro cliente...</option>
+              {Array.from(new Map(clients.map((c) => [c.id, c])).values()).map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <select
+              value={addCompanyId}
+              onChange={(e) => setAddCompanyId(e.target.value)}
+              required
+              disabled={!addClientId}
+              style={{ flex: "1 1 160px" }}
+            >
+              <option value="">Empresa...</option>
+              {availableLinksToAdd.map((c) => (
+                <option key={c.companyId} value={c.companyId}>
+                  {c.companyName}
+                </option>
+              ))}
+            </select>
+            <input
+              type="text"
+              value={addMatricula}
+              onChange={(e) => setAddMatricula(e.target.value)}
+              placeholder="Matrícula (opcional)"
+              style={{ width: "10rem" }}
+            />
+            <button type="submit" className="secondary" disabled={linkBusy || !addClientId || !addCompanyId}>
+              <Plus size={14} style={{ marginRight: "0.3rem" }} />
+              Vincular
+            </button>
+          </form>
         </div>
       )}
 
@@ -433,7 +455,8 @@ export default function EmployeeFormPage() {
             Outras grafias do nome desse colaborador que podem aparecer em arquivos de pagamento
             (ex.: "Anderson Lucas" para "Anderson Lucas Babinski") — consideradas junto com o nome
             cadastrado ao buscar o colaborador durante a importação. Um nome só pode estar
-            vinculado a um colaborador por vez, dentro do mesmo cliente.
+            vinculado a um colaborador por vez, entre os clientes/empresas em que ele já está
+            vinculado.
           </p>
 
           {aliasError && <div className="error-box">{aliasError}</div>}
