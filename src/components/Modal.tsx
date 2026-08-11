@@ -78,7 +78,17 @@ export default function Modal({
 
   if (fullScreen) {
     return createPortal(
-      <div className="modal-overlay" style={{ zIndex, flexDirection: "column" }} onClick={closeOnBackdrop ? onClose : undefined}>
+      // `.modal-overlay`'s own `align-items: center` is right for the small
+      // centered card the non-fullScreen path renders, but wrong here: a
+      // fullScreen surface's children (header/body/footer, stacked directly
+      // — no wrapping div of their own) need to stretch to the overlay's
+      // full width, not shrink to their own content width and float
+      // centered in a column.
+      <div
+        className="modal-overlay"
+        style={{ zIndex, flexDirection: "column", alignItems: "stretch", justifyContent: "flex-start" }}
+        onClick={closeOnBackdrop ? onClose : undefined}
+      >
         {children}
       </div>,
       document.body,
