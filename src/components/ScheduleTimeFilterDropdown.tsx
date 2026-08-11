@@ -15,11 +15,17 @@ export default function ScheduleTimeFilterDropdown({
   value,
   onChange,
   align = "right",
+  fullWidth = false,
+  showIcon = true,
 }: {
   value: ScheduleTimeFilter | null;
   onChange: (v: ScheduleTimeFilter | null) => void;
   /** Same idea as `MultiSelectDropdown`'s `align` — "left" keeps the popover from overflowing past a container's left edge when the trigger sits near that edge (e.g. inside a narrow Drawer). */
   align?: "left" | "right";
+  /** Same idea as `MultiSelectDropdown`'s `fullWidth` — stretches the trigger to fill its container instead of sizing to its label text. */
+  fullWidth?: boolean;
+  /** Hides the clock icon inside the trigger — for callers that show it next to the field's own label instead. */
+  showIcon?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [draftRule, setDraftRule] = useState<ScheduleTimeRule>(value?.rule ?? "start-after");
@@ -43,9 +49,16 @@ export default function ScheduleTimeFilterDropdown({
   const label = value ? `${SCHEDULE_TIME_RULE_LABELS[value.rule]} ${value.time}` : "Horário";
 
   return (
-    <div style={{ position: "relative", display: "inline-block", alignSelf: "flex-start" }} ref={rootRef}>
-      <button type="button" className="secondary" onClick={openPopover}>
-        <Clock3 size={15} style={{ marginRight: "0.4rem" }} />
+    <div
+      style={
+        fullWidth
+          ? { position: "relative", width: "100%" }
+          : { position: "relative", display: "inline-block", alignSelf: "flex-start" }
+      }
+      ref={rootRef}
+    >
+      <button type="button" className="secondary" onClick={openPopover} style={fullWidth ? { width: "100%" } : undefined}>
+        {showIcon && <Clock3 size={15} style={{ marginRight: "0.4rem" }} />}
         {label}
       </button>
       {open && (

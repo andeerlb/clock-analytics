@@ -66,6 +66,18 @@ export default function Drawer({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [open, onClose]);
 
+  // Same lock `Modal` uses — without it the page underneath still scrolls
+  // with the wheel/trackpad while the Drawer is open, which reads as a bug
+  // since the dimmed overlay looks like it should be blocking that.
+  useEffect(() => {
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open]);
+
   if (!rendered) return null;
 
   // Portaled to `document.body`, same reasoning as `Modal` — a Drawer

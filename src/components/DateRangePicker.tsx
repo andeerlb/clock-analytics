@@ -36,6 +36,8 @@ export default function DateRangePicker({
   allowClear = true,
   startPlaceholder = "dd/mm/aaaa",
   endPlaceholder = "dd/mm/aaaa",
+  showIcon = true,
+  fullWidth = false,
 }: {
   startValue: string;
   endValue: string;
@@ -44,6 +46,10 @@ export default function DateRangePicker({
   allowClear?: boolean;
   startPlaceholder?: string;
   endPlaceholder?: string;
+  /** Hides the calendar icon inside the trigger — for callers that show it next to the field's own label instead. */
+  showIcon?: boolean;
+  /** Stretches the trigger to fill its container instead of sizing to its content — for a field that should visually fill its row/cell (e.g. inside a Drawer's field grid). */
+  fullWidth?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>("start");
@@ -141,13 +147,14 @@ export default function DateRangePicker({
   const displayEnd = endValue ? formatDateSlash(endValue) : endPlaceholder;
 
   return (
-    <div style={{ position: "relative" }} ref={rootRef}>
+    <div style={fullWidth ? { position: "relative", width: "100%" } : { position: "relative" }} ref={rootRef}>
       <button
         type="button"
         onClick={openPicker}
         style={{
           display: "flex",
           alignItems: "center",
+          width: fullWidth ? "100%" : undefined,
           gap: "0.5em",
           border: "1px solid var(--border)",
           borderRadius: 7,
@@ -158,7 +165,7 @@ export default function DateRangePicker({
           boxShadow: "none",
         }}
       >
-        <Calendar size={14} style={{ flexShrink: 0, color: "var(--text-muted)" }} />
+        {showIcon && <Calendar size={14} style={{ flexShrink: 0, color: "var(--text-muted)" }} />}
         <span className={startValue ? undefined : "muted"}>{displayStart}</span>
         <span className="muted">→</span>
         <span className={endValue ? undefined : "muted"}>{displayEnd}</span>

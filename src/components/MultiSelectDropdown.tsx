@@ -26,6 +26,8 @@ export default function MultiSelectDropdown<T extends string>({
   noneLabel = "Nenhum selecionado",
   countLabel,
   align = "right",
+  fullWidth = false,
+  showIcon = true,
 }: {
   options: MultiSelectOption<T>[];
   selected: Set<T>;
@@ -38,6 +40,10 @@ export default function MultiSelectDropdown<T extends string>({
   countLabel?: (selectedCount: number, total: number) => string;
   /** Which edge the popover hangs from — "right" (default) suits a trigger near a row's right edge; "left" keeps it from overflowing past a container's left edge when the trigger itself sits near that edge (e.g. inside a narrow Drawer). */
   align?: "left" | "right";
+  /** Stretches the trigger button to fill its container instead of sizing to its label text — for a field that should visually fill its row/cell (e.g. inside a Drawer's field grid), as opposed to sitting inline in a toolbar. */
+  fullWidth?: boolean;
+  /** Hides the icon inside the trigger — for callers that show it next to the field's own label instead. */
+  showIcon?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -60,9 +66,22 @@ export default function MultiSelectDropdown<T extends string>({
           : (countLabel ?? ((n, total) => `${n} de ${total}`))(selected.size, options.length);
 
   return (
-    <div style={{ position: "relative", display: "inline-block", alignSelf: "flex-start" }} ref={rootRef}>
-      <button type="button" className="secondary" onClick={() => setOpen((o) => !o)} disabled={options.length === 0}>
-        <Icon size={15} style={{ marginRight: "0.4rem" }} />
+    <div
+      style={
+        fullWidth
+          ? { position: "relative", width: "100%" }
+          : { position: "relative", display: "inline-block", alignSelf: "flex-start" }
+      }
+      ref={rootRef}
+    >
+      <button
+        type="button"
+        className="secondary"
+        onClick={() => setOpen((o) => !o)}
+        disabled={options.length === 0}
+        style={fullWidth ? { width: "100%" } : undefined}
+      >
+        {showIcon && <Icon size={15} style={{ marginRight: "0.4rem" }} />}
         {label}
       </button>
       {open && (

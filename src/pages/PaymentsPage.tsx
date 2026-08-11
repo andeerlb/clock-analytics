@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Briefcase,
   Building2,
+  Calendar,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -15,6 +16,7 @@ import {
   History,
   Info,
   Layers,
+  ListFilter,
   Moon,
   RotateCcw,
   Search,
@@ -703,6 +705,16 @@ function ShiftRow({
   );
 }
 
+/** A field label with its icon in front — used in the Filtros Drawer, where the icon sits beside the label instead of inside the control below it (unlike this same control's own toolbar usage elsewhere in this file). */
+function FieldLabel({ icon: Icon, htmlFor, children }: { icon: typeof Building2; htmlFor?: string; children: ReactNode }) {
+  return (
+    <label htmlFor={htmlFor} style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+      <Icon size={13} />
+      {children}
+    </label>
+  );
+}
+
 export default function PaymentsPage() {
   const navigate = useNavigate();
   const {
@@ -1110,6 +1122,7 @@ export default function PaymentsPage() {
   const [draftStatuses, setDraftStatuses] = useState<Set<PaymentShiftStatus>>(selectedStatuses);
   const [draftShiftPeriods, setDraftShiftPeriods] = useState<Set<ShiftPeriod>>(selectedShiftPeriods);
   const [draftScheduleTimeFilter, setDraftScheduleTimeFilter] = useState<ScheduleTimeFilter | null>(scheduleTimeFilter);
+  const [draftGrouped, setDraftGrouped] = useState(grouped);
 
   const clientOptions = useMemo(() => {
     const scoped =
@@ -1134,6 +1147,7 @@ export default function PaymentsPage() {
     setDraftStatuses(selectedStatuses);
     setDraftShiftPeriods(selectedShiftPeriods);
     setDraftScheduleTimeFilter(scheduleTimeFilter);
+    setDraftGrouped(grouped);
     setFiltersDrawerOpen(true);
   }
 
@@ -1146,6 +1160,7 @@ export default function PaymentsPage() {
     setSelectedStatuses(draftStatuses);
     setSelectedShiftPeriods(draftShiftPeriods);
     setScheduleTimeFilter(draftScheduleTimeFilter);
+    setGrouped(draftGrouped);
     setPage(0);
     setFiltersDrawerOpen(false);
   }
@@ -1161,6 +1176,7 @@ export default function PaymentsPage() {
     setDraftStatuses(new Set(STATUS_OPTIONS.map((o) => o.id)));
     setDraftShiftPeriods(new Set(SHIFT_PERIOD_OPTIONS.map((o) => o.id)));
     setDraftScheduleTimeFilter(null);
+    setDraftGrouped(false);
   }
 
   function toggleDraftCompany(id: string) {
@@ -1322,13 +1338,12 @@ export default function PaymentsPage() {
             )}
             <button
               type="button"
-              className="ghost"
-              style={{ padding: "0.3rem" }}
+              className="secondary"
               onClick={() => navigate("/payments/export-templates")}
-              aria-label="Gerenciar templates de exportação"
               title="Gerenciar templates de exportação — criar, editar ou excluir"
             >
-              <Settings2 size={15} />
+              <Settings2 size={15} style={{ marginRight: "0.4rem" }} />
+              Templates
             </button>
             {exportTemplates.length > 0 && (
               <button
@@ -1409,18 +1424,6 @@ export default function PaymentsPage() {
       </div>
 
       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "0.8rem", margin: "1rem 0" }}>
-        <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
-          <input
-            type="checkbox"
-            checked={grouped}
-            onChange={(e) => {
-              setGrouped(e.target.checked);
-              setPage(0);
-            }}
-          />
-          <Layers size={14} />
-          Agrupar por colaborador
-        </label>
         <MultiSelectDropdown
           options={FLAT_COLUMNS}
           selected={visibleColumns}
@@ -1829,68 +1832,43 @@ export default function PaymentsPage() {
           </>
         }
       >
-        <div style={{ display: "flex", flexDirection: "column", gap: "1.1rem" }}>
-          <div className="field">
-            <label htmlFor="payments-search">Colaborador</label>
-            <div style={{ position: "relative" }}>
-              <Search
-                size={14}
-                style={{ position: "absolute", left: "0.65rem", top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }}
-              />
-              <input
-                id="payments-search"
-                type="text"
-                value={draftSearch}
-                onChange={(e) => setDraftSearch(e.target.value)}
-                placeholder="Buscar por nome..."
-                style={{ width: "100%", paddingLeft: "2rem" }}
-              />
-            </div>
+        {/* Two fields per row by default (`auto-fit`/`minmax` collapses to
+            one per row only if the panel gets too narrow to fit two) — every
+            field's own control is stretched (`fullWidth`) to fill its cell
+            instead of sizing to its label text. Colaborador is the one
+            fixed exception, always alone on a full-width row, since a name
+            search reads oddly sharing a row with an unrelated dropdown. */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1.1rem" }}>
+          <div className="field" style={{ gridColumn: "1 / -1" }}>
+            <FieldLabel icon={Search} htmlFor="payments-search">
+              Colaborador
+            </FieldLabel>
+            <input
+              id="payments-search"
+              type="text"
+              value={draftSearch}
+              onChange={(e) => setDraftSearch(e.target.value)}
+              placeholder="Buscar por nome..."
+              style={{ width: "100%" }}
+            />
           </div>
           <div className="field">
-            <label>Empresa</label>
+            <FieldLabel icon={Building2}>Empresa</FieldLabel>
             <MultiSelectDropdown
               options={companies.map((c) => ({ id: String(c.id), label: c.name }))}
               selected={draftCompanyIds}
               onToggle={toggleDraftCompany}
               onSelectAll={() => setDraftCompanyIds(new Set(companies.map((c) => String(c.id))))}
               onSelectNone={() => setDraftCompanyIds(new Set())}
-              icon={Building2}
               allLabel="Todas as empresas"
               noneLabel="Nenhuma empresa"
               align="left"
+              fullWidth
+              showIcon={false}
             />
           </div>
           <div className="field">
-            <label>Cliente</label>
-            <MultiSelectDropdown
-              options={clientOptions.map((c) => ({ id: String(c.id), label: c.name }))}
-              selected={draftClientIds}
-              onToggle={toggleDraftClient}
-              onSelectAll={() => setDraftClientIds(new Set(clientOptions.map((c) => String(c.id))))}
-              onSelectNone={() => setDraftClientIds(new Set())}
-              icon={Users}
-              allLabel="Todos os clientes"
-              noneLabel="Nenhum cliente"
-              align="left"
-            />
-          </div>
-          <div className="field">
-            <label>Função</label>
-            <MultiSelectDropdown
-              options={roleOptions.map((r) => ({ id: String(r.id), label: r.name }))}
-              selected={draftRoleIds}
-              onToggle={toggleDraftRole}
-              onSelectAll={() => setDraftRoleIds(new Set(roleOptions.map((r) => String(r.id))))}
-              onSelectNone={() => setDraftRoleIds(new Set())}
-              icon={Briefcase}
-              allLabel="Todas as funções"
-              noneLabel="Nenhuma função"
-              align="left"
-            />
-          </div>
-          <div className="field">
-            <label>Período</label>
+            <FieldLabel icon={Calendar}>Período</FieldLabel>
             <DateRangePicker
               startValue={draftPeriodStart}
               endValue={draftPeriodEnd}
@@ -1898,28 +1876,67 @@ export default function PaymentsPage() {
                 setDraftPeriodStart(start);
                 setDraftPeriodEnd(end);
               }}
+              showIcon={false}
+              fullWidth
             />
           </div>
           <div className="field">
-            <label>Horário</label>
-            <ScheduleTimeFilterDropdown value={draftScheduleTimeFilter} onChange={setDraftScheduleTimeFilter} align="left" />
+            <FieldLabel icon={Users}>Cliente</FieldLabel>
+            <MultiSelectDropdown
+              options={clientOptions.map((c) => ({ id: String(c.id), label: c.name }))}
+              selected={draftClientIds}
+              onToggle={toggleDraftClient}
+              onSelectAll={() => setDraftClientIds(new Set(clientOptions.map((c) => String(c.id))))}
+              onSelectNone={() => setDraftClientIds(new Set())}
+              allLabel="Todos os clientes"
+              noneLabel="Nenhum cliente"
+              align="left"
+              fullWidth
+              showIcon={false}
+            />
           </div>
           <div className="field">
-            <label>Diurno/Noturno</label>
+            <FieldLabel icon={Briefcase}>Função</FieldLabel>
+            <MultiSelectDropdown
+              options={roleOptions.map((r) => ({ id: String(r.id), label: r.name }))}
+              selected={draftRoleIds}
+              onToggle={toggleDraftRole}
+              onSelectAll={() => setDraftRoleIds(new Set(roleOptions.map((r) => String(r.id))))}
+              onSelectNone={() => setDraftRoleIds(new Set())}
+              allLabel="Todas as funções"
+              noneLabel="Nenhuma função"
+              align="left"
+              fullWidth
+              showIcon={false}
+            />
+          </div>
+          <div className="field">
+            <FieldLabel icon={Clock3}>Horário</FieldLabel>
+            <ScheduleTimeFilterDropdown
+              value={draftScheduleTimeFilter}
+              onChange={setDraftScheduleTimeFilter}
+              align="left"
+              fullWidth
+              showIcon={false}
+            />
+          </div>
+          <div className="field">
+            <FieldLabel icon={Moon}>Diurno/Noturno</FieldLabel>
             <MultiSelectDropdown
               options={SHIFT_PERIOD_OPTIONS}
               selected={draftShiftPeriods}
               onToggle={toggleDraftShiftPeriod}
               onSelectAll={() => setDraftShiftPeriods(new Set(SHIFT_PERIOD_OPTIONS.map((o) => o.id)))}
               onSelectNone={() => setDraftShiftPeriods(new Set())}
-              icon={Moon}
               allLabel="Diurno e noturno"
               noneLabel="Nenhum"
               align="left"
+              fullWidth
+              showIcon={false}
             />
           </div>
           <div className="field">
-            <label>Status</label>
+            <FieldLabel icon={ListFilter}>Status</FieldLabel>
             <MultiSelectDropdown
               options={STATUS_OPTIONS}
               selected={draftStatuses}
@@ -1929,7 +1946,16 @@ export default function PaymentsPage() {
               allLabel="Todos os status"
               noneLabel="Nenhum status"
               align="left"
+              fullWidth
+              showIcon={false}
             />
+          </div>
+          <div className="field">
+            <FieldLabel icon={Layers}>Exibição</FieldLabel>
+            <label className="drawer-checkbox-field">
+              <input type="checkbox" checked={draftGrouped} onChange={(e) => setDraftGrouped(e.target.checked)} />
+              Agrupar por colaborador
+            </label>
           </div>
         </div>
       </Drawer>

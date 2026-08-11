@@ -902,6 +902,28 @@ tr:last-child td {
   flex: 1;
 }
 
+/* The "Agrupar por colaborador" checkbox field inside the Filtros Drawer —
+   sized to exactly match its sibling dropdown triggers (same box model as
+   `button.secondary`) so the grid row it shares with Status doesn't grow
+   taller than the rest just because this cell holds a `<label>` instead of
+   a `<button>`. */
+.drawer-checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  width: 100%;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  padding: 0.55em 0.85em;
+  font-size: 0.92em;
+  background: var(--surface-variant);
+  color: var(--text);
+}
+.drawer-checkbox-field input[type="checkbox"] {
+  margin: 0;
+}
+
 .drawer-footer {
   display: flex;
   flex-direction: column;
