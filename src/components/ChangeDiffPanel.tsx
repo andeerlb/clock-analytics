@@ -102,7 +102,7 @@ export default function ChangeDiffPanel({
             marginBottom: "0.4rem",
           }}
         >
-          <span>{e.message}</span>
+          <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{e.message}</span>
           {renderDismissButton([e])}
         </div>
       ))}
@@ -152,7 +152,7 @@ export default function ChangeDiffPanel({
                   }}
                 >
                   <AlertTriangle size={13} style={{ flexShrink: 0 }} />
-                  {first.message}
+                  <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{first.message}</span>
                 </div>
                 <div
                   style={{
@@ -183,7 +183,7 @@ export default function ChangeDiffPanel({
                   }}
                 >
                   <Trash2 size={13} style={{ flexShrink: 0 }} />
-                  {first.message}
+                  <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{first.message}</span>
                 </div>
                 <div
                   style={{

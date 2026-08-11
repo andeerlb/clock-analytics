@@ -703,6 +703,10 @@ tr:last-child td {
   font-size: 0.9rem;
 }
 
+/* `overflow-wrap: anywhere` on all four (below) — a raw error message can
+   contain a long unbroken string (a URL, a stack frame, a file path) with no
+   natural word-break point; without this it overflows straight past the
+   box's own edge instead of wrapping, "leaking" into whatever's next to it. */
 .error-box {
   background: var(--danger-soft);
   color: #f87171;
@@ -710,6 +714,7 @@ tr:last-child td {
   border-radius: 8px;
   padding: 0.75rem 1rem;
   margin-bottom: 1rem;
+  overflow-wrap: anywhere;
 }
 
 .success-box {
@@ -719,6 +724,7 @@ tr:last-child td {
   border-radius: 8px;
   padding: 0.75rem 1rem;
   margin-bottom: 1rem;
+  overflow-wrap: anywhere;
 }
 
 .warning-box {
@@ -728,6 +734,7 @@ tr:last-child td {
   border-radius: 8px;
   padding: 0.75rem 1rem;
   margin-bottom: 1rem;
+  overflow-wrap: anywhere;
 }
 
 /* Neutral counterpart to error/success/warning-box — purely informational,
@@ -744,6 +751,7 @@ tr:last-child td {
   padding: 0.75rem 1rem;
   margin-bottom: 1rem;
   font-size: 0.85rem;
+  overflow-wrap: anywhere;
 }
 
 .summary-row {

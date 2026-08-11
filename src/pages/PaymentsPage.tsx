@@ -653,17 +653,7 @@ function ShiftRow({
       )}
       {col("status") && (
         <td>
-          <span style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: "0.4rem" }}>
-            <span className={badge.className}>{badge.label}</span>
-            {s.editedManually && (
-              <span
-                className="badge info"
-                title="Atualizado manualmente — uma reimportação não sobrescreve este turno enquanto 'Manter registros atualizados manualmente' estiver ativado (Configurações → Zona de risco → Pagamentos)."
-              >
-                <ShieldCheck size={13} />
-              </span>
-            )}
-          </span>
+          <span className={badge.className}>{badge.label}</span>
           {s.status === "erro" && s.errorMessage && (
             <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.25rem" }}>
               {s.errorMessage}
@@ -680,13 +670,28 @@ function ShiftRow({
         <td>
           {(() => {
             const extra = displayExtraData(s);
-            return extra ? (
-              <PillButton onClick={() => onViewExtra(extra, s.sourceUrl)} title="Ver colunas não mapeadas lidas do arquivo">
-                <Info size={12} />
-                {Object.keys(extra).length}
-              </PillButton>
-            ) : (
-              <span className="muted">—</span>
+            if (!s.editedManually && !extra) return <span className="muted">—</span>;
+            return (
+              <span style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: "0.4rem" }}>
+                {extra && (
+                  <PillButton onClick={() => onViewExtra(extra, s.sourceUrl)} title="Ver colunas não mapeadas lidas do arquivo">
+                    <Info size={12} />
+                    {Object.keys(extra).length}
+                  </PillButton>
+                )}
+                {s.editedManually && (
+                  <span
+                    className="badge info"
+                    title={
+                      s.status === "pago"
+                        ? "Atualizado manualmente — o histórico deste turno inclui um campo corrigido à mão (Data/Local/Função/Horário/Valor)."
+                        : "Atualizado manualmente — uma reimportação não sobrescreve este turno enquanto 'Manter registros atualizados manualmente' estiver ativado (Configurações → Zona de risco → Pagamentos)."
+                    }
+                  >
+                    <ShieldCheck size={13} />
+                  </span>
+                )}
+              </span>
             );
           })()}
         </td>
