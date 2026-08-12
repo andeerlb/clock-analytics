@@ -36,23 +36,6 @@
 -- parent-first.
 PRAGMA foreign_keys = ON;
 
--- 0071_employee_company_link.sql creates a TEMP TABLE of this exact same
--- name and never drops it. tauri-plugin-sql/sqlx's migrator runs every
--- pending migration sequentially over ONE shared connection per app
--- launch, and a TEMP TABLE lives on that connection (not scoped to any one
--- migration's own transaction) — so on any database that has to apply 0071
--- and this migration back-to-back in the same launch (a fresh install, or
--- one that was several versions behind), 0071's `employee_canonical`
--- survives its own commit and collides with this one's `CREATE TEMP TABLE`
--- below with "table employee_canonical already exists", before this
--- migration ever gets to its own actual work. Only 0071 and 0072 ever
--- landing in the SAME session (rather than two separate app launches, each
--- getting a fresh connection) is why this wasn't caught testing them
--- individually against a real data copy beforehand. Harmless either way:
--- if 0071's leftover is there, this clears it first; if this is a fresh
--- connection (0071 ran in an earlier launch) there's nothing to drop.
-DROP TABLE IF EXISTS employee_canonical;
-
 -- Which surviving "canonical" employee id each existing employee row folds
 -- into, same tie-break as 0071: most existing history (payment_shifts +
 -- imports combined), lowest id breaks ties.
@@ -256,12 +239,6 @@ WHERE canon.old_id <> canon.canonical_id
   AND NOT EXISTS (
     SELECT 1 FROM employee_aliases_new ex WHERE ex.employee_id = canon.canonical_id AND ex.alias = e.name
   );
-
--- Cleared once it's done its job — same reasoning as the `DROP TABLE IF
--- EXISTS` above this migration's own `CREATE TEMP TABLE`: left behind, it
--- would trip up any future migration that happens to reuse this name in
--- the same session, the exact way 0071's own leftover tripped up this one.
-DROP TABLE employee_canonical;
 
 DROP TABLE punches;
 DROP TABLE day_records;

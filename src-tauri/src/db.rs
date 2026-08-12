@@ -431,6 +431,12 @@ pub fn migrations() -> Vec<Migration> {
             kind: MigrationKind::Up,
         },
         Migration {
+            version: 71001,
+            description: "one-time cleanup of 0071's leftover TEMP TABLE employee_canonical, which otherwise collides with 0072's own — added as a separate migration (not folded into 0072) because 0072 was already applied on real installs before this collision was found; positioned here in the Vec, not by its version number, so it still runs between 0071 and 0072 for a fresh install",
+            sql: include_str!("../migrations/0071b_employee_canonical_temp_cleanup.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
             version: 72,
             description: "employees.UNIQUE(client_id, cpf) narrowed to UNIQUE(cpf) — a colaborador is one person globally now, not one person per cliente; employee_companies (employee_id, company_id, matricula) replaced by employee_client_companies (employee_id, client_id, company_id, matricula), since a empresa can already serve more than one cliente, so a colaborador's empresa link has to say which cliente it's for",
             sql: include_str!("../migrations/0072_employee_client_link.sql"),

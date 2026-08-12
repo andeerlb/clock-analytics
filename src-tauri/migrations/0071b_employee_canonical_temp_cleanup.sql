@@ -1,0 +1,23 @@
+-- 0071_employee_company_link.sql creates a TEMP TABLE named
+-- employee_canonical and never drops it. tauri-plugin-sql/sqlx's migrator
+-- runs every pending migration sequentially over ONE shared connection per
+-- app launch, and a TEMP TABLE lives on that connection (not scoped to any
+-- one migration's own transaction) — so on any database that has to apply
+-- 0071 and 0072_employee_client_link.sql back-to-back in the same launch (a
+-- fresh install, or one that was several versions behind), 0071's
+-- employee_canonical survives its own commit and collides with 0072's own
+-- `CREATE TEMP TABLE employee_canonical` with "table employee_canonical
+-- already exists", before 0072 ever gets to its own actual work.
+--
+-- 0072 is already applied (with this exact collision risk still live) on
+-- real installs, so it can't be edited to add this cleanup itself — see
+-- CLAUDE.md's migrations section. This runs as its own migration instead,
+-- positioned between 0071 and 0072 in db.rs's migrations() Vec (sqlx applies
+-- migrations in that Vec's order, not sorted by version number — the
+-- version below only has to be a number no other migration uses, it does
+-- not need to sort between 71 and 72 numerically). Harmless on every kind of
+-- database: if 0071's leftover temp table is there, this clears it before
+-- 0072 runs; if this is a fresh connection (0071 ran in an earlier launch,
+-- or was already applied in a past launch whose connection is long closed)
+-- there's nothing to drop.
+DROP TABLE IF EXISTS employee_canonical;
