@@ -69,6 +69,12 @@ export default function AnchoredPopover({
   return createPortal(
     <div
       ref={popoverRef}
+      // React bubbles portaled events through the *component* tree, not the
+      // DOM tree — without this, a click inside the popover still reaches
+      // whatever onClick a real DOM ancestor further up the JSX (e.g. a
+      // fullScreen Modal's backdrop-click-to-close) happens to have, even
+      // though this div isn't actually nested inside it in the DOM.
+      onClick={(e) => e.stopPropagation()}
       style={{
         position: "fixed",
         top: pos.top,

@@ -442,5 +442,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0073_merge_duplicate_names.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 74,
+            description: "adds payment_audits table for the Conferência de Pagamentos feature — records manual bank-statement verification of paid shifts, separate from payment_shifts since only the erro outcome is a real state transition",
+            sql: include_str!("../migrations/0074_payment_audits.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

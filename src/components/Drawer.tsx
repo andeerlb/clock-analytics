@@ -85,7 +85,18 @@ export default function Drawer({
   // covers the whole viewport and stacks above everything else this way,
   // not just via `position: fixed` + a high `z-index`.
   return createPortal(
-    <div className={`drawer-overlay${visible ? " drawer-overlay-visible" : ""}`} onClick={onClose}>
+    // Backdrop click still dismisses this Drawer (that's the intended
+    // behavior), but the event itself doesn't propagate any further — same
+    // reasoning as AnchoredPopover/ContextMenu's own stopPropagation, so a
+    // Drawer opened from inside a fullScreen Modal doesn't also close that
+    // Modal via React's portal-follows-the-component-tree bubbling.
+    <div
+      className={`drawer-overlay${visible ? " drawer-overlay-visible" : ""}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClose();
+      }}
+    >
       <div
         className={`drawer-panel drawer-panel-${side}${visible ? " drawer-panel-visible" : ""}`}
         style={{ width }}

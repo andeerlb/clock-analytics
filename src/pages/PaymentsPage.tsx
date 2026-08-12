@@ -1,29 +1,21 @@
 import {
-  Briefcase,
-  Building2,
-  Calendar,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Clock3,
+  ClipboardCheck,
   Eye,
   FileDown,
   FileSpreadsheet,
   Filter,
   FolderOpen,
   Info,
-  Layers,
-  ListFilter,
-  MapPin,
   Moon,
-  Search,
   Settings2,
   ShieldCheck,
   Sun,
   Trash2,
-  Users,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import AnchoredPopover from "../components/AnchoredPopover";
 import Avatar from "../components/Avatar";
@@ -32,15 +24,14 @@ import ConfirmPaymentModal from "../components/ConfirmPaymentModal";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import CurrencyInput from "../components/CurrencyInput";
 import DatePicker from "../components/DatePicker";
-import DateRangePicker from "../components/DateRangePicker";
 import Drawer from "../components/Drawer";
-import EmployeeMultiSelectDropdown from "../components/EmployeeMultiSelectDropdown";
 import ExtraColumnsDrawer from "../components/ExtraColumnsDrawer";
-import MultiSelectDropdown, { type MultiSelectOption } from "../components/MultiSelectDropdown";
+import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
+import PaymentReconciliationModal from "../components/PaymentReconciliationModal";
+import PaymentsFiltersDrawer, { SHIFT_PERIOD_OPTIONS, STATUS_OPTIONS, type PaymentsFiltersValue } from "../components/PaymentsFiltersDrawer";
 import PdfViewerModal from "../components/PdfViewerModal";
 import PillButton from "../components/PillButton";
-import ScheduleTimeFilterDropdown from "../components/ScheduleTimeFilterDropdown";
 import ShiftHistoryDrawer from "../components/ShiftHistoryDrawer";
 import TimeField from "../components/TimeField";
 import { PAYMENTS_PAGE_SIZE_OPTIONS, usePaymentsFilters } from "../contexts/FiltersContext";
@@ -85,6 +76,7 @@ import {
   shiftDurationMinutes,
 } from "../lib/format";
 import { generatePaymentsExportXlsx, type PaymentExportResult } from "../lib/paymentExport";
+import { ALL_COLUMN_IDS, FLAT_COLUMNS } from "../lib/paymentColumns";
 import { generatePaymentsReportPdf, type PaymentsReportResult } from "../lib/paymentsReport";
 import { acceptShiftChange } from "../lib/remoteCheckDiff";
 import type {
@@ -92,21 +84,8 @@ import type {
   PaymentShiftRow,
   PaymentShiftStatus,
   PaymentShiftSummaryRow,
-  ScheduleTimeFilter,
   ShiftPeriod,
 } from "../lib/types";
-
-const STATUS_OPTIONS: MultiSelectOption<PaymentShiftStatus>[] = [
-  { id: "pendente", label: "Pendente" },
-  { id: "erro", label: "Erro" },
-  { id: "pago", label: "Pago" },
-];
-
-/** A summary row matches once at least one of its shifts falls in a checked bucket — same "at least one" semantics as Status, and the same SQL-side HAVING pattern (see `shiftPeriodSql` in db.ts). */
-const SHIFT_PERIOD_OPTIONS: MultiSelectOption<ShiftPeriod>[] = [
-  { id: "diurno", label: "Diurno" },
-  { id: "noturno", label: "Noturno" },
-];
 
 const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: string }> = {
   pendente: { className: "badge warn", label: "Pendente" },
@@ -114,22 +93,6 @@ const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: strin
   pago: { className: "badge ok", label: "Pago" },
 };
 
-/** Every column a turno row can show — `identityOnly` ones only ever appear in the flat (desagrupado) table, since a grouped row's expanded turno table already shows its colaborador/cliente/empresa once, in the summary header above it. */
-const FLAT_COLUMNS: MultiSelectOption<string>[] = [
-  { id: "colaborador", label: "Colaborador" },
-  { id: "cliente", label: "Cliente" },
-  { id: "empresa", label: "Empresa" },
-  { id: "data", label: "Data" },
-  { id: "local", label: "Local" },
-  { id: "funcao", label: "Função" },
-  { id: "horario", label: "Horário" },
-  { id: "horas", label: "H/trab." },
-  { id: "valor", label: "Valor" },
-  { id: "status", label: "Status" },
-  { id: "importado", label: "Importado em" },
-  { id: "extras", label: "Extras" },
-];
-const ALL_COLUMN_IDS = FLAT_COLUMNS.map((c) => c.id);
 /** What a fresh install (no saved column preference yet) shows — everything except "Importado em", which is metadata most people don't need visible by default. */
 const DEFAULT_VISIBLE_COLUMN_IDS = ALL_COLUMN_IDS.filter((id) => id !== "importado");
 const IDENTITY_COLUMN_IDS = new Set(["colaborador", "cliente", "empresa"]);
@@ -677,16 +640,6 @@ function ShiftRow({
   );
 }
 
-/** A field label with its icon in front — used in the Filtros Drawer, where the icon sits beside the label instead of inside the control below it (unlike this same control's own toolbar usage elsewhere in this file). */
-function FieldLabel({ icon: Icon, htmlFor, children }: { icon: typeof Building2; htmlFor?: string; children: ReactNode }) {
-  return (
-    <label htmlFor={htmlFor} style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-      <Icon size={13} />
-      {children}
-    </label>
-  );
-}
-
 export default function PaymentsPage() {
   const navigate = useNavigate();
   const {
@@ -753,6 +706,7 @@ export default function PaymentsPage() {
 
   const [shiftDiffs, setShiftDiffs] = useState<Map<number, ShiftFieldDiffRow[]>>(new Map());
 
+  const [reconciliationOpen, setReconciliationOpen] = useState(false);
   const [payingShift, setPayingShift] = useState<{ shift: PaymentShiftRow; companyId: number; groupRef: GroupRef } | null>(null);
   const [paying, setPaying] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
@@ -1113,126 +1067,21 @@ export default function PaymentsPage() {
     });
   }
 
-  // Drawer draft state — every field the "Filtros" Drawer edits lives here,
-  // separate from the applied (`selectedEmployeeIds`/`selectedCompanyIds`/...)
-  // filters from `usePaymentsFilters`, so the query/table/PDF only ever see a new
-  // value once "Aplicar filtros" commits the draft. `openFiltersDrawer`
-  // reseeds this from the applied filters every time the Drawer opens, so a
-  // cancelled edit never leaks into the next time it's opened.
   const [filtersDrawerOpen, setFiltersDrawerOpen] = useState(false);
-  const [draftEmployeeIds, setDraftEmployeeIds] = useState<Set<string>>(selectedEmployeeIds);
-  const [draftCompanyIds, setDraftCompanyIds] = useState<Set<string>>(selectedCompanyIds);
-  const [draftClientIds, setDraftClientIds] = useState<Set<string>>(selectedClientIds);
-  const [draftRoleIds, setDraftRoleIds] = useState<Set<string>>(selectedRoleIds);
-  const [draftLocals, setDraftLocals] = useState<Set<string>>(selectedLocals);
-  const [draftPeriodStart, setDraftPeriodStart] = useState(periodStart);
-  const [draftPeriodEnd, setDraftPeriodEnd] = useState(periodEnd);
-  const [draftStatuses, setDraftStatuses] = useState<Set<PaymentShiftStatus>>(selectedStatuses);
-  const [draftShiftPeriods, setDraftShiftPeriods] = useState<Set<ShiftPeriod>>(selectedShiftPeriods);
-  const [draftScheduleTimeFilter, setDraftScheduleTimeFilter] = useState<ScheduleTimeFilter | null>(scheduleTimeFilter);
-  const [draftGrouped, setDraftGrouped] = useState(grouped);
 
-  const clientOptions = useMemo(() => {
-    const scoped =
-      draftCompanyIds.size > 0 ? clients.filter((c) => draftCompanyIds.has(String(c.companyId))) : clients;
-    const seen = new Map<number, ClientRow>();
-    for (const c of scoped) if (!seen.has(c.id)) seen.set(c.id, c);
-    return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [clients, draftCompanyIds]);
-
-  const roleOptions = useMemo(() => {
-    const scoped = draftCompanyIds.size > 0 ? roles.filter((r) => draftCompanyIds.has(String(r.companyId))) : roles;
-    return [...scoped].sort((a, b) => a.name.localeCompare(b.name));
-  }, [roles, draftCompanyIds]);
-
-  function openFiltersDrawer() {
-    setDraftEmployeeIds(selectedEmployeeIds);
-    setDraftCompanyIds(selectedCompanyIds);
-    setDraftClientIds(selectedClientIds);
-    setDraftRoleIds(selectedRoleIds);
-    setDraftLocals(selectedLocals);
-    setDraftPeriodStart(periodStart);
-    setDraftPeriodEnd(periodEnd);
-    setDraftStatuses(selectedStatuses);
-    setDraftShiftPeriods(selectedShiftPeriods);
-    setDraftScheduleTimeFilter(scheduleTimeFilter);
-    setDraftGrouped(grouped);
-    setFiltersDrawerOpen(true);
-  }
-
-  function applyFilters() {
-    setSelectedEmployeeIds(draftEmployeeIds);
-    setSelectedCompanyIds(draftCompanyIds);
-    setSelectedClientIds(draftClientIds);
-    setSelectedRoleIds(draftRoleIds);
-    setSelectedLocals(draftLocals);
-    setPeriod(draftPeriodStart, draftPeriodEnd);
-    setSelectedStatuses(draftStatuses);
-    setSelectedShiftPeriods(draftShiftPeriods);
-    setScheduleTimeFilter(draftScheduleTimeFilter);
-    setGrouped(draftGrouped);
+  function handleApplyFilters(next: PaymentsFiltersValue) {
+    setSelectedEmployeeIds(next.employeeIds);
+    setSelectedCompanyIds(next.companyIds);
+    setSelectedClientIds(next.clientIds);
+    setSelectedRoleIds(next.roleIds);
+    setSelectedLocals(next.locals);
+    setPeriod(next.periodStart, next.periodEnd);
+    setSelectedStatuses(next.statuses);
+    setSelectedShiftPeriods(next.shiftPeriods);
+    setScheduleTimeFilter(next.scheduleTimeFilter);
+    setGrouped(next.grouped);
     setPage(0);
     setFiltersDrawerOpen(false);
-  }
-
-  /** Resets just the Drawer's own draft fields — still requires "Aplicar filtros" to take effect, same as every other change made inside the Drawer. */
-  function clearDraftFilters() {
-    setDraftEmployeeIds(new Set());
-    setDraftCompanyIds(new Set());
-    setDraftClientIds(new Set());
-    setDraftRoleIds(new Set());
-    setDraftLocals(new Set());
-    setDraftPeriodStart("");
-    setDraftPeriodEnd("");
-    setDraftStatuses(new Set(STATUS_OPTIONS.map((o) => o.id)));
-    setDraftShiftPeriods(new Set(SHIFT_PERIOD_OPTIONS.map((o) => o.id)));
-    setDraftScheduleTimeFilter(null);
-    setDraftGrouped(false);
-  }
-
-  function toggleDraftEmployee(id: string) {
-    const next = new Set(draftEmployeeIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setDraftEmployeeIds(next);
-  }
-  function toggleDraftCompany(id: string) {
-    const next = new Set(draftCompanyIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setDraftCompanyIds(next);
-    setDraftClientIds(new Set());
-    setDraftRoleIds(new Set());
-  }
-  function toggleDraftClient(id: string) {
-    const next = new Set(draftClientIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setDraftClientIds(next);
-  }
-  function toggleDraftRole(id: string) {
-    const next = new Set(draftRoleIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setDraftRoleIds(next);
-  }
-  function toggleDraftLocal(id: string) {
-    const next = new Set(draftLocals);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setDraftLocals(next);
-  }
-  function toggleDraftStatus(id: PaymentShiftStatus) {
-    const next = new Set(draftStatuses);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setDraftStatuses(next);
-  }
-  function toggleDraftShiftPeriod(id: ShiftPeriod) {
-    const next = new Set(draftShiftPeriods);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setDraftShiftPeriods(next);
   }
 
   /** Every turno matching the current filters, not just the visible page — see `generatePaymentsReportPdf`. */
@@ -1343,7 +1192,7 @@ export default function PaymentsPage() {
 
       <div className="card">
         <div className="field-row" style={{ marginBottom: 0, alignItems: "center" }}>
-          <button type="button" className="secondary" onClick={openFiltersDrawer}>
+          <button type="button" className="secondary" onClick={() => setFiltersDrawerOpen(true)}>
             <Filter size={15} style={{ marginRight: "0.4rem" }} />
             {activeFilterCount > 0 ? `Filtros (${activeFilterCount})` : "Filtros"}
           </button>
@@ -1383,6 +1232,15 @@ export default function PaymentsPage() {
                 {generatingExport ? "Exportando..." : "Exportar Excel"}
               </button>
             )}
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setReconciliationOpen(true)}
+              title="Conferência de Pagamentos — considera os filtros acima"
+            >
+              <ClipboardCheck size={15} style={{ marginRight: "0.4rem" }} />
+              Conferência
+            </button>
             <button type="button" onClick={handleGeneratePdf} disabled={generatingPdf} title="Considera os filtros acima">
               <FileDown size={15} style={{ marginRight: "0.4rem" }} />
               {generatingPdf ? "Gerando..." : "Gerar PDF"}
@@ -1660,6 +1518,19 @@ export default function PaymentsPage() {
         )}
       </div>
 
+      {reconciliationOpen && (
+        <PaymentReconciliationModal
+          companies={companies}
+          clients={clients}
+          roles={roles}
+          locals={locals}
+          onClose={() => {
+            setReconciliationOpen(false);
+            grouped ? refetchSummaries() : refetchFlat();
+          }}
+        />
+      )}
+
       {payingShift && (
         <ConfirmPaymentModal
           shift={payingShift.shift}
@@ -1839,170 +1710,28 @@ export default function PaymentsPage() {
           })()}
       </Drawer>
 
-      <Drawer
+      <PaymentsFiltersDrawer
         open={filtersDrawerOpen}
         onClose={() => setFiltersDrawerOpen(false)}
-        title="Filtros"
-        footer={
-          <>
-            <button type="button" onClick={applyFilters}>
-              Aplicar filtros
-            </button>
-            <button type="button" className="ghost" onClick={clearDraftFilters}>
-              Limpar filtros
-            </button>
-          </>
-        }
-      >
-        {/* Two fields per row by default (`auto-fit`/`minmax` collapses to
-            one per row only if the panel gets too narrow to fit two) — every
-            field's own control is stretched (`fullWidth`) to fill its cell
-            instead of sizing to its label text. Colaborador is the one
-            fixed exception, always alone on a full-width row, since a name
-            search reads oddly sharing a row with an unrelated dropdown. */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1.1rem" }}>
-          {/* `zIndex` counts down in DOM order (top-to-bottom, left-to-right)
-              — every field's popover can extend downward past its own row
-              (e.g. Período's two-month calendar is wider than one column,
-              Status's checklist is taller than one row), so without this an
-              earlier field's open popover gets visually painted over by a
-              *later* field's grid cell, which has no z-index of its own to
-              lose to (CSS Grid gives every item an implicit stacking level
-              in DOM order once any sibling sets an explicit z-index). */}
-          <div className="field" style={{ gridColumn: "1 / -1", position: "relative", zIndex: 9 }}>
-            <FieldLabel icon={Search}>Colaborador</FieldLabel>
-            <EmployeeMultiSelectDropdown
-              selected={draftEmployeeIds}
-              onToggle={toggleDraftEmployee}
-              companyIds={draftCompanyIds.size > 0 ? Array.from(draftCompanyIds, Number) : undefined}
-              clientIds={draftClientIds.size > 0 ? Array.from(draftClientIds, Number) : undefined}
-              align="left"
-              fullWidth
-              showIcon={false}
-            />
-          </div>
-          <div className="field" style={{ position: "relative", zIndex: 8 }}>
-            <FieldLabel icon={Calendar}>Período</FieldLabel>
-            <DateRangePicker
-              startValue={draftPeriodStart}
-              endValue={draftPeriodEnd}
-              onChange={(start, end) => {
-                setDraftPeriodStart(start);
-                setDraftPeriodEnd(end);
-              }}
-              showIcon={false}
-              fullWidth
-            />
-          </div>
-          <div className="field" style={{ position: "relative", zIndex: 7 }}>
-            <FieldLabel icon={Building2}>Empresa</FieldLabel>
-            <MultiSelectDropdown
-              options={companies.map((c) => ({ id: String(c.id), label: c.name }))}
-              selected={draftCompanyIds}
-              onToggle={toggleDraftCompany}
-              onSelectAll={() => setDraftCompanyIds(new Set(companies.map((c) => String(c.id))))}
-              onSelectNone={() => setDraftCompanyIds(new Set())}
-              allLabel="Todas as empresas"
-              noneLabel="Nenhuma empresa"
-              align="left"
-              fullWidth
-              showIcon={false}
-            />
-          </div>
-          <div className="field" style={{ position: "relative", zIndex: 6 }}>
-            <FieldLabel icon={Users}>Cliente</FieldLabel>
-            <MultiSelectDropdown
-              options={clientOptions.map((c) => ({ id: String(c.id), label: c.name }))}
-              selected={draftClientIds}
-              onToggle={toggleDraftClient}
-              onSelectAll={() => setDraftClientIds(new Set(clientOptions.map((c) => String(c.id))))}
-              onSelectNone={() => setDraftClientIds(new Set())}
-              allLabel="Todos os clientes"
-              noneLabel="Nenhum cliente"
-              align="left"
-              fullWidth
-              showIcon={false}
-            />
-          </div>
-          <div className="field" style={{ position: "relative", zIndex: 5 }}>
-            <FieldLabel icon={Briefcase}>Função</FieldLabel>
-            <MultiSelectDropdown
-              options={roleOptions.map((r) => ({ id: String(r.id), label: r.name }))}
-              selected={draftRoleIds}
-              onToggle={toggleDraftRole}
-              onSelectAll={() => setDraftRoleIds(new Set(roleOptions.map((r) => String(r.id))))}
-              onSelectNone={() => setDraftRoleIds(new Set())}
-              allLabel="Todas as funções"
-              noneLabel="Nenhuma função"
-              align="left"
-              fullWidth
-              showIcon={false}
-            />
-          </div>
-          <div className="field" style={{ position: "relative", zIndex: 4 }}>
-            <FieldLabel icon={MapPin}>Local</FieldLabel>
-            <MultiSelectDropdown
-              options={locals.map((l) => ({ id: l, label: l }))}
-              selected={draftLocals}
-              onToggle={toggleDraftLocal}
-              onSelectAll={() => setDraftLocals(new Set(locals))}
-              onSelectNone={() => setDraftLocals(new Set())}
-              allLabel="Todos os locais"
-              noneLabel="Nenhum local"
-              align="left"
-              fullWidth
-              showIcon={false}
-            />
-          </div>
-          <div className="field" style={{ position: "relative", zIndex: 3 }}>
-            <FieldLabel icon={Clock3}>Horário</FieldLabel>
-            <ScheduleTimeFilterDropdown
-              value={draftScheduleTimeFilter}
-              onChange={setDraftScheduleTimeFilter}
-              align="left"
-              fullWidth
-              showIcon={false}
-            />
-          </div>
-          <div className="field" style={{ position: "relative", zIndex: 2 }}>
-            <FieldLabel icon={Moon}>Diurno/Noturno</FieldLabel>
-            <MultiSelectDropdown
-              options={SHIFT_PERIOD_OPTIONS}
-              selected={draftShiftPeriods}
-              onToggle={toggleDraftShiftPeriod}
-              onSelectAll={() => setDraftShiftPeriods(new Set(SHIFT_PERIOD_OPTIONS.map((o) => o.id)))}
-              onSelectNone={() => setDraftShiftPeriods(new Set())}
-              allLabel="Diurno e noturno"
-              noneLabel="Nenhum"
-              align="left"
-              fullWidth
-              showIcon={false}
-            />
-          </div>
-          <div className="field" style={{ position: "relative", zIndex: 1 }}>
-            <FieldLabel icon={ListFilter}>Status</FieldLabel>
-            <MultiSelectDropdown
-              options={STATUS_OPTIONS}
-              selected={draftStatuses}
-              onToggle={toggleDraftStatus}
-              onSelectAll={() => setDraftStatuses(new Set(STATUS_OPTIONS.map((o) => o.id)))}
-              onSelectNone={() => setDraftStatuses(new Set())}
-              allLabel="Todos os status"
-              noneLabel="Nenhum status"
-              align="left"
-              fullWidth
-              showIcon={false}
-            />
-          </div>
-          <div className="field" style={{ position: "relative", zIndex: 0 }}>
-            <FieldLabel icon={Layers}>Exibição</FieldLabel>
-            <label className="drawer-checkbox-field">
-              <input type="checkbox" checked={draftGrouped} onChange={(e) => setDraftGrouped(e.target.checked)} />
-              Agrupar por colaborador
-            </label>
-          </div>
-        </div>
-      </Drawer>
+        value={{
+          employeeIds: selectedEmployeeIds,
+          companyIds: selectedCompanyIds,
+          clientIds: selectedClientIds,
+          roleIds: selectedRoleIds,
+          locals: selectedLocals,
+          periodStart,
+          periodEnd,
+          statuses: selectedStatuses,
+          shiftPeriods: selectedShiftPeriods,
+          scheduleTimeFilter,
+          grouped,
+        }}
+        onApply={handleApplyFilters}
+        companies={companies}
+        clients={clients}
+        roles={roles}
+        locals={locals}
+      />
 
       {contextMenu && (
         <ContextMenu x={contextMenu.x} y={contextMenu.y} items={contextMenu.items} onClose={() => setContextMenu(null)} />

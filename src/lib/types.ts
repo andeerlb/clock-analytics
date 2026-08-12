@@ -535,6 +535,29 @@ export const PAYMENT_SHIFT_STATUS_LABELS: Record<PaymentShiftStatus, string> = {
   pago: "Pago",
 };
 
+/**
+ * The manual bank-statement verdict recorded by "Conferência de Pagamentos"
+ * for a `pago` payment shift. `erro` also triggers reverting the shift back
+ * to `pendente` (via the existing `revertPaymentShiftToPending`) — see
+ * `payment_audits`' own migration comment for why this is a separate table
+ * rather than a `PaymentShiftStatus` value.
+ */
+export type PaymentAuditResult = "confirmado" | "erro";
+
+export const PAYMENT_AUDIT_RESULT_LABELS: Record<PaymentAuditResult, string> = {
+  confirmado: "Confirmado",
+  erro: "Erro",
+};
+
+/** One `payment_audits` row — always at most one per `paymentShiftId` (UNIQUE constraint). */
+export interface PaymentAuditRow {
+  id: number;
+  paymentShiftId: number;
+  result: PaymentAuditResult;
+  note: string | null;
+  auditedAt: string;
+}
+
 /** One imported work shift row, joined with its employee/client/company for display. */
 export interface PaymentShiftRow {
   id: number;

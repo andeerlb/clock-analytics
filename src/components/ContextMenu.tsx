@@ -140,7 +140,12 @@ export default function ContextMenu({
   const top = Math.min(y, window.innerHeight - 8);
 
   return createPortal(
-    <div ref={menuRef} style={{ position: "fixed", top, left, zIndex: 1000 }}>
+    // Same reasoning as AnchoredPopover's own stopPropagation: React bubbles
+    // a portaled click through the *component* tree, not the DOM tree, so
+    // without this a menu item's click can still reach an unrelated
+    // ancestor's onClick (e.g. a fullScreen Modal's backdrop-click-to-close)
+    // even though this div isn't actually nested inside it in the DOM.
+    <div ref={menuRef} style={{ position: "fixed", top, left, zIndex: 1000 }} onClick={(e) => e.stopPropagation()}>
       <ContextMenuList items={items} onClose={onClose} />
     </div>,
     document.body,

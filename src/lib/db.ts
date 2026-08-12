@@ -16,6 +16,8 @@ import type {
   NightShiftRule,
   PagedResult,
   ParsedTimesheet,
+  PaymentAuditResult,
+  PaymentAuditRow,
   PaymentExportTemplateConfig,
   PaymentExportTemplateInput,
   PaymentExportTemplateListRow,
@@ -4057,6 +4059,8 @@ export async function listPaymentShiftSummaries(
 }
 
 export interface PaymentShiftReportRow {
+  /** Added for "Conferência de Pagamentos" — the other consumers (PDF/Excel export) never needed the row's own id, since they only ever render/aggregate it. */
+  id: number;
   employeeId: number;
   employeeName: string;
   companyId: number;
@@ -4071,17 +4075,22 @@ export interface PaymentShiftReportRow {
   scheduleEndMinutes: number | null;
   status: PaymentShiftStatus;
   amount: number | null;
+  /** Added for "Conferência de Pagamentos"'s optional "Importado em"/"Extras" columns — see `PaymentShiftRow` for the same fields' meaning. */
+  importedAt: string;
+  extraData: Record<string, string> | null;
   /** Computed in SQL via the company's own configured rule, same as `shiftPeriodSql` powers for the list's Diurno/Noturno filter — `null` when there's no schedule to classify. */
   shiftPeriod: ShiftPeriod | null;
 }
 
+type PaymentShiftReportRowRaw = Omit<PaymentShiftReportRow, "extraData"> & { extraData: string | null };
+
 /**
  * Every *current* shift matching the Pagamentos list's filters, flat (no
- * grouping/pagination) — the data behind "Gerar PDF". Same WHERE-condition
- * shape as `listPaymentShiftSummaries` for search/empresa/cliente/período,
- * but status and diurno/noturno are per-row `WHERE` conditions here instead
- * of aggregated `HAVING` ones, since there's no `GROUP BY` to aggregate
- * through.
+ * grouping/pagination) — the data behind "Gerar PDF" and "Conferência de
+ * Pagamentos". Same WHERE-condition shape as `listPaymentShiftSummaries` for
+ * search/empresa/cliente/período, but status and diurno/noturno are per-row
+ * `WHERE` conditions here instead of aggregated `HAVING` ones, since there's
+ * no `GROUP BY` to aggregate through.
  */
 export async function listPaymentShiftsForReport(
   query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
@@ -4092,12 +4101,13 @@ export async function listPaymentShiftsForReport(
   const params: (string | number)[] = [];
   const conditions = buildPaymentShiftRowConditions(query, params);
 
-  return db.select<PaymentShiftReportRow[]>(
-    `SELECT e.id AS employeeId, e.name AS employeeName, c.id AS companyId, c.name AS companyName,
+  const rows = await db.select<PaymentShiftReportRowRaw[]>(
+    `SELECT ps.id, e.id AS employeeId, e.name AS employeeName, c.id AS companyId, c.name AS companyName,
             cl.id AS clientId, cl.name AS clientName,
             ps.work_date AS workDate, ps.local, COALESCE(r.name, '') AS role,
             ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
-            ps.status, ps.amount, ${shiftPeriodSelectSql()} AS shiftPeriod
+            ps.status, ps.amount, ps.imported_at AS importedAt, ps.extra_data AS extraData,
+            ${shiftPeriodSelectSql()} AS shiftPeriod
      FROM payment_shifts ps
      JOIN employees e ON e.id = ps.employee_id
      JOIN clients cl ON cl.id = ps.client_id
@@ -4107,6 +4117,7 @@ export async function listPaymentShiftsForReport(
      ORDER BY ps.work_date, ps.local, e.name`,
     params,
   );
+  return rows.map((r) => ({ ...r, extraData: r.extraData ? JSON.parse(r.extraData) : null }));
 }
 
 export interface PaymentShiftFlatRow extends PaymentShiftRow {
@@ -4398,6 +4409,54 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
     ],
   );
   return result.lastInsertId as number;
+}
+
+/**
+ * Records "Conferência de Pagamentos"'s manual bank-statement verdict for a
+ * `pago` shift — an upsert, not a plain insert: a shift already audited as
+ * `confirmado` can still be corrected to `erro` later ("achei que tinha
+ * batido, mas na verdade não bateu"), which just overwrites the existing
+ * `payment_audits` row via `UNIQUE(payment_shift_id)`'s own `ON CONFLICT`
+ * (see the 0074 migration) rather than erroring — `audited_at` is bumped to
+ * now on the update branch too, since SQLite's column `DEFAULT` only ever
+ * applies to a fresh `INSERT`, not the `UPDATE` half of an upsert.
+ */
+export async function recordPaymentAudit(paymentShiftId: number, result: PaymentAuditResult, note: string | null): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO payment_audits (payment_shift_id, result, note)
+     VALUES ($1, $2, $3)
+     ON CONFLICT(payment_shift_id) DO UPDATE SET result = excluded.result, note = excluded.note, audited_at = datetime('now')`,
+    [paymentShiftId, result, note],
+  );
+}
+
+/** The recorded audit verdict, if any, for each given `payment_shifts.id` — at most one per id (UNIQUE constraint). */
+export async function listPaymentAuditsForShiftIds(shiftIds: number[]): Promise<PaymentAuditRow[]> {
+  if (shiftIds.length === 0) return [];
+  const db = await getDb();
+  const placeholders = shiftIds.map((_, i) => `$${i + 1}`).join(", ");
+  return db.select<PaymentAuditRow[]>(
+    `SELECT id, payment_shift_id AS paymentShiftId, result, note, audited_at AS auditedAt
+     FROM payment_audits
+     WHERE payment_shift_id IN (${placeholders})`,
+    shiftIds,
+  );
+}
+
+/**
+ * "Desconfirmar" — undoes a `payment_audits` verdict so the shift goes back
+ * to "não conferido" and reappears in the actionable Conferência list. Only
+ * ever removes the audit fact itself, never anything it may have caused: a
+ * `confirmado` verdict has no other side effect to undo, but an `erro`
+ * verdict already triggered `revertPaymentShiftToPending`, which appended a
+ * real new `payment_shifts` row — that revert stays in effect either way.
+ * Undoing that too would mean re-creating a `pago` state, which is just
+ * "pay it again", a separate, already-existing flow, not an undo.
+ */
+export async function deletePaymentAudit(paymentShiftId: number): Promise<void> {
+  const db = await getDb();
+  await db.execute(`DELETE FROM payment_audits WHERE payment_shift_id = $1`, [paymentShiftId]);
 }
 
 /**
