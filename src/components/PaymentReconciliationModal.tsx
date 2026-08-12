@@ -1,4 +1,4 @@
-import { Check, Filter, Moon, Sun, X } from "lucide-react";
+import { Filter, Moon, Sun, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { usePaymentsFilters } from "../contexts/FiltersContext";
 import {
@@ -6,7 +6,6 @@ import {
   listPaymentAuditsForShiftIds,
   listPaymentShiftsForReport,
   recordPaymentAudit,
-  revertPaymentShiftToPending,
   type ClientRow,
   type CompanyRow,
   type ListPaymentShiftSummariesQuery,
@@ -28,11 +27,6 @@ const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: strin
   pago: { className: "badge ok", label: "Pago" },
 };
 
-const AUDIT_BADGE_CLASS: Record<PaymentAuditResult, string> = {
-  confirmado: "badge ok",
-  erro: "badge file-error",
-};
-
 /** Columns most useful for matching a paid shift against a bank statement — the rest of `FLAT_COLUMNS` starts off unchecked, same picker mechanics as the main page's but a smaller default and never touching `payment_settings.visible_columns_json`. */
 const DEFAULT_VISIBLE_COLUMN_IDS = new Set(["colaborador", "data", "local", "valor", "status"]);
 
@@ -50,14 +44,18 @@ function CloseButton() {
 
 /**
  * "Conferência de Pagamentos" — a full-screen review flow that replaces the
- * user's external spreadsheet for checking paid shifts against the bank:
- * for each `pago` shift, Confirmar records nothing but the audit fact
- * itself (see `recordPaymentAudit`), while Erro also reverts the shift back
- * to `pendente` (reusing `revertPaymentShiftToPending` as-is) so it re-enters
- * the normal payment queue. Non-`pago` rows can appear too (whatever the
- * active filters currently include) but are read-only, since there's
- * nothing to reconcile against a bank for a shift that hasn't been paid
- * yet.
+ * user's external spreadsheet for checking paid shifts against the bank.
+ * This is purely a review/audit screen, not an actions screen: for each
+ * `pago` shift, both Confirmar and Marcar erro only ever record a verdict
+ * (see `recordPaymentAudit`) — neither one touches `payment_shifts` itself,
+ * so a wrong verdict is always freely correctable by clicking the other
+ * button (or "Desfazer" to clear it back to unaudited), with nothing else
+ * in the system to undo alongside it. Reverting a shift back to `pendente`
+ * for re-payment stays the Pagamentos page's own separate, deliberate
+ * "Voltar para pendente" action — this screen never triggers it. Non-`pago`
+ * rows can appear too (whatever the active filters currently include) but
+ * are read-only, since there's nothing to reconcile against a bank for a
+ * shift that hasn't been paid yet.
  *
  * Filters are the SAME live `usePaymentsFilters()` state the Pagamentos
  * page itself reads/writes — not a snapshot — so changing them here (via
@@ -197,11 +195,27 @@ export default function PaymentReconciliationModal({
     setFocusedShiftId(visibleRows[0]?.id ?? null);
   }, [visibleRows, focusedShiftId]);
 
-  // Confirmar/Marcar erro/Desfazer never move focus themselves — whichever
-  // row was focused (by an earlier click, right-click, or arrow key) before
-  // the action stays focused after it, so acting on a row never yanks focus
-  // out from under you onto a different one. Arrow keys remain the only way
-  // focus moves.
+  /**
+   * Only relevant with "Mostrar itens já conferidos" OFF — that's the only
+   * case where auditing `shiftId` actually removes it from `visibleRows`
+   * (with the toggle on, the row stays right where it is, badge in place of
+   * the buttons, and keeping focus on it — i.e. doing nothing here — is
+   * exactly right). Moves focus to whatever row is about to take this one's
+   * place once it's filtered out, computed from the CURRENT `visibleRows`
+   * (before the audit that's about to hide it lands) so it lines up with
+   * the list's next render — without this, focus would fall through to the
+   * generic reset effect above, which has no notion of "where this row
+   * was" and would jump all the way back to the top of the list instead.
+   */
+  function advanceFocusIfHidden(shiftId: number) {
+    if (showAudited) return;
+    const idx = visibleRows.findIndex((r) => r.id === shiftId);
+    if (idx === -1) return;
+    const remaining = visibleRows.filter((r) => r.id !== shiftId);
+    const next = remaining[Math.min(idx, remaining.length - 1)] ?? null;
+    setFocusedShiftId(next ? next.id : null);
+  }
+
   async function handleConfirm(shiftId: number) {
     if (actingShiftId !== null) return;
     setActingShiftId(shiftId);
@@ -209,6 +223,7 @@ export default function PaymentReconciliationModal({
     try {
       await recordPaymentAudit(shiftId, "confirmado", null);
       setAudits((prev) => new Map(prev).set(shiftId, { result: "confirmado", note: null, auditedAt: new Date().toISOString() }));
+      advanceFocusIfHidden(shiftId);
     } catch (e) {
       setActionError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -222,8 +237,8 @@ export default function PaymentReconciliationModal({
     setActionError(null);
     try {
       await recordPaymentAudit(shift.id, "erro", null);
-      await revertPaymentShiftToPending(shift.id);
       setAudits((prev) => new Map(prev).set(shift.id, { result: "erro", note: null, auditedAt: new Date().toISOString() }));
+      advanceFocusIfHidden(shift.id);
     } catch (e) {
       setActionError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -232,16 +247,14 @@ export default function PaymentReconciliationModal({
   }
 
   /**
-   * "Desconfirmar" — only offered for a `confirmado` verdict, where undoing
-   * really does put the shift back exactly how it was (still `pago`,
-   * nothing else ever changed). An `erro` verdict already triggered a real
-   * revert to `pendente` via `revertPaymentShiftToPending`, which can't be
-   * undone by deleting the audit row alone — see `deletePaymentAudit`'s own
-   * doc comment — so that badge stays as a permanent record instead.
-   * Triggered from the row's right-click menu (see `onContextMenu` below),
-   * not a persistent button.
+   * "Desfazer" — clears whichever verdict (confirmado or erro) is currently
+   * recorded, back to unaudited. Safe either way: neither verdict ever
+   * touched `payment_shifts` itself (see the module doc comment above), so
+   * there's nothing else to reverse alongside the audit row. Triggered from
+   * the row's right-click menu (see `onContextMenu` below), not a
+   * persistent button.
    */
-  async function handleUndoConfirm(shiftId: number) {
+  async function handleUndoAudit(shiftId: number) {
     if (actingShiftId !== null) return;
     setActingShiftId(shiftId);
     setActionError(null);
@@ -268,7 +281,9 @@ export default function PaymentReconciliationModal({
 
   const focusedRow = focusedShiftId !== null ? visibleRows.find((r) => r.id === focusedShiftId) ?? null : null;
   const focusedAudit = focusedRow ? audits.get(focusedRow.id) ?? null : null;
-  const focusedActionable = focusedRow?.status === "pago" && !focusedAudit;
+  // Same per-action logic as the row's own buttons/menu: disabled exactly
+  // when it would be a no-op given the row's current verdict.
+  const focusedCanConfirm = focusedRow?.status === "pago" && focusedAudit?.result !== "confirmado";
   const focusedCanMarkError = focusedRow?.status === "pago" && focusedAudit?.result !== "erro";
 
   // Arrow keys move focus across every visible row (not just actionable
@@ -289,7 +304,7 @@ export default function PaymentReconciliationModal({
         moveFocus(-1);
       } else if (e.key === "Enter" || e.key === "y" || e.key === "Y") {
         e.preventDefault();
-        if (focusedShiftId !== null && focusedActionable) handleConfirm(focusedShiftId);
+        if (focusedShiftId !== null && focusedCanConfirm) handleConfirm(focusedShiftId);
       } else if (e.key === "Backspace" || e.key === "n" || e.key === "N") {
         e.preventDefault();
         if (focusedRow && focusedCanMarkError) handleErrorSubmit(focusedRow);
@@ -298,7 +313,7 @@ export default function PaymentReconciliationModal({
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedShiftId, visibleRows, actingShiftId, focusedActionable, focusedCanMarkError]);
+  }, [focusedShiftId, visibleRows, actingShiftId, focusedCanConfirm, focusedCanMarkError]);
 
   return (
     <Modal fullScreen zIndex={100} onClose={onClose} closeOnEscape={!filtersDrawerOpen}>
@@ -386,7 +401,6 @@ export default function PaymentReconciliationModal({
                   {FLAT_COLUMNS.filter((c) => visibleColumns.has(c.id)).map((c) => (
                     <th key={c.id}>{c.label}</th>
                   ))}
-                  <th>Conferência</th>
                 </tr>
               </thead>
               <tbody>
@@ -394,26 +408,30 @@ export default function PaymentReconciliationModal({
                   const hasSchedule = r.scheduleStartMinutes !== null && r.scheduleEndMinutes !== null;
                   const duration = hasSchedule ? shiftDurationMinutes(r.scheduleStartMinutes!, r.scheduleEndMinutes!) : null;
                   const audit = audits.get(r.id) ?? null;
-                  const actionable = r.status === "pago" && !audit;
-                  const col = (id: string) => visibleColumns.has(id);
-                  // Every possible action always appears — one that doesn't
-                  // currently apply to this row is `disabled` rather than
-                  // omitted, so the full set of things this menu can do
-                  // stays discoverable no matter which row you right-click
-                  // (same convention the Pagamentos table's own row menu
-                  // uses for "Fazer pagamento"/"Ver histórico").
-                  // Marcar erro stays available even on an already-`confirmado`
-                  // row — "achei que tinha batido, mas na verdade não bateu" is
-                  // a real correction, not just an initial verdict, and
-                  // `recordPaymentAudit` upserts so it just overwrites the
-                  // existing audit. An `erro` row is the one terminal state:
-                  // it already reverted the shift to `pendente`, so there's
-                  // nothing left here to mark.
+                  // Each action is disabled exactly when it would be a
+                  // no-op given the row's CURRENT verdict — re-confirming an
+                  // already-`confirmado` row (or re-marking an already-`erro`
+                  // one) does nothing new, while the OTHER verdict and
+                  // "Desfazer" stay available to correct it (purely an audit
+                  // label — see the module doc comment — so switching either
+                  // direction via `recordPaymentAudit`'s upsert is always
+                  // safe).
+                  const canConfirm = r.status === "pago" && audit?.result !== "confirmado";
                   const canMarkError = r.status === "pago" && audit?.result !== "erro";
+                  const col = (id: string) => visibleColumns.has(id);
+                  // Every possible action always appears in the right-click
+                  // menu (the only place any of this is reachable via mouse
+                  // — see the toolbar's shortcuts legend for the keyboard
+                  // equivalents) — one that doesn't currently apply to this
+                  // row is `disabled` rather than omitted, so the full set
+                  // of things this menu can do stays discoverable no matter
+                  // which row you right-click (same convention the
+                  // Pagamentos table's own row menu uses for "Fazer
+                  // pagamento"/"Ver histórico").
                   const rowActions: ContextMenuItem[] = [
                     {
                       label: "Confirmar",
-                      disabled: !actionable || actingShiftId === r.id,
+                      disabled: !canConfirm || actingShiftId === r.id,
                       onClick: () => handleConfirm(r.id),
                     },
                     {
@@ -422,16 +440,33 @@ export default function PaymentReconciliationModal({
                       onClick: () => handleErrorSubmit(r),
                     },
                     {
-                      label: "Desfazer confirmação",
-                      disabled: audit?.result !== "confirmado" || actingShiftId === r.id,
-                      onClick: () => handleUndoConfirm(r.id),
+                      label: "Desfazer",
+                      disabled: !audit || actingShiftId === r.id,
+                      onClick: () => handleUndoAudit(r.id),
                     },
                   ];
+                  // The audit verdict colors the whole row — confirmado
+                  // green, erro red — instead of a dedicated column. Plain
+                  // CSS classes (not an inline style), specifically so
+                  // App.css's own `:hover`/`.row-active` combos for these
+                  // classes can still take over the background — an inline
+                  // style would out-specificity every class-based rule
+                  // unconditionally, silently swallowing both the hover and
+                  // focus cues on any audited row (see the rules themselves
+                  // in App.css for the actual colors/priority).
+                  const rowClassName = [
+                    r.id === focusedShiftId && "row-active",
+                    audit?.result === "confirmado" && "row-confirmado",
+                    audit?.result === "erro" && "row-erro",
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
                   return (
                     <tr
                       key={r.id}
-                      className={r.id === focusedShiftId ? "row-active" : undefined}
+                      className={rowClassName || undefined}
                       style={{ cursor: "pointer" }}
+                      title={audit ? `${PAYMENT_AUDIT_RESULT_LABELS[audit.result]} em ${formatDateTimeAbbrevYY(audit.auditedAt)}` : undefined}
                       onClick={() => setFocusedShiftId(r.id)}
                       onContextMenu={(e) => {
                         e.preventDefault();
@@ -488,46 +523,6 @@ export default function PaymentReconciliationModal({
                           {r.extraData && `${Object.keys(r.extraData).length} coluna(s)`}
                         </td>
                       )}
-                      <td>
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                          {actionable && (
-                            <button
-                              type="button"
-                              className="ghost"
-                              title="Confirmar (bateu com o banco)"
-                              style={{ color: "var(--success)", padding: "0.3rem" }}
-                              disabled={actingShiftId === r.id}
-                              onClick={() => handleConfirm(r.id)}
-                            >
-                              <Check size={16} />
-                            </button>
-                          )}
-                          {canMarkError && (
-                            <button
-                              type="button"
-                              className="ghost"
-                              title="Marcar erro (não bateu com o banco)"
-                              style={{ color: "var(--danger)", padding: "0.3rem" }}
-                              disabled={actingShiftId === r.id}
-                              onClick={() => handleErrorSubmit(r)}
-                            >
-                              <X size={16} />
-                            </button>
-                          )}
-                          {audit && (
-                            <span
-                              className={AUDIT_BADGE_CLASS[audit.result]}
-                              title={
-                                audit.result === "confirmado"
-                                  ? `Confirmado em ${formatDateTimeAbbrevYY(audit.auditedAt)} — clique com o botão direito para desfazer`
-                                  : `Marcado como erro em ${formatDateTimeAbbrevYY(audit.auditedAt)}${audit.note ? ` — ${audit.note}` : ""}`
-                              }
-                            >
-                              {PAYMENT_AUDIT_RESULT_LABELS[audit.result]}
-                            </span>
-                          )}
-                        </div>
-                      </td>
                     </tr>
                   );
                 })}

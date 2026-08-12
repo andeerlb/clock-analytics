@@ -1365,6 +1365,38 @@ tr.row-active td:first-child {
   box-shadow: inset 3px 0 0 0 var(--accent);
 }
 
+/* "Conferência de Pagamentos"'s per-row audit verdict — confirmado green,
+   erro red — with its own hover/focus variants (all class-based, not the
+   inline-style-wins convention `tr.row-active`'s own comment above
+   describes) specifically so hovering or keyboard-focusing an already
+   audited row still reads clearly instead of the verdict tint flattening
+   both cues into an unchanging background — this screen leans on hover to
+   show "where I am" while going through a long list, so it can't be lost
+   here the way an inline style would lose it. `tr.row-active.row-confirmado`
+   (three classes) naturally outweighs `tr.row-confirmado:hover` (two) so
+   focus wins visually over a simultaneous hover on the same row. */
+tr.row-confirmado {
+  background: rgba(78, 222, 163, 0.15);
+}
+tr.row-confirmado:hover {
+  background: rgba(78, 222, 163, 0.24);
+}
+tr.row-active.row-confirmado,
+tr.row-active.row-confirmado:hover {
+  background: rgba(78, 222, 163, 0.32);
+}
+
+tr.row-erro {
+  background: rgba(255, 180, 171, 0.15);
+}
+tr.row-erro:hover {
+  background: rgba(255, 180, 171, 0.24);
+}
+tr.row-active.row-erro,
+tr.row-active.row-erro:hover {
+  background: rgba(255, 180, 171, 0.32);
+}
+
 /* Payment template wizard — spacing/radii below mirror the reference
    mockup's own design tokens as literally as this app's real layout
    allows: table-cell-px 12px, table-cell-py 8px, stack-tight 8px,

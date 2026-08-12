@@ -4445,14 +4445,12 @@ export async function listPaymentAuditsForShiftIds(shiftIds: number[]): Promise<
 }
 
 /**
- * "Desconfirmar" — undoes a `payment_audits` verdict so the shift goes back
- * to "não conferido" and reappears in the actionable Conferência list. Only
- * ever removes the audit fact itself, never anything it may have caused: a
- * `confirmado` verdict has no other side effect to undo, but an `erro`
- * verdict already triggered `revertPaymentShiftToPending`, which appended a
- * real new `payment_shifts` row — that revert stays in effect either way.
- * Undoing that too would mean re-creating a `pago` state, which is just
- * "pay it again", a separate, already-existing flow, not an undo.
+ * "Desfazer" — clears a `payment_audits` verdict (either result) so the
+ * shift goes back to "não conferido" and reappears in the actionable
+ * Conferência list. Safe for either verdict: "Conferência de Pagamentos" is
+ * purely a review screen — neither `confirmado` nor `erro` ever touches
+ * `payment_shifts` itself (see `recordPaymentAudit`), so there's nothing
+ * else in the system this needs to reverse alongside the audit row.
  */
 export async function deletePaymentAudit(paymentShiftId: number): Promise<void> {
   const db = await getDb();
