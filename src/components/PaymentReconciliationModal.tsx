@@ -287,11 +287,12 @@ export default function PaymentReconciliationModal({
   const focusedCanMarkError = focusedRow?.status === "pago" && focusedAudit?.result !== "erro";
 
   // Arrow keys move focus across every visible row (not just actionable
-  // ones — see the comment above the focus-reset effect); Y/Enter confirms
-  // and N/Backspace marks erro on the focused row directly, same as
-  // clicking the equivalent button — both no-ops while the focused row
-  // can't take that action. Same scoped attach/detach recipe as
-  // PdfViewerModal's own page-navigation shortcuts.
+  // ones — see the comment above the focus-reset effect); Y/Enter confirms,
+  // N/Backspace marks erro, and U undoes whichever verdict is already
+  // recorded on the focused row directly, same as clicking the equivalent
+  // button/menu item — all no-ops while the focused row can't take that
+  // action. Same scoped attach/detach recipe as PdfViewerModal's own
+  // page-navigation shortcuts.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
@@ -308,12 +309,15 @@ export default function PaymentReconciliationModal({
       } else if (e.key === "Backspace" || e.key === "n" || e.key === "N") {
         e.preventDefault();
         if (focusedRow && focusedCanMarkError) handleErrorSubmit(focusedRow);
+      } else if (e.key === "u" || e.key === "U") {
+        e.preventDefault();
+        if (focusedShiftId !== null && focusedAudit) handleUndoAudit(focusedShiftId);
       }
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedShiftId, visibleRows, actingShiftId, focusedCanConfirm, focusedCanMarkError]);
+  }, [focusedShiftId, visibleRows, actingShiftId, focusedCanConfirm, focusedCanMarkError, focusedAudit]);
 
   return (
     <Modal fullScreen zIndex={100} onClose={onClose} closeOnEscape={!filtersDrawerOpen}>
@@ -383,7 +387,7 @@ export default function PaymentReconciliationModal({
         style={{ padding: "0.5rem 1.2rem", borderBottom: "1px solid var(--border)", fontSize: "0.78rem" }}
         onClick={(e) => e.stopPropagation()}
       >
-        Atalhos: ↑ / ↓ navegar · Enter ou Y confirmar · Backspace ou N marcar erro · clique direito num item para ver todas as ações
+        Atalhos: ↑ / ↓ navegar · Enter ou Y confirmar · Backspace ou N marcar erro · U desfazer · clique direito num item para ver todas as ações
       </div>
 
       <div style={{ flex: 1, overflow: "auto", padding: "1.2rem", minHeight: 0 }} onClick={(e) => e.stopPropagation()}>
