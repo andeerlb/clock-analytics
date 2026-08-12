@@ -1,8 +1,9 @@
-import { Plus, Trash2, X } from "lucide-react";
+import { Briefcase, Info, Plus, Tags, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
+import FormPanel from "../components/FormPanel";
 import {
   addEmployeeAlias,
   createEmployeeManual,
@@ -250,231 +251,147 @@ export default function EmployeeFormPage() {
 
       {error && <div className="error-box">{error}</div>}
 
-      {loading ? (
-        <p className="muted">Carregando...</p>
-      ) : (
-        <div className="card" style={{ maxWidth: "32rem" }}>
-          <form onSubmit={handleSubmit}>
-            {!isEditing && (
-              <div className="field-row" style={{ marginBottom: "1rem" }}>
-                <div className="field" style={{ flex: "1 1 200px" }}>
-                  <label htmlFor="employee-client">Cliente</label>
-                  {clients.length === 0 ? (
-                    <p className="field-hint">
-                      Nenhum cliente cadastrado. <Link to="/clients">Cadastre um cliente</Link>{" "}
-                      antes.
-                    </p>
-                  ) : (
+      <div className="details-main" style={{ maxWidth: "52rem" }}>
+        {loading ? (
+          <p className="muted">Carregando...</p>
+        ) : (
+          <FormPanel icon={Info} title="Informações Gerais">
+            <form onSubmit={handleSubmit}>
+              {!isEditing && (
+                <div className="field-row" style={{ marginBottom: "1rem" }}>
+                  <div className="field" style={{ flex: "1 1 200px" }}>
+                    <label htmlFor="employee-client">Cliente</label>
+                    {clients.length === 0 ? (
+                      <p className="field-hint">
+                        Nenhum cliente cadastrado. <Link to="/clients">Cadastre um cliente</Link>{" "}
+                        antes.
+                      </p>
+                    ) : (
+                      <select
+                        id="employee-client"
+                        value={clientId}
+                        onChange={(e) => setClientId(e.target.value)}
+                        required
+                      >
+                        <option value="">Selecione</option>
+                        {Array.from(new Map(clients.map((c) => [c.id, c])).values()).map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                  <div className="field" style={{ flex: "1 1 180px" }}>
+                    <label htmlFor="employee-company">Empresa</label>
                     <select
-                      id="employee-client"
-                      value={clientId}
-                      onChange={(e) => setClientId(e.target.value)}
+                      id="employee-company"
+                      value={companyId}
+                      onChange={(e) => setCompanyId(e.target.value)}
+                      disabled={clientCompanies.length <= 1}
                       required
                     >
-                      <option value="">Selecione</option>
-                      {Array.from(new Map(clients.map((c) => [c.id, c])).values()).map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
+                      {clientCompanies.length !== 1 && <option value="">Selecione uma empresa</option>}
+                      {clientCompanies.map((c) => (
+                        <option key={c.companyId} value={c.companyId}>
+                          {c.companyName}
                         </option>
                       ))}
                     </select>
-                  )}
+                  </div>
                 </div>
-                <div className="field" style={{ flex: "1 1 180px" }}>
-                  <label htmlFor="employee-company">Empresa</label>
-                  <select
-                    id="employee-company"
-                    value={companyId}
-                    onChange={(e) => setCompanyId(e.target.value)}
-                    disabled={clientCompanies.length <= 1}
-                    required
-                  >
-                    {clientCompanies.length !== 1 && <option value="">Selecione uma empresa</option>}
-                    {clientCompanies.map((c) => (
-                      <option key={c.companyId} value={c.companyId}>
-                        {c.companyName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            )}
+              )}
 
-            <div className="field" style={{ marginBottom: "1rem" }}>
-              <label htmlFor="employee-name">Nome</label>
-              <input
-                id="employee-name"
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Nome completo"
-                required
-                style={{ width: "100%" }}
-              />
-            </div>
-            <div className="field-row" style={{ marginBottom: "1.2rem" }}>
-              <div className="field" style={{ flex: "1 1 200px" }}>
-                <label htmlFor="employee-cpf">CPF</label>
+              <div className="field" style={{ marginBottom: "1rem" }}>
+                <label htmlFor="employee-name">Nome</label>
                 <input
-                  id="employee-cpf"
+                  id="employee-name"
                   type="text"
-                  value={cpf}
-                  onChange={(e) => setCpf(maskCpf(e.target.value))}
-                  placeholder="000.000.000-00"
-                  inputMode="numeric"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Nome completo"
                   required
                   style={{ width: "100%" }}
                 />
               </div>
-              {!isEditing && (
-                <div className="field" style={{ flex: "1 1 160px" }}>
-                  <label htmlFor="employee-matricula">Matrícula (opcional)</label>
+              <div className="field-row" style={{ marginBottom: "1.2rem" }}>
+                <div className="field" style={{ flex: "1 1 200px" }}>
+                  <label htmlFor="employee-cpf">CPF</label>
                   <input
-                    id="employee-matricula"
+                    id="employee-cpf"
                     type="text"
-                    value={matricula}
-                    onChange={(e) => setMatricula(e.target.value)}
-                    placeholder="Ex.: 00123"
+                    value={cpf}
+                    onChange={(e) => setCpf(maskCpf(e.target.value))}
+                    placeholder="000.000.000-00"
+                    inputMode="numeric"
+                    required
                     style={{ width: "100%" }}
                   />
                 </div>
-              )}
-            </div>
-
-            <button type="submit" disabled={busy}>
-              {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
-            </button>
-          </form>
-        </div>
-      )}
-
-      {!loading && isEditing && (
-        <div className="card" style={{ maxWidth: "32rem", marginTop: "1.2rem" }}>
-          <h3 style={{ marginTop: 0 }}>Clientes e empresas vinculados</h3>
-          <p className="page-subtitle" style={{ marginTop: 0 }}>
-            Um colaborador pode estar vinculado a mais de um cliente e, para cada cliente, a mais de
-            uma empresa (ex.: contratado por duas empresas diferentes que atendem o mesmo cliente) —
-            cada vínculo tem sua própria matrícula, já que ela é emitida pela folha de pagamento de
-            cada empresa.
-          </p>
-
-          {linkError && <div className="error-box">{linkError}</div>}
-
-          <div className="file-list" style={{ marginBottom: "0.8rem" }}>
-            {links.map((l) => (
-              <div className="file-row" key={`${l.clientId}-${l.companyId}`}>
-                <div className="file-row-info">
-                  <div className="file-name">
-                    <span className="muted" style={{ fontWeight: 400 }}>
-                      Empresa:{" "}
-                    </span>
-                    {l.companyName}
+                {!isEditing && (
+                  <div className="field" style={{ flex: "1 1 160px" }}>
+                    <label htmlFor="employee-matricula">Matrícula (opcional)</label>
+                    <input
+                      id="employee-matricula"
+                      type="text"
+                      value={matricula}
+                      onChange={(e) => setMatricula(e.target.value)}
+                      placeholder="Ex.: 00123"
+                      style={{ width: "100%" }}
+                    />
                   </div>
-                  <div className="file-name">
-                    <span className="muted" style={{ fontWeight: 400 }}>
-                      Cliente:{" "}
-                    </span>
-                    {l.clientName}
-                  </div>
-                </div>
-                <input
-                  type="text"
-                  value={l.matricula ?? ""}
-                  onChange={(e) => handleMatriculaChange(l.clientId, l.companyId, e.target.value)}
-                  onBlur={(e) => handleMatriculaBlur(l.clientId, l.companyId, e.target.value)}
-                  placeholder="Matrícula (opcional)"
-                  style={{ width: "10rem" }}
-                />
-                <div className="file-row-actions">
-                  <button
-                    type="button"
-                    className="ghost"
-                    style={{ padding: "0.3rem" }}
-                    onClick={() => handleRemoveLink(l.clientId, l.companyId)}
-                    disabled={links.length <= 1}
-                    title={links.length <= 1 ? "O colaborador precisa de ao menos um vínculo" : "Remover vínculo"}
-                    aria-label="Remover vínculo"
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
+                )}
               </div>
-            ))}
-          </div>
 
-          <form onSubmit={handleAddLink} style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-            <select
-              value={addClientId}
-              onChange={(e) => {
-                setAddClientId(e.target.value);
-                setAddCompanyId("");
-              }}
-              required
-              style={{ flex: "1 1 160px" }}
-            >
-              <option value="">Vincular a outro cliente...</option>
-              {Array.from(new Map(clients.map((c) => [c.id, c])).values()).map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            <select
-              value={addCompanyId}
-              onChange={(e) => setAddCompanyId(e.target.value)}
-              required
-              disabled={!addClientId}
-              style={{ flex: "1 1 160px" }}
-            >
-              <option value="">Empresa...</option>
-              {availableLinksToAdd.map((c) => (
-                <option key={c.companyId} value={c.companyId}>
-                  {c.companyName}
-                </option>
-              ))}
-            </select>
-            <input
-              type="text"
-              value={addMatricula}
-              onChange={(e) => setAddMatricula(e.target.value)}
-              placeholder="Matrícula (opcional)"
-              style={{ width: "10rem" }}
-            />
-            <button type="submit" className="secondary" disabled={linkBusy || !addClientId || !addCompanyId}>
-              <Plus size={14} style={{ marginRight: "0.3rem" }} />
-              Vincular
-            </button>
-          </form>
-        </div>
-      )}
+              <button type="submit" disabled={busy}>
+                {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
+              </button>
+            </form>
+          </FormPanel>
+        )}
 
-      {!loading && isEditing && (
-        <div className="card" style={{ maxWidth: "32rem", marginTop: "1.2rem" }}>
-          <h3 style={{ marginTop: 0 }}>Possíveis nomes</h3>
-          <p className="page-subtitle" style={{ marginTop: 0 }}>
-            Outras grafias do nome desse colaborador que podem aparecer em arquivos de pagamento
-            (ex.: "Anderson Lucas" para "Anderson Lucas Babinski") — consideradas junto com o nome
-            cadastrado ao buscar o colaborador durante a importação. Um nome só pode estar
-            vinculado a um colaborador por vez, entre os clientes/empresas em que ele já está
-            vinculado.
-          </p>
+        {!loading && isEditing && (
+          <FormPanel
+            icon={Briefcase}
+            title="Clientes e empresas vinculados"
+            description="Um colaborador pode estar vinculado a mais de um cliente e, para cada cliente, a mais de uma empresa (ex.: contratado por duas empresas diferentes que atendem o mesmo cliente) — cada vínculo tem sua própria matrícula, já que ela é emitida pela folha de pagamento de cada empresa."
+          >
+            {linkError && <div className="error-box">{linkError}</div>}
 
-          {aliasError && <div className="error-box">{aliasError}</div>}
-
-          {aliases.length > 0 && (
             <div className="file-list" style={{ marginBottom: "0.8rem" }}>
-              {aliases.map((a) => (
-                <div className="file-row" key={a.id}>
+              {links.map((l) => (
+                <div className="file-row" key={`${l.clientId}-${l.companyId}`}>
                   <div className="file-row-info">
-                    <div className="file-name">{a.alias}</div>
+                    <div className="file-name">
+                      <span className="muted" style={{ fontWeight: 400 }}>
+                        Empresa:{" "}
+                      </span>
+                      {l.companyName}
+                    </div>
+                    <div className="file-name">
+                      <span className="muted" style={{ fontWeight: 400 }}>
+                        Cliente:{" "}
+                      </span>
+                      {l.clientName}
+                    </div>
                   </div>
+                  <input
+                    type="text"
+                    value={l.matricula ?? ""}
+                    onChange={(e) => handleMatriculaChange(l.clientId, l.companyId, e.target.value)}
+                    onBlur={(e) => handleMatriculaBlur(l.clientId, l.companyId, e.target.value)}
+                    placeholder="Matrícula (opcional)"
+                    style={{ width: "10rem" }}
+                  />
                   <div className="file-row-actions">
                     <button
                       type="button"
                       className="ghost"
                       style={{ padding: "0.3rem" }}
-                      onClick={() => handleRemoveAlias(a.id)}
-                      aria-label="Remover"
+                      onClick={() => handleRemoveLink(l.clientId, l.companyId)}
+                      disabled={links.length <= 1}
+                      title={links.length <= 1 ? "O colaborador precisa de ao menos um vínculo" : "Remover vínculo"}
+                      aria-label="Remover vínculo"
                     >
                       <X size={14} />
                     </button>
@@ -482,38 +399,116 @@ export default function EmployeeFormPage() {
                 </div>
               ))}
             </div>
-          )}
 
-          <form onSubmit={handleAddAlias} style={{ display: "flex", gap: "0.5rem" }}>
-            <input
-              type="text"
-              value={newAlias}
-              onChange={(e) => setNewAlias(e.target.value)}
-              placeholder="Ex.: Anderson Lucas"
-              style={{ flex: 1 }}
-            />
-            <button type="submit" className="secondary" disabled={aliasBusy || !newAlias.trim()}>
-              <Plus size={14} style={{ marginRight: "0.3rem" }} />
-              Adicionar
+            <form onSubmit={handleAddLink} style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+              <select
+                value={addClientId}
+                onChange={(e) => {
+                  setAddClientId(e.target.value);
+                  setAddCompanyId("");
+                }}
+                required
+                style={{ flex: "1 1 160px" }}
+              >
+                <option value="">Vincular a outro cliente...</option>
+                {Array.from(new Map(clients.map((c) => [c.id, c])).values()).map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={addCompanyId}
+                onChange={(e) => setAddCompanyId(e.target.value)}
+                required
+                disabled={!addClientId}
+                style={{ flex: "1 1 160px" }}
+              >
+                <option value="">Empresa...</option>
+                {availableLinksToAdd.map((c) => (
+                  <option key={c.companyId} value={c.companyId}>
+                    {c.companyName}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={addMatricula}
+                onChange={(e) => setAddMatricula(e.target.value)}
+                placeholder="Matrícula (opcional)"
+                style={{ width: "10rem" }}
+              />
+              <button type="submit" className="secondary" disabled={linkBusy || !addClientId || !addCompanyId}>
+                <Plus size={14} style={{ marginRight: "0.3rem" }} />
+                Vincular
+              </button>
+            </form>
+          </FormPanel>
+        )}
+
+        {!loading && isEditing && (
+          <FormPanel
+            icon={Tags}
+            title="Possíveis nomes"
+            description={
+              'Outras grafias do nome desse colaborador que podem aparecer em arquivos de pagamento (ex.: "Anderson Lucas" para "Anderson Lucas Babinski") — consideradas junto com o nome cadastrado ao buscar o colaborador durante a importação. Um nome só pode estar vinculado a um colaborador por vez, entre os clientes/empresas em que ele já está vinculado.'
+            }
+          >
+            {aliasError && <div className="error-box">{aliasError}</div>}
+
+            {aliases.length > 0 && (
+              <div className="file-list" style={{ marginBottom: "0.8rem" }}>
+                {aliases.map((a) => (
+                  <div className="file-row" key={a.id}>
+                    <div className="file-row-info">
+                      <div className="file-name">{a.alias}</div>
+                    </div>
+                    <div className="file-row-actions">
+                      <button
+                        type="button"
+                        className="ghost"
+                        style={{ padding: "0.3rem" }}
+                        onClick={() => handleRemoveAlias(a.id)}
+                        aria-label="Remover"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <form onSubmit={handleAddAlias} style={{ display: "flex", gap: "0.5rem" }}>
+              <input
+                type="text"
+                value={newAlias}
+                onChange={(e) => setNewAlias(e.target.value)}
+                placeholder="Ex.: Anderson Lucas"
+                style={{ flex: 1 }}
+              />
+              <button type="submit" className="secondary" disabled={aliasBusy || !newAlias.trim()}>
+                <Plus size={14} style={{ marginRight: "0.3rem" }} />
+                Adicionar
+              </button>
+            </form>
+          </FormPanel>
+        )}
+
+        {!loading && isEditing && (
+          <FormPanel
+            icon={Trash2}
+            title="Excluir colaborador"
+            danger
+            description={`Remove ${name || "este colaborador"} do cadastro, junto com todo o histórico vinculado a ele — turnos de pagamento, cartões de ponto e apelidos. Não pode ser desfeito.`}
+          >
+            <button type="button" className="danger" onClick={() => setDeleteConfirmOpen(true)}>
+              <Trash2 size={14} style={{ marginRight: "0.4rem" }} />
+              Excluir colaborador
             </button>
-          </form>
-        </div>
-      )}
-
-      {!loading && isEditing && (
-        <div className="card" style={{ maxWidth: "32rem", marginTop: "1.2rem", borderColor: "var(--danger)" }}>
-          <h3 style={{ marginTop: 0 }}>Excluir colaborador</h3>
-          <p className="page-subtitle" style={{ marginTop: 0 }}>
-            Remove {name || "este colaborador"} do cadastro, junto com todo o histórico
-            vinculado a ele — turnos de pagamento, cartões de ponto e apelidos. Não pode ser
-            desfeito.
-          </p>
-          <button type="button" className="danger" onClick={() => setDeleteConfirmOpen(true)}>
-            <Trash2 size={14} style={{ marginRight: "0.4rem" }} />
-            Excluir colaborador
-          </button>
-        </div>
-      )}
+          </FormPanel>
+        )}
+      </div>
 
       {deleteConfirmOpen && (
         <ConfirmModal

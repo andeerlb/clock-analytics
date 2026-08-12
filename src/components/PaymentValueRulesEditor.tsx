@@ -1,4 +1,5 @@
 import { Plus, Trash2 } from "lucide-react";
+import TimeField from "./TimeField";
 import {
   PAYMENT_VALUE_RULE_OPERATOR_LABELS,
   SCHEDULE_TIME_RULE_LABELS,
@@ -210,12 +211,11 @@ export default function PaymentValueRulesEditor({
                                 </option>
                               ))}
                             </select>
-                            <input
+                            <TimeField
                               className="glass-input"
-                              type="time"
                               value={cond.scheduleTime}
-                              onChange={(e) => updateValueCondition(i, ci, { scheduleTime: e.target.value })}
-                              aria-label="Horário de referência"
+                              onChange={(v) => updateValueCondition(i, ci, { scheduleTime: v })}
+                              ariaLabel="Horário de referência"
                             />
                           </div>
                         ) : (

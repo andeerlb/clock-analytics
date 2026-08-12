@@ -1,5 +1,6 @@
 import { Clock3 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import TimeField from "./TimeField";
 import { SCHEDULE_TIME_RULE_LABELS, type ScheduleTimeFilter, type ScheduleTimeRule } from "../lib/types";
 
 const SCHEDULE_TIME_RULES: ScheduleTimeRule[] = ["start-before", "start-after", "end-before", "end-after"];
@@ -98,12 +99,7 @@ export default function ScheduleTimeFilterDropdown({
           </div>
           <div className="field" style={{ marginBottom: "0.8rem" }}>
             <label htmlFor="schedule-time-filter-time">Horário de referência</label>
-            <input
-              id="schedule-time-filter-time"
-              type="time"
-              value={draftTime}
-              onChange={(e) => setDraftTime(e.target.value)}
-            />
+            <TimeField id="schedule-time-filter-time" value={draftTime} onChange={setDraftTime} />
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
             <button

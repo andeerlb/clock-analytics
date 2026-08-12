@@ -202,6 +202,26 @@ export function maskCpf(input: string): string {
 }
 
 /**
+ * As-you-type "HH:MM" (24h) mask for a controlled input's `onChange` — same
+ * convention as `maskCnpj`/`maskCpf`, standing in for `<input type="time">`
+ * (whose native popup renders unstyled/white, clashing with the app's dark
+ * theme — see `TimeField`). Clamps hour to 23 and minute to 59 once each
+ * pair of digits is complete, rather than rejecting keystrokes.
+ */
+export function maskTime(input: string): string {
+  const digits = input.replace(/\D/g, "").slice(0, 4);
+  let hour = digits.slice(0, 2);
+  if (hour.length === 2 && Number(hour) > 23) hour = "23";
+  let out = hour;
+  if (digits.length > 2) {
+    let minute = digits.slice(2, 4);
+    if (minute.length === 2 && Number(minute) > 59) minute = "59";
+    out += `:${minute}`;
+  }
+  return out;
+}
+
+/**
  * SQLite's `datetime('now')` produces "2026-08-03 20:55:52" — UTC, but with
  * no "T"/timezone marker, so a plain `new Date(sqliteDatetime)` gets parsed
  * as LOCAL time by most JS engines, silently shifting it by the browser's

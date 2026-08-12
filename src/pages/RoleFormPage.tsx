@@ -1,8 +1,9 @@
-import { Plus, Trash2, X } from "lucide-react";
+import { Info, Plus, Tags, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
+import FormPanel from "../components/FormPanel";
 import {
   addRoleAlias,
   createRole,
@@ -154,124 +155,123 @@ export default function RoleFormPage() {
 
       {error && <div className="error-box">{error}</div>}
 
-      {loading ? (
-        <p className="muted">Carregando...</p>
-      ) : (
-        <div className="card" style={{ maxWidth: "32rem" }}>
-          <form onSubmit={handleSubmit}>
-            {isEditing ? (
-              <div className="field" style={{ marginBottom: "1rem" }}>
-                <label>Empresa</label>
-                <p className="muted" style={{ margin: 0 }}>{companyName}</p>
+      <div className="details-main" style={{ maxWidth: "52rem" }}>
+        {loading ? (
+          <p className="muted">Carregando...</p>
+        ) : (
+          <FormPanel icon={Info} title="Informações Gerais">
+            <form onSubmit={handleSubmit}>
+              {isEditing ? (
+                <div className="field" style={{ marginBottom: "1rem" }}>
+                  <label>Empresa</label>
+                  <p className="muted" style={{ margin: 0 }}>{companyName}</p>
+                </div>
+              ) : (
+                <div className="field" style={{ marginBottom: "1rem" }}>
+                  <label htmlFor="role-company">Empresa</label>
+                  {companies.length === 0 ? (
+                    <p className="field-hint">Nenhuma empresa cadastrada.</p>
+                  ) : (
+                    <select
+                      id="role-company"
+                      value={companyId}
+                      onChange={(e) => setCompanyId(e.target.value)}
+                      required
+                    >
+                      <option value="">Selecione</option>
+                      {companies.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
+
+              <div className="field" style={{ marginBottom: "1.2rem" }}>
+                <label htmlFor="role-name">Nome</label>
+                <input
+                  id="role-name"
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Ex.: Caixa, FLV, Mercearia"
+                  required
+                  style={{ width: "100%" }}
+                />
               </div>
-            ) : (
-              <div className="field" style={{ marginBottom: "1rem" }}>
-                <label htmlFor="role-company">Empresa</label>
-                {companies.length === 0 ? (
-                  <p className="field-hint">Nenhuma empresa cadastrada.</p>
-                ) : (
-                  <select
-                    id="role-company"
-                    value={companyId}
-                    onChange={(e) => setCompanyId(e.target.value)}
-                    required
-                  >
-                    <option value="">Selecione</option>
-                    {companies.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
+
+              <button type="submit" disabled={busy}>
+                {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
+              </button>
+            </form>
+          </FormPanel>
+        )}
+
+        {!loading && isEditing && (
+          <FormPanel
+            icon={Tags}
+            title="Possíveis nomes"
+            description={
+              'Outras grafias dessa função que podem aparecer em arquivos de pagamento (ex.: "Op. de Caixa" para "Caixa") — consideradas junto com o nome cadastrado ao ler a coluna Função durante a importação. Um nome só pode estar vinculado a uma função por vez, dentro da mesma empresa.'
+            }
+          >
+            {aliasError && <div className="error-box">{aliasError}</div>}
+
+            {aliases.length > 0 && (
+              <div className="file-list" style={{ marginBottom: "0.8rem" }}>
+                {aliases.map((a) => (
+                  <div className="file-row" key={a.id}>
+                    <div className="file-row-info">
+                      <div className="file-name">{a.alias}</div>
+                    </div>
+                    <div className="file-row-actions">
+                      <button
+                        type="button"
+                        className="ghost"
+                        style={{ padding: "0.3rem" }}
+                        onClick={() => handleRemoveAlias(a.id)}
+                        aria-label="Remover"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
 
-            <div className="field" style={{ marginBottom: "1.2rem" }}>
-              <label htmlFor="role-name">Nome</label>
+            <form onSubmit={handleAddAlias} style={{ display: "flex", gap: "0.5rem" }}>
               <input
-                id="role-name"
                 type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Ex.: Caixa, FLV, Mercearia"
-                required
-                style={{ width: "100%" }}
+                value={newAlias}
+                onChange={(e) => setNewAlias(e.target.value)}
+                placeholder="Ex.: Op. de Caixa"
+                style={{ flex: 1 }}
               />
-            </div>
+              <button type="submit" className="secondary" disabled={aliasBusy || !newAlias.trim()}>
+                <Plus size={14} style={{ marginRight: "0.3rem" }} />
+                Adicionar
+              </button>
+            </form>
+          </FormPanel>
+        )}
 
-            <button type="submit" disabled={busy}>
-              {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
+        {!loading && isEditing && (
+          <FormPanel
+            icon={Trash2}
+            title="Excluir função"
+            danger
+            description={`Remove ${name || "esta função"} do cadastro. Turnos já importados com essa função não são apagados — só perdem o vínculo com o cadastro (deixam de aparecer no filtro "Função"). Não pode ser desfeito.`}
+          >
+            <button type="button" className="danger" onClick={() => setDeleteConfirmOpen(true)}>
+              <Trash2 size={14} style={{ marginRight: "0.4rem" }} />
+              Excluir função
             </button>
-          </form>
-        </div>
-      )}
-
-      {!loading && isEditing && (
-        <div className="card" style={{ maxWidth: "32rem", marginTop: "1.2rem" }}>
-          <h3 style={{ marginTop: 0 }}>Possíveis nomes</h3>
-          <p className="page-subtitle" style={{ marginTop: 0 }}>
-            Outras grafias dessa função que podem aparecer em arquivos de pagamento (ex.:
-            "Op. de Caixa" para "Caixa") — consideradas junto com o nome cadastrado ao ler a
-            coluna Função durante a importação. Um nome só pode estar vinculado a uma função
-            por vez, dentro da mesma empresa.
-          </p>
-
-          {aliasError && <div className="error-box">{aliasError}</div>}
-
-          {aliases.length > 0 && (
-            <div className="file-list" style={{ marginBottom: "0.8rem" }}>
-              {aliases.map((a) => (
-                <div className="file-row" key={a.id}>
-                  <div className="file-row-info">
-                    <div className="file-name">{a.alias}</div>
-                  </div>
-                  <div className="file-row-actions">
-                    <button
-                      type="button"
-                      className="ghost"
-                      style={{ padding: "0.3rem" }}
-                      onClick={() => handleRemoveAlias(a.id)}
-                      aria-label="Remover"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <form onSubmit={handleAddAlias} style={{ display: "flex", gap: "0.5rem" }}>
-            <input
-              type="text"
-              value={newAlias}
-              onChange={(e) => setNewAlias(e.target.value)}
-              placeholder="Ex.: Op. de Caixa"
-              style={{ flex: 1 }}
-            />
-            <button type="submit" className="secondary" disabled={aliasBusy || !newAlias.trim()}>
-              <Plus size={14} style={{ marginRight: "0.3rem" }} />
-              Adicionar
-            </button>
-          </form>
-        </div>
-      )}
-
-      {!loading && isEditing && (
-        <div className="card" style={{ maxWidth: "32rem", marginTop: "1.2rem", borderColor: "var(--danger)" }}>
-          <h3 style={{ marginTop: 0 }}>Excluir função</h3>
-          <p className="page-subtitle" style={{ marginTop: 0 }}>
-            Remove {name || "esta função"} do cadastro. Turnos já importados com essa função
-            não são apagados — só perdem o vínculo com o cadastro (deixam de aparecer no filtro
-            "Função"). Não pode ser desfeito.
-          </p>
-          <button type="button" className="danger" onClick={() => setDeleteConfirmOpen(true)}>
-            <Trash2 size={14} style={{ marginRight: "0.4rem" }} />
-            Excluir função
-          </button>
-        </div>
-      )}
+          </FormPanel>
+        )}
+      </div>
 
       {deleteConfirmOpen && (
         <ConfirmModal

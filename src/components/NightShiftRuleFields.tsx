@@ -1,3 +1,4 @@
+import TimeField from "./TimeField";
 import { NIGHT_SHIFT_RULE_LABELS, type NightShiftRule } from "../lib/types";
 
 const NIGHT_SHIFT_RULES = Object.keys(NIGHT_SHIFT_RULE_LABELS) as NightShiftRule[];
@@ -29,21 +30,19 @@ export default function NightShiftRuleFields({
       <div className="field-row" style={{ marginBottom: "1.2rem" }}>
         <div className="field" style={{ flex: "0 1 160px", marginBottom: 0 }}>
           <label htmlFor={`${idPrefix}-night-start`}>Início do noturno</label>
-          <input
+          <TimeField
             id={`${idPrefix}-night-start`}
-            type="time"
             value={nightStartTime}
-            onChange={(e) => onChange({ nightStartTime: e.target.value })}
+            onChange={(v) => onChange({ nightStartTime: v })}
             required
           />
         </div>
         <div className="field" style={{ flex: "0 1 160px", marginBottom: 0 }}>
           <label htmlFor={`${idPrefix}-night-end`}>Fim do noturno</label>
-          <input
+          <TimeField
             id={`${idPrefix}-night-end`}
-            type="time"
             value={nightEndTime}
-            onChange={(e) => onChange({ nightEndTime: e.target.value })}
+            onChange={(v) => onChange({ nightEndTime: v })}
             required
           />
         </div>

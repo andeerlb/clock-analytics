@@ -664,7 +664,7 @@ export async function removeClientCompany(clientId: number, companyId: number): 
     throw new Error("O cliente precisa continuar vinculado a pelo menos uma empresa.");
   }
   const employeeCount = await db.select<{ count: number }[]>(
-    "SELECT COUNT(*) AS count FROM employees WHERE client_id = $1 AND company_id = $2",
+    "SELECT COUNT(*) AS count FROM employee_client_companies WHERE client_id = $1 AND company_id = $2",
     [clientId, companyId],
   );
   if ((employeeCount[0]?.count ?? 0) > 0) {

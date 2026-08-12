@@ -1,7 +1,8 @@
-import { Calculator, Moon, Plus, X } from "lucide-react";
+import { Building2, Calculator, Info, Moon, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
+import FormPanel from "../components/FormPanel";
 import NightShiftRuleFields from "../components/NightShiftRuleFields";
 import PaymentValueRulesEditor, {
   fromPaymentValueRules,
@@ -164,11 +165,9 @@ export default function ClientFormPage() {
       {loading ? (
         <p className="muted">Carregando...</p>
       ) : (
-        <div className="card" style={{ maxWidth: "32rem" }}>
-          <form onSubmit={handleSubmit}>
-            <div className="field" style={{ marginBottom: "1rem" }}>
-              <label>Empresas vinculadas</label>
-
+        <form onSubmit={handleSubmit} className="details-main" style={{ maxWidth: "52rem" }}>
+          <FormPanel icon={Building2} title="Empresas vinculadas">
+            <div className="field">
               {companyError && <div className="error-box">{companyError}</div>}
 
               {currentCompanies.length > 0 && (
@@ -227,7 +226,9 @@ export default function ClientFormPage() {
                 )
               )}
             </div>
+          </FormPanel>
 
+          <FormPanel icon={Info} title="Informações Gerais">
             <div className="field" style={{ marginBottom: "1rem" }}>
               <label htmlFor="client-name">Nome</label>
               <input
@@ -240,7 +241,7 @@ export default function ClientFormPage() {
                 style={{ width: "100%" }}
               />
             </div>
-            <div className="field" style={{ marginBottom: "1.2rem" }}>
+            <div className="field">
               <label htmlFor="client-cnpj">CNPJ</label>
               <input
                 id="client-cnpj"
@@ -253,60 +254,52 @@ export default function ClientFormPage() {
                 style={{ width: "100%" }}
               />
             </div>
+          </FormPanel>
 
-            <section className="glass-panel" style={{ marginBottom: "1.2rem" }}>
-              <h3 className="glass-panel-heading">
-                <Moon size={18} />
-                Horário noturno
-              </h3>
-              <p className="glass-panel-desc">
-                Por padrão, este cliente usa o horário noturno configurado na empresa. Sobrescreva
-                aqui só se este cliente específico tiver um horário diferente.
-              </p>
-              <label className="field-code-checkbox" style={{ marginBottom: overrideNightShift ? "1rem" : 0 }}>
-                <input
-                  type="checkbox"
-                  checked={overrideNightShift}
-                  onChange={(e) => setOverrideNightShift(e.target.checked)}
-                />
-                Sobrescrever horário noturno da empresa
-              </label>
-              {overrideNightShift && (
-                <NightShiftRuleFields
-                  nightStartTime={nightStartTime}
-                  nightEndTime={nightEndTime}
-                  nightShiftRule={nightShiftRule}
-                  onChange={(patch) => {
-                    if (patch.nightStartTime !== undefined) setNightStartTime(patch.nightStartTime);
-                    if (patch.nightEndTime !== undefined) setNightEndTime(patch.nightEndTime);
-                    if (patch.nightShiftRule !== undefined) setNightShiftRule(patch.nightShiftRule);
-                  }}
-                  idPrefix="client"
-                />
-              )}
-            </section>
+          <FormPanel
+            icon={Moon}
+            title="Horário noturno"
+            description="Por padrão, este cliente usa o horário noturno configurado na empresa. Sobrescreva aqui só se este cliente específico tiver um horário diferente."
+          >
+            <label className="field-code-checkbox" style={{ marginBottom: overrideNightShift ? "1rem" : 0 }}>
+              <input
+                type="checkbox"
+                checked={overrideNightShift}
+                onChange={(e) => setOverrideNightShift(e.target.checked)}
+              />
+              Sobrescrever horário noturno da empresa
+            </label>
+            {overrideNightShift && (
+              <NightShiftRuleFields
+                nightStartTime={nightStartTime}
+                nightEndTime={nightEndTime}
+                nightShiftRule={nightShiftRule}
+                onChange={(patch) => {
+                  if (patch.nightStartTime !== undefined) setNightStartTime(patch.nightStartTime);
+                  if (patch.nightEndTime !== undefined) setNightEndTime(patch.nightEndTime);
+                  if (patch.nightShiftRule !== undefined) setNightShiftRule(patch.nightShiftRule);
+                }}
+                idPrefix="client"
+              />
+            )}
+          </FormPanel>
 
-            <section className="glass-panel" style={{ marginBottom: "1.2rem" }}>
-              <h3 className="glass-panel-heading">
-                <Calculator size={18} />
-                Regras de valor por hora trabalhada
-              </h3>
-              <p className="glass-panel-desc">
-                Por padrão, este cliente usa as regras de valor configuradas na empresa. Cadastre
-                regras aqui só se este cliente específico tiver valores diferentes — sem nenhuma
-                regra, o Valor continua vindo da empresa.
-              </p>
-              <PaymentValueRulesEditor valueRules={valueRules} onChange={setValueRules} />
-            </section>
+          <FormPanel
+            icon={Calculator}
+            title="Regras de valor por hora trabalhada"
+            description="Por padrão, este cliente usa as regras de valor configuradas na empresa. Cadastre regras aqui só se este cliente específico tiver valores diferentes — sem nenhuma regra, o Valor continua vindo da empresa."
+          >
+            <PaymentValueRulesEditor valueRules={valueRules} onChange={setValueRules} />
+          </FormPanel>
 
-            <button
-              type="submit"
-              disabled={busy || (!isEditing && pendingCompanies.length === 0) || !isValueRulesValid(valueRules)}
-            >
-              {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
-            </button>
-          </form>
-        </div>
+          <button
+            type="submit"
+            disabled={busy || (!isEditing && pendingCompanies.length === 0) || !isValueRulesValid(valueRules)}
+            style={{ alignSelf: "flex-start" }}
+          >
+            {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
+          </button>
+        </form>
       )}
     </div>
   );

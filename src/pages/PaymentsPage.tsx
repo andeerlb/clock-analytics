@@ -42,6 +42,7 @@ import PdfViewerModal from "../components/PdfViewerModal";
 import PillButton from "../components/PillButton";
 import ScheduleTimeFilterDropdown from "../components/ScheduleTimeFilterDropdown";
 import ShiftHistoryDrawer from "../components/ShiftHistoryDrawer";
+import TimeField from "../components/TimeField";
 import { PAYMENTS_PAGE_SIZE_OPTIONS, usePaymentsFilters } from "../contexts/FiltersContext";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { revealInFileManager } from "../lib/api";
@@ -342,40 +343,14 @@ function EditableCurrencyCell({
   );
 }
 
-const SCHEDULE_HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
-const SCHEDULE_MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"));
 const SCHEDULE_POPOVER_WIDTH = 230;
-
-/** One "HH" + "MM" pair of selects — Início and Fim are two of these side by side inside `EditableSchedule`'s popover. Explicit widths override the global `select` rule's generous padding (built for full-width filter dropdowns, not a 2-digit value) — without them, two "HH : MM" pairs don't fit the popover and visually run into each other. */
-function TimeSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-  const [h, m] = value.split(":");
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}>
-      <select value={h} onChange={(e) => onChange(`${e.target.value}:${m}`)} aria-label="Hora" style={{ width: "4.2rem" }}>
-        {SCHEDULE_HOURS.map((hh) => (
-          <option key={hh} value={hh}>
-            {hh}
-          </option>
-        ))}
-      </select>
-      <span className="muted">:</span>
-      <select value={m} onChange={(e) => onChange(`${h}:${e.target.value}`)} aria-label="Minuto" style={{ width: "4.2rem" }}>
-        {SCHEDULE_MINUTES.map((mm) => (
-          <option key={mm} value={mm}>
-            {mm}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
 
 /**
  * Horário's own editable cell — one trigger opening one popover with
- * Início and Fim together (hora/minuto dropdowns, always 24h), the same
- * "connected" idea as `DateRangePicker`'s single popover with two linked
- * months, instead of two separate native `<input type="time">` fields each
- * rendering the OS's own (often 12h AM/PM) time control.
+ * Início and Fim together (`TimeField`, always 24h), the same "connected"
+ * idea as `DateRangePicker`'s single popover with two linked months, instead
+ * of two separate native `<input type="time">` fields each rendering the
+ * OS's own (often 12h AM/PM) time control.
  */
 function EditableSchedule({
   editable,
@@ -423,18 +398,18 @@ function EditableSchedule({
     <span ref={triggerRef} className="editable-value" onClick={(e) => e.stopPropagation()}>
       {display}
       <AnchoredPopover anchorRef={triggerRef} width={SCHEDULE_POPOVER_WIDTH} onClose={() => setEditing(false)}>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+        <div style={{ display: "flex", gap: "0.6rem" }}>
           <div>
             <div className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.3rem" }}>
               Início
             </div>
-            <TimeSelect value={draftStart} onChange={setDraftStart} />
+            <TimeField ariaLabel="Início" value={draftStart} onChange={setDraftStart} />
           </div>
           <div>
             <div className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.3rem" }}>
               Fim
             </div>
-            <TimeSelect value={draftEnd} onChange={setDraftEnd} />
+            <TimeField ariaLabel="Fim" value={draftEnd} onChange={setDraftEnd} />
           </div>
         </div>
         <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.8rem" }}>
