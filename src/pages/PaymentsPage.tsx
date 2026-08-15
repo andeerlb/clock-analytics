@@ -593,12 +593,9 @@ function ShiftRow({
       )}
       {col("status") && (
         <td>
-          <span className={badge.className}>{badge.label}</span>
-          {s.status === "erro" && s.errorMessage && (
-            <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.25rem" }}>
-              {s.errorMessage}
-            </div>
-          )}
+          <span className={badge.className} title={s.status === "erro" ? s.errorMessage ?? undefined : undefined}>
+            {badge.label}
+          </span>
         </td>
       )}
       {col("importado") && (

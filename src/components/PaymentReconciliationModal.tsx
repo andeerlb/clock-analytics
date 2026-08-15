@@ -5,7 +5,9 @@ import {
   deletePaymentAudit,
   listPaymentAuditsForShiftIds,
   listPaymentShiftsForReport,
+  markPaymentShiftAuditError,
   recordPaymentAudit,
+  undoPaymentShiftAuditError,
   type ClientRow,
   type CompanyRow,
   type ListPaymentShiftSummariesQuery,
@@ -45,17 +47,21 @@ function CloseButton() {
 /**
  * "Conferência de Pagamentos" — a full-screen review flow that replaces the
  * user's external spreadsheet for checking paid shifts against the bank.
- * This is purely a review/audit screen, not an actions screen: for each
- * `pago` shift, both Confirmar and Marcar erro only ever record a verdict
- * (see `recordPaymentAudit`) — neither one touches `payment_shifts` itself,
- * so a wrong verdict is always freely correctable by clicking the other
- * button (or "Desfazer" to clear it back to unaudited), with nothing else
- * in the system to undo alongside it. Reverting a shift back to `pendente`
- * for re-payment stays the Pagamentos page's own separate, deliberate
- * "Voltar para pendente" action — this screen never triggers it. Non-`pago`
- * rows can appear too (whatever the active filters currently include) but
- * are read-only, since there's nothing to reconcile against a bank for a
- * shift that hasn't been paid yet.
+ * Confirmar is a pure audit label: it only ever records a verdict (see
+ * `recordPaymentAudit`), never touching `payment_shifts`. Marcar erro is a
+ * real state transition — the bank statement didn't match, so the shift is
+ * kicked back to `erro` (via `markPaymentShiftAuditError`) the same way any
+ * other `erro` shift works: editable and payable again from the Pagamentos
+ * page. Desfazer reverses whichever of those actually happened: for a
+ * `confirmado` row that's just `deletePaymentAudit`; for an `erro` row it
+ * first restores the `pago` state (`undoPaymentShiftAuditError`) and then
+ * clears the audit, so "Desfazer" always lands back exactly where the row
+ * started. Because Marcar erro changes the row's own status, whether it
+ * stays visible after acting is entirely up to the active filters (same as
+ * any other shift) — this screen doesn't special-case it. Non-`pago` rows
+ * can appear too (whatever the active filters currently include) but are
+ * read-only otherwise, since there's nothing to reconcile against a bank
+ * for a shift that hasn't been paid yet.
  *
  * Filters are the SAME live `usePaymentsFilters()` state the Pagamentos
  * page itself reads/writes — not a snapshot — so changing them here (via
@@ -161,6 +167,22 @@ export default function PaymentReconciliationModal({
     scheduleTimeFilter,
   ]);
 
+  /**
+   * Re-runs the same fetch the mount effect does, on demand — used after
+   * `markPaymentShiftAuditError`/`undoPaymentShiftAuditError`, both of
+   * which change a row's actual `payment_shifts.status`, so whether the
+   * result still belongs in this list is up to the active filters (same as
+   * any other status change elsewhere in the app), not something this
+   * screen decides for itself by patching local state.
+   */
+  async function refetchAfterMutation(): Promise<PaymentShiftReportRow[]> {
+    const reportRows = await listPaymentShiftsForReport(baseQuery());
+    setRows(reportRows);
+    const auditRows = await listPaymentAuditsForShiftIds(reportRows.map((r) => r.id));
+    setAudits(new Map(auditRows.map((a) => [a.paymentShiftId, { result: a.result, note: a.note, auditedAt: a.auditedAt }])));
+    return reportRows;
+  }
+
   function handleApplyFilters(next: PaymentsFiltersValue) {
     setSelectedEmployeeIds(next.employeeIds);
     setSelectedCompanyIds(next.companyIds);
@@ -231,14 +253,23 @@ export default function PaymentReconciliationModal({
     }
   }
 
+  /**
+   * "Marcar erro" — unlike Confirmar, this actually transitions the shift
+   * (`markPaymentShiftAuditError`: a new `erro` row, same append-only shape
+   * `revertPaymentShiftToPending` uses) before recording the audit verdict
+   * against that NEW row's id, then refetches so the active filters decide
+   * whether it's still visible here — no local patch-and-hide, same as any
+   * other status change in this app.
+   */
   async function handleErrorSubmit(shift: PaymentShiftReportRow) {
     if (actingShiftId !== null) return;
     setActingShiftId(shift.id);
     setActionError(null);
     try {
-      await recordPaymentAudit(shift.id, "erro", null);
-      setAudits((prev) => new Map(prev).set(shift.id, { result: "erro", note: null, auditedAt: new Date().toISOString() }));
-      advanceFocusIfHidden(shift.id);
+      const newShiftId = await markPaymentShiftAuditError(shift.id);
+      await recordPaymentAudit(newShiftId, "erro", null);
+      await refetchAfterMutation();
+      setFocusedShiftId(newShiftId);
     } catch (e) {
       setActionError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -248,23 +279,33 @@ export default function PaymentReconciliationModal({
 
   /**
    * "Desfazer" — clears whichever verdict (confirmado or erro) is currently
-   * recorded, back to unaudited. Safe either way: neither verdict ever
-   * touched `payment_shifts` itself (see the module doc comment above), so
-   * there's nothing else to reverse alongside the audit row. Triggered from
-   * the row's right-click menu (see `onContextMenu` below), not a
-   * persistent button.
+   * recorded, back to unaudited. A `confirmado` row was never touched, so
+   * clearing the audit alone puts it back exactly as it was; an `erro` row
+   * DID transition (see `handleErrorSubmit`), so this first restores `pago`
+   * via `undoPaymentShiftAuditError` before clearing the audit, and
+   * refetches for the same reason `handleErrorSubmit` does — whether the
+   * restored row still matches the active filters isn't this screen's call.
+   * Triggered from the row's right-click menu (see `onContextMenu` below)
+   * or the U shortcut, not a persistent button.
    */
-  async function handleUndoAudit(shiftId: number) {
+  async function handleUndoAudit(row: PaymentShiftReportRow) {
     if (actingShiftId !== null) return;
-    setActingShiftId(shiftId);
+    setActingShiftId(row.id);
     setActionError(null);
     try {
-      await deletePaymentAudit(shiftId);
-      setAudits((prev) => {
-        const next = new Map(prev);
-        next.delete(shiftId);
-        return next;
-      });
+      if (row.status === "erro") {
+        const restoredShiftId = await undoPaymentShiftAuditError(row.id);
+        await deletePaymentAudit(row.id);
+        await refetchAfterMutation();
+        setFocusedShiftId(restoredShiftId);
+      } else {
+        await deletePaymentAudit(row.id);
+        setAudits((prev) => {
+          const next = new Map(prev);
+          next.delete(row.id);
+          return next;
+        });
+      }
     } catch (e) {
       setActionError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -311,7 +352,7 @@ export default function PaymentReconciliationModal({
         if (focusedRow && focusedCanMarkError) handleErrorSubmit(focusedRow);
       } else if (e.key === "u" || e.key === "U") {
         e.preventDefault();
-        if (focusedShiftId !== null && focusedAudit) handleUndoAudit(focusedShiftId);
+        if (focusedRow && focusedAudit) handleUndoAudit(focusedRow);
       }
     }
     document.addEventListener("keydown", onKeyDown);
@@ -412,14 +453,11 @@ export default function PaymentReconciliationModal({
                   const hasSchedule = r.scheduleStartMinutes !== null && r.scheduleEndMinutes !== null;
                   const duration = hasSchedule ? shiftDurationMinutes(r.scheduleStartMinutes!, r.scheduleEndMinutes!) : null;
                   const audit = audits.get(r.id) ?? null;
-                  // Each action is disabled exactly when it would be a
-                  // no-op given the row's CURRENT verdict — re-confirming an
-                  // already-`confirmado` row (or re-marking an already-`erro`
-                  // one) does nothing new, while the OTHER verdict and
-                  // "Desfazer" stay available to correct it (purely an audit
-                  // label — see the module doc comment — so switching either
-                  // direction via `recordPaymentAudit`'s upsert is always
-                  // safe).
+                  // Both actions only ever apply to a `pago` row — once
+                  // Marcar erro fires, the row's own status moves off
+                  // `pago` (see the module doc comment), so `canMarkError`
+                  // doubles as "hasn't already been marked erro" without
+                  // needing to also check `audit`.
                   const canConfirm = r.status === "pago" && audit?.result !== "confirmado";
                   const canMarkError = r.status === "pago" && audit?.result !== "erro";
                   const col = (id: string) => visibleColumns.has(id);
@@ -446,7 +484,7 @@ export default function PaymentReconciliationModal({
                     {
                       label: "Desfazer",
                       disabled: !audit || actingShiftId === r.id,
-                      onClick: () => handleUndoAudit(r.id),
+                      onClick: () => handleUndoAudit(r),
                     },
                   ];
                   // The audit verdict colors the whole row — confirmado

@@ -4291,6 +4291,8 @@ interface PaymentShiftCoreFields {
   amount: number | null;
   /** 0/1 as stored — read so `markPaymentShiftPaid`/`revertPaymentShiftToPending` can carry it forward instead of forcing it, since neither of those touches a field (see their own doc comments for why forcing it was wrong). */
   editedManually: number;
+  /** Only read by `undoPaymentShiftAuditError`, to walk back one hop and recover the `pago` row's original amount — every other caller ignores it. */
+  previousShiftId: number | null;
 }
 
 /** Shared by every status-transition function below — the fields that always carry over unchanged into the new row. */
@@ -4302,7 +4304,7 @@ async function readPaymentShiftCoreFields(db: Database, shiftId: number): Promis
             schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes,
             extra_data AS extraData, status,
             source_row_number AS sourceRowNumber, source_sheet_name AS sourceSheetName, amount,
-            edited_manually AS editedManually
+            edited_manually AS editedManually, previous_shift_id AS previousShiftId
      FROM payment_shifts WHERE id = $1`,
     [shiftId],
   );
@@ -4408,6 +4410,96 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
   return result.lastInsertId as number;
 }
 
+/** Shown alongside the "Erro" badge on the Pagamentos page for a shift `markPaymentShiftAuditError` transitioned — same spot `error_message` already shows an import-time parse failure in. */
+const AUDIT_ERROR_MESSAGE = "Marcado como erro na Conferência de Pagamentos.";
+
+/**
+ * "Marcar erro" in "Conferência de Pagamentos": same append-only transition
+ * as `revertPaymentShiftToPending`, but to `erro` instead of `pendente` —
+ * a bank-statement mismatch needs the same "fix the data, pay again" path
+ * every other `erro` shift already gets (see `canEdit` in the Pagamentos
+ * page's `ShiftRow`), not just a passive audit label. `amount` is cleared,
+ * same reasoning as reverting to `pendente`: the old paid amount is no
+ * longer the record of anything real once the shift needs correcting.
+ * Pairs with `undoPaymentShiftAuditError` for "Desfazer".
+ */
+export async function markPaymentShiftAuditError(shiftId: number): Promise<number> {
+  const db = await getDb();
+  const s = await readPaymentShiftCoreFields(db, shiftId);
+
+  const result = await db.execute(
+    `INSERT INTO payment_shifts
+       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
+        schedule_start_minutes, schedule_end_minutes, status, error_message, amount, previous_shift_id, extra_data, edited_manually,
+        source_row_number, source_sheet_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'erro', $11, NULL, $12, $13, $14, $15, $16)`,
+    [
+      s.employeeId,
+      s.templateId,
+      s.sourceFileId,
+      s.clientId,
+      s.companyId,
+      s.local,
+      s.workDate,
+      s.roleId,
+      s.scheduleStartMinutes,
+      s.scheduleEndMinutes,
+      AUDIT_ERROR_MESSAGE,
+      shiftId,
+      s.extraData,
+      s.editedManually,
+      s.sourceRowNumber,
+      s.sourceSheetName,
+    ],
+  );
+  return result.lastInsertId as number;
+}
+
+/**
+ * "Desfazer" on a shift `markPaymentShiftAuditError` transitioned: mints a
+ * new `pago` row (same append-only shape, never mutating `shiftId`'s own
+ * `erro` row) with the amount read back from the `pago` row that `erro` one
+ * superseded — one hop back via `previousShiftId`, always set since only
+ * `markPaymentShiftAuditError` ever produces this shape. The audit verdict
+ * itself is cleared separately by the caller (`deletePaymentAudit`), same as
+ * every other "Desfazer" — this only reverses the `payment_shifts` side.
+ */
+export async function undoPaymentShiftAuditError(shiftId: number): Promise<number> {
+  const db = await getDb();
+  const s = await readPaymentShiftCoreFields(db, shiftId);
+  if (s.previousShiftId === null) {
+    throw new Error("Não foi possível encontrar o pagamento original para restaurar.");
+  }
+  const previous = await readPaymentShiftCoreFields(db, s.previousShiftId);
+
+  const result = await db.execute(
+    `INSERT INTO payment_shifts
+       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
+        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
+        source_row_number, source_sheet_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pago', $11, $12, $13, $14, $15, $16)`,
+    [
+      s.employeeId,
+      s.templateId,
+      s.sourceFileId,
+      s.clientId,
+      s.companyId,
+      s.local,
+      s.workDate,
+      s.roleId,
+      s.scheduleStartMinutes,
+      s.scheduleEndMinutes,
+      previous.amount,
+      shiftId,
+      s.extraData,
+      s.editedManually,
+      s.sourceRowNumber,
+      s.sourceSheetName,
+    ],
+  );
+  return result.lastInsertId as number;
+}
+
 /**
  * Records "Conferência de Pagamentos"'s manual bank-statement verdict for a
  * `pago` shift — an upsert, not a plain insert: a shift already audited as
@@ -4443,11 +4535,11 @@ export async function listPaymentAuditsForShiftIds(shiftIds: number[]): Promise<
 
 /**
  * "Desfazer" — clears a `payment_audits` verdict (either result) so the
- * shift goes back to "não conferido" and reappears in the actionable
- * Conferência list. Safe for either verdict: "Conferência de Pagamentos" is
- * purely a review screen — neither `confirmado` nor `erro` ever touches
- * `payment_shifts` itself (see `recordPaymentAudit`), so there's nothing
- * else in the system this needs to reverse alongside the audit row.
+ * shift goes back to "não conferido". A `confirmado` verdict never touched
+ * `payment_shifts`, so this alone is enough to reverse it; an `erro` one did
+ * (see `markPaymentShiftAuditError`), so the caller pairs this with
+ * `undoPaymentShiftAuditError` first — this function only ever clears the
+ * audit row itself, for either case.
  */
 export async function deletePaymentAudit(paymentShiftId: number): Promise<void> {
   const db = await getDb();
