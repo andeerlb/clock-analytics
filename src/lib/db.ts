@@ -1172,8 +1172,8 @@ export async function getImportById(id: number): Promise<StoredImport | null> {
 }
 
 export interface ListImportsQuery {
-  /** Substring match on employee name — case-insensitive only for ASCII (SQLite's `LOWER()` doesn't case-fold accents). */
-  search?: string;
+  /** Specific colaboradores picked from the "Colaborador" search-and-select — same `listEmployeesGlobal`-backed filter Pagamentos uses, not a freeform text filter. */
+  employeeIds?: number[];
   companyIds?: number[];
   clientIds?: number[];
   periodStart: string;
@@ -1198,11 +1198,8 @@ export async function listImports(query: ListImportsQuery): Promise<PagedResult<
   const conditions: string[] = [];
   const params: (string | number)[] = [];
 
-  const search = query.search?.trim();
-  if (search) {
-    params.push(search);
-    conditions.push(`LOWER(e.name) LIKE '%' || LOWER($${params.length}) || '%'`);
-  }
+  const employeeClause = inClause("e.id", query.employeeIds ?? [], params);
+  if (employeeClause) conditions.push(employeeClause);
   const companyClause = inClause("c.id", query.companyIds ?? [], params);
   if (companyClause) conditions.push(companyClause);
   const clientClause = inClause("cl.id", query.clientIds ?? [], params);

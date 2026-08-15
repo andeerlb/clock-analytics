@@ -16,7 +16,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Fragment, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import AnchoredPopover from "../components/AnchoredPopover";
 import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
@@ -1339,7 +1339,8 @@ export default function PaymentsPage() {
         )}
         {!loading && !listError && total === 0 && hasFilters && (
           <p className="muted" style={{ padding: "1.4rem" }}>
-            Nenhum resultado para os filtros selecionados.
+            Nenhum resultado para os filtros selecionados. Considere ajustar os filtros ou{" "}
+            <Link to="/import/payments">importar um novo pagamento</Link>.
           </p>
         )}
 

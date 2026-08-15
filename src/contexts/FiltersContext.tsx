@@ -17,8 +17,9 @@ const SHIFT_PERIODS: ShiftPeriod[] = ["diurno", "noturno"];
 export type ReportMode = "per-employee" | "per-client";
 
 export interface LibraryFilters {
-  search: string;
-  setSearch: (v: string) => void;
+  /** Specific colaboradores picked from the "Colaborador" search-and-select — same `EmployeeMultiSelectDropdown`-backed filter Pagamentos uses. */
+  selectedEmployeeIds: Set<string>;
+  setSelectedEmployeeIds: (v: Set<string>) => void;
   selectedCompanyIds: Set<string>;
   setSelectedCompanyIds: (v: Set<string>) => void;
   selectedClientIds: Set<string>;
@@ -86,7 +87,7 @@ const PaymentsFiltersContext = createContext<PaymentsFilters | null>(null);
  * carry fields that don't apply to them.
  */
 export function FiltersProvider({ children }: { children: ReactNode }) {
-  const [search, setSearch] = useState("");
+  const [employeeIds, setEmployeeIds] = useState<Set<string>>(new Set());
   const [companyIds, setCompanyIds] = useState<Set<string>>(new Set());
   const [clientIds, setClientIds] = useState<Set<string>>(new Set());
   const [periodStart, setPeriodStart] = useState(defaultPeriodStart);
@@ -99,8 +100,8 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
   const [pageSize, setPageSize] = useState(LIBRARY_PAGE_SIZE_OPTIONS[0]);
 
   const library: LibraryFilters = {
-    search,
-    setSearch,
+    selectedEmployeeIds: employeeIds,
+    setSelectedEmployeeIds: setEmployeeIds,
     selectedCompanyIds: companyIds,
     setSelectedCompanyIds: setCompanyIds,
     selectedClientIds: clientIds,

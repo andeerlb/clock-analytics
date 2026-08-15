@@ -1,10 +1,9 @@
 import { save } from "@tauri-apps/plugin-dialog";
-import { Archive, Building2, CheckCircle2, FolderOpen, Search, Users } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Archive, CheckCircle2, Filter, FolderOpen } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import Avatar from "../components/Avatar";
-import DateRangePicker from "../components/DateRangePicker";
-import MultiSelectDropdown from "../components/MultiSelectDropdown";
+import LibraryFiltersDrawer, { type LibraryFiltersValue } from "../components/LibraryFiltersDrawer";
 import Pagination from "../components/Pagination";
 import PdfViewerModal from "../components/PdfViewerModal";
 import { LIBRARY_PAGE_SIZE_OPTIONS, useLibraryFilters, type ReportMode } from "../contexts/FiltersContext";
@@ -18,7 +17,7 @@ import {
   formatTimestampForFileName,
   sanitizeFileName,
 } from "../lib/format";
-import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
+import { PERIOD_STATUS_OPTIONS } from "../lib/periodStatus";
 import type { ReportZipEntry, StoredImport } from "../lib/types";
 
 /**
@@ -72,8 +71,8 @@ function buildZipEntries(imports: StoredImport[], mode: ReportMode): ReportZipEn
 
 export default function LibraryPage() {
   const {
-    search,
-    setSearch,
+    selectedEmployeeIds,
+    setSelectedEmployeeIds,
     selectedCompanyIds,
     setSelectedCompanyIds,
     selectedClientIds,
@@ -101,6 +100,7 @@ export default function LibraryPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generatedZipPath, setGeneratedZipPath] = useState<string | null>(null);
+  const [filtersDrawerOpen, setFiltersDrawerOpen] = useState(false);
 
   useEffect(() => {
     Promise.all([listCompanies(), listClients()]).then(([companyRows, clientRows]) => {
@@ -114,7 +114,7 @@ export default function LibraryPage() {
     let cancelled = false;
     setLoading(true);
     listImports({
-      search,
+      employeeIds: Array.from(selectedEmployeeIds, Number),
       companyIds: Array.from(selectedCompanyIds, Number),
       clientIds: Array.from(selectedClientIds, Number),
       periodStart,
@@ -134,70 +134,26 @@ export default function LibraryPage() {
     return () => {
       cancelled = true;
     };
-  }, [search, selectedCompanyIds, selectedClientIds, periodStart, periodEnd, selectedStatuses, page, pageSize]);
+  }, [selectedEmployeeIds, selectedCompanyIds, selectedClientIds, periodStart, periodEnd, selectedStatuses, page, pageSize]);
 
-  // `listClients` has one row per (client, company) link — scope to the
-  // chosen empresas (if any), then dedupe down to one option per client.
-  const clientOptions = useMemo(() => {
-    const scoped =
-      selectedCompanyIds.size > 0
-        ? clients.filter((c) => selectedCompanyIds.has(String(c.companyId)))
-        : clients;
-    const seen = new Map<number, ClientRow>();
-    for (const c of scoped) if (!seen.has(c.id)) seen.set(c.id, c);
-    return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [clients, selectedCompanyIds]);
+  /** Applied from the "Filtros" Drawer — every field commits together, same as Pagamentos' own `handleApplyFilters`. */
+  function handleApplyFilters(next: LibraryFiltersValue) {
+    setSelectedEmployeeIds(next.employeeIds);
+    setSelectedCompanyIds(next.companyIds);
+    setSelectedClientIds(next.clientIds);
+    setPeriod(next.periodStart, next.periodEnd);
+    setSelectedStatuses(next.statuses);
+    setPage(0);
+    setFiltersDrawerOpen(false);
+  }
 
-  // Each setter below resets whatever it invalidates itself (rather than
-  // reacting via an effect), so a filter restored as-is from
-  // `FiltersProvider` on remount never gets treated as a "change": empresa
-  // narrows cliente, and any of these resets back to page 1.
-  function updateSearch(v: string) {
-    setSearch(v);
-    setPage(0);
-  }
-  function updateSelectedCompanyIds(next: Set<string>) {
-    setSelectedCompanyIds(next);
-    setSelectedClientIds(new Set());
-    setPage(0);
-  }
-  function toggleCompany(id: string) {
-    const next = new Set(selectedCompanyIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    updateSelectedCompanyIds(next);
-  }
-  function updateSelectedClientIds(next: Set<string>) {
-    setSelectedClientIds(next);
-    setPage(0);
-  }
-  function toggleClient(id: string) {
-    const next = new Set(selectedClientIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    updateSelectedClientIds(next);
-  }
-  function updatePeriod(s: string, e: string) {
-    setPeriod(s, e);
-    setPage(0);
-  }
-  function toggleStatus(id: PeriodStatusId) {
-    setSelectedStatuses((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-    setPage(0);
-  }
-  function selectAllStatuses() {
-    setSelectedStatuses(new Set(PERIOD_STATUS_OPTIONS.map((o) => o.id)));
-    setPage(0);
-  }
-  function selectNoneStatuses() {
-    setSelectedStatuses(new Set());
-    setPage(0);
-  }
+  /** How many filter categories are currently applied — shown as a count badge on the "Filtros" button, same as Pagamentos. Período is excluded since it always defaults to the current month rather than "empty". */
+  const activeFilterCount = [
+    selectedEmployeeIds.size > 0,
+    selectedCompanyIds.size > 0,
+    selectedClientIds.size > 0,
+    selectedStatuses.size < PERIOD_STATUS_OPTIONS.length,
+  ].filter(Boolean).length;
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
@@ -218,7 +174,7 @@ export default function LibraryPage() {
     setBusy(true);
     try {
       const { rows: allMatching } = await listImports({
-        search,
+        employeeIds: Array.from(selectedEmployeeIds, Number),
         companyIds: Array.from(selectedCompanyIds, Number),
         clientIds: Array.from(selectedClientIds, Number),
         periodStart,
@@ -255,139 +211,49 @@ export default function LibraryPage() {
       {error && <div className="error-box">{error}</div>}
 
       <div className="card">
-        <div className="field-row" style={{ marginBottom: 0 }}>
-            <div className="field" style={{ flex: "2 1 240px" }}>
-              <label htmlFor="search">Buscar</label>
-              <div style={{ position: "relative" }}>
-                <Search
-                  size={14}
-                  style={{
-                    position: "absolute",
-                    left: "0.65rem",
-                    top: "50%",
-                    transform: "translateY(-50%)",
-                    color: "var(--text-muted)",
-                  }}
-                />
-                <input
-                  id="search"
-                  type="text"
-                  value={search}
-                  onChange={(e) => updateSearch(e.target.value)}
-                  placeholder="Nome do colaborador..."
-                  style={{ width: "100%", paddingLeft: "2rem" }}
-                />
-              </div>
-            </div>
-            <div className="field">
-              <label>Empresa</label>
-              <MultiSelectDropdown
-                options={companies.map((c) => ({ id: String(c.id), label: c.name }))}
-                selected={selectedCompanyIds}
-                onToggle={toggleCompany}
-                onSelectAll={() => updateSelectedCompanyIds(new Set(companies.map((c) => String(c.id))))}
-                onSelectNone={() => updateSelectedCompanyIds(new Set())}
-                icon={Building2}
-                allLabel="Todas as empresas"
-                noneLabel="Todas as empresas"
-                countLabel={(n, total) => `${n} de ${total} empresas`}
-              />
-            </div>
-            <div className="field">
-              <label>Cliente</label>
-              <MultiSelectDropdown
-                options={clientOptions.map((c) => ({ id: String(c.id), label: c.name }))}
-                selected={selectedClientIds}
-                onToggle={toggleClient}
-                onSelectAll={() => updateSelectedClientIds(new Set(clientOptions.map((c) => String(c.id))))}
-                onSelectNone={() => updateSelectedClientIds(new Set())}
-                icon={Users}
-                allLabel="Todos os clientes"
-                noneLabel="Todos os clientes"
-                countLabel={(n, total) => `${n} de ${total} clientes`}
-              />
-            </div>
-            <div className="field">
-              <label>Período</label>
-              <DateRangePicker
-                startValue={periodStart}
-                endValue={periodEnd}
-                onChange={updatePeriod}
-                allowClear={false}
-              />
-            </div>
-            <div className="field">
-              <label>Status no período</label>
-              <MultiSelectDropdown
-                options={PERIOD_STATUS_OPTIONS}
-                selected={selectedStatuses}
-                onToggle={toggleStatus}
-                onSelectAll={selectAllStatuses}
-                onSelectNone={selectNoneStatuses}
-                allLabel="Todos os status"
-                noneLabel="Nenhum filtro selecionado"
-                countLabel={(n, total) => `${n} de ${total} filtros`}
-              />
-            </div>
-          </div>
-
-          <div className="field-row" style={{ marginTop: "1rem", marginBottom: 0 }}>
-            <div className="field">
-              <label>Modo de geração</label>
-              <div style={{ display: "flex", gap: "1.2rem", alignItems: "center", height: "2.5rem" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.9rem", cursor: "pointer" }}>
-                  <input
-                    type="radio"
-                    name="mode"
-                    checked={mode === "per-employee"}
-                    onChange={() => setMode("per-employee")}
-                  />
-                  Um PDF por colaborador
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.9rem", cursor: "pointer" }}>
-                  <input
-                    type="radio"
-                    name="mode"
-                    checked={mode === "per-client"}
-                    onChange={() => setMode("per-client")}
-                  />
-                  Um PDF por cliente
-                </label>
-              </div>
-            </div>
-            <button
-              type="button"
-              style={{ marginLeft: "auto" }}
-              onClick={handleGenerateZip}
-              disabled={busy || total === 0}
+        <div className="field-row" style={{ marginBottom: 0, alignItems: "center" }}>
+          <button type="button" className="secondary" onClick={() => setFiltersDrawerOpen(true)}>
+            <Filter size={15} style={{ marginRight: "0.4rem" }} />
+            {activeFilterCount > 0 ? `Filtros (${activeFilterCount})` : "Filtros"}
+          </button>
+          <div style={{ marginLeft: "auto", display: "flex", gap: "0.6rem", alignItems: "center" }}>
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value as ReportMode)}
+              title="Modo de geração do zip"
             >
+              <option value="per-employee">Um PDF por colaborador</option>
+              <option value="per-client">Um PDF por cliente</option>
+            </select>
+            <button type="button" onClick={handleGenerateZip} disabled={busy || total === 0}>
               <Archive size={15} style={{ marginRight: "0.4rem" }} />
               {busy ? "Gerando..." : "Gerar zip"}
             </button>
           </div>
+        </div>
 
-          {generatedZipPath && (
-            <div
-              className="success-box"
-              style={{
-                marginTop: "1rem",
-                marginBottom: 0,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: "1rem",
-              }}
-            >
-              <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <CheckCircle2 size={16} />
-                Zip gerado com sucesso: {fileNameFromPath(generatedZipPath)}
-              </span>
-              <button type="button" className="outline" onClick={() => handleReveal(generatedZipPath)}>
-                <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-                Abrir no explorador de arquivos
-              </button>
-            </div>
-          )}
+        {generatedZipPath && (
+          <div
+            className="success-box"
+            style={{
+              marginTop: "1rem",
+              marginBottom: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "1rem",
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <CheckCircle2 size={16} />
+              Zip gerado com sucesso: {fileNameFromPath(generatedZipPath)}
+            </span>
+            <button type="button" className="outline" onClick={() => handleReveal(generatedZipPath)}>
+              <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
+              Abrir no explorador de arquivos
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="card table-card">
@@ -464,6 +330,15 @@ export default function LibraryPage() {
         path={viewerImport?.originalPdfPath ?? null}
         title={viewerImport ? `${viewerImport.employeeName} — ${formatDate(viewerImport.periodStart)} a ${formatDate(viewerImport.periodEnd)}` : undefined}
         onClose={() => setViewerImport(null)}
+      />
+
+      <LibraryFiltersDrawer
+        open={filtersDrawerOpen}
+        onClose={() => setFiltersDrawerOpen(false)}
+        value={{ employeeIds: selectedEmployeeIds, companyIds: selectedCompanyIds, clientIds: selectedClientIds, periodStart, periodEnd, statuses: selectedStatuses }}
+        onApply={handleApplyFilters}
+        companies={companies}
+        clients={clients}
       />
     </div>
   );
