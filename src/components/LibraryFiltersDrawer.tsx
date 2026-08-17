@@ -113,14 +113,23 @@ export default function LibraryFiltersDrawer({
     });
   }
 
-  /** Resets just the Drawer's own draft fields — still requires "Aplicar filtros" to take effect, same as every other change made inside the Drawer. */
-  function clearDraftFilters() {
-    setDraftEmployeeIds(new Set());
-    setDraftCompanyIds(new Set());
-    setDraftClientIds(new Set());
-    setDraftPeriodStart("");
-    setDraftPeriodEnd("");
-    setDraftStatuses(new Set(PERIOD_STATUS_OPTIONS.map((o) => o.id)));
+  /** Resets every field to its default and applies immediately — unlike every other change in the Drawer, "Limpar filtros" doesn't wait for "Aplicar filtros" since there's no draft of an empty state worth reviewing first. */
+  function clearFilters() {
+    const cleared: LibraryFiltersValue = {
+      employeeIds: new Set(),
+      companyIds: new Set(),
+      clientIds: new Set(),
+      periodStart: "",
+      periodEnd: "",
+      statuses: new Set(PERIOD_STATUS_OPTIONS.map((o) => o.id)),
+    };
+    setDraftEmployeeIds(cleared.employeeIds);
+    setDraftCompanyIds(cleared.companyIds);
+    setDraftClientIds(cleared.clientIds);
+    setDraftPeriodStart(cleared.periodStart);
+    setDraftPeriodEnd(cleared.periodEnd);
+    setDraftStatuses(cleared.statuses);
+    onApply(cleared);
   }
 
   return (
@@ -133,7 +142,7 @@ export default function LibraryFiltersDrawer({
           <button type="button" onClick={applyFilters}>
             Aplicar filtros
           </button>
-          <button type="button" className="ghost" onClick={clearDraftFilters}>
+          <button type="button" className="ghost" onClick={clearFilters}>
             Limpar filtros
           </button>
         </>
@@ -147,6 +156,7 @@ export default function LibraryFiltersDrawer({
           <EmployeeMultiSelectDropdown
             selected={draftEmployeeIds}
             onToggle={toggleDraftEmployee}
+            onClear={() => setDraftEmployeeIds(new Set())}
             companyIds={draftCompanyIds.size > 0 ? Array.from(draftCompanyIds, Number) : undefined}
             clientIds={draftClientIds.size > 0 ? Array.from(draftClientIds, Number) : undefined}
             align="left"

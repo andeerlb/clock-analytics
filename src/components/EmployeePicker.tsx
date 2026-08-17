@@ -5,6 +5,8 @@ import { listEmployeesGlobal, type EmployeeRow } from "../lib/db";
 
 const PAGE_SIZE = 8;
 const POPOVER_WIDTH = 288; // 18rem at the default 16px root size
+/** Idle time after the last keystroke before the typed search actually queries the db — long enough to type a full name without firing a query per letter. */
+const SEARCH_DEBOUNCE_MS = 300;
 
 /**
  * A single-colaborador combobox, scoped to one client **and** one company —
@@ -44,6 +46,7 @@ export default function EmployeePicker({
   const [open, setOpen] = useState(false);
   const [coords, setCoords] = useState<{ top: number; left: number; openUp: boolean } | null>(null);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(0);
   const [rows, setRows] = useState<EmployeeRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -88,11 +91,19 @@ export default function EmployeePicker({
     inputRef.current?.focus();
   }, [open]);
 
+  // Holds off updating `debouncedSearch` (the effect below queries by this,
+  // not `search` directly) until typing has paused — otherwise every
+  // keystroke fires its own query against the db.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setLoading(true);
-    listEmployeesGlobal({ search, clientIds: [clientId], companyIds: [companyId], page, pageSize: PAGE_SIZE })
+    listEmployeesGlobal({ search: debouncedSearch, clientIds: [clientId], companyIds: [companyId], page, pageSize: PAGE_SIZE })
       .then(({ rows: r, total: t }) => {
         if (cancelled) return;
         setRows(r);
@@ -104,7 +115,7 @@ export default function EmployeePicker({
     return () => {
       cancelled = true;
     };
-  }, [open, search, clientId, companyId, page]);
+  }, [open, debouncedSearch, clientId, companyId, page]);
 
   function toggleOpen() {
     if (disabled) return;
@@ -123,6 +134,7 @@ export default function EmployeePicker({
       openUp,
     });
     setSearch("");
+    setDebouncedSearch("");
     setPage(0);
     setOpen(true);
   }
@@ -184,13 +196,17 @@ export default function EmployeePicker({
               />
             </div>
 
-            {loading && <p className="muted" style={{ fontSize: "0.82rem", margin: "0.4rem 0" }}>Carregando...</p>}
+            {/* The previous results stay on screen while a new page/search is
+                in flight — swapped for the new list only once it arrives,
+                rather than clearing to "Carregando..." first (which read as
+                a flicker between two lists). */}
+            {loading && rows.length === 0 && <p className="muted" style={{ fontSize: "0.82rem", margin: "0.4rem 0" }}>Carregando...</p>}
             {!loading && rows.length === 0 && (
               <p className="muted" style={{ fontSize: "0.82rem", margin: "0.4rem 0" }}>
                 Nenhum colaborador encontrado.
               </p>
             )}
-            {!loading && rows.length > 0 && (
+            {rows.length > 0 && (
               <div style={{ display: "flex", flexDirection: "column", maxHeight: "14rem", overflowY: "auto" }}>
                 {rows.map((e) => (
                   <button

@@ -63,6 +63,39 @@ function inClause(column: string, values: (string | number)[], params: (string |
   return `${column} IN (${placeholders})`;
 }
 
+/**
+ * Common PT-BR accented letters folded to their base ASCII form. Both cases
+ * are listed explicitly (not just lowercase) because SQLite's built-in
+ * `LOWER()` only case-folds ASCII — an uppercase "Ç"/"É"/etc. (the employee
+ * directory is all-caps) passes through `LOWER()` unchanged, so it still
+ * needs its own `REPLACE()` pair downstream of it.
+ */
+const ACCENT_FOLD_PAIRS: [string, string][] = [
+  ["á", "a"], ["à", "a"], ["ã", "a"], ["â", "a"], ["ä", "a"],
+  ["Á", "a"], ["À", "a"], ["Ã", "a"], ["Â", "a"], ["Ä", "a"],
+  ["é", "e"], ["è", "e"], ["ê", "e"], ["ë", "e"],
+  ["É", "e"], ["È", "e"], ["Ê", "e"], ["Ë", "e"],
+  ["í", "i"], ["ì", "i"], ["î", "i"], ["ï", "i"],
+  ["Í", "i"], ["Ì", "i"], ["Î", "i"], ["Ï", "i"],
+  ["ó", "o"], ["ò", "o"], ["õ", "o"], ["ô", "o"], ["ö", "o"],
+  ["Ó", "o"], ["Ò", "o"], ["Õ", "o"], ["Ô", "o"], ["Ö", "o"],
+  ["ú", "u"], ["ù", "u"], ["û", "u"], ["ü", "u"],
+  ["Ú", "u"], ["Ù", "u"], ["Û", "u"], ["Ü", "u"],
+  ["ç", "c"], ["Ç", "c"], ["ñ", "n"], ["Ñ", "n"],
+];
+
+/**
+ * Wraps a SQL expression (a column reference or a bound-parameter
+ * placeholder) with `LOWER()` plus a chain of `REPLACE()` calls that fold
+ * accented PT-BR letters to their base form — SQLite has no built-in accent
+ * folding, so a name search needs the *same* chain applied to both sides of
+ * a `LIKE` to match case- and accent-insensitively (e.g. "goncalves" against
+ * "GONÇALVES").
+ */
+function foldAccentsSql(sqlExpr: string): string {
+  return ACCENT_FOLD_PAIRS.reduce((expr, [from, to]) => `REPLACE(${expr}, '${from}', '${to}')`, `LOWER(${sqlExpr})`);
+}
+
 async function upsertEmployee(
   db: Database,
   companyId: number,
@@ -816,7 +849,7 @@ async function hydrateEmployeeRows(db: Database, employeeIds: number[]): Promise
 }
 
 export interface EmployeesGlobalQuery {
-  /** Substring match on name — case-insensitive only for ASCII (SQLite's `LOWER()` doesn't case-fold accents). */
+  /** Substring match on name — case- and accent-insensitive (see `foldAccentsSql`). */
   search?: string;
   companyIds?: number[];
   clientIds?: number[];
@@ -845,7 +878,7 @@ export async function listEmployeesGlobal(query: EmployeesGlobalQuery): Promise<
   const search = query.search?.trim();
   if (search) {
     params.push(search);
-    conditions.push(`LOWER(e.name) LIKE '%' || LOWER($${params.length}) || '%'`);
+    conditions.push(`${foldAccentsSql("e.name")} LIKE '%' || ${foldAccentsSql(`$${params.length}`)} || '%'`);
   }
   const companyClause = inClause("ecc_company.company_id", query.companyIds ?? [], params);
   if (companyClause) {
@@ -880,6 +913,19 @@ export async function listEmployeesGlobal(query: EmployeesGlobalQuery): Promise<
   const rows = idRows.map((r) => byId.get(r.id)!);
 
   return { rows, total };
+}
+
+/**
+ * Full `EmployeeRow`s for a specific set of ids, in one batched query —
+ * for a caller that already knows *which* colaboradores it wants (e.g. the
+ * "Colaborador" filter pinning already-selected names that may have fallen
+ * off the current search's page) rather than searching/paginating like
+ * `listEmployeesGlobal`.
+ */
+export async function getEmployeesByIds(ids: number[]): Promise<EmployeeRow[]> {
+  if (ids.length === 0) return [];
+  const db = await getDb();
+  return hydrateEmployeeRows(db, ids);
 }
 
 /**
