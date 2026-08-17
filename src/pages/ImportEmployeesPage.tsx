@@ -362,8 +362,17 @@ export default function ImportEmployeesPage() {
   );
 
   const isSelectable = (r: EmployeePreviewRow) => r.category === "valid";
-  const selectableCount = employeeRows.filter(isSelectable).length;
-  const allSelected = selectableCount > 0 && employeeRows.every((r, i) => selectedRows.has(i) || !isSelectable(r));
+  // "Selecionar todos" only ever acts on what's currently on screen — the
+  // toolbar chips/name search filter `previewRows` down to a category
+  // without touching `selectedRows` itself, so a global select-all here
+  // would silently select rows the user can't even see (e.g. checking it
+  // while filtered to "ignoradas" used to select every OTHER selectable row
+  // in the whole file instead).
+  const visibleSelectableIndices = previewRows
+    .filter((r) => r.kind === "row" && isSelectable(r.row))
+    .map((r) => (r as Extract<DisplayRow, { kind: "row" }>).index);
+  const visibleSelectableCount = visibleSelectableIndices.length;
+  const allSelected = visibleSelectableCount > 0 && visibleSelectableIndices.every((i) => selectedRows.has(i));
 
   function toggleRowFilter(category: RowFilter) {
     setRowFilter((prev) => (prev === category ? "all" : category));
@@ -380,11 +389,14 @@ export default function ImportEmployeesPage() {
   }
 
   function toggleAll() {
-    if (allSelected) {
-      setSelectedRows(new Set());
-    } else {
-      setSelectedRows(new Set(employeeRows.flatMap((r, i) => (isSelectable(r) ? [i] : []))));
-    }
+    setSelectedRows((prev) => {
+      const next = new Set(prev);
+      for (const i of visibleSelectableIndices) {
+        if (allSelected) next.delete(i);
+        else next.add(i);
+      }
+      return next;
+    });
   }
 
   const historyPageCount = Math.max(1, Math.ceil(recentFilesTotal / historyPageSize));
@@ -862,7 +874,7 @@ export default function ImportEmployeesPage() {
                             type="checkbox"
                             checked={allSelected}
                             onChange={toggleAll}
-                            disabled={selectableCount === 0}
+                            disabled={visibleSelectableCount === 0}
                             aria-label="Selecionar todos"
                           />
                         </th>
