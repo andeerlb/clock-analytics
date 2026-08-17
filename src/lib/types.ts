@@ -152,8 +152,6 @@ export interface StorageUsage {
   dbBytes: number;
   importsBytes: number;
   importsFileCount: number;
-  paymentTemplatesBytes: number;
-  paymentTemplatesFileCount: number;
 }
 
 /** Whether a single Poppler CLI tool (pdfinfo/pdftotext/pdfseparate/pdfunite) was found. */

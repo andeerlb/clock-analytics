@@ -338,9 +338,7 @@ export default function SettingsPage() {
     }
   }
 
-  const totalBytes = storage
-    ? storage.dbBytes + storage.importsBytes + storage.paymentTemplatesBytes
-    : 0;
+  const totalBytes = storage ? storage.dbBytes + storage.importsBytes : 0;
 
   return (
     <div>
@@ -456,12 +454,6 @@ export default function SettingsPage() {
             <div className="summary-tile">
               <div className="label">PDFs importados ({storage.importsFileCount} arquivos)</div>
               <div className="value">{formatBytes(storage.importsBytes)}</div>
-            </div>
-            <div className="summary-tile">
-              <div className="label">
-                Modelos de importação de pagamentos ({storage.paymentTemplatesFileCount} arquivos)
-              </div>
-              <div className="value">{formatBytes(storage.paymentTemplatesBytes)}</div>
             </div>
             <div className="summary-tile">
               <div className="label">Total</div>

@@ -567,10 +567,9 @@ pub struct DownloadedPaymentFile {
 /// URL, validates it's really an xlsx/xls/ods by magic bytes (never
 /// trusting the URL's extension or Content-Type — both are attacker/
 /// misconfig-controllable, e.g. a login-wall HTML response served with a
-/// 200), and writes it into `imports/` next to the timesheet-PDF flow's
-/// own copies — `payment_templates/` is dead code today (nothing ever
-/// creates that directory), and `imports/` already carries the
-/// size/clear/backup lifecycle this file needs for free (see `storage.rs`).
+/// 200), and writes it into `imports/` next to the timesheet-PDF flow's own
+/// copies — `imports/` already carries the size/clear/backup lifecycle this
+/// file needs for free (see `storage.rs`).
 #[tauri::command]
 pub async fn download_payment_file_from_url(
     app: AppHandle,

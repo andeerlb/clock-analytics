@@ -9,17 +9,14 @@ use zip::ZipWriter;
 const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
 
 /// Disk usage of everything the app itself created — the DB (plus its WAL/
-/// SHM sidecars, which hold real data until checkpointed), the copied PDFs
-/// under `imports/`, and the copied payment-template sample files under
-/// `payment_templates/`. Powers the storage indicator in Configurações.
+/// SHM sidecars, which hold real data until checkpointed) and the copied
+/// PDFs under `imports/`. Powers the storage indicator in Configurações.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageUsage {
     pub db_bytes: u64,
     pub imports_bytes: u64,
     pub imports_file_count: u64,
-    pub payment_templates_bytes: u64,
-    pub payment_templates_file_count: u64,
 }
 
 pub fn usage(data_dir: &Path) -> StorageUsage {
@@ -32,15 +29,11 @@ pub fn usage(data_dir: &Path) -> StorageUsage {
     }
 
     let (imports_bytes, imports_file_count) = dir_size(&data_dir.join("imports"));
-    let (payment_templates_bytes, payment_templates_file_count) =
-        dir_size(&data_dir.join("payment_templates"));
 
     StorageUsage {
         db_bytes,
         imports_bytes,
         imports_file_count,
-        payment_templates_bytes,
-        payment_templates_file_count,
     }
 }
 
@@ -103,11 +96,11 @@ pub fn clear_imports_dir(data_dir: &Path) -> Result<(), String> {
 }
 
 /// Zips up the database (with its WAL/SHM sidecars, if present) and/or the
-/// whole `imports/` and `payment_templates/` trees — an escape hatch to
-/// save a copy before "Limpar tudo" wipes everything, since this app keeps
-/// the only copy of its data. `include_db`/`include_files` let the caller
-/// back up just one side (e.g. only the database, skipping the potentially
-/// much larger PDF files) instead of always bundling both.
+/// whole `imports/` tree — an escape hatch to save a copy before "Limpar
+/// tudo" wipes everything, since this app keeps the only copy of its data.
+/// `include_db`/`include_files` let the caller back up just one side (e.g.
+/// only the database, skipping the potentially much larger PDF files)
+/// instead of always bundling both.
 pub fn backup(
     data_dir: &Path,
     dest_zip_path: &str,
@@ -134,17 +127,6 @@ pub fn backup(
         let imports_dir = data_dir.join("imports");
         if imports_dir.exists() {
             add_dir_to_zip(&mut zip, &imports_dir, &imports_dir, "imports", options)?;
-        }
-
-        let payment_templates_dir = data_dir.join("payment_templates");
-        if payment_templates_dir.exists() {
-            add_dir_to_zip(
-                &mut zip,
-                &payment_templates_dir,
-                &payment_templates_dir,
-                "payment_templates",
-                options,
-            )?;
         }
     }
 
