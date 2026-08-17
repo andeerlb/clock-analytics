@@ -30,6 +30,7 @@ import type { EmployeeFormNavState } from "./EmployeeFormPage";
 import type { RoleFormNavState } from "./RoleFormPage";
 import {
   applyPaymentTemplate,
+  deletePaths,
   downloadPaymentFileFromUrl,
   hashPaymentFile,
   listDirFiles,
@@ -492,6 +493,16 @@ export default function ImportPaymentsPage() {
       return next;
     });
     setPathsPage(0);
+    // Only a URL download is our own copy under imports/ — a locally-picked
+    // file lives wherever the user put it and is never ours to delete.
+    if (urlSourceByPath.has(path)) {
+      setUrlSourceByPath((prev) => {
+        const next = new Map(prev);
+        next.delete(path);
+        return next;
+      });
+      deletePaths([path]).catch(() => {});
+    }
   }
 
   const pathsPageCount = Math.max(1, Math.ceil(paths.length / pathsPageSize));
@@ -1635,6 +1646,23 @@ export default function ImportPaymentsPage() {
               autoApplyOverwritePaid: false,
             });
           }
+        }
+      }
+
+      // The rows this save needed are already in `shiftInputs`/SQLite —
+      // nothing reads these downloaded bytes again, so the local copies
+      // `download_payment_file_from_url` made under imports/ are done being
+      // useful. `originalPdfPath` above is never persisted for them, so
+      // without this they'd sit there forever, invisible to any cleanup
+      // tool. A locally-picked file is never in `urlSourceByPath` and is
+      // left alone either way.
+      const urlDownloadedPaths = fileResults.map((r) => r.path).filter((p) => urlSourceByPath.has(p));
+      if (urlDownloadedPaths.length > 0) {
+        try {
+          await deletePaths(urlDownloadedPaths);
+        } catch {
+          // Best-effort — the shifts are already saved either way, not
+          // worth surfacing an error over a leftover temp file.
         }
       }
 

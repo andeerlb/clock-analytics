@@ -10,7 +10,9 @@ const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
 
 /// Disk usage of everything the app itself created — the DB (plus its WAL/
 /// SHM sidecars, which hold real data until checkpointed) and the copied
-/// PDFs under `imports/`. Powers the storage indicator in Configurações.
+/// imported files under `imports/` (timesheet PDFs, plus any payment
+/// spreadsheet downloaded by link). Powers the storage indicator in
+/// Configurações.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageUsage {

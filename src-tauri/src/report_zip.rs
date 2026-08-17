@@ -37,13 +37,15 @@ pub fn build(entries: &[ReportZipEntry], dest_zip_path: &str, poppler_dir: Optio
         };
         let source_path = merged_tmp_path.as_deref().unwrap_or(&entry.source_pdf_paths[0]);
 
-        let bytes = fs::read(source_path).map_err(|e| e.to_string())?;
-        zip.start_file(&entry.zip_path, options).map_err(|e| e.to_string())?;
-        zip.write_all(&bytes).map_err(|e| e.to_string())?;
+        let result = fs::read(source_path).map_err(|e| e.to_string()).and_then(|bytes| {
+            zip.start_file(&entry.zip_path, options).map_err(|e| e.to_string())?;
+            zip.write_all(&bytes).map_err(|e| e.to_string())
+        });
 
         if let Some(tmp) = merged_tmp_path {
             let _ = fs::remove_file(tmp);
         }
+        result?;
     }
 
     zip.finish().map_err(|e| e.to_string())?;

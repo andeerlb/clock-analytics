@@ -21,7 +21,6 @@ import Avatar from "../components/Avatar";
 import Drawer from "../components/Drawer";
 import Pagination from "../components/Pagination";
 import PickFilesButton from "../components/PickFilesButton";
-import PdfViewerModal from "../components/PdfViewerModal";
 import { hashFiles, listDirFiles, listProviders, parseImport, pickFolder, pickPdfFiles } from "../lib/api";
 import {
   findConflicts,
@@ -91,7 +90,6 @@ export default function ImportTimesheetPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [viewerFile, setViewerFile] = useState<ImportFileRow | null>(null);
 
   useEffect(() => {
     listProviders().then((list) => {
@@ -876,17 +874,6 @@ export default function ImportTimesheetPage() {
                         <BadgeIcon size={13} />
                         {badge.label}
                       </span>
-                      <button
-                        type="button"
-                        className="ghost"
-                        style={{ padding: "0.3rem" }}
-                        onClick={() => setViewerFile(f)}
-                        disabled={!f.originalPdfPath}
-                        aria-label="Visualizar"
-                        title={f.originalPdfPath ? "Visualizar" : "Arquivo original removido (Configurações)"}
-                      >
-                        <Eye size={14} />
-                      </button>
                     </div>
                   </div>
                 );
@@ -940,12 +927,6 @@ export default function ImportTimesheetPage() {
             </div>
           </div>
         </div>
-
-      <PdfViewerModal
-        path={viewerFile?.originalPdfPath ?? null}
-        title={viewerFile?.fileName}
-        onClose={() => setViewerFile(null)}
-      />
     </div>
   );
 }

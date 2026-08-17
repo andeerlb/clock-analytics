@@ -159,10 +159,11 @@ export default function SettingsPage() {
   }
 
   // Fetches the clicked tile's breakdown on open — "Banco de dados" lists
-  // per-table disk usage (see `getDatabaseTableSizes`), "PDFs importados"
-  // lists each file actually inside imports/, largest first, with its
-  // human name resolved where possible (see `getImportedFileNamesByBasename`
-  // for why that resolution isn't always available).
+  // per-table disk usage (see `getDatabaseTableSizes`), "Arquivos importados"
+  // lists each file actually inside imports/ (PDFs plus any payment
+  // spreadsheet downloaded by link), largest first, with its human name
+  // resolved where possible (see `getImportedFileNamesByBasename` for why
+  // that resolution isn't always available).
   useEffect(() => {
     if (!storageDetail) return;
     setLoadingStorageDetail(true);
@@ -388,7 +389,8 @@ export default function SettingsPage() {
       </div>
       <p className="page-subtitle">
         O PontoScan guarda tudo localmente neste computador — banco de dados e cópias dos
-        PDFs importados. Com o tempo isso ocupa espaço em disco; aqui dá pra acompanhar e liberar.
+        arquivos importados (PDFs de ponto e, quando baixadas por link, planilhas de pagamento).
+        Com o tempo isso ocupa espaço em disco; aqui dá pra acompanhar e liberar.
       </p>
 
       {error && <div className="error-box">{error}</div>}
@@ -505,7 +507,7 @@ export default function SettingsPage() {
               onClick={() => setStorageDetail("imports")}
               title="Ver detalhado, ordenado por tamanho"
             >
-              <div className="label">PDFs importados ({storage.importsFileCount} arquivos)</div>
+              <div className="label">Arquivos importados ({storage.importsFileCount} arquivos)</div>
               <div className="value">{formatBytes(storage.importsBytes)}</div>
             </div>
             <div className="summary-tile">
@@ -521,7 +523,7 @@ export default function SettingsPage() {
       {storageDetail && (
         <Modal
           onClose={closeStorageDetail}
-          title={storageDetail === "db" ? "Banco de dados" : "PDFs importados"}
+          title={storageDetail === "db" ? "Banco de dados" : "Arquivos importados"}
           maxHeight="70vh"
         >
           {loadingStorageDetail && <p className="muted">Calculando...</p>}

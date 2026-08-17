@@ -89,17 +89,22 @@ pub struct FileParseResult {
     /// the hash of just that person's split-off page.
     pub file_hash: String,
     pub page_count: u32,
-    /// Copy of the whole original file, kept regardless of outcome so a
-    /// failed file can still be reopened later ("Visualizar" in the import
-    /// history) to see what was actually sent in.
+    /// Always empty. The whole batch file is never kept as its own copy —
+    /// only each resulting timesheet's own split-off page is (see
+    /// `sheets[].original_pdf_path`), so the import history has nothing to
+    /// point "Visualizar" at. Field kept because `source_files` still
+    /// carries the column, shared with the payment-import flow, where a
+    /// URL-downloaded file does set a real path.
     pub original_pdf_path: String,
     pub sheets: Vec<ParsedTimesheet>,
     pub error: Option<String>,
 }
 
-/// Extracts text from each source PDF, hands it to the chosen provider's
-/// parser, and copies the original file into the app's data dir so it stays
-/// browsable later independent of where the user picked it from on disk.
+/// Extracts text from each source PDF and hands it to the chosen provider's
+/// parser. The original file is never kept as a whole — only each resulting
+/// timesheet's own split-off page is copied into the app's data dir (see
+/// `parse_single_page`/`parse_multi_page`), so "Visualizar" later reopens a
+/// specific employee's page, never the whole batch file as it was uploaded.
 ///
 /// A file with more than one page is treated as one timesheet per page
 /// (Coalize's "Espelho Ponto" batch exports put one employee per page): it's
@@ -130,25 +135,6 @@ pub fn parse_import(
     for source_path in paths {
         let file_name = hashing::file_name(&source_path);
 
-        // Always keep a copy of the whole original file, even on failure —
-        // it's what "Visualizar" in the import history opens later, and
-        // it's useful to be able to re-inspect a file that didn't parse.
-        let original_pdf_path = match copy_into_imports_dir(&source_path, &imports_dir) {
-            Ok(p) => p,
-            Err(e) => {
-                results.push(FileParseResult {
-                    path: source_path,
-                    file_name,
-                    file_hash: String::new(),
-                    page_count: 0,
-                    original_pdf_path: String::new(),
-                    sheets: Vec::new(),
-                    error: Some(e),
-                });
-                continue;
-            }
-        };
-
         let file_hash = match hashing::hash_file(&source_path) {
             Ok(h) => h,
             Err(e) => {
@@ -157,7 +143,7 @@ pub fn parse_import(
                     file_name,
                     file_hash: String::new(),
                     page_count: 0,
-                    original_pdf_path,
+                    original_pdf_path: String::new(),
                     sheets: Vec::new(),
                     error: Some(e.to_string()),
                 });
@@ -172,7 +158,7 @@ pub fn parse_import(
                     file_name,
                     file_hash,
                     page_count: 0,
-                    original_pdf_path,
+                    original_pdf_path: String::new(),
                     sheets: Vec::new(),
                     error: Some(e),
                 });
@@ -181,14 +167,8 @@ pub fn parse_import(
         };
 
         let (sheets, error) = if page_count <= 1 {
-            match parse_single_page(
-                &source_path,
-                &file_name,
-                &file_hash,
-                &original_pdf_path,
-                parser.as_ref(),
-                poppler_dir.as_deref(),
-            ) {
+            match parse_single_page(&source_path, &file_name, &file_hash, &imports_dir, parser.as_ref(), poppler_dir.as_deref())
+            {
                 Ok(sheets) => (sheets, None),
                 Err(e) => (Vec::new(), Some(e)),
             }
@@ -201,7 +181,7 @@ pub fn parse_import(
             file_name,
             file_hash,
             page_count,
-            original_pdf_path,
+            original_pdf_path: String::new(),
             sheets,
             error,
         });
@@ -214,12 +194,13 @@ fn parse_single_page(
     source_path: &str,
     file_name: &str,
     file_hash: &str,
-    dest: &str,
+    imports_dir: &Path,
     parser: &dyn parsers::TimesheetParser,
     poppler_dir: Option<&str>,
 ) -> Result<Vec<ParsedTimesheet>, String> {
     let raw_text = pdf_extract::extract_text(source_path, poppler_dir).map_err(|e| e.to_string())?;
-    let mut parsed = parser.parse(&raw_text, dest).map_err(|e| e.to_string())?;
+    let dest = copy_into_imports_dir(source_path, imports_dir)?;
+    let mut parsed = parser.parse(&raw_text, &dest).map_err(|e| e.to_string())?;
     for sheet in &mut parsed {
         sheet.original_file_hash = file_hash.to_string();
         sheet.original_file_name = file_name.to_string();
