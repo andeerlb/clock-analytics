@@ -57,6 +57,35 @@ fn dir_size(dir: &Path) -> (u64, u64) {
     (total, count)
 }
 
+/// One file's name and size — the itemized counterpart to `dir_size`'s
+/// aggregate total, for the "o que está pesando" breakdown behind
+/// "PDFs importados" in Configurações. Only regards files directly inside
+/// `dir` (the layout there is flat; a stray subdirectory, e.g. a
+/// still-in-progress PDF split, is skipped rather than recursed into).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileEntry {
+    pub name: String,
+    pub bytes: u64,
+}
+
+pub fn list_files(dir: &Path) -> Vec<FileEntry> {
+    let mut out = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        if let Some(name) = entry.file_name().to_str() {
+            out.push(FileEntry { name: name.to_string(), bytes: meta.len() });
+        }
+    }
+    out
+}
+
 /// Best-effort delete of every path given — used both for "remover
 /// originais redundantes" (specific files) and could be reused elsewhere.
 /// A file already missing isn't an error (nothing to clean up); any other

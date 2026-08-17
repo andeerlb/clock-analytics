@@ -154,6 +154,12 @@ export interface StorageUsage {
   importsFileCount: number;
 }
 
+/** One file's raw (uuid-named) filename and size — an itemized entry behind the storage indicator's "PDFs importados" breakdown. */
+export interface StorageFileEntry {
+  name: string;
+  bytes: number;
+}
+
 /** Whether a single Poppler CLI tool (pdfinfo/pdftotext/pdfseparate/pdfunite) was found. */
 export interface PopplerBinaryStatus {
   name: string;

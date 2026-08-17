@@ -163,6 +163,7 @@ pub fn run() {
             commands::hash_payment_file,
             commands::generate_report_zip,
             commands::get_storage_usage,
+            commands::get_imports_file_list,
             commands::delete_paths,
             commands::clear_imports_dir,
             commands::backup_app_data,

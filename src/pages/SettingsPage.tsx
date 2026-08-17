@@ -21,6 +21,7 @@ import {
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import GithubIcon from "../components/GithubIcon";
+import Modal from "../components/Modal";
 import UpdateModal from "../components/UpdateModal";
 import {
   backupAppData,
@@ -29,6 +30,7 @@ import {
   deletePaths,
   exportDatabase,
   getCloseToTray,
+  getImportsFileList,
   getStorageUsage,
   importDatabase,
   openAppDataDir,
@@ -40,11 +42,14 @@ import {
   clearAllData,
   closeDatabase,
   findRedundantOriginals,
+  getDatabaseTableSizes,
+  getImportedFileNamesByBasename,
   markOriginalsRemoved,
   vacuumDatabase,
+  type DatabaseTableSize,
 } from "../lib/db";
 import { formatBytes } from "../lib/format";
-import type { PopplerStatus, StorageUsage } from "../lib/types";
+import type { PopplerStatus, StorageFileEntry, StorageUsage } from "../lib/types";
 import { checkForUpdate, REPO_URL } from "../lib/updateCheck";
 
 const CLEAR_CONFIRM_PHRASE = "APAGAR TUDO";
@@ -54,6 +59,13 @@ export default function SettingsPage() {
   const navigate = useNavigate();
   const [storage, setStorage] = useState<StorageUsage | null>(null);
   const [loadingStorage, setLoadingStorage] = useState(true);
+  // Which storage tile's breakdown is open in the detail Modal, if any —
+  // "Total" has no breakdown of its own, so it isn't a valid value here.
+  const [storageDetail, setStorageDetail] = useState<"db" | "imports" | null>(null);
+  const [dbTableSizes, setDbTableSizes] = useState<DatabaseTableSize[] | null>(null);
+  const [importFileEntries, setImportFileEntries] = useState<StorageFileEntry[] | null>(null);
+  const [loadingStorageDetail, setLoadingStorageDetail] = useState(false);
+  const [storageDetailError, setStorageDetailError] = useState<string | null>(null);
   const [vacuuming, setVacuuming] = useState(false);
   const [purging, setPurging] = useState(false);
   const [purgeMessage, setPurgeMessage] = useState<string | null>(null);
@@ -138,6 +150,35 @@ export default function SettingsPage() {
       .catch((e) => setError(String(e)))
       .finally(() => setLoadingStorage(false));
   }
+
+  function closeStorageDetail() {
+    setStorageDetail(null);
+    setDbTableSizes(null);
+    setImportFileEntries(null);
+    setStorageDetailError(null);
+  }
+
+  // Fetches the clicked tile's breakdown on open — "Banco de dados" lists
+  // per-table disk usage (see `getDatabaseTableSizes`), "PDFs importados"
+  // lists each file actually inside imports/, largest first, with its
+  // human name resolved where possible (see `getImportedFileNamesByBasename`
+  // for why that resolution isn't always available).
+  useEffect(() => {
+    if (!storageDetail) return;
+    setLoadingStorageDetail(true);
+    setStorageDetailError(null);
+    const request =
+      storageDetail === "db"
+        ? getDatabaseTableSizes().then(setDbTableSizes)
+        : Promise.all([getImportsFileList(), getImportedFileNamesByBasename()]).then(([files, namesByBasename]) => {
+            setImportFileEntries(
+              [...files]
+                .map((f) => ({ name: namesByBasename.get(f.name) ?? f.name, bytes: f.bytes }))
+                .sort((a, b) => b.bytes - a.bytes),
+            );
+          });
+    request.catch((e) => setStorageDetailError(String(e))).finally(() => setLoadingStorageDetail(false));
+  }, [storageDetail]);
 
   useEffect(() => {
     refreshStorage();
@@ -447,11 +488,23 @@ export default function SettingsPage() {
         {loadingStorage && <p className="muted">Calculando...</p>}
         {!loadingStorage && storage && (
           <div className="summary-row" style={{ marginBottom: 0 }}>
-            <div className="summary-tile">
+            <div
+              className="summary-tile clickable"
+              role="button"
+              tabIndex={0}
+              onClick={() => setStorageDetail("db")}
+              title="Ver detalhado, ordenado por tamanho"
+            >
               <div className="label">Banco de dados</div>
               <div className="value">{formatBytes(storage.dbBytes)}</div>
             </div>
-            <div className="summary-tile">
+            <div
+              className="summary-tile clickable"
+              role="button"
+              tabIndex={0}
+              onClick={() => setStorageDetail("imports")}
+              title="Ver detalhado, ordenado por tamanho"
+            >
               <div className="label">PDFs importados ({storage.importsFileCount} arquivos)</div>
               <div className="value">{formatBytes(storage.importsBytes)}</div>
             </div>
@@ -464,6 +517,63 @@ export default function SettingsPage() {
           </div>
         )}
       </div>
+
+      {storageDetail && (
+        <Modal
+          onClose={closeStorageDetail}
+          title={storageDetail === "db" ? "Banco de dados" : "PDFs importados"}
+          maxHeight="70vh"
+        >
+          {loadingStorageDetail && <p className="muted">Calculando...</p>}
+          {storageDetailError && <div className="error-box">{storageDetailError}</div>}
+          {!loadingStorageDetail && !storageDetailError && storageDetail === "db" && (
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              {(dbTableSizes ?? []).length === 0 && <p className="muted">Nada para mostrar.</p>}
+              {dbTableSizes?.map((t) => (
+                <div
+                  key={t.tableName}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: "1rem",
+                    fontSize: "0.88rem",
+                    padding: "0.4rem 0",
+                    borderBottom: "1px solid var(--border)",
+                  }}
+                >
+                  <span>{t.tableName}</span>
+                  <span className="muted" style={{ flexShrink: 0 }}>
+                    {formatBytes(t.bytes)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {!loadingStorageDetail && !storageDetailError && storageDetail === "imports" && (
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              {(importFileEntries ?? []).length === 0 && <p className="muted">Nada para mostrar.</p>}
+              {importFileEntries?.map((f, i) => (
+                <div
+                  key={i}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: "1rem",
+                    fontSize: "0.88rem",
+                    padding: "0.4rem 0",
+                    borderBottom: "1px solid var(--border)",
+                  }}
+                >
+                  <span style={{ overflowWrap: "anywhere" }}>{f.name}</span>
+                  <span className="muted" style={{ flexShrink: 0 }}>
+                    {formatBytes(f.bytes)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Modal>
+      )}
 
       <div className="card">
         <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>

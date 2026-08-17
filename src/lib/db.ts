@@ -4879,6 +4879,53 @@ export interface ClearDataOptions {
   keepManuallyEditedShifts?: boolean;
 }
 
+export interface DatabaseTableSize {
+  tableName: string;
+  bytes: number;
+}
+
+/**
+ * Per-table disk usage, largest first — an index's own pages are rolled
+ * into the table it belongs to (via a `sqlite_master` join) rather than
+ * listed as their own line, since "how big is this index" isn't a question
+ * the "o que está pesando no banco" breakdown in Configurações is trying to
+ * answer. Backed by `dbstat`, a read-only virtual table SQLite exposes when
+ * built with `SQLITE_ENABLE_DBSTAT_VTAB` (true of every build this app
+ * ships, both `sqlx-sqlite`'s bundled SQLite and the system `sqlite3` CLI).
+ */
+export async function getDatabaseTableSizes(): Promise<DatabaseTableSize[]> {
+  const db = await getDb();
+  return db.select<DatabaseTableSize[]>(
+    `SELECT m.tbl_name AS tableName, SUM(d.pgsize) AS bytes
+     FROM dbstat d
+     JOIN sqlite_master m ON m.name = d.name
+     WHERE m.type IN ('table', 'index')
+     GROUP BY m.tbl_name
+     ORDER BY bytes DESC`,
+  );
+}
+
+/**
+ * Maps an `imports/`-copied file's on-disk (uuid) basename back to the
+ * human name it was originally picked/downloaded as, for the "PDFs
+ * importados" breakdown in Configurações — `source_files.original_pdf_path`
+ * only ever gets populated for a locally-picked timesheet PDF (see every
+ * `logSourceFile` caller), so a payment file downloaded by URL won't
+ * resolve here; the caller falls back to the raw filename in that case.
+ */
+export async function getImportedFileNamesByBasename(): Promise<Map<string, string>> {
+  const db = await getDb();
+  const rows = await db.select<{ path: string; fileName: string }[]>(
+    "SELECT original_pdf_path AS path, file_name AS fileName FROM source_files WHERE original_pdf_path != ''",
+  );
+  const byBasename = new Map<string, string>();
+  for (const row of rows) {
+    const basename = row.path.split(/[/\\]/).pop();
+    if (basename) byBasename.set(basename, row.fileName);
+  }
+  return byBasename;
+}
+
 /**
  * Deletes rows from every table (schema and migration history stay intact)
  * and reclaims the freed space — the database half of "Limpar tudo". The

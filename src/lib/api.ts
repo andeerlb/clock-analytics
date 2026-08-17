@@ -6,6 +6,7 @@ import type {
   PopplerStatus,
   ProviderInfo,
   ReportZipEntry,
+  StorageFileEntry,
   StorageUsage,
 } from "./types";
 
@@ -199,6 +200,11 @@ export function generateReportZip(entries: ReportZipEntry[], destZipPath: string
 /** Disk usage of the DB and the copied PDFs. */
 export function getStorageUsage(): Promise<StorageUsage> {
   return invoke("get_storage_usage");
+}
+
+/** Itemized breakdown behind the "PDFs importados" tile — one entry per file actually inside imports/. */
+export function getImportsFileList(): Promise<StorageFileEntry[]> {
+  return invoke("get_imports_file_list");
 }
 
 /** Best-effort delete of each path — returns how many bytes were actually freed. */

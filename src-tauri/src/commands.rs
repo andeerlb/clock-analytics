@@ -729,6 +729,18 @@ pub fn get_storage_usage(app: AppHandle) -> Result<StorageUsage, String> {
     Ok(storage::usage(&data_dir))
 }
 
+/// Itemized breakdown behind the "PDFs importados" tile — what's actually
+/// inside `imports/`, one entry per file. The frontend sorts by size and
+/// resolves each entry's uuid-named file back to a human name where
+/// `source_files.original_pdf_path` links to it (local-picked timesheet
+/// PDFs only — a payment file downloaded via URL never gets that link, see
+/// `download_payment_file_from_url`, so those just show their raw name).
+#[tauri::command]
+pub fn get_imports_file_list(app: AppHandle) -> Result<Vec<storage::FileEntry>, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(storage::list_files(&data_dir.join("imports")))
+}
+
 /// Best-effort delete of the given files — used for "remover originais
 /// redundantes". Returns how many bytes were actually freed.
 #[tauri::command]

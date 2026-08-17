@@ -768,6 +768,17 @@ tr:last-child td {
   padding: 1rem 1.2rem;
 }
 
+.summary-tile.clickable {
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease;
+}
+
+.summary-tile.clickable:hover,
+.summary-tile.clickable:focus-visible {
+  border-color: var(--accent);
+}
+
 .summary-tile .value {
   font-size: 1.6rem;
   font-weight: 700;
