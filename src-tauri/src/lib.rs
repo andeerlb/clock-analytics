@@ -71,7 +71,24 @@ fn with_attention_badge(base: &Image<'_>) -> Image<'static> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // Must be registered before every other plugin (Tauri's own
+    // requirement — it needs to intercept as early as possible). Desktop
+    // only: the plugin itself has no mobile implementation, and mobile OSes
+    // already enforce single-instance on their own. A second launch just
+    // re-focuses the running window instead of starting a second process —
+    // two instances would otherwise both open the same SQLite file
+    // (`db::DB_URL`), which is exactly the kind of thing that corrupts data
+    // or throws "database is locked".
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }));
+    }
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
