@@ -109,12 +109,19 @@ pub fn run() {
             // overlapping frames — see the screenshot that prompted this)
             // on transparent windows, so Linux keeps an opaque one and
             // relies solely on `.modal-overlay`'s CSS-only blur instead.
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            let main_window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("PontoScan")
                 .inner_size(1280.0, 800.0)
                 .maximized(true)
                 .transparent(cfg!(any(target_os = "windows", target_os = "macos")))
                 .build()?;
+
+            // Applied once, for the window's whole lifetime — not toggled
+            // per Modal/Drawer open — so the app has a permanent frosted-glass
+            // look on Windows/macOS. Whether it actually took is reported back
+            // to the frontend via `window_glass_active` (see `window_glass.rs`).
+            let glass_active = window_glass::enable(&main_window).is_ok();
+            app.manage(window_glass::WindowGlassState(glass_active));
 
             // Always present (regardless of the "Minimizar na bandeja ao
             // fechar" setting) — it's the only way back once a close has
@@ -214,7 +221,7 @@ pub fn run() {
             commands::set_tray_status,
             commands::open_reconciliation_window,
             commands::is_reconciliation_window_open,
-            window_glass::set_window_glass,
+            window_glass::window_glass_active,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

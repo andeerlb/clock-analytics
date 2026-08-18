@@ -35,9 +35,8 @@ import PillButton from "../components/PillButton";
 import ShiftHistoryDrawer from "../components/ShiftHistoryDrawer";
 import TimeField from "../components/TimeField";
 import { PAYMENTS_PAGE_SIZE_OPTIONS, usePaymentsFilters } from "../contexts/FiltersContext";
-import { useReconciliationModal } from "../contexts/ReconciliationModalContext";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
-import { revealInFileManager } from "../lib/api";
+import { openReconciliationWindow, revealInFileManager } from "../lib/api";
 import {
   deletePaymentShift,
   editPaymentShift,
@@ -671,7 +670,6 @@ export default function PaymentsPage() {
     setSelectedExportTemplateId,
   } = usePaymentsFilters();
   const { trackedFiles, reimportConfigs } = useRemoteFileUpdates();
-  const { openReconciliation } = useReconciliationModal();
 
   const [summaries, setSummaries] = useState<PaymentShiftSummaryRow[]>([]);
   const [summariesTotal, setSummariesTotal] = useState(0);
@@ -899,11 +897,11 @@ export default function PaymentsPage() {
     pageSize,
   ]);
 
-  // Cross-window/cross-screen sync: refreshes this table when a payment
-  // is confirmed/marked erro/undone in "Conferência de Pagamentos" — in
-  // this window (the embedded modal) or a detached one entirely (see
-  // `notifyPaymentShiftsChanged` in `db.ts` and `PaymentReconciliationScreen`'s
-  // own listener for the other half of this). A ref, not a dependency
+  // Cross-window sync: refreshes this table when a payment is
+  // confirmed/marked erro/undone in "Conferência de Pagamentos" — its own
+  // detached window (see `notifyPaymentShiftsChanged` in `db.ts` and
+  // `PaymentReconciliationScreen`'s own listener for the other half of
+  // this). A ref, not a dependency
   // list, since the listener is only ever subscribed once but needs
   // whichever `refetchFlat`/`refetchSummaries` closure (over `grouped`/
   // filters/page) is current at the moment the event actually arrives.
@@ -1253,7 +1251,7 @@ export default function PaymentsPage() {
             <button
               type="button"
               className="secondary"
-              onClick={openReconciliation}
+              onClick={() => openReconciliationWindow().catch(() => {})}
               title="Conferência de Pagamentos — considera os filtros acima"
             >
               <ClipboardCheck size={15} style={{ marginRight: "0.4rem" }} />

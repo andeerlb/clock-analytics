@@ -947,14 +947,13 @@ tr:last-child td {
   gap: 1rem;
 }
 
-/* Set on `<html>` by `useWindowGlass` only once the Rust `set_window_glass`
-   command confirms a native blur-behind is actually active (Windows/macOS)
-   — drops the app's own opaque `--bg` so the real desktop can show through
-   wherever the DOM above it is transparent too. Safe globally, not just
-   "under the modal": `.modal-overlay`/`.drawer-overlay` are the only things
-   with this class ever applied while mounted, and both already cover the
-   full viewport (`inset: 0`) above everything else, so there's no gap in
-   the app underneath left exposed. */
+/* Set on `<html>` by `useWindowGlassInit` once, at startup, once the Rust
+   native blur-behind (Windows Acrylic, macOS Vibrancy) — applied for the
+   window's whole lifetime, not toggled per Modal/Drawer — is confirmed
+   active. Drops the app's own opaque `--bg` permanently, so the real
+   desktop shows through wherever the DOM above it doesn't paint its own
+   background (most of `.app-shell`'s chrome — cards/sidebar keep their own
+   opaque surfaces). */
 :root.glass-native {
   background-color: transparent;
 }
@@ -978,10 +977,10 @@ tr:last-child td {
   animation: modal-overlay-in 0.18s ease;
 }
 
-/* Set instead of `glass-native` wherever `set_window_glass` reports no
+/* Set instead of `glass-native` wherever `window_glass_active` reports no
    native effect (Linux) — but only overrides `.modal-overlay-fullscreen`
-   (a `<Modal fullScreen>` like `PaymentReconciliationModal`'s "Conferência
-   de Pagamentos"), not every `.modal-overlay`/`.drawer-overlay-visible`.
+   (a `<Modal fullScreen>` like `PdfViewerModal`), not every
+   `.modal-overlay`/`.drawer-overlay-visible`.
    Small centered modals and drawers keep the CSS `backdrop-filter` blur
    they've always had on Linux — this class only steps in for the one case
    that actually broke: a fullScreen surface has no `.card` covering most of
@@ -993,17 +992,6 @@ tr:last-child td {
    without giving up the frosted look everywhere else. */
 :root.glass-css-only .modal-overlay-fullscreen {
   background: var(--bg);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-
-/* Native blur-behind is active (see `:root.glass-native` above): the OS is
-   already compositing a real blurred desktop behind this overlay, so the
-   CSS blur — which could only ever reach the app's own (now transparent)
-   content, never the desktop — is dead weight, and the flat tint can be
-   lighter since it's no longer the only thing selling the "glass" look. */
-:root.glass-native .modal-overlay {
-  background: rgba(6, 9, 16, 0.22);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -1109,17 +1097,6 @@ tr:last-child td {
   background: rgba(6, 9, 16, 0.45);
   backdrop-filter: blur(28px) saturate(1.4);
   -webkit-backdrop-filter: blur(28px) saturate(1.4);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-
-/* Same reasoning as `.modal-overlay`'s counterpart above: real desktop
-   blur is already showing through, so the CSS blur is dropped and the
-   tint lightened. */
-:root.glass-native .drawer-overlay-visible {
-  background: rgba(6, 9, 16, 0.22);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 
 .drawer-panel {

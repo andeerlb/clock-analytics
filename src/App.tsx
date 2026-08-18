@@ -3,13 +3,12 @@ import { AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { HashRouter, Link, Route, Routes } from "react-router-dom";
 import "./App.css";
-import PaymentReconciliationModal from "./components/PaymentReconciliationModal";
 import PendingChangesTab from "./components/PendingChangesTab";
 import Sidebar from "./components/Sidebar";
 import { FiltersProvider } from "./contexts/FiltersContext";
-import { ReconciliationModalProvider, useReconciliationModal } from "./contexts/ReconciliationModalContext";
 import { RemoteFileUpdatesProvider } from "./contexts/RemoteFileUpdatesContext";
 import { checkPopplerStatus } from "./lib/api";
+import { useWindowGlassInit } from "./lib/useWindowGlass";
 import ClientFormPage from "./pages/ClientFormPage";
 import ClientsPage from "./pages/ClientsPage";
 import CompaniesPage from "./pages/CompaniesPage";
@@ -34,29 +33,18 @@ import RolesPage from "./pages/RolesPage";
 import SettingsPage from "./pages/SettingsPage";
 
 /**
- * "Destacar" on "Conferência de Pagamentos" (`open_reconciliation_window`)
- * opens a second OS window running this exact same app bundle — the only
- * thing that tells the two apart is the window's own label, set in Rust.
- * That window gets none of the normal app shell (`Sidebar`/routes/
- * `RemoteFileUpdatesProvider`): it's a focused single-purpose surface, not
- * a second copy of the whole app. `FiltersProvider` is the one thing it
- * still needs, since `PaymentReconciliationWindowPage` reads/writes
- * `usePaymentsFilters()` same as the embedded modal does.
+ * "Conferência" on `PaymentsPage` (`open_reconciliation_window`) opens a
+ * second OS window running this exact same app bundle — the only thing that
+ * tells the two apart is the window's own label, set in Rust. That window
+ * gets none of the normal app shell (`Sidebar`/routes/
+ * `RemoteFileUpdatesProvider`): it's a focused single-purpose surface, not a
+ * second copy of the whole app. `FiltersProvider` is the one thing it still
+ * needs, since `PaymentReconciliationWindowPage` reads/writes
+ * `usePaymentsFilters()`.
  */
 const IS_RECONCILIATION_WINDOW = getCurrentWindow().label === "reconciliation";
 
-/**
- * The normal app shell's content — split out from `App` so it can sit
- * inside `ReconciliationModalProvider` (which itself needs `FiltersProvider`
- * above it) and call `useReconciliationModal()` to render
- * `PaymentReconciliationModal` at this level, alongside `PendingChangesTab`,
- * rather than nested under whichever route happens to be active. That's
- * what lets "Anexar" on the detached window reopen the modal here even if
- * the main window isn't currently sitting on `/payments` — see
- * `ReconciliationModalContext.tsx`.
- */
 function AppShell({ popplerMissing }: { popplerMissing: boolean }) {
-  const { open, closeReconciliation } = useReconciliationModal();
   return (
     <div className="app-shell">
       <Sidebar />
@@ -104,13 +92,17 @@ function AppShell({ popplerMissing }: { popplerMissing: boolean }) {
         </Routes>
       </main>
       <PendingChangesTab />
-      {open && <PaymentReconciliationModal onClose={closeReconciliation} />}
     </div>
   );
 }
 
 function App() {
   const [popplerMissing, setPopplerMissing] = useState(false);
+
+  // Reads back whether the native window blur applied at startup (see
+  // `lib.rs`'s `setup`) actually took, and stamps `<html>` accordingly —
+  // once per window, permanently, not per Modal/Drawer open.
+  useWindowGlassInit();
 
   useEffect(() => {
     checkPopplerStatus()
@@ -130,9 +122,7 @@ function App() {
     <HashRouter>
       <FiltersProvider>
         <RemoteFileUpdatesProvider>
-          <ReconciliationModalProvider>
-            <AppShell popplerMissing={popplerMissing} />
-          </ReconciliationModalProvider>
+          <AppShell popplerMissing={popplerMissing} />
         </RemoteFileUpdatesProvider>
       </FiltersProvider>
     </HashRouter>

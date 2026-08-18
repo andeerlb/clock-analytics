@@ -1,7 +1,6 @@
 import { X } from "lucide-react";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useWindowGlass } from "../lib/useWindowGlass";
 
 /** How long the exit animation (`modal-overlay-out`/`modal-card-out` in App.css) takes to play before the real `onClose` actually fires and unmounts the modal. */
 const CLOSE_ANIMATION_MS = 180;
@@ -89,11 +88,6 @@ export default function Modal({
   children: ReactNode;
 }) {
   const [closing, setClosing] = useState(false);
-
-  // Real desktop blur (Windows/macOS) behind the dimmed backdrop area, for
-  // this component's whole mounted lifetime — including the closing
-  // animation, so the effect doesn't pop off mid-transition.
-  useWindowGlass(true);
 
   function requestClose() {
     if (closing) return;

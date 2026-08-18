@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import { ExternalLink, Filter, Link2, Moon, Sun, X } from "lucide-react";
+import { Filter, Moon, Sun } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePaymentsFilters } from "../contexts/FiltersContext";
 import {
@@ -22,7 +22,6 @@ import { FLAT_COLUMNS } from "../lib/paymentColumns";
 import { PAYMENT_AUDIT_RESULT_LABELS, type PaymentAuditResult, type PaymentShiftStatus } from "../lib/types";
 import Avatar from "./Avatar";
 import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
-import { useModalClose } from "./Modal";
 import MultiSelectDropdown from "./MultiSelectDropdown";
 import PaymentsFiltersDrawer, { type PaymentsFiltersValue } from "./PaymentsFiltersDrawer";
 
@@ -39,16 +38,6 @@ const DEFAULT_VISIBLE_COLUMN_IDS = new Set(["colaborador", "data", "local", "val
 const PAGE_SIZE = 50;
 
 type AuditedInfo = { result: PaymentAuditResult; note: string | null; auditedAt: string };
-
-/** Header X, routed through `useModalClose` — a no-op outside `<Modal>` (its context's default value), which is exactly right: `embedded={false}` never renders this button in the first place, so the hook's return value is never actually invoked there. */
-function CloseButton() {
-  const requestClose = useModalClose();
-  return (
-    <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={requestClose} aria-label="Fechar">
-      <X size={18} />
-    </button>
-  );
-}
 
 /**
  * "Conferência de Pagamentos" — a full-screen review flow that replaces the
@@ -69,13 +58,12 @@ function CloseButton() {
  * read-only otherwise, since there's nothing to reconcile against a bank
  * for a shift that hasn't been paid yet.
  *
- * Filters are the SAME live `usePaymentsFilters()` state the Pagamentos
- * page itself reads/writes when `embedded` (not a snapshot) — so changing
- * them here (via its own "Filtros" button) both refetches this list
- * immediately and is what the page itself shows once this modal closes. A
- * detached window's `FiltersProvider` is a separate instance seeded once
- * at open time instead (see `PaymentReconciliationWindowPage`) — from then
- * on its filters evolve independently of the main window's.
+ * Always runs in its own detached OS window (`open_reconciliation_window`,
+ * mounted by `PaymentReconciliationWindowPage`), never as an in-app modal —
+ * so its `usePaymentsFilters()` is that window's own `FiltersProvider`
+ * instance, seeded once from the main window's filters at open time (see
+ * `PaymentReconciliationWindowPage`) and independent from then on, not the
+ * main window's live state.
  *
  * Rows load a page at a time (`listPaymentShiftsForReportPage`), not all at
  * once — `PaymentReconciliationScreen` grew a real infinite-scroll list
@@ -85,31 +73,19 @@ function CloseButton() {
  * anymore once `rows` is only ever a prefix of what matches the filters.
  * `PAYMENT_SHIFTS_CHANGED_EVENT` keeps this list (and its counterpart in
  * `PaymentsPage`) in sync across windows — confirming/marking erro here
- * broadcasts, and a payment made in `PaymentsPage` (in this window or a
- * detached one) refreshes this list the same way.
+ * broadcasts, and a payment made in `PaymentsPage` refreshes this list the
+ * same way.
  */
 export default function PaymentReconciliationScreen({
   companies,
   clients,
   roles,
   locals,
-  embedded,
-  onDetach,
-  onReattach,
-  onFiltersDrawerOpenChange,
 }: {
   companies: CompanyRow[];
   clients: ClientRow[];
   roles: RoleRow[];
   locals: string[];
-  /** True inside `<Modal fullScreen>` (the in-app usage, `PaymentReconciliationModal`) — shows the header close X. False in the standalone detached window, which closes via its own native OS chrome instead. */
-  embedded: boolean;
-  /** Only passed by the embedded usage — shows "Destacar" in the toolbar. Omitted in the standalone window itself, which has nothing further to detach into. */
-  onDetach?: () => void;
-  /** Only passed by the standalone (detached) usage — shows "Anexar" in the toolbar. Omitted for the embedded usage, which is already attached. */
-  onReattach?: () => void;
-  /** Only meaningful for the embedded usage — lets `PaymentReconciliationModal` disable the wrapping `<Modal>`'s own Escape-to-close while the filters drawer here is open, so Escape closes the drawer instead of the whole screen. */
-  onFiltersDrawerOpenChange?: (open: boolean) => void;
 }) {
   const {
     selectedEmployeeIds,
@@ -151,11 +127,6 @@ export default function PaymentReconciliationScreen({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    onFiltersDrawerOpenChange?.(filtersDrawerOpen);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtersDrawerOpen]);
-
   const exhausted = rowsTotal !== null && rows.length >= rowsTotal;
 
   function baseQuery(): Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize"> {
@@ -180,9 +151,9 @@ export default function PaymentReconciliationScreen({
   }
 
   // Resets and loads the first page on mount AND whenever the filters
-  // change (via the "Filtros" button below) — filters here are the live
-  // `usePaymentsFilters()` state (embedded) or a once-seeded independent
-  // copy (detached), not a snapshot taken only at mount.
+  // change (via the "Filtros" button below) — filters here are this
+  // window's once-seeded, independent `usePaymentsFilters()` copy (see the
+  // module doc comment), not a snapshot taken only at mount.
   useEffect(() => {
     let cancelled = false;
     setRows([]);
@@ -512,15 +483,6 @@ export default function PaymentReconciliationScreen({
             Atalhos: ↑ / ↓ navegar · Enter ou Y confirmar · Backspace ou N marcar erro · U desfazer · clique direito num item para ver todas as ações
           </p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-          {onDetach && (
-            <button type="button" className="secondary" onClick={onDetach} title="Abrir em uma janela separada">
-              <ExternalLink size={15} style={{ marginRight: "0.4rem" }} />
-              Destacar
-            </button>
-          )}
-          {embedded && <CloseButton />}
-        </div>
       </div>
 
       <div
@@ -567,12 +529,6 @@ export default function PaymentReconciliationScreen({
               ? "Tudo conferido"
               : `${pendingCount} pendente${pendingCount === 1 ? "" : "s"} de conferência`}
         </span>
-        {onReattach && (
-          <button type="button" className="secondary" onClick={onReattach} title="Voltar para a janela principal">
-            <Link2 size={15} style={{ marginRight: "0.4rem" }} />
-            Anexar
-          </button>
-        )}
       </div>
 
       <div style={{ flex: 1, overflow: "auto", padding: "1.2rem 0", minHeight: 0 }} onClick={(e) => e.stopPropagation()}>

@@ -16,27 +16,16 @@ const PAYMENT_SHIFT_STATUSES: PaymentShiftStatus[] = ["pendente", "erro", "pago"
 const SHIFT_PERIODS: ShiftPeriod[] = ["diurno", "noturno"];
 
 /**
- * One-time filter handshake for "Destacar" on "Conferência de Pagamentos"
- * (see `commands::open_reconciliation_window`): the detached window is a
- * brand-new React tree with its own `FiltersProvider`, so it can't just
- * read the main window's live `usePaymentsFilters()` state — it asks for a
- * snapshot instead, right after it mounts. `RECONCILIATION_WINDOW_LABEL`
- * matches the label `open_reconciliation_window` gives that window in Rust.
+ * One-time filter handshake for "Conferência" opening its detached window
+ * (see `commands::open_reconciliation_window`): that window is a brand-new
+ * React tree with its own `FiltersProvider`, so it can't just read the main
+ * window's live `usePaymentsFilters()` state — it asks for a snapshot
+ * instead, right after it mounts. `RECONCILIATION_WINDOW_LABEL` matches the
+ * label `open_reconciliation_window` gives that window in Rust.
  */
-export const MAIN_WINDOW_LABEL = "main";
 export const RECONCILIATION_WINDOW_LABEL = "reconciliation";
 export const RECONCILIATION_WINDOW_READY_EVENT = "reconciliation-window-ready";
 export const SEED_PAYMENTS_FILTERS_EVENT = "seed-payments-filters";
-
-/**
- * "Anexar" on the detached window — the reverse handshake:
- * `PaymentReconciliationWindowPage` emits this (targeted at
- * `MAIN_WINDOW_LABEL`) carrying its own current filters, then closes
- * itself; `ReconciliationModalProvider` (mounted once in `App.tsx`'s
- * shell) is what's listening, and responds by seeding the main window's
- * `usePaymentsFilters()` with that snapshot and opening the modal.
- */
-export const REATTACH_RECONCILIATION_EVENT = "reattach-reconciliation";
 
 /** Wire shape for the handshake above — every `Set`-typed `PaymentsFilters` field flattened to a plain array so it survives `JSON.stringify` across the Tauri event bridge. */
 export interface PaymentsFiltersSnapshot {

@@ -919,18 +919,29 @@ pub fn add_recent_payment_file(app: AppHandle, path: String) -> Result<(), Strin
 /// "Destacar" is clicked again — same one-instance-per-purpose idea as
 /// `tauri_plugin_single_instance`, just scoped to this one window instead
 /// of the whole app.
+// `async`, not just `fn` — building a window from a *synchronous* command is
+// a known Tauri/WebView2 deadlock on Windows (`create_controller` hangs the
+// whole app when called straight from the IPC handler's thread). Marking it
+// `async` routes the call through Tauri's async task runner instead, which
+// avoids that: see https://github.com/tauri-apps/wry/issues/583 and
+// https://github.com/tauri-apps/tauri/issues/3110.
 #[tauri::command]
-pub fn open_reconciliation_window(app: AppHandle) -> Result<(), String> {
+pub async fn open_reconciliation_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("reconciliation") {
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
         return Ok(());
     }
-    WebviewWindowBuilder::new(&app, "reconciliation", WebviewUrl::App("index.html".into()))
+    // Same `transparent` + `window_glass::enable` pairing as `main` in
+    // `lib.rs`'s `setup` — this window gets the native blur too, not just
+    // the one it detached from.
+    let window = WebviewWindowBuilder::new(&app, "reconciliation", WebviewUrl::App("index.html".into()))
         .title("Conferência de Pagamentos — PontoScan")
         .inner_size(1180.0, 780.0)
+        .transparent(cfg!(any(target_os = "windows", target_os = "macos")))
         .build()
         .map_err(|e| e.to_string())?;
+    let _ = crate::window_glass::enable(&window);
     Ok(())
 }
 
