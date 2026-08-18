@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { emitTo, listen } from "@tauri-apps/api/event";
+import { createContext, useContext, useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { toIso, todayUtc } from "../lib/calendar";
 import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
 import type { PaymentShiftStatus, ScheduleTimeFilter, ShiftPeriod } from "../lib/types";
@@ -13,6 +14,73 @@ export const LIBRARY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 export const PAYMENTS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const PAYMENT_SHIFT_STATUSES: PaymentShiftStatus[] = ["pendente", "erro", "pago"];
 const SHIFT_PERIODS: ShiftPeriod[] = ["diurno", "noturno"];
+
+/**
+ * One-time filter handshake for "Destacar" on "Conferência de Pagamentos"
+ * (see `commands::open_reconciliation_window`): the detached window is a
+ * brand-new React tree with its own `FiltersProvider`, so it can't just
+ * read the main window's live `usePaymentsFilters()` state — it asks for a
+ * snapshot instead, right after it mounts. `RECONCILIATION_WINDOW_LABEL`
+ * matches the label `open_reconciliation_window` gives that window in Rust.
+ */
+export const MAIN_WINDOW_LABEL = "main";
+export const RECONCILIATION_WINDOW_LABEL = "reconciliation";
+export const RECONCILIATION_WINDOW_READY_EVENT = "reconciliation-window-ready";
+export const SEED_PAYMENTS_FILTERS_EVENT = "seed-payments-filters";
+
+/**
+ * "Anexar" on the detached window — the reverse handshake:
+ * `PaymentReconciliationWindowPage` emits this (targeted at
+ * `MAIN_WINDOW_LABEL`) carrying its own current filters, then closes
+ * itself; `ReconciliationModalProvider` (mounted once in `App.tsx`'s
+ * shell) is what's listening, and responds by seeding the main window's
+ * `usePaymentsFilters()` with that snapshot and opening the modal.
+ */
+export const REATTACH_RECONCILIATION_EVENT = "reattach-reconciliation";
+
+/** Wire shape for the handshake above — every `Set`-typed `PaymentsFilters` field flattened to a plain array so it survives `JSON.stringify` across the Tauri event bridge. */
+export interface PaymentsFiltersSnapshot {
+  employeeIds: string[];
+  companyIds: string[];
+  clientIds: string[];
+  roleIds: string[];
+  locals: string[];
+  periodStart: string;
+  periodEnd: string;
+  statuses: PaymentShiftStatus[];
+  shiftPeriods: ShiftPeriod[];
+  scheduleTimeFilter: ScheduleTimeFilter | null;
+  grouped: boolean;
+}
+
+export function snapshotPaymentsFilters(f: PaymentsFilters): PaymentsFiltersSnapshot {
+  return {
+    employeeIds: Array.from(f.selectedEmployeeIds),
+    companyIds: Array.from(f.selectedCompanyIds),
+    clientIds: Array.from(f.selectedClientIds),
+    roleIds: Array.from(f.selectedRoleIds),
+    locals: Array.from(f.selectedLocals),
+    periodStart: f.periodStart,
+    periodEnd: f.periodEnd,
+    statuses: Array.from(f.selectedStatuses),
+    shiftPeriods: Array.from(f.selectedShiftPeriods),
+    scheduleTimeFilter: f.scheduleTimeFilter,
+    grouped: f.grouped,
+  };
+}
+
+export function applyPaymentsFiltersSnapshot(f: PaymentsFilters, snap: PaymentsFiltersSnapshot): void {
+  f.setSelectedEmployeeIds(new Set(snap.employeeIds));
+  f.setSelectedCompanyIds(new Set(snap.companyIds));
+  f.setSelectedClientIds(new Set(snap.clientIds));
+  f.setSelectedRoleIds(new Set(snap.roleIds));
+  f.setSelectedLocals(new Set(snap.locals));
+  f.setPeriod(snap.periodStart, snap.periodEnd);
+  f.setSelectedStatuses(new Set(snap.statuses));
+  f.setSelectedShiftPeriods(new Set(snap.shiftPeriods));
+  f.setScheduleTimeFilter(snap.scheduleTimeFilter);
+  f.setGrouped(snap.grouped);
+}
 
 export type ReportMode = "per-employee" | "per-client";
 
@@ -173,6 +241,26 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
     selectedExportTemplateId: paymentsSelectedExportTemplateId,
     setSelectedExportTemplateId: setPaymentsSelectedExportTemplateId,
   };
+
+  // Answers the detached "Conferência de Pagamentos" window's one-time
+  // "what are the current filters" ask (see `RECONCILIATION_WINDOW_READY_EVENT`
+  // above) — a ref, not `payments` itself, as the listener's dependency:
+  // the listener is only ever set up once (this provider lives for the
+  // whole main-window session), so it needs to read whatever `payments`
+  // happens to be CURRENT at the moment the event actually arrives, not
+  // whatever it was when the effect first ran.
+  const paymentsRef = useRef(payments);
+  paymentsRef.current = payments;
+  useEffect(() => {
+    const unlisten = listen(RECONCILIATION_WINDOW_READY_EVENT, () => {
+      emitTo(RECONCILIATION_WINDOW_LABEL, SEED_PAYMENTS_FILTERS_EVENT, snapshotPaymentsFilters(paymentsRef.current)).catch(
+        () => {},
+      );
+    });
+    return () => {
+      unlisten.then((f) => f()).catch(() => {});
+    };
+  }, []);
 
   return (
     <LibraryFiltersContext.Provider value={library}>

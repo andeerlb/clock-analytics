@@ -212,6 +212,8 @@ pub fn run() {
             commands::get_close_to_tray,
             commands::set_close_to_tray,
             commands::set_tray_status,
+            commands::open_reconciliation_window,
+            commands::is_reconciliation_window_open,
             window_glass::set_window_glass,
         ])
         .run(tauri::generate_context!())

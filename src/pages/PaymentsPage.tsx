@@ -15,6 +15,7 @@ import {
   Sun,
   Trash2,
 } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 import { Fragment, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import AnchoredPopover from "../components/AnchoredPopover";
@@ -28,13 +29,13 @@ import Drawer from "../components/Drawer";
 import ExtraColumnsDrawer from "../components/ExtraColumnsDrawer";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
-import PaymentReconciliationModal from "../components/PaymentReconciliationModal";
 import PaymentsFiltersDrawer, { SHIFT_PERIOD_OPTIONS, STATUS_OPTIONS, type PaymentsFiltersValue } from "../components/PaymentsFiltersDrawer";
 import PdfViewerModal from "../components/PdfViewerModal";
 import PillButton from "../components/PillButton";
 import ShiftHistoryDrawer from "../components/ShiftHistoryDrawer";
 import TimeField from "../components/TimeField";
 import { PAYMENTS_PAGE_SIZE_OPTIONS, usePaymentsFilters } from "../contexts/FiltersContext";
+import { useReconciliationModal } from "../contexts/ReconciliationModalContext";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { revealInFileManager } from "../lib/api";
 import {
@@ -52,6 +53,7 @@ import {
   listPaymentShiftsForGroup,
   listRolesGlobal,
   markPaymentShiftPaid,
+  PAYMENT_SHIFTS_CHANGED_EVENT,
   revertPaymentShiftToPending,
   setPaymentVisibleColumns,
   type ClientRow,
@@ -669,6 +671,7 @@ export default function PaymentsPage() {
     setSelectedExportTemplateId,
   } = usePaymentsFilters();
   const { trackedFiles, reimportConfigs } = useRemoteFileUpdates();
+  const { openReconciliation } = useReconciliationModal();
 
   const [summaries, setSummaries] = useState<PaymentShiftSummaryRow[]>([]);
   const [summariesTotal, setSummariesTotal] = useState(0);
@@ -703,7 +706,6 @@ export default function PaymentsPage() {
 
   const [shiftDiffs, setShiftDiffs] = useState<Map<number, ShiftFieldDiffRow[]>>(new Map());
 
-  const [reconciliationOpen, setReconciliationOpen] = useState(false);
   const [payingShift, setPayingShift] = useState<{ shift: PaymentShiftRow; companyId: number; groupRef: GroupRef } | null>(null);
   const [paying, setPaying] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
@@ -896,6 +898,25 @@ export default function PaymentsPage() {
     page,
     pageSize,
   ]);
+
+  // Cross-window/cross-screen sync: refreshes this table when a payment
+  // is confirmed/marked erro/undone in "Conferência de Pagamentos" — in
+  // this window (the embedded modal) or a detached one entirely (see
+  // `notifyPaymentShiftsChanged` in `db.ts` and `PaymentReconciliationScreen`'s
+  // own listener for the other half of this). A ref, not a dependency
+  // list, since the listener is only ever subscribed once but needs
+  // whichever `refetchFlat`/`refetchSummaries` closure (over `grouped`/
+  // filters/page) is current at the moment the event actually arrives.
+  const refetchTableRef = useRef(() => (grouped ? refetchSummaries() : refetchFlat()));
+  refetchTableRef.current = () => (grouped ? refetchSummaries() : refetchFlat());
+  useEffect(() => {
+    const unlisten = listen(PAYMENT_SHIFTS_CHANGED_EVENT, () => {
+      refetchTableRef.current().catch(() => {});
+    });
+    return () => {
+      unlisten.then((f) => f()).catch(() => {});
+    };
+  }, []);
 
   // A previously generated PDF reflects a specific set of filters (and,
   // since it now adds a per-colaborador subtotal when grouped, `grouped`
@@ -1232,7 +1253,7 @@ export default function PaymentsPage() {
             <button
               type="button"
               className="secondary"
-              onClick={() => setReconciliationOpen(true)}
+              onClick={openReconciliation}
               title="Conferência de Pagamentos — considera os filtros acima"
             >
               <ClipboardCheck size={15} style={{ marginRight: "0.4rem" }} />
@@ -1515,19 +1536,6 @@ export default function PaymentsPage() {
           </>
         )}
       </div>
-
-      {reconciliationOpen && (
-        <PaymentReconciliationModal
-          companies={companies}
-          clients={clients}
-          roles={roles}
-          locals={locals}
-          onClose={() => {
-            setReconciliationOpen(false);
-            grouped ? refetchSummaries() : refetchFlat();
-          }}
-        />
-      )}
 
       {payingShift && (
         <ConfirmPaymentModal

@@ -282,3 +282,13 @@ export function addRecentPaymentFile(path: string): Promise<void> {
 export function setWindowGlass(active: boolean): Promise<boolean> {
   return invoke("set_window_glass", { active });
 }
+
+/** "Destacar" on "Conferência de Pagamentos" — opens (or refocuses) it as its own OS window. See `open_reconciliation_window`. */
+export function openReconciliationWindow(): Promise<void> {
+  return invoke("open_reconciliation_window");
+}
+
+/** Whether "Conferência de Pagamentos" is already open in its own detached window. See `is_reconciliation_window_open`. */
+export function isReconciliationWindowOpen(): Promise<boolean> {
+  return invoke("is_reconciliation_window_open");
+}

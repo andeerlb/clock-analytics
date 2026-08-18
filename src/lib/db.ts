@@ -1,3 +1,4 @@
+import { emit } from "@tauri-apps/api/event";
 import Database from "@tauri-apps/plugin-sql";
 import { overtimeMinutesForDay, sumIntervalMinutes } from "./analysis";
 import { normalizeCnpj, normalizeCpf, parseTimeToMinutes } from "./format";
@@ -61,6 +62,21 @@ function inClause(column: string, values: (string | number)[], params: (string |
   const placeholders = values.map((_, i) => `$${params.length + i + 1}`).join(", ");
   params.push(...values);
   return `${column} IN (${placeholders})`;
+}
+
+/**
+ * Broadcast (via Tauri's global event bus, reaching every open window —
+ * the main one and a detached "Conferência de Pagamentos" window alike)
+ * whenever a mutation changes what a `payment_shifts`/`payment_audits`
+ * -backed list shows. `PaymentReconciliationScreen`/`PaymentsPage` each
+ * listen for this to refetch, instead of the two windows only ever seeing
+ * their own local changes. Fire-and-forget: nothing downstream needs to
+ * await delivery, and a dropped event just means that window is stale
+ * until its next refetch, not a correctness issue.
+ */
+export const PAYMENT_SHIFTS_CHANGED_EVENT = "payment-shifts-changed";
+function notifyPaymentShiftsChanged(): void {
+  emit(PAYMENT_SHIFTS_CHANGED_EVENT).catch(() => {});
 }
 
 /**
@@ -4163,6 +4179,81 @@ export async function listPaymentShiftsForReport(
   return rows.map((r) => ({ ...r, extraData: r.extraData ? JSON.parse(r.extraData) : null }));
 }
 
+/**
+ * Same rows as `listPaymentShiftsForReport`, `LIMIT`/`OFFSET`-paginated —
+ * "Conferência de Pagamentos"'s own infinite-scroll list uses this instead,
+ * so opening it against a large filtered period doesn't pull every matching
+ * shift into memory up front. `listPaymentShiftsForReport` itself is left
+ * untouched: "Gerar PDF"/"Exportar Excel" (`paymentsReport.ts`/
+ * `paymentExport.ts`) both still need the complete set in one shot.
+ */
+export async function listPaymentShiftsForReportPage(
+  query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
+  page: number,
+  pageSize: number,
+): Promise<PagedResult<PaymentShiftReportRow>> {
+  if (query.statuses.length === 0 || query.shiftPeriods.length === 0) return { rows: [], total: 0 };
+
+  const db = await getDb();
+  const params: (string | number)[] = [];
+  const conditions = buildPaymentShiftRowConditions(query, params);
+  const from = `FROM payment_shifts ps
+    JOIN employees e ON e.id = ps.employee_id
+    JOIN clients cl ON cl.id = ps.client_id
+    JOIN companies c ON c.id = ps.company_id
+    LEFT JOIN roles r ON r.id = ps.role_id`;
+  const whereClause = `WHERE ${conditions.join(" AND ")}`;
+
+  const countRows = await db.select<{ count: number }[]>(`SELECT COUNT(*) AS count ${from} ${whereClause}`, params);
+  const total = countRows[0]?.count ?? 0;
+
+  const rows = await db.select<PaymentShiftReportRowRaw[]>(
+    `SELECT ps.id, e.id AS employeeId, e.name AS employeeName, c.id AS companyId, c.name AS companyName,
+            cl.id AS clientId, cl.name AS clientName,
+            ps.work_date AS workDate, ps.local, COALESCE(r.name, '') AS role,
+            ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
+            ps.status, ps.amount, ps.imported_at AS importedAt, ps.extra_data AS extraData,
+            ${shiftPeriodSelectSql()} AS shiftPeriod
+     ${from}
+     ${whereClause}
+     ORDER BY ps.work_date, ps.local, e.name
+     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, pageSize, page * pageSize],
+  );
+  return { rows: rows.map((r) => ({ ...r, extraData: r.extraData ? JSON.parse(r.extraData) : null })), total };
+}
+
+/**
+ * Count of `pago` shifts matching `query` with no recorded `payment_audits`
+ * verdict yet — powers "Conferência de Pagamentos"'s "N pendente(s) de
+ * conferência" badge. A dedicated query rather than counting client-side
+ * because the screen no longer loads every matching row up front (see
+ * `listPaymentShiftsForReportPage`), only whatever's been scrolled into
+ * view so far.
+ */
+export async function countPaymentShiftsPendingAudit(
+  query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
+): Promise<number> {
+  if (query.statuses.length === 0 || query.shiftPeriods.length === 0) return 0;
+
+  const db = await getDb();
+  const params: (string | number)[] = [];
+  const conditions = buildPaymentShiftRowConditions(query, params);
+  conditions.push("ps.status = 'pago'");
+
+  const countRows = await db.select<{ count: number }[]>(
+    `SELECT COUNT(*) AS count
+     FROM payment_shifts ps
+     JOIN employees e ON e.id = ps.employee_id
+     JOIN clients cl ON cl.id = ps.client_id
+     JOIN companies c ON c.id = ps.company_id
+     LEFT JOIN payment_audits pa ON pa.payment_shift_id = ps.id
+     WHERE ${conditions.join(" AND ")} AND pa.id IS NULL`,
+    params,
+  );
+  return countRows[0]?.count ?? 0;
+}
+
 export interface PaymentShiftFlatRow extends PaymentShiftRow {
   companyId: number;
   companyName: string;
@@ -4405,6 +4496,7 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
       s.sourceSheetName,
     ],
   );
+  notifyPaymentShiftsChanged();
   return result.lastInsertId as number;
 }
 
@@ -4453,6 +4545,7 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
       s.sourceSheetName,
     ],
   );
+  notifyPaymentShiftsChanged();
   return result.lastInsertId as number;
 }
 
@@ -4498,6 +4591,7 @@ export async function markPaymentShiftAuditError(shiftId: number): Promise<numbe
       s.sourceSheetName,
     ],
   );
+  notifyPaymentShiftsChanged();
   return result.lastInsertId as number;
 }
 
@@ -4543,6 +4637,7 @@ export async function undoPaymentShiftAuditError(shiftId: number): Promise<numbe
       s.sourceSheetName,
     ],
   );
+  notifyPaymentShiftsChanged();
   return result.lastInsertId as number;
 }
 
@@ -4564,6 +4659,7 @@ export async function recordPaymentAudit(paymentShiftId: number, result: Payment
      ON CONFLICT(payment_shift_id) DO UPDATE SET result = excluded.result, note = excluded.note, audited_at = datetime('now')`,
     [paymentShiftId, result, note],
   );
+  notifyPaymentShiftsChanged();
 }
 
 /** The recorded audit verdict, if any, for each given `payment_shifts.id` — at most one per id (UNIQUE constraint). */
@@ -4590,6 +4686,7 @@ export async function listPaymentAuditsForShiftIds(shiftIds: number[]): Promise<
 export async function deletePaymentAudit(paymentShiftId: number): Promise<void> {
   const db = await getDb();
   await db.execute(`DELETE FROM payment_audits WHERE payment_shift_id = $1`, [paymentShiftId]);
+  notifyPaymentShiftsChanged();
 }
 
 /**
@@ -4661,6 +4758,7 @@ export async function editPaymentShift(
       s.sourceSheetName,
     ],
   );
+  notifyPaymentShiftsChanged();
   return result.lastInsertId as number;
 }
 
@@ -4820,6 +4918,7 @@ export async function deletePaymentShift(shiftId: number): Promise<void> {
   const idList = [...ids];
   const placeholders = idList.map((_, i) => `$${i + 1}`).join(", ");
   await db.execute(`UPDATE payment_shifts SET deleted_at = datetime('now') WHERE id IN (${placeholders})`, idList);
+  notifyPaymentShiftsChanged();
 }
 
 /** Which columns of the Pagamentos table are shown — `null` means every column (the default, and what a fresh install has). */

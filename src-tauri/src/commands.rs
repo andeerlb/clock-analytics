@@ -10,7 +10,7 @@ use crate::storage::{self, StorageUsage};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
 #[derive(Debug, Serialize)]
@@ -907,4 +907,42 @@ pub fn add_recent_payment_file(app: AppHandle, path: String) -> Result<(), Strin
     settings.recent_payment_files.insert(0, path);
     settings.recent_payment_files.truncate(MAX_RECENT_PAYMENT_FILES);
     settings::save(&data_dir, &settings)
+}
+
+/// "Destacar" on "Conferência de Pagamentos" — opens that screen in its own
+/// OS window (label `"reconciliation"`) instead of the fullScreen `Modal`
+/// it normally runs as, so it can sit side by side with, say, the main
+/// window's Pagamentos page. The frontend (`App.tsx`) tells the two apart
+/// by `getCurrentWindow().label`, rendering `PaymentReconciliationWindowPage`
+/// standalone (no app-shell/sidebar) whenever it's `"reconciliation"`.
+/// Re-focuses the existing window instead of creating a second one if
+/// "Destacar" is clicked again — same one-instance-per-purpose idea as
+/// `tauri_plugin_single_instance`, just scoped to this one window instead
+/// of the whole app.
+#[tauri::command]
+pub fn open_reconciliation_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("reconciliation") {
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(&app, "reconciliation", WebviewUrl::App("index.html".into()))
+        .title("Conferência de Pagamentos — PontoScan")
+        .inner_size(1180.0, 780.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Whether "Conferência de Pagamentos" is already open in its own window —
+/// `ReconciliationModalProvider`'s `openReconciliation` checks this first
+/// (the "Conferência" button's actual entry point) so it never opens the
+/// in-app `Modal` version on top of an already-detached one: there must
+/// only ever be one "Conferência" surface open at a time, whichever kind it
+/// is. Not checked by the "Anexar" reattach path itself — that path is the
+/// one legitimate moment the window exists purely to hand off to the modal
+/// right before closing itself, not a second surface to redirect to.
+#[tauri::command]
+pub fn is_reconciliation_window_open(app: AppHandle) -> bool {
+    app.get_webview_window("reconciliation").is_some()
 }
