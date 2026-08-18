@@ -460,6 +460,21 @@ th {
   text-transform: uppercase;
 }
 
+/* `PaymentReconciliationScreen`'s table — stays pinned to the top of its
+   scrollable list (unlike a generic `<table>`'s `th`, which has no
+   background/position of its own and just scrolls away with the rows) so
+   the column labels stay legible once the title bar + toolbar above it
+   collapse away on scroll (see that component's `handleScroll`). A solid
+   `--card-bg`, not the app's translucent default, or — with the native
+   window glass active — it'd show the blurred desktop bleeding through
+   instead of a normal header row. */
+.reconciliation-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--card-bg);
+}
+
 tr:last-child td {
   border-bottom: none;
 }
@@ -996,6 +1011,29 @@ tr:last-child td {
   -webkit-backdrop-filter: none;
 }
 
+/* Native blur-behind is active (see `:root.glass-native` above): the
+   `backdrop-filter` above is dropped rather than left in place, because it
+   doesn't actually render anything — WebView2's transparent-window mode
+   (needed for Acrylic to have somewhere to show through) breaks Chromium's
+   own `backdrop-filter` compositing, full stop. Confirmed against a
+   computed-style inspection (the declaration shows as "active", not
+   overridden — the CSS is accepted, it just never paints) and matches a
+   still-open upstream limitation: WebView2's background-alpha API only
+   accepts 0 or 255, nothing in between, so there's no configuration that
+   gets both a transparent window and a working CSS blur at the same time
+   (see https://github.com/MicrosoftEdge/WebView2Feedback/issues/4945 and
+   https://issues.chromium.org/issues/365818856). Left declared above (not
+   deleted) since it's still exactly right on Linux, where the window is
+   never natively transparent to begin with. With no blur to help sell "a
+   layer is here", the tint goes darker than the CSS-only case's 0.45
+   instead of lighter — otherwise the dimming alone reads as too subtle to
+   notice at a glance. */
+:root.glass-native .modal-overlay {
+  background: rgba(6, 9, 16, 0.68);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 @keyframes modal-overlay-in {
   from {
     opacity: 0;
@@ -1097,6 +1135,18 @@ tr:last-child td {
   background: rgba(6, 9, 16, 0.45);
   backdrop-filter: blur(28px) saturate(1.4);
   -webkit-backdrop-filter: blur(28px) saturate(1.4);
+}
+
+/* Same reasoning as `.modal-overlay`'s counterpart above: WebView2's
+   transparent-window mode (needed for the always-on Acrylic) breaks
+   `backdrop-filter` compositing outright, so it's dropped rather than left
+   declared-but-inert, and the tint darkened (see `.modal-overlay`'s own
+   counterpart above) since there's no blur left to help sell "a layer is
+   here". */
+:root.glass-native .drawer-overlay-visible {
+  background: rgba(6, 9, 16, 0.68);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .drawer-panel {

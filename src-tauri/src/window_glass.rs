@@ -23,10 +23,12 @@ pub struct WindowGlassState(pub bool);
 
 #[cfg(target_os = "windows")]
 pub fn enable(window: &tauri::WebviewWindow) -> Result<(), String> {
-    // Dark, mostly-opaque tint so the acrylic material reads as a
-    // continuation of the app's own dark theme rather than a bright
-    // Windows-default frosted panel.
-    window_vibrancy::apply_acrylic(window, Some((18, 18, 18, 125))).map_err(|e| e.to_string())
+    // Same hue as `--bg` (#0b0e14), tinted heavily opaque (235/255) rather
+    // than the ~50% this started at — Acrylic's own blur+noise texture
+    // already lightens whatever's behind it, so a merely-half-opaque tint
+    // read as a washed-out gray haze instead of a continuation of the app's
+    // dark theme, especially over a bright/colorful desktop.
+    window_vibrancy::apply_acrylic(window, Some((11, 14, 20, 235))).map_err(|e| e.to_string())
 }
 
 #[cfg(target_os = "macos")]

@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 
 export interface ContextMenuItem {
   label?: string;
+  /** Right-aligned hint (e.g. "Enter" or "Backspace") for a row that's also reachable via keyboard — purely informational, doesn't register the key itself. */
+  shortcut?: string;
   onClick?: () => void;
   submenu?: ContextMenuItem[];
   danger?: boolean;
@@ -14,7 +16,8 @@ export interface ContextMenuItem {
   render?: (close: () => void) => ReactNode;
 }
 
-const MENU_WIDTH = 220;
+/** Wide enough for a label plus a shortcut hint like "Backspace / N" on the same row without wrapping. */
+const MENU_WIDTH = 240;
 
 /** One level of a (possibly nested) menu — the top-level `ContextMenu` renders this once; a `submenu` item renders another one flush to its own right edge, opened on hover. */
 function ContextMenuList({ items, onClose }: { items: ContextMenuItem[]; onClose: () => void }) {
@@ -71,7 +74,13 @@ function ContextMenuList({ items, onClose }: { items: ContextMenuItem[]; onClose
               }}
             >
               <span>{item.label}</span>
-              {item.submenu && <span style={{ opacity: 0.6 }}>▸</span>}
+              {item.submenu ? (
+                <span style={{ opacity: 0.6 }}>▸</span>
+              ) : (
+                item.shortcut && (
+                  <span style={{ opacity: 0.55, fontSize: "0.72rem", letterSpacing: "0.02em", marginLeft: "0.8rem" }}>{item.shortcut}</span>
+                )
+              )}
             </button>
             {item.submenu && openSubmenu === i && (
               <div style={{ position: "absolute", top: 0, left: "100%" }}>

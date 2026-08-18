@@ -37,6 +37,11 @@ const DEFAULT_VISIBLE_COLUMN_IDS = new Set(["colaborador", "data", "local", "val
 /** Rows fetched per scroll chunk — see `loadMore`/the `IntersectionObserver` sentinel below. */
 const PAGE_SIZE = 50;
 
+/** Scroll *distance* (px), not position — how much downward scroll it takes to fully collapse the title bar + toolbar away. Larger than `EXPAND_DISTANCE` so hiding reads as a deliberate, gradual retreat rather than snapping away. See `handleScroll` below. */
+const COLLAPSE_DISTANCE = 320;
+/** Same idea in the opposite direction — how much upward scroll it takes to fully bring the title bar + toolbar back. Shorter than `COLLAPSE_DISTANCE`: wanting the toolbar back (to hit "Filtros", say) should feel responsive, not like undoing the same slow retreat. */
+const EXPAND_DISTANCE = 90;
+
 type AuditedInfo = { result: PaymentAuditResult; note: string | null; auditedAt: string };
 
 /**
@@ -126,6 +131,13 @@ export default function PaymentReconciliationScreen({
   const [filtersDrawerOpen, setFiltersDrawerOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const collapsibleRef = useRef<HTMLDivElement | null>(null);
+  const collapsibleInnerRef = useRef<HTMLDivElement | null>(null);
+  const collapseRafRef = useRef(0);
+  /** Current collapse amount (0 = fully expanded, 1 = fully collapsed) — persists across scroll events, not derived from absolute `scrollTop`, so it responds to scroll *direction* the same way no matter how far down the list you are. See `handleScroll`. */
+  const collapseProgressRef = useRef(0);
+  const lastScrollTopRef = useRef(0);
+  const latestScrollTopRef = useRef(0);
 
   const exhausted = rowsTotal !== null && rows.length >= rowsTotal;
 
@@ -463,84 +475,166 @@ export default function PaymentReconciliationScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedShiftId, visibleRows, actingShiftId, focusedCanConfirm, focusedCanMarkError, focusedAudit]);
 
+  /**
+   * Collapses the title bar + toolbar (everything above the table) away as
+   * the list scrolls, leaving only the sticky column-header row — the same
+   * "collapsing toolbar" effect Android's `CollapsingToolbarLayout` and a
+   * lot of scroll-heavy mobile apps use, so a long conferência list has more
+   * room once you're actually scrolling through it.
+   *
+   * Driven by scroll *delta*, not absolute `scrollTop` — collapsing 1
+   * `COLLAPSE_DISTANCE` worth of downward scroll, expanding 1
+   * `EXPAND_DISTANCE` worth of upward scroll, from wherever
+   * `collapseProgressRef` currently sits. That's what makes "scroll up a
+   * little" bring the toolbar back no matter how far down the list you
+   * are — tying this to `scrollTop` directly (as an earlier version did)
+   * only ever expanded once you scrolled all the way back near the top,
+   * since `scrollTop` stays huge everywhere else in a long list. Snapped
+   * back to fully expanded outright at `scrollTop <= 0` as a safety net,
+   * so drifting delta math can never leave it stuck slightly collapsed
+   * right at the top.
+   *
+   * `rAF`-throttled since `onScroll` fires far more often than a frame
+   * needs (the latest `scrollTop` is stashed in a ref between frames so a
+   * throttled-away event's position isn't lost, only coalesced), and
+   * applied via refs (mutating the DOM directly) rather than `useState` so
+   * scrolling doesn't re-render this whole screen every frame.
+   *
+   * The two bars move as a single rigid unit, not two independently-cropped
+   * pieces — `collapsibleInnerRef` (both bars, in normal flow) slides
+   * upward via `translateY` by up to its own full natural height
+   * (`scrollHeight`, measured fresh each frame — cheap for a two-row
+   * header, and `transform` doesn't itself affect layout so this can't
+   * self-distort), while the outer `collapsibleRef` shrinks its own
+   * `height` by that same amount so the table below reclaims the freed
+   * space. An earlier version shrank only the outer height (a CSS
+   * grid-rows `1fr` → `0fr` trick) without the matching inner translate —
+   * since `overflow: hidden` then clips from the bottom of whatever's
+   * inside, that made the *lower* bar (the toolbar) disappear well before
+   * the title bar above it had moved at all, instead of both retreating
+   * together.
+   */
+  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
+    latestScrollTopRef.current = e.currentTarget.scrollTop;
+    if (collapseRafRef.current) return;
+    collapseRafRef.current = requestAnimationFrame(() => {
+      collapseRafRef.current = 0;
+      const scrollTop = latestScrollTopRef.current;
+      const delta = scrollTop - lastScrollTopRef.current;
+      lastScrollTopRef.current = scrollTop;
+
+      let progress = collapseProgressRef.current;
+      if (scrollTop <= 0) {
+        progress = 0;
+      } else if (delta > 0) {
+        progress = Math.min(1, progress + delta / COLLAPSE_DISTANCE);
+      } else if (delta < 0) {
+        progress = Math.max(0, progress + delta / EXPAND_DISTANCE);
+      }
+      collapseProgressRef.current = progress;
+
+      const outer = collapsibleRef.current;
+      const inner = collapsibleInnerRef.current;
+      if (outer && inner) {
+        const naturalHeight = inner.scrollHeight;
+        outer.style.height = `${(1 - progress) * naturalHeight}px`;
+        outer.style.opacity = String(1 - progress);
+        inner.style.transform = `translateY(-${progress * naturalHeight}px)`;
+      }
+    });
+  }
+
   return (
     <>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: "1rem",
-          padding: "0.8rem 1.2rem",
-          background: "var(--card-bg)",
-          borderBottom: "1px solid var(--border)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div>
-          <strong style={{ fontSize: "0.95rem" }}>Conferência de Pagamentos</strong>
-          <p className="muted" style={{ margin: "0.2rem 0 0", fontSize: "0.78rem" }}>
-            Atalhos: ↑ / ↓ navegar · Enter ou Y confirmar · Backspace ou N marcar erro · U desfazer · clique direito num item para ver todas as ações
-          </p>
+      <div ref={collapsibleRef} style={{ overflow: "hidden" }}>
+        <div ref={collapsibleInnerRef}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "1rem",
+              padding: "0.8rem 1.2rem",
+              background: "var(--card-bg)",
+              borderBottom: "1px solid var(--border)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div>
+              <strong style={{ fontSize: "0.95rem" }}>Conferência de Pagamentos</strong>
+              <p className="muted" style={{ margin: "0.2rem 0 0", fontSize: "0.78rem" }}>
+                Atalhos: ↑ / ↓ navegar · Enter ou Y confirmar · Backspace ou N marcar erro · U desfazer · clique direito num item para ver todas as ações
+              </p>
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.8rem",
+              padding: "0.8rem 1.2rem",
+              background: "var(--card-bg)",
+              borderBottom: "1px solid var(--border)",
+              flexWrap: "wrap",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button type="button" className="secondary" onClick={() => setFiltersDrawerOpen(true)}>
+              <Filter size={15} style={{ marginRight: "0.4rem" }} />
+              Filtros
+            </button>
+            <MultiSelectDropdown
+              options={FLAT_COLUMNS}
+              selected={visibleColumns}
+              onToggle={(id) =>
+                setVisibleColumns((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(id)) next.delete(id);
+                  else next.add(id);
+                  return next;
+                })
+              }
+              onSelectAll={() => setVisibleColumns(new Set(FLAT_COLUMNS.map((c) => c.id)))}
+              onSelectNone={() => setVisibleColumns(new Set())}
+              allLabel="Configurar colunas"
+              noneLabel="Nenhuma coluna"
+              countLabel={(n) => `Colunas (${n})`}
+              align="left"
+            />
+            <label className="drawer-checkbox-field" style={{ width: "auto" }}>
+              <input type="checkbox" checked={showAudited} onChange={(e) => setShowAudited(e.target.checked)} />
+              Mostrar itens já conferidos
+            </label>
+            <span className="muted" style={{ fontSize: "0.85rem", marginLeft: "auto" }}>
+              {pendingCount === null
+                ? "Carregando..."
+                : pendingCount === 0
+                  ? "Tudo conferido"
+                  : `${pendingCount} pendente${pendingCount === 1 ? "" : "s"} de conferência`}
+            </span>
+          </div>
         </div>
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "0.8rem",
-          padding: "0.8rem 1.2rem",
-          borderBottom: "1px solid var(--border)",
-          flexWrap: "wrap",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button type="button" className="secondary" onClick={() => setFiltersDrawerOpen(true)}>
-          <Filter size={15} style={{ marginRight: "0.4rem" }} />
-          Filtros
-        </button>
-        <MultiSelectDropdown
-          options={FLAT_COLUMNS}
-          selected={visibleColumns}
-          onToggle={(id) =>
-            setVisibleColumns((prev) => {
-              const next = new Set(prev);
-              if (next.has(id)) next.delete(id);
-              else next.add(id);
-              return next;
-            })
-          }
-          onSelectAll={() => setVisibleColumns(new Set(FLAT_COLUMNS.map((c) => c.id)))}
-          onSelectNone={() => setVisibleColumns(new Set())}
-          allLabel="Configurar colunas"
-          noneLabel="Nenhuma coluna"
-          countLabel={(n) => `Colunas (${n})`}
-          align="left"
-        />
-        <label className="drawer-checkbox-field" style={{ width: "auto" }}>
-          <input type="checkbox" checked={showAudited} onChange={(e) => setShowAudited(e.target.checked)} />
-          Mostrar itens já conferidos
-        </label>
-        <span className="muted" style={{ fontSize: "0.85rem", marginLeft: "auto" }}>
-          {pendingCount === null
-            ? "Carregando..."
-            : pendingCount === 0
-              ? "Tudo conferido"
-              : `${pendingCount} pendente${pendingCount === 1 ? "" : "s"} de conferência`}
-        </span>
-      </div>
-
-      <div style={{ flex: 1, overflow: "auto", padding: "1.2rem 0", minHeight: 0 }} onClick={(e) => e.stopPropagation()}>
-        {listError && <div className="error-box" style={{ marginBottom: "1rem", marginInline: "1.2rem" }}>Não foi possível carregar os pagamentos: {listError}</div>}
-        {actionError && <div className="error-box" style={{ marginBottom: "1rem", marginInline: "1.2rem" }}>{actionError}</div>}
-        {rowsTotal === null && !listError && <p className="muted" style={{ marginInline: "1.2rem" }}>Carregando...</p>}
+      {/* No `padding-top` here (only `padding-bottom`, for breathing room
+          under the last row) — the table's `thead` is `position: sticky`
+          inside this same scrolling container (see `.reconciliation-table`
+          in App.css), so any padding placed *before* it would just sit
+          there un-stuck, showing through as a gap with no background of its
+          own once scrolled — exactly the blurred-desktop seam this avoided.
+          The loading/error/empty states below aren't sticky, so they get
+          their own `marginTop` instead. */}
+      <div style={{ flex: 1, overflow: "auto", paddingBottom: "1.2rem", minHeight: 0 }} onClick={(e) => e.stopPropagation()} onScroll={handleScroll}>
+        {listError && <div className="error-box" style={{ margin: "1.2rem 1.2rem 1rem" }}>Não foi possível carregar os pagamentos: {listError}</div>}
+        {actionError && <div className="error-box" style={{ margin: "1.2rem 1.2rem 1rem" }}>{actionError}</div>}
+        {rowsTotal === null && !listError && <p className="muted" style={{ margin: "1.2rem" }}>Carregando...</p>}
         {rowsTotal !== null && visibleRows.length === 0 && (
-          <p className="muted" style={{ marginInline: "1.2rem" }}>{rowsTotal === 0 ? "Nenhum turno para os filtros selecionados." : "Nada pendente de conferência."}</p>
+          <p className="muted" style={{ margin: "1.2rem" }}>{rowsTotal === 0 ? "Nenhum turno para os filtros selecionados." : "Nada pendente de conferência."}</p>
         )}
         {rowsTotal !== null && visibleRows.length > 0 && (
           <div className="table-scroll">
-            <table>
+            <table className="reconciliation-table">
               <thead>
                 <tr>
                   {FLAT_COLUMNS.filter((c) => visibleColumns.has(c.id)).map((c) => (
@@ -573,16 +667,19 @@ export default function PaymentReconciliationScreen({
                   const rowActions: ContextMenuItem[] = [
                     {
                       label: "Confirmar",
+                      shortcut: "Enter / Y",
                       disabled: !canConfirm || actingShiftId === r.id,
                       onClick: () => handleConfirm(r.id),
                     },
                     {
                       label: "Marcar erro",
+                      shortcut: "Backspace / N",
                       disabled: !canMarkError || actingShiftId === r.id,
                       onClick: () => handleErrorSubmit(r),
                     },
                     {
                       label: "Desfazer",
+                      shortcut: "U",
                       disabled: !audit || actingShiftId === r.id,
                       onClick: () => handleUndoAudit(r),
                     },
