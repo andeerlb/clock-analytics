@@ -3,15 +3,19 @@ import { setWindowGlass } from "./api";
 
 /**
  * Turns on the native window blur-behind for as long as `active` is true —
- * used by `Modal`/`Drawer` for their full lifetime (open + closing-animation),
- * so the desktop shows real, OS-blurred through their dimmed backdrop area
- * instead of just the CSS `backdrop-filter` blur of the app's own content.
+ * used by `Modal`/`Drawer` for their full lifetime (open + closing-animation).
  *
- * `document.documentElement`'s `glass-native` class (see the `:root.glass-native`
- * rules in App.css) is only added once the backend confirms a native effect
- * actually applies — on Linux `setWindowGlass` resolves `false`, so the class
- * never lands and `.modal-overlay`/`.drawer-overlay` fall back to their
- * existing CSS-only blur exactly as before this feature existed.
+ * Stamps `document.documentElement` with exactly one of two classes once
+ * `setWindowGlass` resolves (see the `:root.glass-native`/`:root.glass-css-only`
+ * rules in App.css):
+ * - `glass-native` when the backend confirms a real native effect (Windows/
+ *   macOS) — the desktop shows blurred through the dimmed backdrop area.
+ * - `glass-css-only` everywhere else (Linux). This does *not* mean "fall
+ *   back to the CSS `backdrop-filter` blur" — WebKitGTK's support for it is
+ *   unreliable enough (works on some driver/compositor combos, silently
+ *   renders as flat, unblurred transparency on others — letting whatever's
+ *   behind the modal/drawer show straight through) that leaning on it to
+ *   hide the app's own content isn't safe. Linux instead goes fully opaque.
  */
 export function useWindowGlass(active: boolean): void {
   useEffect(() => {
@@ -19,12 +23,12 @@ export function useWindowGlass(active: boolean): void {
     let cancelled = false;
     setWindowGlass(true)
       .then((native) => {
-        if (!cancelled && native) document.documentElement.classList.add("glass-native");
+        if (!cancelled) document.documentElement.classList.add(native ? "glass-native" : "glass-css-only");
       })
       .catch(() => {});
     return () => {
       cancelled = true;
-      document.documentElement.classList.remove("glass-native");
+      document.documentElement.classList.remove("glass-native", "glass-css-only");
       setWindowGlass(false).catch(() => {});
     };
   }, [active]);

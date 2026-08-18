@@ -953,8 +953,7 @@ tr:last-child td {
    "under the modal": `.modal-overlay`/`.drawer-overlay` are the only things
    with this class ever applied while mounted, and both already cover the
    full viewport (`inset: 0`) above everything else, so there's no gap in
-   the app underneath left exposed. Linux never gets this class, so it
-   keeps today's fully opaque look untouched. */
+   the app underneath left exposed. */
 :root.glass-native {
   background-color: transparent;
 }
@@ -962,7 +961,9 @@ tr:last-child td {
 /* Shared by every `Modal`-based dialog (ConfirmModal, UpdateModal,
    ConfirmPaymentModal) — a frosted-glass backdrop instead of a flat dark
    scrim, so whatever's behind the modal stays legible as shapes/colors
-   without competing for attention. */
+   without competing for attention. Only the visual default: see
+   `:root.glass-css-only` right below for why Linux doesn't actually get
+   this look. */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -974,6 +975,25 @@ tr:last-child td {
   align-items: center;
   justify-content: center;
   animation: modal-overlay-in 0.18s ease;
+}
+
+/* Set instead of `glass-native` wherever `set_window_glass` reports no
+   native effect (Linux) — but only overrides `.modal-overlay-fullscreen`
+   (a `<Modal fullScreen>` like `PaymentReconciliationModal`'s "Conferência
+   de Pagamentos"), not every `.modal-overlay`/`.drawer-overlay-visible`.
+   Small centered modals and drawers keep the CSS `backdrop-filter` blur
+   they've always had on Linux — this class only steps in for the one case
+   that actually broke: a fullScreen surface has no `.card` covering most of
+   the viewport, so its backdrop *is* nearly the whole screen, and on at
+   least one real machine WebKitGTK silently renders `backdrop-filter` as
+   flat, unblurred transparency instead of failing loudly, letting whatever
+   page was mounted behind it (e.g. `PaymentsPage`'s sidebar) show sharply
+   through. Going fully solid there sidesteps whether the blur works at all,
+   without giving up the frosted look everywhere else. */
+:root.glass-css-only .modal-overlay-fullscreen {
+  background: var(--bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* Native blur-behind is active (see `:root.glass-native` above): the OS is
