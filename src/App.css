@@ -83,6 +83,41 @@ body,
   margin: 0;
 }
 
+/* Runs once, automatically, the moment `#root` first paints — a plain CSS
+   `animation` (not JS-triggered) so it starts as early as the stylesheet
+   itself loads, independent of how long React/data-fetching takes to
+   actually populate it. Without this, a window goes straight from its
+   native `background_color` (see `lib.rs`'s `setup`/
+   `commands::open_reconciliation_window`) to the *entire* mounted UI in one
+   paint, which reads as content "popping" into existence rather than
+   arriving — most noticeable on the "Conferência de Pagamentos" window,
+   which mounts fresh on every open, not just once at app startup. `#root`
+   itself never unmounts once React takes over, so this can't accidentally
+   replay on a later re-render. */
+#root {
+  animation: app-fade-in 0.22s ease;
+}
+@keyframes app-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Same idea as `#root`'s own fade-in, one level down: every list page
+   conditionally mounts `.table-scroll` only once its data has actually
+   loaded (a `{condition && <div className="table-scroll">…}` guard), so
+   without this the *rows themselves* still pop in abruptly a beat after the
+   page shell's own fade already finished — this is what plays for that
+   specific, later moment. Re-triggers correctly (unlike a one-off `#root`
+   animation) because each of these divs is a genuinely fresh DOM node the
+   moment its data resolves, not a persistent one merely being restyled. */
+.table-scroll {
+  animation: app-fade-in 0.18s ease;
+}
+
 a {
   color: var(--accent);
   text-decoration: none;
