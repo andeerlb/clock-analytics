@@ -12,19 +12,25 @@ import { createPortal } from "react-dom";
  * siblings. A portal sidesteps that entirely.
  *
  * Closes itself on a click outside (either the popover or the anchor),
- * Escape, or any ancestor scrolling — `true` on the scroll listener
- * catches any scrollable ancestor (usually `.table-scroll`, not the page
- * itself), since a detached popover that no longer lines up with its
- * trigger is worse than just closing.
+ * Escape, or any *other* scrolling — `true` on the scroll listener catches
+ * any scrollable ancestor (usually `.table-scroll`, not the page itself),
+ * since a detached popover that no longer lines up with its trigger is
+ * worse than just closing. Scrolling *inside the popover's own content*
+ * (e.g. `MultiSelectDropdown`'s checkbox list, once it's got enough options
+ * to need its own `overflow-y: auto`) is excluded from that, or the
+ * popover would slam shut the moment you tried to scroll through it.
  */
 export default function AnchoredPopover({
   anchorRef,
   width,
+  align = "left",
   onClose,
   children,
 }: {
   anchorRef: RefObject<HTMLElement | null>;
   width: number;
+  /** Which edge of the anchor the popover's own edge lines up with — "left" (default) for a trigger near a container's left edge; "right" keeps the popover from overflowing past a container's right edge when the trigger itself sits near that edge (e.g. a toolbar's last button). */
+  align?: "left" | "right";
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -34,8 +40,9 @@ export default function AnchoredPopover({
   useEffect(() => {
     const rect = anchorRef.current?.getBoundingClientRect();
     if (!rect) return;
-    setPos({ top: rect.bottom + 4, left: Math.min(rect.left, window.innerWidth - width - 8) });
-  }, [anchorRef, width]);
+    const left = align === "right" ? rect.right - width : rect.left;
+    setPos({ top: rect.bottom + 4, left: Math.max(8, Math.min(left, window.innerWidth - width - 8)) });
+  }, [anchorRef, width, align]);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -57,7 +64,8 @@ export default function AnchoredPopover({
   }, [onClose]);
 
   useEffect(() => {
-    function onScroll() {
+    function onScroll(e: Event) {
+      if (popoverRef.current?.contains(e.target as Node)) return;
       onClose();
     }
     document.addEventListener("scroll", onScroll, true);

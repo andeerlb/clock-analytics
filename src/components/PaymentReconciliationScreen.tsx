@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { Filter, Moon, Sun } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePaymentsFilters } from "../contexts/FiltersContext";
 import {
   countPaymentShiftsPendingAudit,
@@ -123,7 +123,6 @@ export default function PaymentReconciliationScreen({
   const [listError, setListError] = useState<string | null>(null);
   const [audits, setAudits] = useState<Map<number, AuditedInfo>>(new Map());
   const [pendingCount, setPendingCount] = useState<number | null>(null);
-  const [showAudited, setShowAudited] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(DEFAULT_VISIBLE_COLUMN_IDS));
   const [focusedShiftId, setFocusedShiftId] = useState<number | null>(null);
   const [actingShiftId, setActingShiftId] = useState<number | null>(null);
@@ -307,42 +306,17 @@ export default function PaymentReconciliationScreen({
     setFiltersDrawerOpen(false);
   }
 
-  const visibleRows = useMemo(
-    () => rows.filter((r) => r.status !== "pago" || showAudited || !audits.has(r.id)),
-    [rows, audits, showAudited],
-  );
-
-  // Focus/navigation ranges over every *visible, already-loaded* row, not
-  // just the actionable ones — a pendente/erro row (or an already-audited
-  // one, once "Mostrar itens já conferidos" is on) can still be selected
-  // and arrowed through, same as clicking it; what changes per row is only
-  // which actions are enabled once it's focused (see `focusedActionable`/
-  // `focusedCanMarkError` below), not whether it's reachable at all.
+  // Focus/navigation ranges over every *loaded* row, not just the
+  // actionable ones — a pendente/erro row (or an already-confirmado/erro
+  // one — every row always stays in `rows`, audited or not) can still be
+  // selected and arrowed through, same as clicking it; what changes per row
+  // is only which actions are enabled once it's focused (see
+  // `focusedCanConfirm`/`focusedCanMarkError` below), not whether it's
+  // reachable at all.
   useEffect(() => {
-    if (focusedShiftId !== null && visibleRows.some((r) => r.id === focusedShiftId)) return;
-    setFocusedShiftId(visibleRows[0]?.id ?? null);
-  }, [visibleRows, focusedShiftId]);
-
-  /**
-   * Only relevant with "Mostrar itens já conferidos" OFF — that's the only
-   * case where auditing `shiftId` actually removes it from `visibleRows`
-   * (with the toggle on, the row stays right where it is, badge in place of
-   * the buttons, and keeping focus on it — i.e. doing nothing here — is
-   * exactly right). Moves focus to whatever row is about to take this one's
-   * place once it's filtered out, computed from the CURRENT `visibleRows`
-   * (before the audit that's about to hide it lands) so it lines up with
-   * the list's next render — without this, focus would fall through to the
-   * generic reset effect above, which has no notion of "where this row
-   * was" and would jump all the way back to the top of the list instead.
-   */
-  function advanceFocusIfHidden(shiftId: number) {
-    if (showAudited) return;
-    const idx = visibleRows.findIndex((r) => r.id === shiftId);
-    if (idx === -1) return;
-    const remaining = visibleRows.filter((r) => r.id !== shiftId);
-    const next = remaining[Math.min(idx, remaining.length - 1)] ?? null;
-    setFocusedShiftId(next ? next.id : null);
-  }
+    if (focusedShiftId !== null && rows.some((r) => r.id === focusedShiftId)) return;
+    setFocusedShiftId(rows[0]?.id ?? null);
+  }, [rows, focusedShiftId]);
 
   async function handleConfirm(shiftId: number) {
     if (actingShiftId !== null) return;
@@ -356,7 +330,6 @@ export default function PaymentReconciliationScreen({
       // `confirmado` (see `canConfirm`'s gate below), never `erro`, since
       // Marcar erro always moves the row off `pago` first.
       setPendingCount((prev) => (prev !== null ? Math.max(0, prev - 1) : prev));
-      advanceFocusIfHidden(shiftId);
     } catch (e) {
       setActionError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -429,13 +402,13 @@ export default function PaymentReconciliationScreen({
   }
 
   function moveFocus(delta: number) {
-    if (visibleRows.length === 0) return;
-    const idx = visibleRows.findIndex((r) => r.id === focusedShiftId);
-    const nextIdx = idx === -1 ? 0 : Math.min(Math.max(idx + delta, 0), visibleRows.length - 1);
-    setFocusedShiftId(visibleRows[nextIdx].id);
+    if (rows.length === 0) return;
+    const idx = rows.findIndex((r) => r.id === focusedShiftId);
+    const nextIdx = idx === -1 ? 0 : Math.min(Math.max(idx + delta, 0), rows.length - 1);
+    setFocusedShiftId(rows[nextIdx].id);
   }
 
-  const focusedRow = focusedShiftId !== null ? visibleRows.find((r) => r.id === focusedShiftId) ?? null : null;
+  const focusedRow = focusedShiftId !== null ? rows.find((r) => r.id === focusedShiftId) ?? null : null;
   const focusedAudit = focusedRow ? audits.get(focusedRow.id) ?? null : null;
   // Same per-action logic as the row's own buttons/menu: disabled exactly
   // when it would be a no-op given the row's current verdict.
@@ -443,8 +416,8 @@ export default function PaymentReconciliationScreen({
   const focusedCanMarkError = focusedRow?.status === "pago" && focusedAudit?.result !== "erro";
 
   // Arrow keys move focus across every visible row (not just actionable
-  // ones — see the comment above the focus-reset effect); Y/Enter confirms,
-  // N/Backspace marks erro, and U undoes whichever verdict is already
+  // ones — see the comment above the focus-reset effect); Enter confirms,
+  // Delete marks erro, and Backspace undoes whichever verdict is already
   // recorded on the focused row directly, same as clicking the equivalent
   // button/menu item — all no-ops while the focused row can't take that
   // action. Same scoped attach/detach recipe as PdfViewerModal's own
@@ -459,13 +432,13 @@ export default function PaymentReconciliationScreen({
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         moveFocus(-1);
-      } else if (e.key === "Enter" || e.key === "y" || e.key === "Y") {
+      } else if (e.key === "Enter") {
         e.preventDefault();
         if (focusedShiftId !== null && focusedCanConfirm) handleConfirm(focusedShiftId);
-      } else if (e.key === "Backspace" || e.key === "n" || e.key === "N") {
+      } else if (e.key === "Delete") {
         e.preventDefault();
         if (focusedRow && focusedCanMarkError) handleErrorSubmit(focusedRow);
-      } else if (e.key === "u" || e.key === "U") {
+      } else if (e.key === "Backspace") {
         e.preventDefault();
         if (focusedRow && focusedAudit) handleUndoAudit(focusedRow);
       }
@@ -473,7 +446,7 @@ export default function PaymentReconciliationScreen({
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedShiftId, visibleRows, actingShiftId, focusedCanConfirm, focusedCanMarkError, focusedAudit]);
+  }, [focusedShiftId, rows, actingShiftId, focusedCanConfirm, focusedCanMarkError, focusedAudit]);
 
   /**
    * Collapses the title bar + toolbar (everything above the table) away as
@@ -563,7 +536,7 @@ export default function PaymentReconciliationScreen({
             <div>
               <strong style={{ fontSize: "0.95rem" }}>Conferência de Pagamentos</strong>
               <p className="muted" style={{ margin: "0.2rem 0 0", fontSize: "0.78rem" }}>
-                Atalhos: ↑ / ↓ navegar · Enter ou Y confirmar · Backspace ou N marcar erro · U desfazer · clique direito num item para ver todas as ações
+                Atalhos: ↑ / ↓ navegar · Enter confirmar · Delete marcar erro · Backspace desfazer · clique direito num item para ver todas as ações
               </p>
             </div>
           </div>
@@ -602,10 +575,6 @@ export default function PaymentReconciliationScreen({
               countLabel={(n) => `Colunas (${n})`}
               align="left"
             />
-            <label className="drawer-checkbox-field" style={{ width: "auto" }}>
-              <input type="checkbox" checked={showAudited} onChange={(e) => setShowAudited(e.target.checked)} />
-              Mostrar itens já conferidos
-            </label>
             <span className="muted" style={{ fontSize: "0.85rem", marginLeft: "auto" }}>
               {pendingCount === null
                 ? "Carregando..."
@@ -629,10 +598,8 @@ export default function PaymentReconciliationScreen({
         {listError && <div className="error-box" style={{ margin: "1.2rem 1.2rem 1rem" }}>Não foi possível carregar os pagamentos: {listError}</div>}
         {actionError && <div className="error-box" style={{ margin: "1.2rem 1.2rem 1rem" }}>{actionError}</div>}
         {rowsTotal === null && !listError && <p className="muted" style={{ margin: "1.2rem" }}>Carregando...</p>}
-        {rowsTotal !== null && visibleRows.length === 0 && (
-          <p className="muted" style={{ margin: "1.2rem" }}>{rowsTotal === 0 ? "Nenhum turno para os filtros selecionados." : "Nada pendente de conferência."}</p>
-        )}
-        {rowsTotal !== null && visibleRows.length > 0 && (
+        {rowsTotal !== null && rows.length === 0 && <p className="muted" style={{ margin: "1.2rem" }}>Nenhum turno para os filtros selecionados.</p>}
+        {rowsTotal !== null && rows.length > 0 && (
           <div className="table-scroll">
             <table className="reconciliation-table">
               <thead>
@@ -643,7 +610,7 @@ export default function PaymentReconciliationScreen({
                 </tr>
               </thead>
               <tbody>
-                {visibleRows.map((r) => {
+                {rows.map((r) => {
                   const hasSchedule = r.scheduleStartMinutes !== null && r.scheduleEndMinutes !== null;
                   const duration = hasSchedule ? shiftDurationMinutes(r.scheduleStartMinutes!, r.scheduleEndMinutes!) : null;
                   const audit = audits.get(r.id) ?? null;
@@ -667,19 +634,19 @@ export default function PaymentReconciliationScreen({
                   const rowActions: ContextMenuItem[] = [
                     {
                       label: "Confirmar",
-                      shortcut: "Enter / Y",
+                      shortcut: "Enter",
                       disabled: !canConfirm || actingShiftId === r.id,
                       onClick: () => handleConfirm(r.id),
                     },
                     {
                       label: "Marcar erro",
-                      shortcut: "Backspace / N",
+                      shortcut: "Delete",
                       disabled: !canMarkError || actingShiftId === r.id,
                       onClick: () => handleErrorSubmit(r),
                     },
                     {
                       label: "Desfazer",
-                      shortcut: "U",
+                      shortcut: "Backspace",
                       disabled: !audit || actingShiftId === r.id,
                       onClick: () => handleUndoAudit(r),
                     },
