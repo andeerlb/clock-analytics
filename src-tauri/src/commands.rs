@@ -932,13 +932,15 @@ pub async fn open_reconciliation_window(app: AppHandle) -> Result<(), String> {
         window.set_focus().map_err(|e| e.to_string())?;
         return Ok(());
     }
-    // Same `transparent` + `window_glass::enable` pairing as `main` in
-    // `lib.rs`'s `setup` — this window gets the native blur too, not just
-    // the one it detached from.
+    // Same `transparent` + `background_color` + `window_glass::enable`
+    // trio as `main` in `lib.rs`'s `setup` — this window gets the native
+    // blur too (not just the one it detached from), and the same dark
+    // initial paint so it doesn't flash white for a moment on every open.
     let window = WebviewWindowBuilder::new(&app, "reconciliation", WebviewUrl::App("index.html".into()))
         .title("Conferência de Pagamentos — PontoScan")
         .inner_size(1180.0, 780.0)
         .transparent(cfg!(any(target_os = "windows", target_os = "macos")))
+        .background_color(tauri::window::Color(11, 14, 20, 255))
         .build()
         .map_err(|e| e.to_string())?;
     let _ = crate::window_glass::enable(&window);
