@@ -3266,7 +3266,7 @@ dependencies = [
 
 [[package]]
 name = "pontoscan"
-version = "0.1.68"
+version = "0.1.70"
 dependencies = [
  "calamine",
  "chrono",
