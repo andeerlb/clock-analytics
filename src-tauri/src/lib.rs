@@ -9,6 +9,7 @@ mod report_zip;
 mod settings;
 mod spreadsheet;
 mod storage;
+mod window_glass;
 
 use tauri::{
     image::Image,
@@ -179,6 +180,7 @@ pub fn run() {
             commands::get_close_to_tray,
             commands::set_close_to_tray,
             commands::set_tray_status,
+            window_glass::set_window_glass,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

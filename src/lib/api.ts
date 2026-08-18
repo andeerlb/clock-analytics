@@ -271,3 +271,14 @@ export function listRecentPaymentFiles(): Promise<string[]> {
 export function addRecentPaymentFile(path: string): Promise<void> {
   return invoke("add_recent_payment_file", { path });
 }
+
+/**
+ * Toggles the real OS-level window blur-behind (Acrylic/Vibrancy) on or off.
+ * Resolves `true` only on Windows/macOS, where the effect actually exists —
+ * `false` on Linux (and anywhere else `window-vibrancy` has no native
+ * backend), so callers know to leave their CSS-only blur fallback in place.
+ * See `useWindowGlass`.
+ */
+export function setWindowGlass(active: boolean): Promise<boolean> {
+  return invoke("set_window_glass", { active });
+}

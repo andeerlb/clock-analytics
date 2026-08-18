@@ -23,6 +23,10 @@ tauri-build = { version = "2", features = [] }
 # since it pulls in extra platform deps (e.g. libayatana-appindicator on
 # Linux) that not every app wants.
 tauri = { version = "2", features = ["tray-icon"] }
+# Native window blur-behind (Acrylic on Windows, Vibrancy on macOS) toggled
+# by `window_glass::set_window_glass` while a Modal/Drawer backdrop is
+# visible — see that module for why Linux has no branch here at all.
+window-vibrancy = "0.6"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

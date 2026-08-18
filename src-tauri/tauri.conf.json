@@ -15,7 +15,8 @@
         "title": "PontoScan",
         "width": 1280,
         "height": 800,
-        "maximized": true
+        "maximized": true,
+        "transparent": true
       }
     ],
     "security": {

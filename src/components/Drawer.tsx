@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { useWindowGlass } from "../lib/useWindowGlass";
 
 /**
  * Slide-in side panel (right or left), with a dimming overlay — the desktop
@@ -28,6 +29,11 @@ export default function Drawer({
 }) {
   const [rendered, setRendered] = useState(open);
   const [visible, setVisible] = useState(false);
+
+  // Real desktop blur (Windows/macOS) behind the dimmed backdrop area,
+  // keyed on `rendered` (not `open`) so it covers the slide-out animation
+  // too, same reasoning as `Modal`'s.
+  useWindowGlass(rendered);
 
   useEffect(() => {
     if (open) {

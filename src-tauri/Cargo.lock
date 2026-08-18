@@ -3288,6 +3288,7 @@ dependencies = [
  "tauri-plugin-updater",
  "thiserror 2.0.19",
  "uuid",
+ "window-vibrancy",
  "zip 2.4.2",
 ]
 
