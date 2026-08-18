@@ -1,6 +1,6 @@
 [package]
 name = "pontoscan"
-version = "0.1.70"
+version = "0.1.71"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -22,7 +22,7 @@ tauri-build = { version = "2", features = [] }
 # needs a real tray icon to hide the window into — off by default upstream
 # since it pulls in extra platform deps (e.g. libayatana-appindicator on
 # Linux) that not every app wants.
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 # Native window blur-behind (Acrylic on Windows, Vibrancy on macOS) toggled
 # by `window_glass::set_window_glass` while a Modal/Drawer backdrop is
 # visible — see that module for why Linux has no branch here at all.
