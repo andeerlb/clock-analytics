@@ -10,15 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "PontoScan",
-        "width": 1280,
-        "height": 800,
-        "maximized": true,
-        "transparent": true
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

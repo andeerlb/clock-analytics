@@ -15,7 +15,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WindowEvent,
+    Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 
 /// Shows and focuses the main window — shared by the tray menu's "Abrir
@@ -101,6 +101,21 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            // Built here instead of declaratively in `tauri.conf.json`
+            // (whose `app.windows` is deliberately empty) so `transparent`
+            // can differ by OS: Windows/macOS need it for `window_glass`'s
+            // Acrylic/Vibrancy to have anything to show through, but
+            // WebKitGTK on Linux has known rendering glitches (ghosted,
+            // overlapping frames — see the screenshot that prompted this)
+            // on transparent windows, so Linux keeps an opaque one and
+            // relies solely on `.modal-overlay`'s CSS-only blur instead.
+            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                .title("PontoScan")
+                .inner_size(1280.0, 800.0)
+                .maximized(true)
+                .transparent(cfg!(any(target_os = "windows", target_os = "macos")))
+                .build()?;
+
             // Always present (regardless of the "Minimizar na bandeja ao
             // fechar" setting) — it's the only way back once a close has
             // been turned into a hide, and a "Sair" that actually quits.
