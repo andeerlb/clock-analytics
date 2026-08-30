@@ -498,6 +498,14 @@ export default function PaymentTemplateWizard({
     });
   }
 
+  function selectAllSheets() {
+    setIncludedSheets(new Set(sheets));
+  }
+
+  function deselectAllSheets() {
+    setIncludedSheets(new Set());
+  }
+
   function renameSheet(oldName: string, rawNewName: string) {
     const newName = rawNewName.trim();
     if (!newName || newName === oldName) {
@@ -1129,6 +1137,18 @@ export default function PaymentTemplateWizard({
                     <p className="muted">
                       {sheets.length === 1 ? "Aba carregada neste template" : "Selecione a aba para configurar"}
                     </p>
+                    {sheets.length > 1 && (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.4rem", marginTop: "0.65rem" }}>
+                        <button type="button" className="outline" onClick={selectAllSheets} disabled={includedSheets.size === sheets.length} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "0.3rem", padding: "0.38rem 0.4rem", fontSize: "0.7rem", whiteSpace: "nowrap" }}>
+                          <CheckSquare size={12} />
+                          Selecionar todas
+                        </button>
+                        <button type="button" className="outline" onClick={deselectAllSheets} disabled={includedSheets.size === 0} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "0.3rem", padding: "0.38rem 0.4rem", fontSize: "0.7rem", whiteSpace: "nowrap" }}>
+                          <Square size={12} />
+                          Desmarcar todas
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <nav className="mapping-sidebar-nav">
                     {sheets.map((s) => {

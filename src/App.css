@@ -427,6 +427,32 @@ button.ghost:hover {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text);
 }
+
+/* Whole-row PIX copy target in the payment confirmation dialog. Each key
+   is its own visually distinct target so similar numbers are easy to scan
+   and the user never has to aim for a tiny copy button. */
+button.pix-copy-row {
+  background: var(--surface-variant);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: none;
+  font-weight: 400;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+button.pix-copy-row:hover {
+  background: var(--surface-variant-hover, rgba(255, 255, 255, 0.055));
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+button.pix-copy-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+button.pix-copy-row.copied {
+  border-color: var(--success);
+  background: var(--success-soft);
+}
 /* Small pill-sized variant of button.outline — shared by "Visto"
    acknowledgements and inline count triggers (e.g. Pagamentos' "extras"
    column) so both use the exact same compact size and hover treatment

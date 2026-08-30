@@ -31,7 +31,7 @@ import {
 } from "../lib/api";
 import {
   createEmployeesFromImport,
-  findEmployeeByAttempts,
+  findEmployeeAnywhereByAttempts,
   getEmployeeTemplate,
   listClients,
   listEmployeeTemplates,
@@ -43,6 +43,7 @@ import {
   type EmployeeRow,
 } from "../lib/db";
 import { fileNameFromPath, formatCpf, formatDateTime, normalizeCpf } from "../lib/format";
+import { parsePixKeys } from "../lib/pix";
 import type {
   EmployeeTemplateListRow,
   EmployeeTemplateRow,
@@ -72,17 +73,10 @@ function formatFileKindList(kinds: PaymentFileKind[]): string {
 }
 
 /**
- * Every row lands in exactly one bucket. "duplicate" means already linked
- * to THIS exact (cliente, empresa) pair — flagged for manual review (see
- * `/employees/:id`), never auto-created or auto-updated. "valid" is
- * everything else, including a colaborador that already exists somewhere
- * else entirely — a different cliente, a different empresa of the same
- * cliente, or both (`findEmployeeByAttempts` is scoped to one exact pair,
- * so that's not a "duplicate" here) — importing it links the new pair to
- * the existing colaborador instead of creating a second person (see
- * `createEmployeesFromImport`), so "valid" isn't only ever "brand new".
+ * "valid" creates a new CPF; "update" changes/links the employee resolved
+ * by the template's ordered identification attempts.
  */
-type RowCategory = "valid" | "duplicate" | "duplicate-in-file" | "skipped";
+type RowCategory = "valid" | "update" | "duplicate-in-file" | "skipped";
 type RowFilter = RowCategory | "error" | "all" | "selected";
 
 interface EmployeePreviewRow {
@@ -93,6 +87,7 @@ interface EmployeePreviewRow {
   cpfRaw: string;
   matriculaRaw: string;
   nameRaw: string;
+  pixKeys: string[];
   /**
    * Which cliente+empresa pair this preview instance targets — one physical
    * spreadsheet row produces one `EmployeePreviewRow` per valid pair
@@ -104,7 +99,7 @@ interface EmployeePreviewRow {
   pairClientName: string | null;
   pairCompanyId: number | null;
   pairCompanyName: string | null;
-  /** Set only for category "duplicate" — the already-registered employee found via `findEmployeeByAttempts`. */
+  /** Set for category "update" — resolved by the template's identification attempts. */
   match: EmployeeRow | null;
   category: RowCategory;
 }
@@ -345,13 +340,13 @@ export default function ImportEmployeesPage() {
   }, [fileResults, rowFilter, selectedRows, nameSearch]);
 
   const categoryCounts = useMemo(() => {
-    const counts: Record<RowCategory, number> = { valid: 0, duplicate: 0, "duplicate-in-file": 0, skipped: 0 };
+    const counts: Record<RowCategory, number> = { valid: 0, update: 0, "duplicate-in-file": 0, skipped: 0 };
     for (const r of employeeRows) counts[r.category]++;
     return counts;
   }, [employeeRows]);
 
   const errorCount = fileResults.filter((r) => r.error).length;
-  const duplicateCount = categoryCounts.duplicate;
+  const updateCount = categoryCounts.update;
   const duplicateInFileCount = categoryCounts["duplicate-in-file"];
   const skippedCount = categoryCounts.skipped;
 
@@ -361,7 +356,7 @@ export default function ImportEmployeesPage() {
     [previewRows, previewPage, previewPageSize],
   );
 
-  const isSelectable = (r: EmployeePreviewRow) => r.category === "valid";
+  const isSelectable = (r: EmployeePreviewRow) => r.category === "valid" || r.category === "update";
   // "Selecionar todos" only ever acts on what's currently on screen — the
   // toolbar chips/name search filter `previewRows` down to a category
   // without touching `selectedRows` itself, so a global select-all here
@@ -416,6 +411,13 @@ export default function ImportEmployeesPage() {
         return group?.headerRow ?? null;
       }
 
+      function mappedFieldsForSheet(sheetName: string | null): Set<string> {
+        const group = selectedTemplate!.groups.find((g) =>
+          sheetName === null ? g.sheetNames.length === 0 : g.sheetNames.includes(sheetName),
+        );
+        return new Set(group?.fieldMappings.map((mapping) => mapping.targetField) ?? []);
+      }
+
       const results: EmployeeFileResult[] = [];
       for (const path of paths) {
         const info = fileHashes.get(path);
@@ -439,6 +441,8 @@ export default function ImportEmployeesPage() {
             const cpfRaw = applied_row.fields.cpf ?? "";
             const matriculaRaw = applied_row.fields.matricula ?? "";
             const nameRaw = applied_row.fields.nome ?? "";
+            const pixKeys = parsePixKeys(applied_row.fields.pix ?? "");
+            const mappedFields = mappedFieldsForSheet(applied_row.sheetName);
             const base = {
               fileHash,
               fileName,
@@ -447,10 +451,19 @@ export default function ImportEmployeesPage() {
               cpfRaw,
               matriculaRaw,
               nameRaw,
+              pixKeys,
             };
 
             const cpfDigits = cpfRaw ? normalizeCpf(cpfRaw) : "";
-            if (cpfDigits.length !== 11 || !nameRaw.trim()) {
+            const match = await findEmployeeAnywhereByAttempts(selectedTemplate.identifierPriority, {
+              cpf: mappedFields.has("cpf") ? cpfRaw : null,
+              matricula: mappedFields.has("matricula") ? matriculaRaw || null : null,
+              nome: mappedFields.has("nome") ? nameRaw || null : null,
+            });
+            // Identification is decided exclusively by the template's
+            // ordered attempts. Only a genuinely unmatched row reaches
+            // creation, which still needs the database-required CPF+Nome.
+            if (!match && (cpfDigits.length !== 11 || !nameRaw.trim())) {
               rows.push({
                 ...base,
                 pairClientId: null,
@@ -466,11 +479,6 @@ export default function ImportEmployeesPage() {
             // One row per valid cliente+empresa pair — the same colaborador
             // is checked (and later importable) independently in each.
             for (const pair of validPairs) {
-              const match = await findEmployeeByAttempts(pair.id, pair.companyId, selectedTemplate.identifierPriority, {
-                cpf: cpfRaw,
-                matricula: matriculaRaw || null,
-                nome: nameRaw || null,
-              });
               rows.push({
                 ...base,
                 pairClientId: pair.id,
@@ -478,7 +486,7 @@ export default function ImportEmployeesPage() {
                 pairCompanyId: pair.companyId,
                 pairCompanyName: pair.companyName,
                 match,
-                category: match ? "duplicate" : "valid",
+                category: match ? "update" : "valid",
               });
             }
           }
@@ -496,8 +504,9 @@ export default function ImportEmployeesPage() {
       const allRows = results.flatMap((r) => r.rows);
       const seenCpf = new Set<string>();
       for (const r of allRows) {
-        if (r.category !== "valid") continue;
-        const key = `${r.pairClientId}:${r.pairCompanyId}:${normalizeCpf(r.cpfRaw)}`;
+        if (r.category !== "valid" && r.category !== "update") continue;
+        const identity = r.match ? `employee:${r.match.id}` : `cpf:${normalizeCpf(r.cpfRaw)}`;
+        const key = `${r.pairClientId}:${r.pairCompanyId}:${identity}`;
         if (seenCpf.has(key)) {
           r.category = "duplicate-in-file";
         } else {
@@ -507,7 +516,7 @@ export default function ImportEmployeesPage() {
 
       const defaultSelected = new Set<number>();
       allRows.forEach((r, i) => {
-        if (r.category === "valid") defaultSelected.add(i);
+        if (r.category === "valid" || r.category === "update") defaultSelected.add(i);
       });
 
       setFileResults(results);
@@ -548,13 +557,21 @@ export default function ImportEmployeesPage() {
       for (let i = 0; i < employeeRows.length; i++) {
         if (!selectedRows.has(i)) continue;
         const row = employeeRows[i];
-        if (row.category !== "valid") continue;
+        if (row.category !== "valid" && row.category !== "update") continue;
+        const mappedFields = new Set(
+          selectedTemplate.groups
+            .find((group) => row.sheetName === null ? group.sheetNames.length === 0 : group.sheetNames.includes(row.sheetName))
+            ?.fieldMappings.map((mapping) => mapping.targetField) ?? [],
+        );
         importRows.push({
           clientId: row.pairClientId!,
           companyId: row.pairCompanyId!,
-          name: row.nameRaw.trim(),
-          cpf: row.cpfRaw,
+          employeeId: row.match?.id ?? null,
+          name: mappedFields.has("nome") ? row.nameRaw.trim() || null : null,
+          cpf: mappedFields.has("cpf") ? row.cpfRaw : null,
           matricula: row.matriculaRaw.trim() || null,
+          matriculaMapped: mappedFields.has("matricula"),
+          pixKeys: row.pixKeys,
         });
         savedFileHashes.add(employeeRowFileHash[i]);
       }
@@ -756,10 +773,9 @@ export default function ImportEmployeesPage() {
                       <Eye size={18} />
                       Pré-visualização da Importação
                     </h3>
-                    {duplicateCount > 0 ? (
+                    {updateCount > 0 ? (
                       <p className="muted" style={{ maxWidth: "42rem" }}>
-                        Algumas linhas batem com um colaborador já cadastrado — não são importadas
-                        automaticamente. Use "Ver colaborador" para revisar manualmente.
+                        Algumas linhas correspondem a colaboradores cadastrados e atualizarão somente os campos mapeados.
                       </p>
                     ) : (
                       <p className="muted">Revise os dados antes de confirmar.</p>
@@ -798,15 +814,15 @@ export default function ImportEmployeesPage() {
                       <CheckCircle2 size={13} />
                       {categoryCounts.valid} novo(s)
                     </button>
-                    {duplicateCount > 0 && (
+                    {updateCount > 0 && (
                       <button
                         type="button"
-                        className={`badge warn chip-filter${rowFilter === "duplicate" ? " active" : ""}`}
-                        onClick={() => toggleRowFilter("duplicate")}
-                        title="Já existe um colaborador cadastrado com esse identificador. Clique para filtrar."
+                        className={`badge warn chip-filter${rowFilter === "update" ? " active" : ""}`}
+                        onClick={() => toggleRowFilter("update")}
+                        title="Colaborador encontrado pelas tentativas de identificação do template; os campos mapeados serão atualizados."
                       >
                         <AlertTriangle size={13} />
-                        {duplicateCount} já cadastrado(s)
+                        {updateCount} a atualizar
                       </button>
                     )}
                     {duplicateInFileCount > 0 && (
@@ -882,6 +898,7 @@ export default function ImportEmployeesPage() {
                         <th>CPF</th>
                         <th>Matrícula</th>
                         <th>Nome</th>
+                        <th>PIX</th>
                         <th>Cliente</th>
                         <th>Empresa</th>
                         <th>Status</th>
@@ -890,7 +907,7 @@ export default function ImportEmployeesPage() {
                     <tbody>
                       {previewRows.length === 0 && rowFilter !== "all" && (
                         <tr>
-                          <td colSpan={8} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
+                          <td colSpan={9} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
                             Nenhuma linha nesta categoria.
                           </td>
                         </tr>
@@ -902,7 +919,7 @@ export default function ImportEmployeesPage() {
                               <td className="checkbox-cell">
                                 <input type="checkbox" disabled aria-label="Não disponível" />
                               </td>
-                              <td colSpan={6}>
+                              <td colSpan={7}>
                                 <div className="file-name">{item.fileName}</div>
                                 <div className="muted">{item.message}</div>
                               </td>
@@ -941,6 +958,13 @@ export default function ImportEmployeesPage() {
                                 {row.nameRaw || "—"}
                               </div>
                             </td>
+                            <td>
+                              {row.pixKeys.length === 0 ? <span className="muted">—</span> : row.pixKeys.map((key) => (
+                                <div key={key} title={key} style={{ marginBottom: "0.2rem", fontSize: "0.78rem", maxWidth: "14rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {key}
+                                </div>
+                              ))}
+                            </td>
                             <td>{row.pairClientName ?? <span className="muted">—</span>}</td>
                             <td>{row.pairCompanyName ?? <span className="muted">—</span>}</td>
                             <td>
@@ -950,11 +974,11 @@ export default function ImportEmployeesPage() {
                                   Novo
                                 </span>
                               )}
-                              {row.category === "duplicate" && (
+                              {row.category === "update" && (
                                 <div style={{ marginBottom: "0.3rem" }}>
                                   <span className="badge warn">
                                     <AlertTriangle size={13} />
-                                    Já cadastrado
+                                    Atualizar
                                   </span>
                                   {row.match && (
                                     <div style={{ marginTop: "0.25rem" }}>
@@ -974,8 +998,8 @@ export default function ImportEmployeesPage() {
                                 </span>
                               )}
                               {row.category === "skipped" && (
-                                <span className="badge neutral" title="CPF inválido ou Nome ausente nesta linha">
-                                  CPF ou nome ausente
+                                <span className="badge neutral" title="Nenhuma tentativa do template encontrou um colaborador e a linha não possui CPF e Nome válidos para criar um novo cadastro.">
+                                  Não importável
                                 </span>
                               )}
                             </td>

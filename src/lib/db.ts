@@ -3,6 +3,7 @@ import Database from "@tauri-apps/plugin-sql";
 import { overtimeMinutesForDay, sumIntervalMinutes } from "./analysis";
 import { normalizeCnpj, normalizeCpf, parseTimeToMinutes } from "./format";
 import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "./periodStatus";
+import { detectPixKeyType, type PixKeyType } from "./pix";
 import type {
   ConflictInfo,
   DuplicateFileInfo,
@@ -1112,6 +1113,7 @@ export async function deleteEmployee(employeeId: number): Promise<void> {
   await db.execute("DELETE FROM imports WHERE employee_id = $1", [employeeId]);
   await db.execute("DELETE FROM payment_shifts WHERE employee_id = $1", [employeeId]);
   await db.execute("DELETE FROM employee_aliases WHERE employee_id = $1", [employeeId]);
+  await db.execute("DELETE FROM employee_pix_keys WHERE employee_id = $1", [employeeId]);
   await db.execute("DELETE FROM employee_client_companies WHERE employee_id = $1", [employeeId]);
   await db.execute("DELETE FROM employees WHERE id = $1", [employeeId]);
 }
@@ -3044,9 +3046,14 @@ export async function deleteEmployeeTemplate(id: number): Promise<void> {
 export interface EmployeeImportRow {
   clientId: number;
   companyId: number;
-  name: string;
-  cpf: string;
+  /** Existing employee resolved during preview; null means create by CPF. */
+  employeeId: number | null;
+  /** Null means the field was not mapped and the saved value must be preserved. */
+  name: string | null;
+  cpf: string | null;
   matricula: string | null;
+  matriculaMapped: boolean;
+  pixKeys: string[];
 }
 
 /**
@@ -3062,20 +3069,83 @@ export interface EmployeeImportRow {
 export async function createEmployeesFromImport(rows: EmployeeImportRow[]): Promise<void> {
   const db = await getDb();
   for (const row of rows) {
-    const normalizedCpf = normalizeCpf(row.cpf);
-    const existing = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1", [normalizedCpf]);
+    const normalizedCpf = row.cpf === null ? "" : normalizeCpf(row.cpf);
+    const existing = row.employeeId !== null
+      ? [{ id: row.employeeId }]
+      : await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1", [normalizedCpf]);
     let employeeId: number;
     if (existing.length > 0) {
       employeeId = existing[0].id;
+      if (row.name?.trim()) {
+        await db.execute("UPDATE employees SET name = $1 WHERE id = $2", [row.name.trim(), employeeId]);
+      }
+      if (row.cpf !== null) {
+        if (normalizedCpf.length !== 11) throw new Error("CPF mapeado deve ter 11 dígitos.");
+        const cpfOwner = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1 AND id != $2", [
+          normalizedCpf,
+          employeeId,
+        ]);
+        if (cpfOwner.length > 0) throw new Error("O CPF mapeado já pertence a outro colaborador.");
+        await db.execute("UPDATE employees SET cpf = $1 WHERE id = $2", [normalizedCpf, employeeId]);
+      }
     } else {
+      if (normalizedCpf.length !== 11 || !row.name?.trim()) {
+        throw new Error("Para criar um colaborador novo, a linha precisa ter CPF válido e Nome.");
+      }
       const result = await db.execute("INSERT INTO employees (name, cpf) VALUES ($1, $2)", [
         row.name.trim(),
         normalizedCpf,
       ]);
       employeeId = result.lastInsertId as number;
     }
-    await linkEmployeeToClientCompany(employeeId, row.clientId, row.companyId, row.matricula);
+    const currentLink = await db.select<{ id: number }[]>(
+      "SELECT rowid AS id FROM employee_client_companies WHERE employee_id = $1 AND client_id = $2 AND company_id = $3",
+      [employeeId, row.clientId, row.companyId],
+    );
+    if (currentLink.length === 0 || row.matriculaMapped) {
+      await linkEmployeeToClientCompany(employeeId, row.clientId, row.companyId, row.matricula);
+    }
+    for (const keyValue of row.pixKeys) {
+      await addEmployeePixKey(employeeId, keyValue, detectPixKeyType(keyValue));
+    }
   }
+}
+
+export interface EmployeePixKeyRow {
+  id: number;
+  employeeId: number;
+  keyValue: string;
+  keyType: PixKeyType;
+}
+
+export async function listEmployeePixKeys(employeeId: number): Promise<EmployeePixKeyRow[]> {
+  const db = await getDb();
+  return db.select<EmployeePixKeyRow[]>(
+    `SELECT id, employee_id AS employeeId, key_value AS keyValue, key_type AS keyType
+     FROM employee_pix_keys WHERE employee_id = $1 ORDER BY id`,
+    [employeeId],
+  );
+}
+
+export async function addEmployeePixKey(employeeId: number, rawValue: string, keyType?: PixKeyType): Promise<void> {
+  const db = await getDb();
+  const keyValue = rawValue.trim();
+  if (!keyValue) throw new Error("Informe uma chave PIX.");
+  await db.execute(
+    `INSERT INTO employee_pix_keys (employee_id, key_value, key_type) VALUES ($1, $2, $3)
+     ON CONFLICT(employee_id, key_value) DO UPDATE SET key_type = excluded.key_type`,
+    [employeeId, keyValue, keyType ?? detectPixKeyType(keyValue)],
+  );
+}
+
+export async function updateEmployeePixKeyType(id: number, keyType: PixKeyType): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE employee_pix_keys SET key_type = $1 WHERE id = $2", [keyType, id]);
+}
+
+export async function removeEmployeePixKey(id: number): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM employee_pix_keys WHERE id = $1", [id]);
 }
 
 export interface EmployeeAliasRow {
@@ -5103,12 +5173,14 @@ export async function clearAllData(options: ClearDataOptions = {}): Promise<void
   }
 
   if (!keepEmployees) {
-    // employee_aliases.employee_id is NOT NULL REFERENCES employees(id)
+    // Employee-owned auxiliary rows have NOT NULL foreign keys and must go
+    // before their employees when FK enforcement is enabled.
+    await db.execute("DELETE FROM employee_pix_keys");
     // with FK enforcement on for this connection (confirmed by a real
     // SQLITE_CONSTRAINT_FOREIGNKEY here) — has to go first.
     await db.execute("DELETE FROM employee_aliases");
     await db.execute("DELETE FROM employees");
-    clearedTables.push("employee_aliases", "employees");
+    clearedTables.push("employee_pix_keys", "employee_aliases", "employees");
   }
   if (!keepClients) {
     // A surviving payment template's routing rule still requires a real

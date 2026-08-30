@@ -179,10 +179,8 @@ pub fn preview(
 pub struct GroupSpec {
     /// Empty for csv — there's exactly one implicit group.
     pub sheet_names: Vec<String>,
-    /// (columnLetter, targetField) pairs — deliberately a tuple list, not a
-    /// map, since duplicate target fields across columns should never
-    /// happen (the wizard already prevents it) but a tuple list doesn't
-    /// need to care either way.
+    /// (columnLetter, targetField) pairs — deliberately a tuple list because
+    /// PIX may be mapped from several columns for the same employee.
     pub field_mappings: Vec<(String, String)>,
 }
 
@@ -234,6 +232,25 @@ fn is_blank_row(fields: &HashMap<String, String>) -> bool {
     fields.values().all(|v| v.trim().is_empty())
 }
 
+/// Most targets are unique in the wizard. PIX is repeatable, so preserve
+/// every mapped PIX column by joining its raw values; the employee importer
+/// splits them back into individual keys.
+fn insert_mapped_value(fields: &mut HashMap<String, String>, target: &str, value: String) {
+    if target == "pix" && !value.is_empty() {
+        fields
+            .entry(target.to_string())
+            .and_modify(|current| {
+                if !current.is_empty() {
+                    current.push('\n');
+                }
+                current.push_str(&value);
+            })
+            .or_insert(value);
+    } else {
+        fields.insert(target.to_string(), value);
+    }
+}
+
 /// Reads every non-blank row of `path` according to `groups`' column
 /// mappings — the real, unbounded counterpart to `preview`. There's no
 /// header-row skip: every physical row (blank ones aside) comes back as
@@ -270,15 +287,13 @@ pub fn apply_template(
         for (i, record) in reader.records().enumerate() {
             let row_number = (i + 1) as u32;
             let record = record.map_err(friendly_csv_error)?;
-            let fields: HashMap<String, String> = group
-                .field_mappings
-                .iter()
-                .filter_map(|(letter, target_field)| {
-                    let index = column_index(letter)?;
+            let mut fields: HashMap<String, String> = HashMap::new();
+            for (letter, target_field) in &group.field_mappings {
+                if let Some(index) = column_index(letter) {
                     let value = record.get(index).unwrap_or("").trim().to_string();
-                    Some((target_field.clone(), value))
-                })
-                .collect();
+                    insert_mapped_value(&mut fields, target_field, value);
+                }
+            }
             if is_blank_row(&fields) {
                 continue;
             }
@@ -316,12 +331,10 @@ pub fn apply_template(
                 .map_err(friendly_calamine_error)?;
             for (i, row) in range.rows().enumerate() {
                 let row_number = (i + 1) as u32;
-                let fields: HashMap<String, String> = group
-                    .field_mappings
-                    .iter()
-                    .filter_map(|(letter, target_field)| {
-                        let index = column_index(letter)?;
-                        let cell = row.get(index)?;
+                let mut fields: HashMap<String, String> = HashMap::new();
+                for (letter, target_field) in &group.field_mappings {
+                    if let Some(index) = column_index(letter) {
+                        let Some(cell) = row.get(index) else { continue };
                         // A native date cell's Display impl prints the raw
                         // Excel serial number, not a usable date — convert
                         // it properly for the one field that needs a real
@@ -335,9 +348,9 @@ pub fn apply_template(
                         } else {
                             cell.to_string()
                         };
-                        Some((target_field.clone(), value.trim().to_string()))
-                    })
-                    .collect();
+                        insert_mapped_value(&mut fields, target_field, value.trim().to_string());
+                    }
+                }
                 if is_blank_row(&fields) {
                     continue;
                 }

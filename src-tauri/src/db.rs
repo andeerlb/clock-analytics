@@ -454,5 +454,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0074_payment_audits.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 75,
+            description: "adds employee_pix_keys — a colaborador can have multiple PIX keys, each with an automatically detected but user-editable type",
+            sql: include_str!("../migrations/0075_employee_pix_keys.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

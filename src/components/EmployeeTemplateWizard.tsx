@@ -45,7 +45,6 @@ import { columnLetter, fileNameFromPath } from "../lib/format";
 import {
   EMPLOYEE_TARGET_FIELDS,
   EMPLOYEE_TARGET_FIELD_LABELS,
-  REQUIRED_EMPLOYEE_FIELDS,
   type EmployeeTargetField,
   type EmployeeTemplateGroup,
   type EmployeeTemplateRow,
@@ -399,6 +398,14 @@ export default function EmployeeTemplateWizard({
     });
   }
 
+  function selectAllSheets() {
+    setIncludedSheets(new Set(sheets));
+  }
+
+  function deselectAllSheets() {
+    setIncludedSheets(new Set());
+  }
+
   function renameSheet(oldName: string, rawNewName: string) {
     const newName = rawNewName.trim();
     if (!newName || newName === oldName) {
@@ -547,9 +554,14 @@ export default function EmployeeTemplateWizard({
       if (!field) {
         delete current[colIndex];
       } else {
-        for (const k of Object.keys(current)) {
-          const idx = Number(k);
-          if (idx !== colIndex && current[idx] === field) delete current[idx];
+        // PIX is intentionally repeatable: one employee can have several
+        // keys spread across multiple source columns. Identity fields stay
+        // one-column-only as before.
+        if (field !== "pix") {
+          for (const k of Object.keys(current)) {
+            const idx = Number(k);
+            if (idx !== colIndex && current[idx] === field) delete current[idx];
+          }
         }
         current[colIndex] = field;
       }
@@ -583,7 +595,9 @@ export default function EmployeeTemplateWizard({
 
   function isGroupMappingValid(key: string): boolean {
     const fields = new Set(Object.values(groupMapping[key] ?? {}));
-    return REQUIRED_EMPLOYEE_FIELDS.every((f) => fields.has(f));
+    return identifierAttempts.some(
+      (attempt) => attempt.fields.length > 0 && attempt.fields.every((field) => fields.has(field)),
+    );
   }
 
   function addIdentifierAttempt() {
@@ -689,17 +703,20 @@ export default function EmployeeTemplateWizard({
         setError("Nenhuma configuração de colunas para mapear.");
         return;
       }
-      const invalidKey = includedGroupKeys.find((k) => !isGroupMappingValid(k));
-      if (invalidKey) {
-        setError(`"${invalidKey}": mapeie CPF e Nome antes de avançar.`);
-        return;
-      }
+      // The attempts themselves are configured on the next step. Their
+      // compatibility with every included group is validated on Save.
     }
     setStepIndex((s) => s + 1);
   }
 
   async function handleSave() {
     if (!fileKind || !name.trim()) return;
+    const invalidKey = includedGroupKeys.find((key) => !isGroupMappingValid(key));
+    if (invalidKey) {
+      setError(`"${invalidKey}": nenhuma tentativa de identificação configurada possui todos os campos mapeados nesta aba.`);
+      setStepIndex(steps.indexOf("mapping"));
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -917,6 +934,18 @@ export default function EmployeeTemplateWizard({
                     <p className="muted">
                       {sheets.length === 1 ? "Aba carregada neste template" : "Selecione a aba para configurar"}
                     </p>
+                    {sheets.length > 1 && (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.4rem", marginTop: "0.65rem" }}>
+                        <button type="button" className="outline" onClick={selectAllSheets} disabled={includedSheets.size === sheets.length} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "0.3rem", padding: "0.38rem 0.4rem", fontSize: "0.7rem", whiteSpace: "nowrap" }}>
+                          <CheckSquare size={12} />
+                          Selecionar todas
+                        </button>
+                        <button type="button" className="outline" onClick={deselectAllSheets} disabled={includedSheets.size === 0} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "0.3rem", padding: "0.38rem 0.4rem", fontSize: "0.7rem", whiteSpace: "nowrap" }}>
+                          <Square size={12} />
+                          Desmarcar todas
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <nav className="mapping-sidebar-nav">
                     {sheets.map((s) => {
@@ -972,7 +1001,7 @@ export default function EmployeeTemplateWizard({
                             {mirroring && <span className="mapping-sidebar-mirroring"> → {mirroring}</span>}
                           </span>
                           {included && !isGroupMappingValid(groupKey) && (
-                            <span className="mapping-sidebar-warn" title="Faltam mapear CPF e/ou Nome">
+                            <span className="mapping-sidebar-warn" title="Nenhuma tentativa de identificação possui todos os seus campos mapeados">
                               •
                             </span>
                           )}

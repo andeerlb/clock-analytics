@@ -478,18 +478,16 @@ export interface PaymentTemplateRow extends PaymentTemplateListRow {
  * a mapped row's raw field keys line up unchanged with the existing
  * IdentifierAttempt/findEmployeeByAttempts machinery.
  */
-export type EmployeeTargetField = "cpf" | "matricula" | "nome";
+export type EmployeeTargetField = "cpf" | "matricula" | "nome" | "pix";
 
-export const EMPLOYEE_TARGET_FIELDS: EmployeeTargetField[] = ["cpf", "matricula", "nome"];
+export const EMPLOYEE_TARGET_FIELDS: EmployeeTargetField[] = ["cpf", "matricula", "nome", "pix"];
 
 export const EMPLOYEE_TARGET_FIELD_LABELS: Record<EmployeeTargetField, string> = {
   cpf: "CPF",
   matricula: "Matrícula",
   nome: "Nome",
+  pix: "PIX",
 };
-
-/** Mapping both of these is required for a group to be usable — both are NOT NULL columns on `employees`. matricula stays optional. */
-export const REQUIRED_EMPLOYEE_FIELDS: EmployeeTargetField[] = ["cpf", "nome"];
 
 export interface EmployeeTemplateFieldMapping {
   columnLetter: string;

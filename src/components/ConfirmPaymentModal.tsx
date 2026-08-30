@@ -1,6 +1,6 @@
-import { AlertTriangle, Info } from "lucide-react";
-import { useState } from "react";
-import type { ShiftFieldDiffRow } from "../lib/db";
+import { AlertTriangle, Check, Copy, Info, KeyRound } from "lucide-react";
+import { useEffect, useState } from "react";
+import { listEmployeePixKeys, type EmployeePixKeyRow, type ShiftFieldDiffRow } from "../lib/db";
 import {
   centsMaskToAmount,
   diffFieldLabel,
@@ -10,6 +10,7 @@ import {
   shiftDurationMinutes,
 } from "../lib/format";
 import type { PaymentShiftRow } from "../lib/types";
+import { PIX_KEY_TYPE_LABELS } from "../lib/pix";
 import Avatar from "./Avatar";
 import CurrencyInput from "./CurrencyInput";
 import Modal, { useModalClose } from "./Modal";
@@ -59,6 +60,37 @@ export default function ConfirmPaymentModal({
   onCancel: () => void;
 }) {
   const [digits, setDigits] = useState(suggestedAmount !== null ? String(Math.round(suggestedAmount * 100)) : "");
+  const [pixKeys, setPixKeys] = useState<EmployeePixKeyRow[]>([]);
+  const [loadingPixKeys, setLoadingPixKeys] = useState(true);
+  const [pixError, setPixError] = useState<string | null>(null);
+  const [copiedPixId, setCopiedPixId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingPixKeys(true);
+    setPixError(null);
+    listEmployeePixKeys(shift.employeeId)
+      .then((keys) => {
+        if (!cancelled) setPixKeys(keys);
+      })
+      .catch((err) => {
+        if (!cancelled) setPixError(String(err instanceof Error ? err.message : err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPixKeys(false);
+      });
+    return () => { cancelled = true; };
+  }, [shift.employeeId]);
+
+  async function copyPixKey(key: EmployeePixKeyRow) {
+    try {
+      await navigator.clipboard.writeText(key.keyValue);
+      setCopiedPixId(key.id);
+      window.setTimeout(() => setCopiedPixId((current) => current === key.id ? null : current), 1800);
+    } catch {
+      setPixError("Não foi possível copiar a chave PIX. Selecione o texto e copie manualmente.");
+    }
+  }
 
   const amountValid = digits !== "";
   const hasSchedule = shift.scheduleStartMinutes !== null && shift.scheduleEndMinutes !== null;
@@ -108,6 +140,54 @@ export default function ConfirmPaymentModal({
             </div>
           </div>
         </div>
+      </div>
+      <div style={{ marginBottom: "1rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.45rem" }}>
+          <KeyRound size={14} />
+          Chaves PIX
+        </div>
+        {loadingPixKeys ? (
+          <div className="muted" style={{ fontSize: "0.82rem" }}>Carregando chaves…</div>
+        ) : pixError ? (
+          <div className="error-box" style={{ margin: 0 }}>{pixError}</div>
+        ) : pixKeys.length === 0 ? (
+          <div className="info-box" style={{ margin: 0 }}>
+            <Info size={14} style={{ flexShrink: 0 }} />
+            <span>Nenhuma chave PIX cadastrada para este colaborador.</span>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+            {pixKeys.map((key) => {
+              const copied = copiedPixId === key.id;
+              return (
+                <button
+                  key={key.id}
+                  type="button"
+                  className={`pix-copy-row${copied ? " copied" : ""}`}
+                  onClick={() => copyPixKey(key)}
+                  title={copied ? "Chave copiada" : `Clique para copiar: ${key.keyValue}`}
+                  aria-label={`Copiar chave PIX ${key.keyValue}`}
+                  style={{
+                    width: "100%",
+                    display: "grid",
+                    gridTemplateColumns: "6.5rem minmax(0, 1fr) auto",
+                    alignItems: "center",
+                    gap: "0.75rem",
+                    padding: "0.78rem 0.85rem",
+                    textAlign: "left",
+                  }}
+                >
+                  <span className="muted" style={{ fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase" }}>{PIX_KEY_TYPE_LABELS[key.keyType]}</span>
+                  <span style={{ minWidth: 0, overflowWrap: "anywhere", userSelect: "text", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: "0.96rem", fontWeight: 650, letterSpacing: "0.025em" }}>{key.keyValue}</span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", color: copied ? "var(--success)" : "var(--text-muted)", fontSize: "0.74rem" }}>
+                    {copied ? <Check size={14} /> : <Copy size={14} />}
+                    {copied && "Copiada"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
       {changes.length > 0 && (
         <div className="warning-box">

@@ -1,4 +1,4 @@
-import { Briefcase, Info, Plus, Tags, Trash2, X } from "lucide-react";
+import { Briefcase, Info, KeyRound, Plus, Tags, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
@@ -6,21 +6,27 @@ import ConfirmModal from "../components/ConfirmModal";
 import FormPanel from "../components/FormPanel";
 import {
   addEmployeeAlias,
+  addEmployeePixKey,
   createEmployeeManual,
   deleteEmployee,
   getEmployee,
   linkEmployeeToClientCompany,
   listClients,
   listEmployeeAliases,
+  listEmployeePixKeys,
   removeEmployeeAlias,
+  removeEmployeePixKey,
   unlinkEmployeeClientCompany,
   updateEmployee,
   updateEmployeeClientCompanyMatricula,
+  updateEmployeePixKeyType,
   type ClientRow,
   type EmployeeAliasRow,
   type EmployeeClientCompanyLink,
+  type EmployeePixKeyRow,
 } from "../lib/db";
 import { maskCpf } from "../lib/format";
+import { detectPixKeyType, PIX_KEY_TYPE_LABELS, PIX_KEY_TYPES, type PixKeyType } from "../lib/pix";
 
 /**
  * What a "Cadastrar colaborador" shortcut (e.g. from the payment import
@@ -64,6 +70,10 @@ export default function EmployeeFormPage() {
   const [newAlias, setNewAlias] = useState("");
   const [aliasBusy, setAliasBusy] = useState(false);
   const [aliasError, setAliasError] = useState<string | null>(null);
+  const [pixKeys, setPixKeys] = useState<EmployeePixKeyRow[]>([]);
+  const [newPixKey, setNewPixKey] = useState("");
+  const [pixBusy, setPixBusy] = useState(false);
+  const [pixError, setPixError] = useState<string | null>(null);
 
   // "Vincular a outro cliente/empresa" — edit mode only.
   const [addClientId, setAddClientId] = useState("");
@@ -104,6 +114,7 @@ export default function EmployeeFormPage() {
         .catch((e) => setError(String(e instanceof Error ? e.message : e)))
         .finally(() => setLoading(false));
       listEmployeeAliases(Number(id)).then(setAliases);
+      listEmployeePixKeys(Number(id)).then(setPixKeys);
     }
   }, [id, isEditing]);
 
@@ -183,6 +194,42 @@ export default function EmployeeFormPage() {
   async function handleRemoveAlias(aliasId: number) {
     await removeEmployeeAlias(aliasId);
     setAliases((prev) => prev.filter((a) => a.id !== aliasId));
+  }
+
+  async function handleAddPixKey(e: React.FormEvent) {
+    e.preventDefault();
+    setPixError(null);
+    setPixBusy(true);
+    try {
+      await addEmployeePixKey(Number(id), newPixKey, detectPixKeyType(newPixKey));
+      setNewPixKey("");
+      setPixKeys(await listEmployeePixKeys(Number(id)));
+    } catch (err) {
+      setPixError(String(err instanceof Error ? err.message : err));
+    } finally {
+      setPixBusy(false);
+    }
+  }
+
+  async function handlePixTypeChange(key: EmployeePixKeyRow, keyType: PixKeyType) {
+    setPixKeys((previous) => previous.map((item) => item.id === key.id ? { ...item, keyType } : item));
+    setPixError(null);
+    try {
+      await updateEmployeePixKeyType(key.id, keyType);
+    } catch (err) {
+      setPixKeys((previous) => previous.map((item) => item.id === key.id ? key : item));
+      setPixError(String(err instanceof Error ? err.message : err));
+    }
+  }
+
+  async function handleRemovePixKey(keyId: number) {
+    setPixError(null);
+    try {
+      await removeEmployeePixKey(keyId);
+      setPixKeys((previous) => previous.filter((key) => key.id !== keyId));
+    } catch (err) {
+      setPixError(String(err instanceof Error ? err.message : err));
+    }
   }
 
   // `clients` has one row per (client, company) link — same pattern as the
@@ -352,6 +399,51 @@ export default function EmployeeFormPage() {
 
         {!loading && isEditing && (
           <FormPanel
+            icon={KeyRound}
+            title="Chaves PIX"
+            description="Um colaborador pode ter várias chaves. O tipo é detectado automaticamente na importação e pode ser corrigido aqui."
+          >
+            {pixError && <div className="error-box">{pixError}</div>}
+            {pixKeys.length > 0 && (
+              <div className="file-list" style={{ marginBottom: "0.8rem" }}>
+                {pixKeys.map((key) => (
+                  <div className="file-row" key={key.id}>
+                    <div className="file-row-info" style={{ minWidth: 0 }}>
+                      <div className="file-name" style={{ overflowWrap: "anywhere" }}>{key.keyValue}</div>
+                    </div>
+                    <select
+                      value={key.keyType}
+                      onChange={(e) => handlePixTypeChange(key, e.target.value as PixKeyType)}
+                      aria-label={`Tipo da chave ${key.keyValue}`}
+                      style={{ width: "9rem" }}
+                    >
+                      {PIX_KEY_TYPES.map((type) => <option key={type} value={type}>{PIX_KEY_TYPE_LABELS[type]}</option>)}
+                    </select>
+                    <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={() => handleRemovePixKey(key.id)} aria-label="Remover chave PIX">
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <form onSubmit={handleAddPixKey} style={{ display: "flex", gap: "0.5rem" }}>
+              <input
+                type="text"
+                value={newPixKey}
+                onChange={(e) => setNewPixKey(e.target.value)}
+                placeholder="CPF, CNPJ, telefone, e-mail ou chave aleatória"
+                style={{ flex: 1 }}
+              />
+              <button type="submit" className="secondary" disabled={pixBusy || !newPixKey.trim()}>
+                <Plus size={14} style={{ marginRight: "0.3rem" }} />
+                Adicionar
+              </button>
+            </form>
+          </FormPanel>
+        )}
+
+        {!loading && isEditing && (
+          <FormPanel
             icon={Briefcase}
             title="Clientes e empresas vinculados"
             description="Um colaborador pode estar vinculado a mais de um cliente e, para cada cliente, a mais de uma empresa (ex.: contratado por duas empresas diferentes que atendem o mesmo cliente) — cada vínculo tem sua própria matrícula, já que ela é emitida pela folha de pagamento de cada empresa."
@@ -500,7 +592,7 @@ export default function EmployeeFormPage() {
             icon={Trash2}
             title="Excluir colaborador"
             danger
-            description={`Remove ${name || "este colaborador"} do cadastro, junto com todo o histórico vinculado a ele — turnos de pagamento, cartões de ponto e apelidos. Não pode ser desfeito.`}
+            description={`Remove ${name || "este colaborador"} do cadastro, junto com todo o histórico vinculado a ele — turnos de pagamento, cartões de ponto, chaves PIX e apelidos. Não pode ser desfeito.`}
           >
             <button type="button" className="danger" onClick={() => setDeleteConfirmOpen(true)}>
               <Trash2 size={14} style={{ marginRight: "0.4rem" }} />
@@ -513,7 +605,7 @@ export default function EmployeeFormPage() {
       {deleteConfirmOpen && (
         <ConfirmModal
           title="Excluir colaborador?"
-          message={`Isso exclui ${name || "este colaborador"} permanentemente, junto com todo o histórico vinculado a ele — turnos de pagamento, cartões de ponto e apelidos cadastrados. Não pode ser desfeito.`}
+          message={`Isso exclui ${name || "este colaborador"} permanentemente, junto com todo o histórico vinculado a ele — turnos de pagamento, cartões de ponto, chaves PIX e apelidos cadastrados. Não pode ser desfeito.`}
           confirmLabel={deleting ? "Excluindo..." : "Excluir colaborador"}
           confirmDisabled={deleting}
           onConfirm={handleConfirmDelete}
