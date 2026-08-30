@@ -1,11 +1,13 @@
-import { Bell, ChevronRight } from "lucide-react";
+import { Bell, CheckCheck, ChevronDown, ChevronRight, Clock3, FileSpreadsheet } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { deletePaymentShift, dismissCheckDiffs, listAllLatestShiftDiffs, type CheckDiffRow } from "../lib/db";
 import { acceptShiftChange } from "../lib/remoteCheckDiff";
+import { formatCountdown, formatDateAbbrevYY, formatDateTime, parseSqliteDateTime, resolveReimportConfigLabel } from "../lib/format";
 import ChangeDiffPanel from "./ChangeDiffPanel";
 import Drawer from "./Drawer";
+import PillButton from "./PillButton";
 
 /** `.app-nav`'s own width (App.css) — the floating card can be dragged anywhere EXCEPT over the sidebar; that column is real layout, not an overlay, so this is the one thing that never moves either. */
 const SIDEBAR_WIDTH = 220;
@@ -57,7 +59,7 @@ function clampCardPosition(top: number, left: number, width: number, height: num
 export default function PendingChangesTab() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { trackedFiles, reimportConfigs } = useRemoteFileUpdates();
+  const { trackedFiles, reimportConfigs, checkingConfigIds } = useRemoteFileUpdates();
   const [rows, setRows] = useState<CheckDiffRow[]>([]);
   const [open, setOpen] = useState(false);
 
@@ -67,6 +69,13 @@ export default function PendingChangesTab() {
   const [markedShiftIds, setMarkedShiftIds] = useState<Set<number>>(new Set());
   const [dismissingIds, setDismissingIds] = useState<Set<number>>(new Set());
   const [actionError, setActionError] = useState<string | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // Drag state — `position` is `null` until the very first drag, meaning
   // "use the CSS top-right default" (`top`/`right` in the style below);
@@ -196,6 +205,19 @@ export default function PendingChangesTab() {
     }
   }
 
+  async function handleDismissAll() {
+    await handleDismiss(unseenRows.map((row) => row.id));
+  }
+
+  function toggleGroup(key: string) {
+    setCollapsedGroups((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
   /** "Reprocessar agora" on an 'unresolved' card — closes this Drawer first since the navigation takes over the screen anyway. */
   function handleReprocess(configId: number, periodStart: string | null, periodEnd: string | null) {
     setOpen(false);
@@ -206,6 +228,107 @@ export default function PendingChangesTab() {
 
   const pending = rows.filter((r) => !r.applied);
   const applied = rows.filter((r) => r.applied);
+  const dismissingAll = unseenRows.length > 0 && unseenRows.every((row) => dismissingIds.has(row.id));
+
+  function renderGroups(groupRows: CheckDiffRow[], appliedGroup = false) {
+    const groups = new Map<string, CheckDiffRow[]>();
+    for (const row of groupRows) {
+      const key = `${row.checkLogId}:${row.configId ?? "file"}`;
+      groups.set(key, [...(groups.get(key) ?? []), row]);
+    }
+
+    const sortedGroups = Array.from(groups.entries()).sort(([, a], [, b]) => {
+      const priority = (entries: CheckDiffRow[]) => {
+        if (entries.some((row) => row.changeKind === "error")) return 0;
+        if (entries.some((row) => row.dismissedAt === null)) return 1;
+        return 2;
+      };
+      return priority(a) - priority(b) || b[0].checkLogId - a[0].checkLogId;
+    });
+
+    return sortedGroups.map(([key, entries]) => {
+      const first = entries[0];
+      const config = first.configId === null ? undefined : reimportConfigs.find((item) => item.id === first.configId);
+      const trackedFile = trackedFiles.find((item) => item.sourceUrl === first.sourceUrl);
+      const fileName = trackedFile?.fileName || (() => {
+        try { return decodeURIComponent(new URL(first.sourceUrl).pathname.split("/").pop() || "Arquivo rastreado"); }
+        catch { return "Arquivo rastreado"; }
+      })();
+      const ruleLabel = config ? resolveReimportConfigLabel(config) : first.configLabel || "Verificação do arquivo";
+      const period = first.periodStart && first.periodStart === first.periodEnd
+        ? formatDateAbbrevYY(first.periodStart)
+        : first.periodStart || first.periodEnd
+          ? `${first.periodStart ? formatDateAbbrevYY(first.periodStart) : "início"} – ${first.periodEnd ? formatDateAbbrevYY(first.periodEnd) : "hoje"}`
+          : "Todo o relatório";
+      const nextAt = config && !config.checkDisabled
+        ? (config.lastCheckedAt ? parseSqliteDateTime(config.lastCheckedAt).getTime() + config.checkIntervalMinutes * 60_000 : now)
+        : null;
+      const isChecking = config
+        ? checkingConfigIds.has(config.id)
+        : reimportConfigs.some((item) => item.sourceUrl === first.sourceUrl && checkingConfigIds.has(item.id));
+      const groupUnseen = entries.filter((row) => row.dismissedAt === null);
+      const groupSeenCount = entries.length - groupUnseen.length;
+      const dismissingGroup = groupUnseen.length > 0 && groupUnseen.every((row) => dismissingIds.has(row.id));
+      const collapsed = collapsedGroups.has(key);
+      const lastCheckTitle = config?.lastCheckedAt
+        ? `Última análise: ${formatDateTime(config.lastCheckedAt)}`
+        : "Esta configuração ainda não foi analisada";
+
+      return (
+        <section key={key} style={{ border: "1px solid var(--border-soft)", borderRadius: 10, overflow: "hidden", marginBottom: "0.65rem" }}>
+          <div style={{ padding: "0.65rem 0.75rem", background: "var(--surface-variant)", borderBottom: collapsed ? "none" : "1px solid var(--border-soft)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 650, fontSize: "0.82rem" }}>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => toggleGroup(key)}
+                aria-expanded={!collapsed}
+                title={collapsed ? "Expandir grupo" : "Recolher grupo"}
+                style={{ display: "flex", alignItems: "center", gap: "0.4rem", minWidth: 0, padding: 0, flex: 1, textAlign: "left", color: "inherit" }}
+              >
+                <ChevronDown size={14} style={{ flexShrink: 0, transform: collapsed ? "rotate(-90deg)" : undefined, transition: "transform 120ms ease" }} />
+                <FileSpreadsheet size={14} style={{ flexShrink: 0 }} />
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fileName}</span>
+              </button>
+              <span className="badge neutral" style={{ flexShrink: 0 }}>
+                {entries.length} {entries.length === 1 ? "notificação" : "notificações"}
+              </span>
+            </div>
+            <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.3rem" }}>
+              Configuração: {ruleLabel} · Analisado: {period}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.45rem", marginTop: "0.35rem" }}>
+              <div title={lastCheckTitle} style={{ display: "flex", alignItems: "center", gap: "0.3rem", color: nextAt === null ? "var(--text-muted)" : "var(--accent)", fontSize: "0.72rem", fontWeight: 600 }}>
+                <Clock3 size={12} />
+                {isChecking ? "Analisando agora…" : config?.checkDisabled ? "Análise automática pausada" : nextAt === null ? "Próxima análise indisponível" : `Próxima análise em ${formatCountdown(nextAt - now)}`}
+              </div>
+              <span className={`badge ${groupUnseen.length > 0 ? "warn" : "neutral"}`} style={{ marginLeft: "auto" }}>
+                {groupUnseen.length > 0 ? `${groupUnseen.length} pendente${groupUnseen.length === 1 ? "" : "s"}` : "Tudo visto"}
+              </span>
+              {groupSeenCount > 0 && groupUnseen.length > 0 && <span className="muted" style={{ fontSize: "0.7rem" }}>{groupSeenCount} visto{groupSeenCount === 1 ? "" : "s"}</span>}
+              {groupUnseen.length > 0 && (
+                <PillButton disabled={dismissingGroup} onClick={() => handleDismiss(groupUnseen.map((row) => row.id))}>
+                  <CheckCheck size={12} /> {dismissingGroup ? "Marcando…" : "Visto neste grupo"}
+                </PillButton>
+              )}
+            </div>
+          </div>
+          {!collapsed && <div style={{ padding: "0.65rem" }}>
+            <ChangeDiffPanel
+              rows={entries}
+              {...(!appliedGroup ? {
+                onAccept: handleAccept, acceptingShiftId, acceptedShiftIds,
+                onMarkDeleted: handleMarkDeleted, markingShiftId, markedShiftIds,
+                onReprocess: handleReprocess,
+              } : {})}
+              onDismiss={handleDismiss}
+              dismissingIds={dismissingIds}
+            />
+          </div>}
+        </section>
+      );
+    });
+  }
 
   return (
     <>
@@ -249,23 +372,19 @@ export default function PendingChangesTab() {
       >
         <div style={{ display: "flex", flexDirection: "column", gap: "1.2rem" }}>
           {actionError && <div className="error-box">{actionError}</div>}
+          {unseenRows.length > 0 && (
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <PillButton disabled={dismissingAll} onClick={handleDismissAll}>
+                <CheckCheck size={13} /> {dismissingAll ? "Marcando…" : `Visto em todos (${unseenRows.length})`}
+              </PillButton>
+            </div>
+          )}
           {pending.length > 0 && (
             <div>
               <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.5rem" }}>
                 Pendentes ({pending.length})
               </div>
-              <ChangeDiffPanel
-                rows={pending}
-                onAccept={handleAccept}
-                acceptingShiftId={acceptingShiftId}
-                acceptedShiftIds={acceptedShiftIds}
-                onMarkDeleted={handleMarkDeleted}
-                markingShiftId={markingShiftId}
-                markedShiftIds={markedShiftIds}
-                onDismiss={handleDismiss}
-                dismissingIds={dismissingIds}
-                onReprocess={handleReprocess}
-              />
+              {renderGroups(pending)}
             </div>
           )}
           {applied.length > 0 && (
@@ -273,7 +392,7 @@ export default function PendingChangesTab() {
               <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.5rem" }}>
                 Aplicadas automaticamente ({applied.length})
               </div>
-              <ChangeDiffPanel rows={applied} onDismiss={handleDismiss} dismissingIds={dismissingIds} />
+              {renderGroups(applied, true)}
             </div>
           )}
         </div>

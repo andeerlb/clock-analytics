@@ -2045,6 +2045,8 @@ export type CheckDiffKind = "field" | "new-shift" | "unresolved" | "error" | "re
 export interface CheckDiffRow {
   id: number;
   checkLogId: number;
+  /** URL/file whose check produced this notification. */
+  sourceUrl: string;
   configId: number | null;
   configLabel: string;
   changeKind: CheckDiffKind;
@@ -2072,7 +2074,7 @@ export interface CheckDiffRow {
   periodEnd: string | null;
 }
 
-export type CheckDiffInput = Omit<CheckDiffRow, "id" | "checkLogId" | "dismissedAt" | "periodStart" | "periodEnd">;
+export type CheckDiffInput = Omit<CheckDiffRow, "id" | "checkLogId" | "sourceUrl" | "dismissedAt" | "periodStart" | "periodEnd">;
 
 type CheckDiffRowRaw = Omit<CheckDiffRow, "applied"> & { applied: number };
 
@@ -2196,7 +2198,7 @@ export async function saveCheckDiffs(checkLogId: number, sourceUrl: string, entr
 export async function listCheckDiffs(checkLogId: number): Promise<CheckDiffRow[]> {
   const db = await getDb();
   const rows = await db.select<CheckDiffRowRaw[]>(
-    `SELECT d.id, d.check_log_id AS checkLogId, d.config_id AS configId, d.config_label AS configLabel,
+    `SELECT d.id, d.check_log_id AS checkLogId, l.source_url AS sourceUrl, d.config_id AS configId, d.config_label AS configLabel,
             d.change_kind AS changeKind, d.matched_shift_id AS matchedShiftId, d.employee_id AS employeeId,
             d.employee_name AS employeeName, d.work_date AS workDate, d.local, d.role,
             d.schedule_start_minutes AS scheduleStartMinutes, d.schedule_end_minutes AS scheduleEndMinutes,
@@ -2204,6 +2206,7 @@ export async function listCheckDiffs(checkLogId: number): Promise<CheckDiffRow[]
             d.field_name AS fieldName, d.old_value AS oldValue, d.new_value AS newValue, d.message, d.applied,
             d.dismissed_at AS dismissedAt, jc.period_start AS periodStart, jc.period_end AS periodEnd
      FROM source_url_check_diffs d
+     JOIN source_url_check_log l ON l.id = d.check_log_id
      LEFT JOIN source_url_check_log_configs jc ON jc.check_log_id = d.check_log_id AND jc.config_id = d.config_id
      WHERE d.check_log_id = $1
      ORDER BY d.id`,
@@ -2315,7 +2318,7 @@ export async function listLatestFieldDiffsForShifts(shiftIds: number[]): Promise
 export async function listAllLatestShiftDiffs(): Promise<CheckDiffRow[]> {
   const db = await getDb();
   const rows = await db.select<CheckDiffRowRaw[]>(
-    `SELECT d.id, d.check_log_id AS checkLogId, d.config_id AS configId, d.config_label AS configLabel,
+    `SELECT d.id, d.check_log_id AS checkLogId, l.source_url AS sourceUrl, d.config_id AS configId, d.config_label AS configLabel,
             d.change_kind AS changeKind, d.matched_shift_id AS matchedShiftId, d.employee_id AS employeeId,
             d.employee_name AS employeeName, d.work_date AS workDate, d.local, d.role,
             d.schedule_start_minutes AS scheduleStartMinutes, d.schedule_end_minutes AS scheduleEndMinutes,
