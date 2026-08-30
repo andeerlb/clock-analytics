@@ -4068,6 +4068,50 @@ function buildPaymentShiftRowConditions(
     const cond = scheduleTimeConditionSql(query.scheduleTimeFilter, params);
     if (cond) conditions.push(cond);
   }
+  if (query.attention === "missing-amount") conditions.push("ps.amount IS NULL");
+  if (query.attention === "pending-audit") {
+    conditions.push("ps.status = 'pago'");
+    conditions.push("NOT EXISTS (SELECT 1 FROM payment_audits pa_attention WHERE pa_attention.payment_shift_id = ps.id)");
+  }
+  if (query.analytics === "journey-over-12h") {
+    conditions.push("ps.schedule_start_minutes IS NOT NULL AND ps.schedule_end_minutes IS NOT NULL");
+    conditions.push("(CASE WHEN ps.schedule_end_minutes >= ps.schedule_start_minutes THEN ps.schedule_end_minutes - ps.schedule_start_minutes ELSE 1440 - ps.schedule_start_minutes + ps.schedule_end_minutes END) > 720");
+  }
+  if (query.analytics === "journey-under-4h") {
+    conditions.push("ps.schedule_start_minutes IS NOT NULL AND ps.schedule_end_minutes IS NOT NULL");
+    conditions.push("(CASE WHEN ps.schedule_end_minutes >= ps.schedule_start_minutes THEN ps.schedule_end_minutes - ps.schedule_start_minutes ELSE 1440 - ps.schedule_start_minutes + ps.schedule_end_minutes END) BETWEEN 1 AND 239");
+  }
+  if (query.analytics === "rest-under-11h") {
+    const ids = inClause("ps.id", query.analyticsShiftIds ?? [], params);
+    if (ids) conditions.push(ids);
+    else conditions.push("0 = 1");
+    /* The explicit ids are computed from the already-filtered dashboard rows,
+       making this pair-based indicator exact even when the preceding shift
+       would not itself match the active status/local/client filters. */
+    /*
+    conditions.push(`EXISTS (
+      SELECT 1 FROM payment_shifts prev
+      WHERE prev.employee_id = ps.employee_id AND prev.superseded_by_id IS NULL AND prev.id <> ps.id
+        AND datetime(prev.work_date, printf('+%d minutes', prev.schedule_end_minutes + CASE WHEN prev.schedule_end_minutes < prev.schedule_start_minutes THEN 1440 ELSE 0 END)) <= datetime(ps.work_date, printf('+%d minutes', ps.schedule_start_minutes))
+        AND datetime(prev.work_date, printf('+%d minutes', prev.schedule_end_minutes + CASE WHEN prev.schedule_end_minutes < prev.schedule_start_minutes THEN 1440 ELSE 0 END)) > datetime(ps.work_date, printf('+%d minutes', ps.schedule_start_minutes - 660))
+        AND NOT EXISTS (
+          SELECT 1 FROM payment_shifts middle
+          WHERE middle.employee_id = ps.employee_id AND middle.superseded_by_id IS NULL AND middle.id <> ps.id AND middle.id <> prev.id
+            AND datetime(middle.work_date, printf('+%d minutes', middle.schedule_end_minutes + CASE WHEN middle.schedule_end_minutes < middle.schedule_start_minutes THEN 1440 ELSE 0 END)) > datetime(prev.work_date, printf('+%d minutes', prev.schedule_end_minutes + CASE WHEN prev.schedule_end_minutes < prev.schedule_start_minutes THEN 1440 ELSE 0 END))
+            AND datetime(middle.work_date, printf('+%d minutes', middle.schedule_end_minutes + CASE WHEN middle.schedule_end_minutes < middle.schedule_start_minutes THEN 1440 ELSE 0 END)) <= datetime(ps.work_date, printf('+%d minutes', ps.schedule_start_minutes))
+        )
+    )`);
+    */
+  }
+  if (query.analytics === "heatmap") {
+    if (query.analyticsWeekday === undefined || query.analyticsTimeBucket === undefined) conditions.push("0 = 1");
+    else {
+      params.push(String(query.analyticsWeekday));
+      conditions.push(`strftime('%w', ps.work_date) = $${params.length}`);
+      params.push(query.analyticsTimeBucket * 360, query.analyticsTimeBucket * 360 + 359);
+      conditions.push(`ps.schedule_start_minutes BETWEEN $${params.length - 1} AND $${params.length}`);
+    }
+  }
   return conditions;
 }
 
@@ -4093,6 +4137,13 @@ export interface ListPaymentShiftSummariesQuery {
   shiftPeriods: ShiftPeriod[];
   /** The "Horário" filter — `null`/omitted means unfiltered, unlike `statuses`/`shiftPeriods` where an empty array means "match nothing". */
   scheduleTimeFilter?: ScheduleTimeFilter | null;
+  /** Actionable subset used by dashboard deep-links into Pagamentos. */
+  attention?: "pending-audit" | "missing-amount";
+  /** Exact dashboard drill-down subset; evaluated at row level in SQL. */
+  analytics?: "journey-over-12h" | "journey-under-4h" | "rest-under-11h" | "heatmap";
+  analyticsWeekday?: number;
+  analyticsTimeBucket?: number;
+  analyticsShiftIds?: number[];
   page: number;
   pageSize: number;
 }
@@ -4133,6 +4184,11 @@ export async function listPaymentShiftSummaries(
   if (query.periodEnd) {
     params.push(query.periodEnd);
     conditions.push(`ps.work_date <= $${params.length}`);
+  }
+  if (query.attention === "missing-amount") conditions.push("ps.amount IS NULL");
+  if (query.attention === "pending-audit") {
+    conditions.push("ps.status = 'pago'");
+    conditions.push("NOT EXISTS (SELECT 1 FROM payment_audits pa_attention WHERE pa_attention.payment_shift_id = ps.id)");
   }
 
   const havingParts: string[] = [];
@@ -4203,6 +4259,7 @@ export interface PaymentShiftReportRow {
   workDate: string;
   local: string;
   role: string;
+  roleId: number | null;
   scheduleStartMinutes: number | null;
   scheduleEndMinutes: number | null;
   status: PaymentShiftStatus;
@@ -4236,7 +4293,7 @@ export async function listPaymentShiftsForReport(
   const rows = await db.select<PaymentShiftReportRowRaw[]>(
     `SELECT ps.id, e.id AS employeeId, e.name AS employeeName, c.id AS companyId, c.name AS companyName,
             cl.id AS clientId, cl.name AS clientName,
-            ps.work_date AS workDate, ps.local, COALESCE(r.name, '') AS role,
+            ps.work_date AS workDate, ps.local, COALESCE(r.name, '') AS role, ps.role_id AS roleId,
             ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
             ps.status, ps.amount, ps.imported_at AS importedAt, ps.extra_data AS extraData,
             ${shiftPeriodSelectSql()} AS shiftPeriod
@@ -4283,7 +4340,7 @@ export async function listPaymentShiftsForReportPage(
   const rows = await db.select<PaymentShiftReportRowRaw[]>(
     `SELECT ps.id, e.id AS employeeId, e.name AS employeeName, c.id AS companyId, c.name AS companyName,
             cl.id AS clientId, cl.name AS clientName,
-            ps.work_date AS workDate, ps.local, COALESCE(r.name, '') AS role,
+            ps.work_date AS workDate, ps.local, COALESCE(r.name, '') AS role, ps.role_id AS roleId,
             ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
             ps.status, ps.amount, ps.imported_at AS importedAt, ps.extra_data AS extraData,
             ${shiftPeriodSelectSql()} AS shiftPeriod

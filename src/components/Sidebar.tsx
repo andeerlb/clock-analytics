@@ -1,5 +1,5 @@
 import type { Update } from "@tauri-apps/plugin-updater";
-import { Briefcase, Building2, Clock, FileUp, RefreshCw, Settings, Tag, Users, Wallet } from "lucide-react";
+import { BarChart3, Briefcase, Building2, Clock, FileUp, RefreshCw, Settings, Tag, Users, Wallet } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import UpdateModal from "./UpdateModal";
@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { to: "/roles", label: "Funções", icon: Tag, end: false },
   { to: "/", label: "Cartão Ponto", icon: Clock, end: true },
   { to: "/payments", label: "Pagamentos", icon: Wallet, end: false },
+  { to: "/analytics", label: "Análises", icon: BarChart3, end: false },
 ];
 
 function navLinkClass({ isActive }: { isActive: boolean }): string {

@@ -31,6 +31,7 @@ import RemoteUpdatesPage from "./pages/RemoteUpdatesPage";
 import RoleFormPage from "./pages/RoleFormPage";
 import RolesPage from "./pages/RolesPage";
 import SettingsPage from "./pages/SettingsPage";
+import AnalyticsPage from "./pages/AnalyticsPage";
 
 /**
  * "Conferência" on `PaymentsPage` (`open_reconciliation_window`) opens a
@@ -85,6 +86,7 @@ function AppShell({ popplerMissing }: { popplerMissing: boolean }) {
           <Route path="/import/employees/templates" element={<EmployeeTemplatesPage />} />
           <Route path="/employee/:importId" element={<EmployeeDetailPage />} />
           <Route path="/payments" element={<PaymentsPage />} />
+          <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/payments/export-templates" element={<PaymentExportTemplatesPage />} />
           <Route path="/payments/export-templates/new" element={<PaymentExportTemplateEditorPage />} />
           <Route path="/payments/export-templates/:id" element={<PaymentExportTemplateEditorPage />} />

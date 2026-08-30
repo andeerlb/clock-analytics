@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { Fragment, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import AnchoredPopover from "../components/AnchoredPopover";
 import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
@@ -640,6 +640,14 @@ function ShiftRow({
 
 export default function PaymentsPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const attentionParam = searchParams.get("attention");
+  const attention = attentionParam === "pending-audit" || attentionParam === "missing-amount" ? attentionParam : undefined;
+  const analyticsParam = searchParams.get("analytics");
+  const analytics = analyticsParam === "journey-over-12h" || analyticsParam === "journey-under-4h" || analyticsParam === "rest-under-11h" || analyticsParam === "heatmap" ? analyticsParam : undefined;
+  const analyticsWeekday = searchParams.has("weekday") ? Number(searchParams.get("weekday")) : undefined;
+  const analyticsTimeBucket = searchParams.has("bucket") ? Number(searchParams.get("bucket")) : undefined;
+  const analyticsShiftIds = (searchParams.get("ids") || "").split(",").map(Number).filter((id) => Number.isSafeInteger(id) && id > 0);
   const {
     selectedEmployeeIds,
     setSelectedEmployeeIds,
@@ -839,6 +847,11 @@ export default function PaymentsPage() {
       statuses: Array.from(selectedStatuses),
       shiftPeriods: Array.from(selectedShiftPeriods),
       scheduleTimeFilter,
+      attention,
+      analytics,
+      analyticsWeekday,
+      analyticsTimeBucket,
+      analyticsShiftIds,
     };
   }
 
@@ -893,6 +906,11 @@ export default function PaymentsPage() {
     selectedStatuses,
     selectedShiftPeriods,
     scheduleTimeFilter,
+    attention,
+    analytics,
+    analyticsWeekday,
+    analyticsTimeBucket,
+    searchParams,
     page,
     pageSize,
   ]);
@@ -1086,6 +1104,7 @@ export default function PaymentsPage() {
   const [filtersDrawerOpen, setFiltersDrawerOpen] = useState(false);
 
   function handleApplyFilters(next: PaymentsFiltersValue) {
+    setSearchParams({});
     setSelectedEmployeeIds(next.employeeIds);
     setSelectedCompanyIds(next.companyIds);
     setSelectedClientIds(next.clientIds);
@@ -1175,7 +1194,9 @@ export default function PaymentsPage() {
       periodEnd ||
       selectedStatuses.size < STATUS_OPTIONS.length ||
       selectedShiftPeriods.size < SHIFT_PERIOD_OPTIONS.length ||
-      scheduleTimeFilter !== null,
+      scheduleTimeFilter !== null ||
+      attention !== undefined ||
+      analytics !== undefined,
   );
   /** How many filter categories are currently applied — shown as a count badge on the "Filtros" button so it's clear at a glance the list isn't unfiltered, without opening the Drawer. */
   const activeFilterCount = [
@@ -1188,6 +1209,8 @@ export default function PaymentsPage() {
     selectedStatuses.size < STATUS_OPTIONS.length,
     selectedShiftPeriods.size < SHIFT_PERIOD_OPTIONS.length,
     scheduleTimeFilter !== null,
+    attention !== undefined,
+    analytics !== undefined,
   ].filter(Boolean).length;
   const total = grouped ? summariesTotal : flatTotal;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
@@ -1205,6 +1228,16 @@ export default function PaymentsPage() {
       {pdfError && <div className="error-box">{pdfError}</div>}
       {exportError && <div className="error-box">{exportError}</div>}
       {inlineEditError && <div className="error-box">{inlineEditError}</div>}
+      {attention && (
+        <div className="info-box">
+          Filtro da análise: {attention === "pending-audit" ? "pagamentos aguardando conferência" : "turnos sem valor definido"}.
+        </div>
+      )}
+      {analytics && (
+        <div className="info-box">
+          Filtro da análise: {{ "journey-over-12h": "jornadas acima de 12h", "journey-under-4h": "jornadas abaixo de 4h", "rest-under-11h": "intervalos inferiores a 11h", heatmap: "célula do mapa de calor" }[analytics]}.
+        </div>
+      )}
 
       <div className="card">
         <div className="field-row" style={{ marginBottom: 0, alignItems: "center" }}>
