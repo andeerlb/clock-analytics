@@ -9,6 +9,7 @@ import {
   TrendingUp,
   Users,
   Activity, Filter, FileDown, FileSpreadsheet, Bookmark, Settings2,
+  RefreshCw,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -17,16 +18,17 @@ import PaymentsFiltersDrawer, { STATUS_OPTIONS, SHIFT_PERIOD_OPTIONS, type Payme
 import Modal from "../components/Modal";
 import ConfirmModal from "../components/ConfirmModal";
 import { applyPaymentsFiltersSnapshot, snapshotPaymentsFilters, usePaymentsFilters, type PaymentsFiltersSnapshot } from "../contexts/FiltersContext";
-import { countPaymentShiftsPendingAudit, listClients, listCompanies, listDistinctPaymentShiftLocals, listPaymentShiftsForReport, listRolesGlobal, type ClientRow, type CompanyRow, type ListPaymentShiftSummariesQuery, type PaymentShiftReportRow, type RoleRow } from "../lib/db";
+import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
+import { countPaymentShiftsPendingAudit, listAllLatestShiftDiffs, listClients, listCompanies, listDistinctPaymentShiftLocals, listPaymentShiftsForReport, listRolesGlobal, type CheckDiffRow, type ClientRow, type CompanyRow, type ListPaymentShiftSummariesQuery, type PaymentShiftReportRow, type RoleRow } from "../lib/db";
 import { toIso, todayUtc } from "../lib/calendar";
 import { formatCurrencyBRL, formatDateCompact } from "../lib/format";
 import { exportAnalyticsPdf, exportAnalyticsXlsx } from "../lib/analyticsExport";
 
-type Tab = "overview" | "costs" | "journeys" | "audit";
+type Tab = "overview" | "costs" | "journeys" | "audit" | "occurrences";
 type Cards = Record<Tab, string[]>;
 type SavedView = { id: string; name: string; tab: Tab; start: string; end: string; filters: PaymentsFiltersSnapshot; cards: Cards };
-const DEFAULT_CARDS: Cards = { overview: ["total","paid","hours","employees","trend","clients"], costs: ["total","paid","pending","night","companies","roles","employees"], journeys: ["long","short","rest","night","heatmap"], audit: ["audit","errors","missing","analyzed","priorities"] };
-const LABELS: Record<string,string> = { total:"Custo total",paid:"Total pago",hours:"Horas previstas",employees:"Colaboradores",trend:"Custo diário",clients:"Maiores clientes",pending:"Pendente",night:"Turnos noturnos",companies:"Ranking por empresa",roles:"Ranking por função",long:"Jornadas acima de 12h",short:"Jornadas abaixo de 4h",rest:"Intervalos abaixo de 11h",heatmap:"Mapa de calor",audit:"Pendentes de conferência",errors:"Turnos com erro",missing:"Sem valor definido",analyzed:"Turnos analisados",priorities:"Prioridades" };
+const DEFAULT_CARDS: Cards = { overview: ["total","paid","hours","employees","trend","clients"], costs: ["total","paid","pending","night","companies","roles","employees"], journeys: ["long","short","rest","night","heatmap"], audit: ["audit","errors","missing","analyzed","priorities"], occurrences: ["unseen","changed","unresolved","newShifts","occurrencePriorities","occurrenceSources"] };
+const LABELS: Record<string,string> = { total:"Custo total",paid:"Total pago",hours:"Horas previstas",employees:"Colaboradores",trend:"Custo diário",clients:"Maiores clientes",pending:"Pendente",night:"Turnos noturnos",companies:"Ranking por empresa",roles:"Ranking por função",long:"Jornadas acima de 12h",short:"Jornadas abaixo de 4h",rest:"Intervalos abaixo de 11h",heatmap:"Mapa de calor",audit:"Pendentes de conferência",errors:"Turnos com erro",missing:"Sem valor definido",analyzed:"Turnos analisados",priorities:"Prioridades",unseen:"Não vistas",changed:"Dados alterados",unresolved:"Não identificados",newShifts:"Novos turnos",occurrencePriorities:"Tipos de ocorrência",occurrenceSources:"Fontes com ocorrências" };
 function loadCards(): Cards { try { return { ...DEFAULT_CARDS, ...JSON.parse(localStorage.getItem("analytics-visible-cards") || "{}") }; } catch { return DEFAULT_CARDS; } }
 function loadViews(): SavedView[] { try { const x=JSON.parse(localStorage.getItem("analytics-saved-views")||"[]"); return Array.isArray(x)?x:[]; } catch { return []; } }
 
@@ -121,11 +123,13 @@ function aggregate(rows: PaymentShiftReportRow[], key: (r: PaymentShiftReportRow
 export default function AnalyticsPage() {
   const navigate = useNavigate();
   const paymentFilters = usePaymentsFilters();
+  const { trackedFiles } = useRemoteFileUpdates();
   const [[periodStart, periodEnd], setPeriod] = useState<[string,string]>(()=>paymentFilters.periodStart&&paymentFilters.periodEnd?[paymentFilters.periodStart,paymentFilters.periodEnd]:currentMonth());
   const [tab, setTab] = useState<Tab>("overview");
   const [rows, setRows] = useState<PaymentShiftReportRow[]>([]);
   const [previousRows, setPreviousRows] = useState<PaymentShiftReportRow[]>([]);
   const [pendingAudit, setPendingAudit] = useState(0);
+  const [occurrenceRows, setOccurrenceRows] = useState<CheckDiffRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [exportError,setExportError]=useState<string|null>(null); const [exporting,setExporting]=useState(false);
@@ -135,6 +139,9 @@ export default function AnalyticsPage() {
   const visible=(id:string)=>cards[tab].includes(id);
 
   useEffect(()=>{Promise.all([listCompanies(),listClients(),listRolesGlobal(),listDistinctPaymentShiftLocals()]).then(([companies,clients,roles,locals])=>setCatalogs({companies,clients,roles,locals})).catch(()=>{});},[]);
+  // The background checker replaces `trackedFiles` after each completed
+  // batch, so the dashboard refreshes while it is open without polling.
+  useEffect(()=>{listAllLatestShiftDiffs().then(setOccurrenceRows).catch(()=>{});},[trackedFiles]);
   useEffect(()=>{if(views.length||!localStorage.getItem("analytics-saved-view"))return;try{const old=JSON.parse(localStorage.getItem("analytics-saved-view")!);if(old?.start&&old?.end){const v:SavedView={id:crypto.randomUUID(),name:"Visão migrada",tab:old.tab||"overview",start:old.start,end:old.end,filters:snapshotPaymentsFilters(paymentFilters),cards};setViews([v]);localStorage.setItem("analytics-saved-views",JSON.stringify([v]));}}catch{/* fallback seguro */}},[]);
 
   useEffect(() => {
@@ -177,6 +184,19 @@ export default function AnalyticsPage() {
   const previousTotal=previousRows.reduce((sum,r)=>sum+(r.amount??0),0),variation=previousTotal?(metrics.total-previousTotal)/previousTotal*100:null;
   const long=rows.filter(r=>durationMinutes(r)>720), short=rows.filter(r=>durationMinutes(r)>0&&durationMinutes(r)<240);
   const restIds=useMemo(()=>{const a=[...rows].filter(r=>r.scheduleStartMinutes!==null&&r.scheduleEndMinutes!==null).sort((x,y)=>x.employeeId-y.employeeId||x.workDate.localeCompare(y.workDate)||x.scheduleStartMinutes!-y.scheduleStartMinutes!);const ids:number[]=[];for(let i=1;i<a.length;i++){const p=a[i-1],c=a[i];if(p.employeeId!==c.employeeId)continue;const pe=new Date(`${p.workDate}T00:00:00Z`).getTime()+(p.scheduleEndMinutes!+(p.scheduleEndMinutes!<p.scheduleStartMinutes!?1440:0))*60000,cs=new Date(`${c.workDate}T00:00:00Z`).getTime()+c.scheduleStartMinutes!*60000;if(cs>=pe&&cs-pe<39600000)ids.push(c.id);}return ids;},[rows]);
+  const occurrences=useMemo(()=>{
+    // A field change can produce several DB rows for one turno. The dashboard
+    // counts the actionable occurrence once, while the detail screen keeps
+    // showing every changed field.
+    const groups=new Map<string,CheckDiffRow[]>();
+    occurrenceRows.forEach(r=>{const identity=r.matchedShiftId!==null?`shift:${r.matchedShiftId}`:`row:${r.configId}:${r.sheetName}:${r.rowNumber}:${r.employeeName}:${r.workDate}`;const key=`${r.checkLogId}:${r.changeKind}:${identity}`;groups.set(key,[...(groups.get(key)??[]),r]);});
+    const items=Array.from(groups.values());
+    const count=(kind:CheckDiffRow["changeKind"])=>items.filter(g=>g[0].changeKind===kind).length;
+    const unseen=items.filter(g=>g.some(r=>r.dismissedAt===null));
+    const bySource=new Map<string,{label:string;count:number;unseen:number}>();
+    items.forEach(g=>{const first=g[0],key=first.configId===null?first.sourceUrl:`${first.sourceUrl}:${first.configId}`,current=bySource.get(key)??{label:first.configLabel||first.sourceUrl,count:0,unseen:0};current.count++;if(g.some(r=>r.dismissedAt===null))current.unseen++;bySource.set(key,current);});
+    return {total:items.length,unseen:unseen.length,field:count("field"),unresolved:count("unresolved"),newShift:count("new-shift"),removed:count("removed"),errors:count("error"),applied:items.filter(g=>g.some(r=>r.applied)).length,sources:Array.from(bySource.values()).sort((a,b)=>b.unseen-a.unseen||b.count-a.count).slice(0,8)};
+  },[occurrenceRows]);
   const activeFilterCount=[paymentFilters.selectedEmployeeIds.size,paymentFilters.selectedCompanyIds.size,paymentFilters.selectedClientIds.size,paymentFilters.selectedRoleIds.size,paymentFilters.selectedLocals.size,paymentFilters.selectedStatuses.size<STATUS_OPTIONS.length,paymentFilters.selectedShiftPeriods.size<SHIFT_PERIOD_OPTIONS.length,paymentFilters.scheduleTimeFilter!==null].filter(Boolean).length;
   const filterDescription=useMemo(()=>{const parts:string[]=[];const names=(ids:Set<string>,source:{id:number;name:string}[])=>Array.from(ids).map(id=>source.find(x=>String(x.id)===id)?.name||id).join(", ");if(paymentFilters.selectedCompanyIds.size)parts.push(`Empresas: ${names(paymentFilters.selectedCompanyIds,catalogs.companies)}`);if(paymentFilters.selectedClientIds.size)parts.push(`Clientes: ${names(paymentFilters.selectedClientIds,catalogs.clients)}`);if(paymentFilters.selectedRoleIds.size)parts.push(`Funções: ${names(paymentFilters.selectedRoleIds,catalogs.roles)}`);if(paymentFilters.selectedEmployeeIds.size)parts.push(`Colaboradores selecionados: ${paymentFilters.selectedEmployeeIds.size}`);if(paymentFilters.selectedLocals.size)parts.push(`Locais: ${Array.from(paymentFilters.selectedLocals).join(", ")}`);if(paymentFilters.selectedStatuses.size<3)parts.push(`Status: ${Array.from(paymentFilters.selectedStatuses).join(", ")}`);if(paymentFilters.selectedShiftPeriods.size<2)parts.push(`Diurno/noturno: ${Array.from(paymentFilters.selectedShiftPeriods).join(", ")}`);if(paymentFilters.scheduleTimeFilter)parts.push("Horário personalizado ativo");return parts.length?parts.join("; "):"Nenhum filtro adicional";},[paymentFilters.selectedCompanyIds,paymentFilters.selectedClientIds,paymentFilters.selectedRoleIds,paymentFilters.selectedEmployeeIds,paymentFilters.selectedLocals,paymentFilters.selectedStatuses,paymentFilters.selectedShiftPeriods,paymentFilters.scheduleTimeFilter,catalogs]);
 
@@ -206,6 +226,7 @@ export default function AnalyticsPage() {
         <button type="button" role="tab" aria-selected={tab==="costs"} className={tab === "costs" ? "active" : ""} onClick={() => setTab("costs")}>Custos e pagamentos</button>
         <button type="button" role="tab" aria-selected={tab==="journeys"} className={tab === "journeys" ? "active" : ""} onClick={() => setTab("journeys")}>Jornadas</button>
         <button type="button" role="tab" aria-selected={tab==="audit"} className={tab === "audit" ? "active" : ""} onClick={() => setTab("audit")}><span>Auditoria</span>{pendingAudit + metrics.errors > 0 && <b>{pendingAudit + metrics.errors}</b>}</button>
+        <button type="button" role="tab" aria-selected={tab==="occurrences"} className={tab === "occurrences" ? "active" : ""} onClick={() => setTab("occurrences")}><span>Ocorrências</span>{occurrences.unseen > 0 && <b>{occurrences.unseen}</b>}</button>
       </div>
 
       {error && <div className="error-box">Não foi possível carregar as análises: {error}</div>}
@@ -264,6 +285,34 @@ export default function AnalyticsPage() {
                 { label: "Turnos sem valor", value: metrics.missingAmount, text: "Configure uma regra de valor ou informe o valor manualmente.", tone: "warning", to: "/payments?attention=missing-amount", statuses: ["pendente", "erro", "pago"] as const },
               ].map((item) => <div className={`analytics-audit-item ${item.tone}`} key={item.label}><span className="analytics-audit-count">{item.value}</span><div><strong>{item.label}</strong><p>{item.text}</p></div><Link to={item.to} onClick={() => preparePaymentsNavigation([...item.statuses])} aria-label={`Abrir ${item.label}`}><ArrowRight size={18}/></Link></div>)}
             </div>}
+          </>}
+          {tab === "occurrences" && <>
+            <div className="analytics-occurrence-note">
+              <RefreshCw size={15}/>
+              Estado atual das fontes com verificação automática. Estes indicadores são globais e não usam o período financeiro acima.
+            </div>
+            <section className="analytics-stats">
+              {visible("unseen")&&<StatCard icon={<AlertTriangle size={21}/>} label="Não vistas" value={String(occurrences.unseen)} detail={`${occurrences.total} ocorrência(s) no estado atual`} tone={occurrences.unseen?"danger":"success"} onClick={()=>navigate("/remote-updates/imports")}/>}
+              {visible("changed")&&<StatCard icon={<Activity size={21}/>} label="Dados alterados" value={String(occurrences.field)} detail={`${occurrences.applied} ocorrência(s) já aplicada(s)`} tone="warning" onClick={()=>navigate("/remote-updates/imports")}/>}
+              {visible("unresolved")&&<StatCard icon={<Users size={21}/>} label="Não identificados" value={String(occurrences.unresolved)} detail="Colaboradores que precisam ser vinculados" tone="danger" onClick={()=>navigate("/remote-updates/imports")}/>}
+              {visible("newShifts")&&<StatCard icon={<Clock3 size={21}/>} label="Possíveis novos turnos" value={String(occurrences.newShift)} detail="Linhas novas encontradas nas fontes" tone="warning" onClick={()=>navigate("/remote-updates/imports")}/>}
+            </section>
+            <section className="analytics-grid analytics-grid-main">
+              {visible("occurrencePriorities")&&<div className="card analytics-panel analytics-audit-list">
+                <header><div><span className="analytics-eyebrow">Diagnóstico</span><h3>Tipos de ocorrência</h3></div></header>
+                {[
+                  {label:"Colaborador não identificado",value:occurrences.unresolved,text:"Cadastre o colaborador ou ajuste seus identificadores e reprocese.",tone:"danger"},
+                  {label:"Erro de verificação",value:occurrences.errors,text:"A fonte, template ou arquivo não pôde ser processado.",tone:"danger"},
+                  {label:"Campos alterados",value:occurrences.field,text:"Dados de turnos existentes mudaram na planilha de origem.",tone:"warning"},
+                  {label:"Possíveis novos turnos",value:occurrences.newShift,text:"Novas linhas foram encontradas e precisam ser revisadas.",tone:"warning"},
+                  {label:"Possíveis remoções",value:occurrences.removed,text:"Turnos existentes deixaram de aparecer na fonte.",tone:"warning"},
+                ].map(item=><div className={`analytics-audit-item ${item.tone}`} key={item.label}><span className="analytics-audit-count">{item.value}</span><div><strong>{item.label}</strong><p>{item.text}</p></div><Link to="/remote-updates/imports" aria-label={`Revisar ${item.label}`}><ArrowRight size={18}/></Link></div>)}
+              </div>}
+              {visible("occurrenceSources")&&<div className="card analytics-panel">
+                <header><div><span className="analytics-eyebrow">Origem</span><h3>Fontes com ocorrências</h3></div></header>
+                {!occurrences.sources.length?<EmptyChart/>:<div className="analytics-occurrence-sources">{occurrences.sources.map((source,index)=><Link to="/remote-updates/imports" key={`${source.label}-${index}`}><span><b>{index+1}</b><span title={source.label}>{source.label}</span></span><strong>{source.unseen?`${source.unseen} nova(s)`: `${source.count} vista(s)`}</strong></Link>)}</div>}
+              </div>}
+            </section>
           </>}
           <div className="analytics-footer-link"><Link to="/payments">Ver todos os turnos em Pagamentos <ArrowRight size={15}/></Link></div>
         </>

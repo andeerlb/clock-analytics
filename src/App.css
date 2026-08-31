@@ -358,6 +358,14 @@ h6 {
 .analytics-audit-item.danger .analytics-audit-count { color: var(--danger); background: var(--danger-soft); }
 .analytics-audit-item p { margin: .15rem 0 0; color: var(--text-muted); font-size: .78rem; }
 .analytics-audit-item a { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; color: var(--accent); background: var(--accent-soft); }
+.analytics-occurrence-note { display: flex; align-items: center; gap: .45rem; margin: -.15rem 0 .85rem; color: var(--text-muted); font-size: .76rem; }
+.analytics-occurrence-sources { display: grid; gap: .45rem; }
+.analytics-occurrence-sources > a { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .7rem; border: 1px solid var(--border-soft); border-radius: 8px; color: var(--text); }
+.analytics-occurrence-sources > a:hover { border-color: var(--accent); background: var(--accent-soft); }
+.analytics-occurrence-sources > a > span { display: flex; align-items: center; min-width: 0; gap: .55rem; }
+.analytics-occurrence-sources > a > span > b { display: grid; place-items: center; flex: 0 0 24px; height: 24px; border-radius: 7px; background: var(--surface-variant); color: var(--text-muted); font-size: .72rem; }
+.analytics-occurrence-sources > a > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.analytics-occurrence-sources > a > strong { white-space: nowrap; color: var(--warning); font-size: .74rem; }
 .analytics-footer-link { display: flex; justify-content: flex-end; margin-top: 1rem; }
 .analytics-footer-link a { display: inline-flex; align-items: center; gap: .4rem; font-size: .82rem; }
 .analytics-heatmap { display: grid; grid-template-columns: 55px repeat(4, minmax(70px, 1fr)); gap: 5px; align-items: stretch; }
