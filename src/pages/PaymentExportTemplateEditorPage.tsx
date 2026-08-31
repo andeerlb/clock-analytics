@@ -1,7 +1,10 @@
+import { CircleHelp } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
+import ConfirmModal from "../components/ConfirmModal";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
+import PaymentExportTemplateHelpDrawer from "../components/PaymentExportTemplateHelpDrawer";
 import TemplateGridEditor, {
   FONT_FAMILIES,
   FONT_SIZES,
@@ -10,6 +13,7 @@ import TemplateGridEditor, {
 } from "../components/TemplateGridEditor";
 import { createPaymentExportTemplate, getPaymentExportTemplate, updatePaymentExportTemplate } from "../lib/db";
 import { isBindableField } from "../lib/paymentExportGrid";
+import type { PaymentExportTemplateExample } from "../lib/paymentExportTemplateExamples";
 import {
   PAYMENT_EXPORT_BINDABLE_FIELD_LABELS,
   type PaymentExportBindableField,
@@ -60,6 +64,9 @@ export default function PaymentExportTemplateEditorPage() {
   const [loading, setLoading] = useState(isEditing);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [exampleTarget, setExampleTarget] = useState<PaymentExportTemplateExample | null>(null);
+  const [gridRevision, setGridRevision] = useState(0);
 
   const [detailRowIndex, setDetailRowIndex] = useState<number | null>(null);
   const [groupBy, setGroupBy] = useState<PaymentExportBindableField[]>([]);
@@ -510,6 +517,26 @@ export default function PaymentExportTemplateEditorPage() {
     });
   }
 
+  function applyExample() {
+    if (!exampleTarget) return;
+    const config = exampleTarget.config;
+    setInitialGrid(structuredClone(config.grid));
+    setGridRevision((revision) => revision + 1);
+    setDetailRowIndex(config.detailRowIndex);
+    setGroupBy([...config.groupBy]);
+    setSubtotalGroupBy([...(config.subtotalGroupBy ?? config.groupBy)]);
+    setSeparatorEnabled(config.separator?.enabled ?? false);
+    setSeparatorRowIndex(config.separator?.rowIndex ?? null);
+    setSubtotalEnabled(config.subtotal?.enabled ?? false);
+    setSubtotalRowIndex(config.subtotal?.rowIndex ?? null);
+    setGroupHeaderRowIndex(config.groupHeader?.rowIndex ?? null);
+    setConsolidatedRowIndex(config.consolidated?.rowIndex ?? null);
+    setOutlineEnabled(config.outline?.enabled ?? false);
+    setOutlineCollapsed(config.outline?.collapsed ?? false);
+    setError(null);
+    setExampleTarget(null);
+  }
+
   async function handleSave() {
     setError(null);
     if (!name.trim()) {
@@ -634,9 +661,14 @@ export default function PaymentExportTemplateEditorPage() {
       <BackButton fallback="/payments/export-templates" />
       <div className="page-header">
         <h2>{isEditing ? "Editar template de exportação" : "Novo template de exportação"}</h2>
-        <button type="button" onClick={handleSave} disabled={busy}>
-          {busy ? "Salvando..." : "Salvar"}
-        </button>
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          <button type="button" className="secondary" onClick={() => setHelpOpen(true)}>
+            <CircleHelp size={15} /> Como criar meu template
+          </button>
+          <button type="button" onClick={handleSave} disabled={busy}>
+            {busy ? "Salvando..." : "Salvar"}
+          </button>
+        </div>
       </div>
       <p className="page-subtitle">
         Monte a planilha — texto, cor de fundo, negrito — e use o botão direito do mouse: numa
@@ -658,6 +690,7 @@ export default function PaymentExportTemplateEditorPage() {
 
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>
         <TemplateGridEditor
+          key={gridRevision}
           ref={gridRef}
           initialGrid={initialGrid}
           rowBadges={rowBadges}
@@ -673,6 +706,25 @@ export default function PaymentExportTemplateEditorPage() {
 
       {contextMenu && (
         <ContextMenu x={contextMenu.x} y={contextMenu.y} items={contextMenu.items} onClose={() => setContextMenu(null)} />
+      )}
+      <PaymentExportTemplateHelpDrawer
+        open={helpOpen}
+        onClose={() => setHelpOpen(false)}
+        onApplyExample={(example) => {
+          setHelpOpen(false);
+          setExampleTarget(example);
+        }}
+      />
+      {exampleTarget && (
+        <ConfirmModal
+          title="Substituir o layout atual?"
+          message={`Usar o exemplo “${exampleTarget.title}” apagará todas as células, formatações, papéis de linha e configurações de agrupamento que estão atualmente no editor. Essa ação só será gravada definitivamente quando você salvar o template.`}
+          confirmLabel="Substituir pelo exemplo"
+          cancelLabel="Manter meu layout"
+          danger
+          onConfirm={applyExample}
+          onCancel={() => setExampleTarget(null)}
+        />
       )}
     </div>
   );
