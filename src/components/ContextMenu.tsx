@@ -8,6 +8,8 @@ export interface ContextMenuItem {
   onClick?: () => void;
   submenu?: ContextMenuItem[];
   danger?: boolean;
+  /** Persistent selected/toggled state — highlights the entire row, distinct from the transient hover state. */
+  selected?: boolean;
   /** Grays the row out and blocks the click instead of omitting it — for an action that's conceptually always there but not currently possible (e.g. "Fazer pagamento" on a turno with no horário to compute a valor from), so the option stays discoverable instead of the menu silently shrinking depending on the row. */
   disabled?: boolean;
   /** Renders a horizontal divider instead of a row — every other field is ignored when this is set. */
@@ -16,8 +18,8 @@ export interface ContextMenuItem {
   render?: (close: () => void) => ReactNode;
 }
 
-/** Wide enough for a label plus a shortcut hint like "Backspace / N" on the same row without wrapping. */
-const MENU_WIDTH = 240;
+/** Wide enough for descriptive actions plus shortcut hints without wrapping onto a second line. */
+const MENU_WIDTH = 320;
 
 /** One level of a (possibly nested) menu — the top-level `ContextMenu` renders this once; a `submenu` item renders another one flush to its own right edge, opened on hover. */
 function ContextMenuList({ items, onClose }: { items: ContextMenuItem[]; onClose: () => void }) {
@@ -54,6 +56,7 @@ function ContextMenuList({ items, onClose }: { items: ContextMenuItem[]; onClose
               type="button"
               className="ghost"
               disabled={item.disabled}
+              aria-pressed={item.selected}
               style={{
                 display: "flex",
                 width: "100%",
@@ -62,10 +65,12 @@ function ContextMenuList({ items, onClose }: { items: ContextMenuItem[]; onClose
                 textAlign: "left",
                 padding: "0.4rem 0.6rem",
                 border: "none",
-                color: item.disabled ? "var(--text-muted)" : item.danger ? "var(--danger)" : "inherit",
                 opacity: item.disabled ? 0.5 : 1,
                 cursor: item.disabled ? "not-allowed" : "pointer",
                 pointerEvents: item.disabled ? "none" : undefined,
+                background: item.selected ? "var(--accent-soft)" : undefined,
+                color: item.selected ? "var(--accent)" : item.disabled ? "var(--text-muted)" : item.danger ? "var(--danger)" : "inherit",
+                boxShadow: item.selected ? "inset 3px 0 var(--accent)" : undefined,
               }}
               onClick={() => {
                 if (item.submenu) return;
@@ -73,7 +78,7 @@ function ContextMenuList({ items, onClose }: { items: ContextMenuItem[]; onClose
                 onClose();
               }}
             >
-              <span>{item.label}</span>
+              <span style={{ whiteSpace: "nowrap" }}>{item.label}</span>
               {item.submenu ? (
                 <span style={{ opacity: 0.6 }}>▸</span>
               ) : (

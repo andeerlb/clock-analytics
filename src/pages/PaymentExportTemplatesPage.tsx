@@ -1,9 +1,13 @@
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Copy, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
-import { deletePaymentExportTemplate, listPaymentExportTemplates } from "../lib/db";
+import {
+  clonePaymentExportTemplate,
+  deletePaymentExportTemplate,
+  listPaymentExportTemplates,
+} from "../lib/db";
 import { formatDateTime } from "../lib/format";
 import type { PaymentExportTemplateListRow } from "../lib/types";
 
@@ -12,6 +16,7 @@ export default function PaymentExportTemplatesPage() {
   const [templates, setTemplates] = useState<PaymentExportTemplateListRow[]>([]);
   const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<PaymentExportTemplateListRow | null>(null);
   const [busy, setBusy] = useState(false);
+  const [cloningId, setCloningId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -19,7 +24,7 @@ export default function PaymentExportTemplatesPage() {
   }, []);
 
   function refreshTemplates() {
-    listPaymentExportTemplates().then(setTemplates);
+    return listPaymentExportTemplates().then(setTemplates);
   }
 
   async function handleDeleteTemplate() {
@@ -34,6 +39,19 @@ export default function PaymentExportTemplatesPage() {
       setError(String(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleCloneTemplate(id: number) {
+    setError(null);
+    setCloningId(id);
+    try {
+      await clonePaymentExportTemplate(id);
+      await refreshTemplates();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setCloningId(null);
     }
   }
 
@@ -86,6 +104,17 @@ export default function PaymentExportTemplatesPage() {
                           title="Editar"
                         >
                           <Pencil size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          style={{ padding: "0.3rem" }}
+                          onClick={() => handleCloneTemplate(t.id)}
+                          disabled={cloningId !== null}
+                          aria-label={cloningId === t.id ? "Clonando" : "Clonar"}
+                          title={cloningId === t.id ? "Clonando..." : "Clonar"}
+                        >
+                          <Copy size={14} />
                         </button>
                         <button
                           type="button"

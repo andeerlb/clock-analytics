@@ -84,6 +84,10 @@ export interface TemplateGridEditorHandle {
   getColumnAutoFit: (col: number) => boolean;
   /** Same border-painting logic the toolbar's own border menu uses, exposed so the parent's cell context menu can offer the same actions without duplicating the per-cell-vs-outline logic. `brush: null` clears the sides `kind` targets instead of painting them. No-op if nothing is selected. */
   applyBorderToSelection: (kind: BorderApplyKind, brush: CellBorderSide | null) => void;
+  insertRow: (index: number) => void;
+  insertColumn: (index: number) => void;
+  deleteRow: (index: number) => void;
+  deleteColumn: (index: number) => void;
 }
 
 /** A small colored tag shown in a row's number gutter (e.g. "D" for the detail row) — makes the current layout legible without needing a side panel. */
@@ -123,6 +127,8 @@ interface TemplateGridEditorProps {
    * domain, same as everywhere else in this component).
    */
   onGroupingMenu?: (row: number, col: number, value: string, x: number, y: number) => void;
+  /** Opens template-wide group display options; unlike "Separar por", this needs no selected cell. */
+  onGroupOptionsMenu?: (x: number, y: number) => void;
   /** Cell values (exact match, e.g. `"{{workDate}}"`) that should get a visual marker — used to show which cells currently drive agrupamento, without a separate side-panel list. Domain-agnostic on purpose (this component doesn't know what "agrupamento" means, just "highlight any cell whose value is exactly one of these"). */
   highlightExactValues?: Set<string>;
   /** Same idea as `highlightExactValues`, rendered as a second, differently-positioned/colored marker — lets two independent groupings (e.g. turno vs. SOMA) be told apart on a cell that's marked by both. */
@@ -748,6 +754,7 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
     onRowContextMenu,
     onColumnContextMenu,
     onGroupingMenu,
+    onGroupOptionsMenu,
     highlightExactValues,
     secondaryHighlightExactValues,
   },
@@ -1176,6 +1183,66 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
       applyBorderToSelection: (kind, brush) => {
         if (range) applyBorderToRange(range, kind, brush);
       },
+      insertRow: (index) => {
+        setGrid((g) => ({
+          ...g,
+          rows: [...g.rows.slice(0, index), Array.from({ length: g.columnWidths.length }, blankCell), ...g.rows.slice(index)],
+          rowHeights: [...g.rowHeights.slice(0, index), DEFAULT_ROW_HEIGHT, ...g.rowHeights.slice(index)],
+          merges: g.merges.map((m) =>
+            index <= m.row ? { ...m, row: m.row + 1 } : index < m.row + m.rowSpan ? { ...m, rowSpan: m.rowSpan + 1 } : m,
+          ),
+        }));
+        setRange((r) => (r ? { ...r, r1: r.r1 >= index ? r.r1 + 1 : r.r1, r2: r.r2 >= index ? r.r2 + 1 : r.r2 } : null));
+        setEditingCell((cell) => (cell && cell.row >= index ? { ...cell, row: cell.row + 1 } : cell));
+      },
+      insertColumn: (index) => {
+        setGrid((g) => ({
+          ...g,
+          rows: g.rows.map((row) => [...row.slice(0, index), blankCell(), ...row.slice(index)]),
+          columnWidths: [...g.columnWidths.slice(0, index), DEFAULT_COL_WIDTH, ...g.columnWidths.slice(index)],
+          columnAutoFit: [...g.columnAutoFit.slice(0, index), true, ...g.columnAutoFit.slice(index)],
+          merges: g.merges.map((m) =>
+            index <= m.col ? { ...m, col: m.col + 1 } : index < m.col + m.colSpan ? { ...m, colSpan: m.colSpan + 1 } : m,
+          ),
+        }));
+        setRange((r) => (r ? { ...r, c1: r.c1 >= index ? r.c1 + 1 : r.c1, c2: r.c2 >= index ? r.c2 + 1 : r.c2 } : null));
+        setEditingCell((cell) => (cell && cell.col >= index ? { ...cell, col: cell.col + 1 } : cell));
+      },
+      deleteRow: (index) => {
+        if (grid.rows.length <= 1) return;
+        setGrid((g) => ({
+          ...g,
+          rows: g.rows.filter((_, row) => row !== index),
+          rowHeights: g.rowHeights.filter((_, row) => row !== index),
+          merges: g.merges
+            .map((m) => {
+              if (index < m.row) return { ...m, row: m.row - 1 };
+              if (index < m.row + m.rowSpan) return { ...m, rowSpan: m.rowSpan - 1 };
+              return m;
+            })
+            .filter((m) => m.rowSpan >= 1 && m.colSpan >= 1 && (m.rowSpan > 1 || m.colSpan > 1)),
+        }));
+        setRange(null);
+        setEditingCell((cell) => (cell?.row === index ? null : cell && cell.row > index ? { ...cell, row: cell.row - 1 } : cell));
+      },
+      deleteColumn: (index) => {
+        if (grid.columnWidths.length <= 1) return;
+        setGrid((g) => ({
+          ...g,
+          rows: g.rows.map((row) => row.filter((_, col) => col !== index)),
+          columnWidths: g.columnWidths.filter((_, col) => col !== index),
+          columnAutoFit: g.columnAutoFit.filter((_, col) => col !== index),
+          merges: g.merges
+            .map((m) => {
+              if (index < m.col) return { ...m, col: m.col - 1 };
+              if (index < m.col + m.colSpan) return { ...m, colSpan: m.colSpan - 1 };
+              return m;
+            })
+            .filter((m) => m.rowSpan >= 1 && m.colSpan >= 1 && (m.rowSpan > 1 || m.colSpan > 1)),
+        }));
+        setRange(null);
+        setEditingCell((cell) => (cell?.col === index ? null : cell && cell.col > index ? { ...cell, col: cell.col - 1 } : cell));
+      },
     }),
     // Re-created whenever `grid`/`range` change so every closure above reads
     // fresh state — this is a small grid (tens of cells), re-creating the
@@ -1412,9 +1479,22 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
           className="ghost"
           onClick={handleGroupingMenuClick}
           style={{ display: "inline-flex", alignItems: "center", flexShrink: 0, gap: "0.15rem", padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
-          title='Agrupar por linha (turno) ou por SOMA a célula selecionada (precisa conter um campo, ex: "{{local}}")'
+          title='Ordenar os turnos e separar blocos usando a célula selecionada (precisa conter um campo, ex: "{{local}}")'
         >
-          Agrupar
+          Separar por
+          <ChevronDown size={12} />
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            onGroupOptionsMenu?.(rect.left, rect.bottom + 4);
+          }}
+          style={{ display: "inline-flex", alignItems: "center", flexShrink: 0, gap: "0.15rem", padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
+          title="Configurar o agrupamento recolhível do arquivo Excel"
+        >
+          Grupos
           <ChevronDown size={12} />
         </button>
         <button
@@ -1422,7 +1502,7 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
           className="ghost"
           onClick={(e) => handleHiddenAction("cell", e)}
           style={{ display: "inline-flex", alignItems: "center", flexShrink: 0, gap: "0.15rem", padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
-          title="Inserir campo, agrupar, somar coluna — as mesmas opções do botão direito numa célula"
+          title="Inserir campo, separar blocos, somar coluna — as mesmas opções do botão direito numa célula"
         >
           Célula
           <ChevronDown size={12} />
@@ -1559,7 +1639,7 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
               const isEditing = editingCell?.row === r && editingCell?.col === c;
               const isGrouped = highlightExactValues?.has(cell.value.trim()) ?? false;
               const isSecondaryGrouped = secondaryHighlightExactValues?.has(cell.value.trim()) ?? false;
-              const groupedTitle = [isGrouped && "Usado no agrupamento", isSecondaryGrouped && "Usado no agrupamento da SOMA"]
+              const groupedTitle = [isGrouped && "Usado para separar blocos", isSecondaryGrouped && "Usado para calcular subtotais"]
                 .filter(Boolean)
                 .join(" / ");
               const hasCustomBorder = Boolean(cell.border.top || cell.border.right || cell.border.bottom || cell.border.left);
@@ -1610,7 +1690,7 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
                 >
                   {isGrouped && (
                     <span
-                      title="Usado no agrupamento"
+                      title="Usado para separar blocos"
                       style={{
                         position: "absolute",
                         left: 0,
@@ -1623,7 +1703,7 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
                   )}
                   {isSecondaryGrouped && (
                     <span
-                      title="Usado no agrupamento da SOMA"
+                      title="Usado para calcular subtotais"
                       style={{
                         position: "absolute",
                         left: 0,

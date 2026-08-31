@@ -735,6 +735,12 @@ export interface PaymentExportTemplateConfig {
   detailRowIndex: number;
   /** In priority order; a new group starts whenever any of these differ between two consecutive (sorted) shifts. Empty means no grouping — every shift in one group. */
   groupBy: PaymentExportBindableField[];
+  /** Optional row written once before each detail group. */
+  groupHeader?: { enabled: boolean; rowIndex: number } | null;
+  /** Optional native Excel outline around the rows in each detail group. */
+  outline?: { enabled: boolean; collapsed: boolean };
+  /** Optional one-row replacement for the group's individual detail rows. */
+  consolidated?: { enabled: boolean; rowIndex: number } | null;
   /** An optional blank row placed between groups, reusing one templated row's style. */
   separator: {
     enabled: boolean;
@@ -742,15 +748,9 @@ export interface PaymentExportTemplateConfig {
     rowIndex: number;
   } | null;
   /**
-   * An optional subtotal row, summing every matching shift's `valor`.
-   * Written as a live `SUM(...)` Excel formula over the detail row's
-   * `{{valor}}` column (falls back to a precomputed static number if the
-   * detail row has no exact `{{valor}}` cell to reference). Unlike the
-   * detail row, there's no separate "which column" config: whichever
-   * cell(s) in this row contain the literal `{{valorSoma}}` token get the
-   * total (same mechanism `{{field}}` tokens use on the detail row — see
-   * `renderSumCell` in `paymentExportGrid.ts`); every other cell is static
-   * text, written as typed, exactly like the separator row.
+   * An optional subtotal row. `{{soma:valor}}` and
+   * `{{soma:workedHours}}` produce live Excel SUM formulas over their
+   * respective detail columns. Legacy `{{valorSoma}}` remains supported.
    */
   subtotal: {
     enabled: boolean;

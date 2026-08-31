@@ -2,16 +2,18 @@ import { save } from "@tauri-apps/plugin-dialog";
 import ExcelJS from "exceljs";
 import { writeBinaryFile } from "./api";
 import { getPaymentExportTemplate, listPaymentShiftsForReport, type ListPaymentShiftSummariesQuery, type PaymentShiftReportRow } from "./db";
-import { formatTimestampForFileName, sanitizeFileName } from "./format";
+import { formatTimestampForFileName, sanitizeFileName, shiftDurationMinutes } from "./format";
 import { buildShiftValueResolver } from "./paymentShiftValue";
 import {
   applyColumnAutoFit,
-  findValorColumnIndex,
+  findSummableColumnIndex,
   groupKeyValue,
   pxToExcelWidth,
+  renderGroupCell,
   renderSumCell,
   renderTemplateCell,
   writeTemplateRow,
+  type PaymentExportSummableField,
   type SumFormulaRange,
 } from "./paymentExportGrid";
 import type { PaymentExportTemplateConfig } from "./types";
@@ -98,6 +100,9 @@ export async function generatePaymentsExportXlsx(
   const workbook = new ExcelJS.Workbook();
   const sheetName = sanitizeFileName(template.name).slice(0, 31) || "Pagamentos";
   const sheet = workbook.addWorksheet(sheetName);
+  if (config.outline?.enabled) {
+    sheet.properties.outlineProperties = { summaryBelow: true, summaryRight: true };
+  }
 
   sheet.columns = grid.columnWidths.map((w) => ({ width: pxToExcelWidth(w) }));
 
@@ -114,7 +119,10 @@ export async function generatePaymentsExportXlsx(
   // Excel formula (matching the user's original manual ledger) instead of a
   // precomputed static number. `null` when the detail row has no exact
   // `{{valor}}` cell to reference (falls back to a static number).
-  const valorColumnIndex = findValorColumnIndex(grid, config.detailRowIndex);
+  const summableColumnIndexes: Record<PaymentExportSummableField, number | null> = {
+    valor: findSummableColumnIndex(grid, config.detailRowIndex, "valor"),
+    workedHours: findSummableColumnIndex(grid, config.detailRowIndex, "workedHours"),
+  };
 
   // Separator and SOMA are written after a group's detail rows in whichever
   // order the template itself has them (by row index) — the template's own
@@ -132,31 +140,63 @@ export async function generatePaymentsExportXlsx(
   // loop itself doesn't need to track anymore, now that SOMA has its own
   // grouping).
   let subtotalFirstRow = nextRow;
-  let subtotalSum = 0;
+  let subtotalSums: Record<PaymentExportSummableField, number> = { valor: 0, workedHours: 0 };
   while (index < sorted.length) {
     const detailKey = detailGroupKeyOf(sorted[index]);
     const subtotalKeyAtStart = subtotalGroupKeyOf(sorted[index]);
-    while (
-      index < sorted.length &&
-      detailGroupKeyOf(sorted[index]) === detailKey &&
-      subtotalGroupKeyOf(sorted[index]) === subtotalKeyAtStart
-    ) {
-      const row = sorted[index];
-      const amount = amounts.get(row) ?? null;
-      subtotalSum += amount ?? 0;
-      writeTemplateRow(sheet, grid, config.detailRowIndex, nextRow, {
-        renderCell: (_c, raw) => renderTemplateCell(raw, row, amount),
+    let groupEnd = index;
+    while (groupEnd < sorted.length && detailGroupKeyOf(sorted[groupEnd]) === detailKey && subtotalGroupKeyOf(sorted[groupEnd]) === subtotalKeyAtStart) {
+      groupEnd++;
+    }
+    const groupRows = sorted.slice(index, groupEnd);
+
+    if (config.groupHeader?.enabled) {
+      writeTemplateRow(sheet, grid, config.groupHeader.rowIndex, nextRow, {
+        renderCell: (_c, raw) => renderGroupCell(raw, groupRows, amounts),
       });
       nextRow++;
-      index++;
     }
+
+    for (const row of groupRows) {
+      const amount = amounts.get(row) ?? null;
+      subtotalSums.valor += amount ?? 0;
+      if (row.scheduleStartMinutes !== null && row.scheduleEndMinutes !== null) {
+        subtotalSums.workedHours += shiftDurationMinutes(row.scheduleStartMinutes, row.scheduleEndMinutes) / (24 * 60);
+      }
+    }
+
+    const contentFirstRow = nextRow;
+    if (config.consolidated?.enabled) {
+      writeTemplateRow(sheet, grid, config.consolidated.rowIndex, nextRow, {
+        renderCell: (_c, raw) => renderGroupCell(raw, groupRows, amounts),
+      });
+      nextRow++;
+    } else {
+      for (const row of groupRows) {
+        writeTemplateRow(sheet, grid, config.detailRowIndex, nextRow, {
+          renderCell: (_c, raw) => renderTemplateCell(raw, row, amounts.get(row) ?? null),
+        });
+        nextRow++;
+      }
+    }
+    if (config.outline?.enabled) {
+      for (let sheetRow = contentFirstRow; sheetRow < nextRow; sheetRow++) {
+        sheet.getRow(sheetRow).outlineLevel = 1;
+        sheet.getRow(sheetRow).hidden = config.outline.collapsed;
+      }
+    }
+    index = groupEnd;
 
     // Every SOMA group is a contiguous run of whole turno-groups (see the
     // sort above), so crossing a SOMA boundary can only ever happen right
     // here, between two turno-groups — never mid-group.
     const atSubtotalBoundary = index >= sorted.length || subtotalGroupKeyOf(sorted[index]) !== subtotalKeyAtStart;
-    const formulaRange: SumFormulaRange | null =
-      valorColumnIndex !== null ? { columnIndex: valorColumnIndex, firstRow: subtotalFirstRow, lastRow: nextRow - 1 } : null;
+    const formulaRangeFor = (field: PaymentExportSummableField): SumFormulaRange | null => {
+      const columnIndex = summableColumnIndexes[field];
+      return columnIndex !== null && !config.groupHeader?.enabled && !config.consolidated?.enabled
+        ? { columnIndex, firstRow: subtotalFirstRow, lastRow: nextRow - 1 }
+        : null;
+    };
 
     // The separator always fires per turno-group boundary; SOMA only fires
     // once its own (possibly wider) group is fully done — skipping it here
@@ -169,14 +209,14 @@ export async function generatePaymentsExportXlsx(
         nextRow++;
       } else if (atSubtotalBoundary) {
         writeTemplateRow(sheet, grid, trailing.rowIndex, nextRow, {
-          renderCell: (_c, raw) => renderSumCell(raw, subtotalSum, formulaRange),
+          renderCell: (_c, raw) => renderSumCell(raw, subtotalSums, formulaRangeFor),
         });
         nextRow++;
       }
     }
 
     if (atSubtotalBoundary) {
-      subtotalSum = 0;
+      subtotalSums = { valor: 0, workedHours: 0 };
       subtotalFirstRow = nextRow;
     }
   }

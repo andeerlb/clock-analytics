@@ -2865,6 +2865,20 @@ export async function updatePaymentExportTemplate(id: number, input: PaymentExpo
   );
 }
 
+/** Creates an independent copy of an export template, including its entire grid configuration. */
+export async function clonePaymentExportTemplate(id: number): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute(
+    `INSERT INTO payment_export_templates (name, config_json)
+     SELECT name || ' (cópia)', config_json
+     FROM payment_export_templates
+     WHERE id = $1`,
+    [id],
+  );
+  if (result.rowsAffected === 0) throw new Error("Template de exportação não encontrado.");
+  return result.lastInsertId as number;
+}
+
 export async function deletePaymentExportTemplate(id: number): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM payment_export_templates WHERE id = $1", [id]);

@@ -73,6 +73,10 @@ export default function PaymentExportTemplateEditorPage() {
   const [subtotalEnabled, setSubtotalEnabled] = useState(false);
   const [subtotalRowIndex, setSubtotalRowIndex] = useState<number | null>(null);
   const [subtotalColor, setSubtotalColor] = useState("#facc15");
+  const [groupHeaderRowIndex, setGroupHeaderRowIndex] = useState<number | null>(null);
+  const [consolidatedRowIndex, setConsolidatedRowIndex] = useState<number | null>(null);
+  const [outlineEnabled, setOutlineEnabled] = useState(false);
+  const [outlineCollapsed, setOutlineCollapsed] = useState(false);
 
   const [contextMenu, setContextMenu] = useState<OpenContextMenu | null>(null);
 
@@ -89,6 +93,10 @@ export default function PaymentExportTemplateEditorPage() {
         setSeparatorRowIndex(t.config.separator?.rowIndex ?? null);
         setSubtotalEnabled(t.config.subtotal?.enabled ?? false);
         setSubtotalRowIndex(t.config.subtotal?.rowIndex ?? null);
+        setGroupHeaderRowIndex(t.config.groupHeader?.rowIndex ?? null);
+        setConsolidatedRowIndex(t.config.consolidated?.rowIndex ?? null);
+        setOutlineEnabled(t.config.outline?.enabled ?? false);
+        setOutlineCollapsed(t.config.outline?.collapsed ?? false);
       })
       .catch((e) => setError(String(e instanceof Error ? e.message : e)))
       .finally(() => setLoading(false));
@@ -243,14 +251,40 @@ export default function PaymentExportTemplateEditorPage() {
       },
     ];
 
+    if (row === groupHeaderRowIndex || row === consolidatedRowIndex) {
+      items.unshift(
+        {
+          label: "Inserir resumo do bloco",
+          submenu: [
+            { label: "Quantidade de turnos", onClick: () => gridRef.current?.setCellValue(row, col, "{{quantidade}}") },
+            { label: "Somar valores", onClick: () => gridRef.current?.setCellValue(row, col, "{{soma:valor}}") },
+            { label: "Somar horas trabalhadas", onClick: () => gridRef.current?.setCellValue(row, col, "{{soma:workedHours}}") },
+            {
+              label: "Listar valores únicos",
+              submenu: ALL_FIELDS.map((field) => ({ label: PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[field], onClick: () => gridRef.current?.setCellValue(row, col, `{{lista:${field}}}`) })),
+            },
+            {
+              label: "Primeiro registro",
+              submenu: ALL_FIELDS.map((field) => ({ label: PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[field], onClick: () => gridRef.current?.setCellValue(row, col, `{{primeiro:${field}}}`) })),
+            },
+            {
+              label: "Último registro",
+              submenu: ALL_FIELDS.map((field) => ({ label: PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[field], onClick: () => gridRef.current?.setCellValue(row, col, `{{ultimo:${field}}}`) })),
+            },
+          ],
+        },
+        { separator: true },
+      );
+    }
+
     const exactField = value.trim().match(/^\{\{(\w+)\}\}$/)?.[1];
     if (exactField && isBindableField(exactField)) {
       items.push({ separator: true });
       const alreadyGrouped = groupBy.includes(exactField);
       items.push({
         label: alreadyGrouped
-          ? `Remover "${PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[exactField]}" do agrupamento`
-          : `Agrupar por "${PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[exactField]}"`,
+          ? `Não separar mais por "${PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[exactField]}"`
+          : `Separar blocos por "${PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[exactField]}"`,
         onClick: () =>
           setGroupBy((prev) => (alreadyGrouped ? prev.filter((f) => f !== exactField) : [...prev, exactField])),
       });
@@ -264,8 +298,8 @@ export default function PaymentExportTemplateEditorPage() {
         const alreadySubtotalGrouped = subtotalGroupBy.includes(exactField);
         items.push({
           label: alreadySubtotalGrouped
-            ? `Remover "${PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[exactField]}" do agrupamento da SOMA`
-            : `Agrupar SOMA por "${PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[exactField]}"`,
+            ? `Não calcular mais subtotal por "${PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[exactField]}"`
+            : `Calcular subtotal por "${PAYMENT_EXPORT_BINDABLE_FIELD_LABELS[exactField]}"`,
           onClick: () =>
             setSubtotalGroupBy((prev) =>
               alreadySubtotalGrouped ? prev.filter((f) => f !== exactField) : [...prev, exactField],
@@ -274,13 +308,20 @@ export default function PaymentExportTemplateEditorPage() {
       }
     }
 
-    // The SOMA row has no separate "which column" config — whichever
-    // cell(s) hold the literal {{valorSoma}} token get the computed total
-    // at export time (same mechanism as the detail row's {{field}}
-    // tokens). Typing it by hand works too; this is just a shortcut.
-    if (subtotalEnabled && subtotalRowIndex === row) {
-      items.push({ separator: true });
-      items.push({ label: "Somar nessa coluna", onClick: () => gridRef.current?.setCellValue(row, col, "{{valorSoma}}") });
+    // A subtotal cell sums the numeric field used by the detail row in the
+    // same column. This keeps the action spreadsheet-like while supporting
+    // both money and worked-duration columns.
+    if (subtotalEnabled && subtotalRowIndex === row && detailRowIndex !== null) {
+      const detailToken = gridRef.current?.getGrid().rows[detailRowIndex]?.[col]?.value.trim();
+      const summableField = detailToken === "{{valor}}" ? "valor" : detailToken === "{{workedHours}}" ? "workedHours" : null;
+      if (summableField) {
+        const sumToken = `{{soma:${summableField}}}`;
+        items.push({ separator: true });
+        items.push({
+          label: summableField === "valor" ? "Somar valores desta coluna" : "Somar horas desta coluna",
+          onClick: () => gridRef.current?.setCellValue(row, col, sumToken),
+        });
+      }
     }
 
     if (backgroundColor || fontColor) {
@@ -316,7 +357,34 @@ export default function PaymentExportTemplateEditorPage() {
 
   /** Right-click on a row's number gutter — marks/unmarks that exact row's role. */
   function handleRowContextMenu(row: number, x: number, y: number) {
-    const items: ContextMenuItem[] = [];
+    function insertRowAt(index: number) {
+      gridRef.current?.insertRow(index);
+      const shift = (value: number | null) => (value !== null && value >= index ? value + 1 : value);
+      setDetailRowIndex(shift);
+      setSeparatorRowIndex(shift);
+      setSubtotalRowIndex(shift);
+      setGroupHeaderRowIndex(shift);
+      setConsolidatedRowIndex(shift);
+    }
+    function deleteRowAt(index: number) {
+      const grid = gridRef.current?.getGrid();
+      if (!grid || grid.rows.length <= 1) return;
+      gridRef.current?.deleteRow(index);
+      const shift = (value: number | null) => (value === index ? null : value !== null && value > index ? value - 1 : value);
+      if (detailRowIndex === index) setDetailRowIndex(null); else setDetailRowIndex(shift);
+      if (separatorRowIndex === index) setSeparatorEnabled(false);
+      setSeparatorRowIndex(shift);
+      if (subtotalRowIndex === index) setSubtotalEnabled(false);
+      setSubtotalRowIndex(shift);
+      setGroupHeaderRowIndex(shift);
+      setConsolidatedRowIndex(shift);
+    }
+    const items: ContextMenuItem[] = [
+      { label: "Inserir linha acima", onClick: () => insertRowAt(row) },
+      { label: "Inserir linha abaixo", onClick: () => insertRowAt(row + 1) },
+      { label: "Excluir linha", onClick: () => deleteRowAt(row) },
+      { separator: true },
+    ];
 
     if (detailRowIndex === row) {
       items.push({ label: "Desmarcar linha do turno", onClick: () => setDetailRowIndex(null) });
@@ -352,6 +420,16 @@ export default function PaymentExportTemplateEditorPage() {
       items.push({ label: "Marcar como Linha de SOMA", onClick: () => markSubtotalRow(row) });
     }
 
+    items.push({ separator: true });
+    items.push({
+      label: groupHeaderRowIndex === row ? "Desmarcar cabeçalho do bloco" : "Marcar como Cabeçalho do Bloco",
+      onClick: () => setGroupHeaderRowIndex(groupHeaderRowIndex === row ? null : row),
+    });
+    items.push({
+      label: consolidatedRowIndex === row ? "Desmarcar linha consolidada" : "Marcar como Linha Consolidada",
+      onClick: () => setConsolidatedRowIndex(consolidatedRowIndex === row ? null : row),
+    });
+
     setContextMenu({ x, y, items });
   }
 
@@ -362,6 +440,10 @@ export default function PaymentExportTemplateEditorPage() {
       x,
       y,
       items: [
+        { label: "Inserir coluna à esquerda", onClick: () => gridRef.current?.insertColumn(col) },
+        { label: "Inserir coluna à direita", onClick: () => gridRef.current?.insertColumn(col + 1) },
+        { label: "Excluir coluna", onClick: () => gridRef.current?.deleteColumn(col) },
+        { separator: true },
         { label: autoFit ? "✓ Ajustar ao maior registro" : "Ajustar ao maior registro", onClick: () => gridRef.current?.setColumnAutoFit(col, true) },
         { label: !autoFit ? "✓ Usar tamanho fixo" : "Usar tamanho fixo", onClick: () => gridRef.current?.setColumnAutoFit(col, false) },
       ],
@@ -388,19 +470,44 @@ export default function PaymentExportTemplateEditorPage() {
     const alreadyGrouped = groupBy.includes(field);
     const items: ContextMenuItem[] = [
       {
-        label: alreadyGrouped ? `Remover "${fieldLabel}" do agrupamento por linha` : `Agrupar por linha: "${fieldLabel}"`,
+        label: alreadyGrouped ? `Não separar mais por "${fieldLabel}"` : `Separar blocos por "${fieldLabel}"`,
         onClick: () => setGroupBy((prev) => (alreadyGrouped ? prev.filter((f) => f !== field) : [...prev, field])),
       },
     ];
     if (subtotalEnabled) {
       const alreadySubtotalGrouped = subtotalGroupBy.includes(field);
       items.push({
-        label: alreadySubtotalGrouped ? `Remover "${fieldLabel}" do agrupamento da SOMA` : `Agrupar SOMA por: "${fieldLabel}"`,
+        label: alreadySubtotalGrouped ? `Não calcular mais subtotal por "${fieldLabel}"` : `Calcular subtotal por "${fieldLabel}"`,
         onClick: () =>
           setSubtotalGroupBy((prev) => (alreadySubtotalGrouped ? prev.filter((f) => f !== field) : [...prev, field])),
       });
     }
     setContextMenu({ x, y, items });
+  }
+
+  function handleGroupOptionsMenu(x: number, y: number) {
+    setContextMenu({
+      x,
+      y,
+      items: [
+        {
+          label: "Agrupamento recolhível no Excel",
+          selected: outlineEnabled,
+          onClick: () => {
+            setOutlineEnabled((enabled) => {
+              if (enabled) setOutlineCollapsed(false);
+              return !enabled;
+            });
+          },
+        },
+        {
+          label: "Iniciar grupos recolhidos",
+          selected: outlineCollapsed,
+          disabled: !outlineEnabled,
+          onClick: () => setOutlineCollapsed((collapsed) => !collapsed),
+        },
+      ],
+    });
   }
 
   async function handleSave() {
@@ -419,6 +526,18 @@ export default function PaymentExportTemplateEditorPage() {
     }
     if (subtotalEnabled && subtotalRowIndex === null) {
       setError("Marque qual linha é a linha de SOMA, ou desative a linha de SOMA.");
+      return;
+    }
+    const assignedRows = [
+      ["turno", detailRowIndex],
+      ["separadora", separatorEnabled ? separatorRowIndex : null],
+      ["SOMA", subtotalEnabled ? subtotalRowIndex : null],
+      ["cabeçalho do bloco", groupHeaderRowIndex],
+      ["consolidada", consolidatedRowIndex],
+    ] as const;
+    const duplicateRole = assignedRows.find(([, row], index) => row !== null && assignedRows.some(([, other], otherIndex) => otherIndex !== index && other === row));
+    if (duplicateRole) {
+      setError(`A linha ${duplicateRole[0]} não pode ter outro papel ao mesmo tempo.`);
       return;
     }
     // Marking the same physical row for two roles is never intentional —
@@ -444,6 +563,9 @@ export default function PaymentExportTemplateEditorPage() {
       grid,
       detailRowIndex,
       groupBy,
+      groupHeader: groupHeaderRowIndex !== null ? { enabled: true, rowIndex: groupHeaderRowIndex } : null,
+      outline: { enabled: outlineEnabled, collapsed: outlineCollapsed },
+      consolidated: consolidatedRowIndex !== null ? { enabled: true, rowIndex: consolidatedRowIndex } : null,
       subtotalGroupBy,
       separator: separatorEnabled && separatorRowIndex !== null ? { enabled: true, rowIndex: separatorRowIndex } : null,
       subtotal: subtotalEnabled && subtotalRowIndex !== null ? { enabled: true, rowIndex: subtotalRowIndex } : null,
@@ -480,12 +602,14 @@ export default function PaymentExportTemplateEditorPage() {
     const map = new Map<number, RowBadge>();
     if (separatorEnabled && separatorRowIndex !== null) map.set(separatorRowIndex, { label: "S", color: separatorColor });
     if (subtotalEnabled && subtotalRowIndex !== null) map.set(subtotalRowIndex, { label: "Σ", color: subtotalColor });
+    if (groupHeaderRowIndex !== null) map.set(groupHeaderRowIndex, { label: "G", color: "#a78bfa" });
+    if (consolidatedRowIndex !== null) map.set(consolidatedRowIndex, { label: "C", color: "#f97316" });
     // Detail row badge is set last so it always wins if two roles were
     // (invalidly) left pointing at the same row while mid-edit — the
     // detail row is the one thing every template must have.
     if (detailRowIndex !== null) map.set(detailRowIndex, { label: "T", color: DETAIL_BADGE_COLOR });
     return map;
-  }, [detailRowIndex, separatorEnabled, separatorRowIndex, separatorColor, subtotalEnabled, subtotalRowIndex, subtotalColor]);
+  }, [detailRowIndex, separatorEnabled, separatorRowIndex, separatorColor, subtotalEnabled, subtotalRowIndex, subtotalColor, groupHeaderRowIndex, consolidatedRowIndex]);
 
   // Which exact cell values currently drive agrupamento — shown as a small
   // marker directly on the grid cell instead of a side-panel list (see
@@ -543,6 +667,7 @@ export default function PaymentExportTemplateEditorPage() {
           onRowContextMenu={handleRowContextMenu}
           onColumnContextMenu={handleColumnContextMenu}
           onGroupingMenu={handleGroupingMenu}
+          onGroupOptionsMenu={handleGroupOptionsMenu}
         />
       </div>
 

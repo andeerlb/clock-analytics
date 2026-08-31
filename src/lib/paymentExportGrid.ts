@@ -118,7 +118,7 @@ function isoDateToUtcDate(isoDate: string): Date {
   return new Date(Date.UTC(y, m - 1, d));
 }
 
-/** A cell's raw template text -> what actually gets written to the exported cell. An exact `{{valor}}` becomes a real number (currency-formatted at write time, see `writeTemplateRow`); an exact `{{workDate}}` becomes a real `Date` (date-formatted at write time); either mixed into other text, or any other field, becomes a substituted string. Unknown/unrecognized tokens are left as-is, visibly, rather than silently vanishing. */
+/** A cell's raw template text -> what actually gets written to the exported cell. Exact numeric/date tokens become native Excel values; tokens mixed with text become display strings. */
 export function renderTemplateCell(rawValue: string, row: PaymentShiftReportRow, amount: number | null): string | number | Date {
   const trimmed = rawValue.trim();
   const exact = trimmed.match(EXACT_TOKEN_RE);
@@ -126,6 +126,7 @@ export function renderTemplateCell(rawValue: string, row: PaymentShiftReportRow,
     const field = exact[1];
     if (!isBindableField(field)) return rawValue;
     if (field === "valor") return amount ?? 0;
+    if (field === "workedHours") return (workedMinutes(row) ?? 0) / (24 * 60);
     if (field === "workDate") return isoDateToUtcDate(row.workDate);
     return fieldDisplayValue(field, row, amount);
   }
@@ -133,9 +134,48 @@ export function renderTemplateCell(rawValue: string, row: PaymentShiftReportRow,
   return rawValue.replace(TOKEN_RE, (whole, field) => (isBindableField(field) ? fieldDisplayValue(field, row, amount) : whole));
 }
 
-const SUM_TOKEN = "{{valorSoma}}";
 const EXACT_SUM_TOKEN_RE = /^\{\{valorSoma\}\}$/;
 const SUM_TOKEN_RE = /\{\{valorSoma\}\}/g;
+const EXACT_GENERIC_SUM_TOKEN_RE = /^\{\{soma:(valor|workedHours)\}\}$/;
+const GENERIC_SUM_TOKEN_RE = /\{\{soma:(valor|workedHours)\}\}/g;
+
+export type PaymentExportSummableField = "valor" | "workedHours";
+
+/** Renders a group header/consolidated cell from all shifts in one block. */
+export function renderGroupCell(
+  rawValue: string,
+  rows: PaymentShiftReportRow[],
+  amounts: Map<PaymentShiftReportRow, number | null>,
+): string | number | Date {
+  if (rows.length === 0) return rawValue;
+  const first = rows[0];
+  const last = rows[rows.length - 1];
+  const exact = rawValue.trim();
+  if (exact === "{{quantidade}}") return rows.length;
+  const operation = exact.match(/^\{\{(soma|lista|primeiro|ultimo):(\w+)\}\}$/);
+  if (operation && isBindableField(operation[2])) {
+    const [, kind, field] = operation as unknown as [string, string, PaymentExportBindableField];
+    if (kind === "soma" && field === "valor") return rows.reduce((total, row) => total + (amounts.get(row) ?? 0), 0);
+    if (kind === "soma" && field === "workedHours") {
+      return rows.reduce((total, row) => total + (workedMinutes(row) ?? 0) / (24 * 60), 0);
+    }
+    if (kind === "lista") {
+      return [...new Set(rows.map((row) => fieldDisplayValue(field, row, amounts.get(row) ?? null)).filter(Boolean))].join(", ");
+    }
+    if (kind === "primeiro") return renderTemplateCell(`{{${field}}}`, first, amounts.get(first) ?? null);
+    if (kind === "ultimo") return renderTemplateCell(`{{${field}}}`, last, amounts.get(last) ?? null);
+  }
+  if (/^\{\{\w+\}\}$/.test(exact)) return renderTemplateCell(rawValue, first, amounts.get(first) ?? null);
+  return renderTemplateCell(rawValue, first, amounts.get(first) ?? null)
+    .toString()
+    .replace(/\{\{quantidade\}\}/g, String(rows.length))
+    .replace(/\{\{(lista|primeiro|ultimo):(\w+)\}\}/g, (whole, kind, candidate) => {
+      if (!isBindableField(candidate)) return whole;
+      if (kind === "lista") return [...new Set(rows.map((row) => fieldDisplayValue(candidate, row, amounts.get(row) ?? null)).filter(Boolean))].join(", ");
+      const row = kind === "primeiro" ? first : last;
+      return fieldDisplayValue(candidate, row, amounts.get(row) ?? null);
+    });
+}
 
 /** Which cells to reference for a group's live `SUM()` formula — the detail row's `{{valor}}` column, across the exact rows just written for that group. */
 export interface SumFormulaRange {
@@ -159,23 +199,43 @@ export interface SumFormulaRange {
  * as typed — the SOMA row otherwise behaves like the separator row (plain
  * static content), there's no separate "label column" concept to track.
  */
-export function renderSumCell(rawValue: string, sum: number, formulaRange: SumFormulaRange | null): string | number | { formula: string } {
+export function renderSumCell(
+  rawValue: string,
+  sums: Record<PaymentExportSummableField, number>,
+  formulaRangeFor: (field: PaymentExportSummableField) => SumFormulaRange | null,
+): string | number | { formula: string } {
   const trimmed = rawValue.trim();
+  const generic = trimmed.match(EXACT_GENERIC_SUM_TOKEN_RE);
+  if (generic) {
+    const field = generic[1] as PaymentExportSummableField;
+    const range = formulaRangeFor(field);
+    if (range) {
+      const letter = columnLetter(range.columnIndex);
+      return { formula: `SUM(${letter}${range.firstRow}:${letter}${range.lastRow})` };
+    }
+    return sums[field];
+  }
   if (EXACT_SUM_TOKEN_RE.test(trimmed)) {
+    const formulaRange = formulaRangeFor("valor");
     if (formulaRange) {
       const letter = columnLetter(formulaRange.columnIndex);
       return { formula: `SUM(${letter}${formulaRange.firstRow}:${letter}${formulaRange.lastRow})` };
     }
-    return sum;
+    return sums.valor;
   }
-  if (!rawValue.includes(SUM_TOKEN)) return rawValue;
-  return rawValue.replace(SUM_TOKEN_RE, () => String(sum));
+  return rawValue
+    .replace(SUM_TOKEN_RE, () => String(sums.valor))
+    .replace(GENERIC_SUM_TOKEN_RE, (_whole, field: PaymentExportSummableField) => String(sums[field]));
 }
 
-/** 0-based column index of the detail row's exact `{{valor}}` cell, or `null` if it doesn't have one — used to build the SOMA row's live formula range. */
-export function findValorColumnIndex(grid: TemplateGridData, detailRowIndex: number): number | null {
+/** 0-based column index of a summable detail token, used to build the subtotal's live formula. */
+export function findSummableColumnIndex(
+  grid: TemplateGridData,
+  detailRowIndex: number,
+  field: PaymentExportSummableField,
+): number | null {
   const row = grid.rows[detailRowIndex] ?? [];
-  const index = row.findIndex((cell) => cell.value.trim() === "{{valor}}");
+  const index = row.findIndex((cell) => cell.value.trim() === `{{${field}}}`);
   return index === -1 ? null : index;
 }
 
@@ -225,6 +285,7 @@ const DEFAULT_ROW_HEIGHT_PX = 30;
  * must always render as currency, never as a bare number.
  */
 const CURRENCY_NUM_FMT = '"R$" #,##0.00';
+const DURATION_NUM_FMT = "[h]:mm";
 
 /** Excel's date number-format code — applied to the CELL (`numFmt`) of every exact `{{workDate}}` cell, alongside writing a real `Date` value (see `isoDateToUtcDate`), so Excel recognizes it as an actual date type (draggable fill, sortable as a date, "Formatar células" shows "Data"), not text that merely reads like one. */
 const DATE_NUM_FMT = "dd/mm/yyyy";
@@ -271,8 +332,10 @@ export function writeTemplateRow(
     const destCell = destRow.getCell(c + 1);
     destCell.value = value === "" ? null : value;
     const rawToken = templateCell.value.trim();
-    if (rawToken === "{{valor}}" || rawToken === "{{valorSoma}}") {
+    if (rawToken === "{{valor}}" || rawToken === "{{valorSoma}}" || rawToken === "{{soma:valor}}") {
       destCell.numFmt = CURRENCY_NUM_FMT;
+    } else if (rawToken === "{{workedHours}}" || rawToken === "{{soma:workedHours}}") {
+      destCell.numFmt = DURATION_NUM_FMT;
     } else if (rawToken === "{{workDate}}") {
       destCell.numFmt = DATE_NUM_FMT;
     }
