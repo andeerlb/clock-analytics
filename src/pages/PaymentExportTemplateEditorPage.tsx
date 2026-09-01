@@ -24,6 +24,18 @@ import {
 const ALL_FIELDS = Object.keys(PAYMENT_EXPORT_BINDABLE_FIELD_LABELS) as PaymentExportBindableField[];
 const DETAIL_BADGE_COLOR = "#60a5fa";
 
+/** Fields still represented by an exact token somewhere in the visible grid. */
+function fieldsPresentInGrid(grid: TemplateGridData): Set<PaymentExportBindableField> {
+  const fields = new Set<PaymentExportBindableField>();
+  for (const row of grid.rows) {
+    for (const cell of row) {
+      const field = cell.value.trim().match(/^\{\{(\w+)\}\}$/)?.[1];
+      if (field && isBindableField(field)) fields.add(field);
+    }
+  }
+  return fields;
+}
+
 interface OpenContextMenu {
   x: number;
   y: number;
@@ -376,7 +388,11 @@ export default function PaymentExportTemplateEditorPage() {
     function deleteRowAt(index: number) {
       const grid = gridRef.current?.getGrid();
       if (!grid || grid.rows.length <= 1) return;
+      const nextGrid = { ...grid, rows: grid.rows.filter((_, row) => row !== index) };
+      const remainingFields = fieldsPresentInGrid(nextGrid);
       gridRef.current?.deleteRow(index);
+      setGroupBy((fields) => fields.filter((field) => remainingFields.has(field)));
+      setSubtotalGroupBy((fields) => fields.filter((field) => remainingFields.has(field)));
       const shift = (value: number | null) => (value === index ? null : value !== null && value > index ? value - 1 : value);
       if (detailRowIndex === index) setDetailRowIndex(null); else setDetailRowIndex(shift);
       if (separatorRowIndex === index) setSeparatorEnabled(false);
@@ -443,13 +459,23 @@ export default function PaymentExportTemplateEditorPage() {
   /** Right-click on a column's letter header — fixed width (the default, whatever's set by dragging) vs. auto-fit to the longest value actually exported into that column. */
   function handleColumnContextMenu(col: number, x: number, y: number) {
     const autoFit = gridRef.current?.getColumnAutoFit(col) ?? false;
+    function deleteColumnAt(index: number) {
+      const editor = gridRef.current;
+      const grid = editor?.getGrid();
+      if (!editor || !grid || grid.columnWidths.length <= 1) return;
+      const nextGrid = { ...grid, rows: grid.rows.map((row) => row.filter((_, column) => column !== index)) };
+      const remainingFields = fieldsPresentInGrid(nextGrid);
+      editor.deleteColumn(index);
+      setGroupBy((fields) => fields.filter((field) => remainingFields.has(field)));
+      setSubtotalGroupBy((fields) => fields.filter((field) => remainingFields.has(field)));
+    }
     setContextMenu({
       x,
       y,
       items: [
         { label: "Inserir coluna à esquerda", onClick: () => gridRef.current?.insertColumn(col) },
         { label: "Inserir coluna à direita", onClick: () => gridRef.current?.insertColumn(col + 1) },
-        { label: "Excluir coluna", onClick: () => gridRef.current?.deleteColumn(col) },
+        { label: "Excluir coluna", onClick: () => deleteColumnAt(col) },
         { separator: true },
         { label: autoFit ? "✓ Ajustar ao maior registro" : "Ajustar ao maior registro", onClick: () => gridRef.current?.setColumnAutoFit(col, true) },
         { label: !autoFit ? "✓ Usar tamanho fixo" : "Usar tamanho fixo", onClick: () => gridRef.current?.setColumnAutoFit(col, false) },
@@ -586,14 +612,20 @@ export default function PaymentExportTemplateEditorPage() {
     }
 
     const grid = gridRef.current?.getGrid() ?? { rows: [], columnWidths: [], columnAutoFit: [], rowHeights: [], merges: [] };
+    // A field selected through "Separar por" lives in config as well as in
+    // its cell. Structural edits can remove the last such cell, so sanitize
+    // again at the persistence boundary (also repairs older orphaned configs).
+    const presentFields = fieldsPresentInGrid(grid);
+    const validGroupBy = groupBy.filter((field) => presentFields.has(field));
+    const validSubtotalGroupBy = subtotalGroupBy.filter((field) => presentFields.has(field));
     const config: PaymentExportTemplateConfig = {
       grid,
       detailRowIndex,
-      groupBy,
+      groupBy: validGroupBy,
       groupHeader: groupHeaderRowIndex !== null ? { enabled: true, rowIndex: groupHeaderRowIndex } : null,
       outline: { enabled: outlineEnabled, collapsed: outlineCollapsed },
       consolidated: consolidatedRowIndex !== null ? { enabled: true, rowIndex: consolidatedRowIndex } : null,
-      subtotalGroupBy,
+      subtotalGroupBy: validSubtotalGroupBy,
       separator: separatorEnabled && separatorRowIndex !== null ? { enabled: true, rowIndex: separatorRowIndex } : null,
       subtotal: subtotalEnabled && subtotalRowIndex !== null ? { enabled: true, rowIndex: subtotalRowIndex } : null,
     };

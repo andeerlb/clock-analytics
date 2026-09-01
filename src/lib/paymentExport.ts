@@ -215,6 +215,27 @@ export async function generatePaymentsExportXlsx(
       }
     }
 
+    // Excel does not know our semantic `detailKey`: its native outline is
+    // inferred only from contiguous runs of rows with the same
+    // `outlineLevel`. Without a header/separator/subtotal row between two
+    // adjacent turno-groups, level-1 rows from Empresa A/Colaborador X and
+    // Empresa A/Colaborador Y become one large +/- group. Insert an
+    // invisible, non-outlined boundary row only when the template itself
+    // did not already produce a visible boundary. It carries no data and
+    // has negligible height, so the rendered layout remains unchanged.
+    const hasNextDetailGroup = index < sorted.length;
+    const templateCreatesBoundary =
+      Boolean(config.groupHeader?.enabled) ||
+      Boolean(config.separator?.enabled) ||
+      Boolean(config.subtotal?.enabled && atSubtotalBoundary);
+    if (config.outline?.enabled && hasNextDetailGroup && !templateCreatesBoundary) {
+      const boundaryRow = sheet.getRow(nextRow);
+      boundaryRow.outlineLevel = 0;
+      boundaryRow.hidden = true;
+      boundaryRow.height = 0.1;
+      nextRow++;
+    }
+
     if (atSubtotalBoundary) {
       subtotalSums = { valor: 0, workedHours: 0 };
       subtotalFirstRow = nextRow;
