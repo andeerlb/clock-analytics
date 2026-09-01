@@ -1,7 +1,7 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { exit, relaunch } from "@tauri-apps/plugin-process";
 import type { Update } from "@tauri-apps/plugin-updater";
 import {
   AlertTriangle,
@@ -25,6 +25,7 @@ import Modal from "../components/Modal";
 import UpdateModal from "../components/UpdateModal";
 import {
   backupAppData,
+  cancelDatabaseImport,
   checkPopplerStatus,
   clearImportsDir,
   deletePaths,
@@ -36,11 +37,11 @@ import {
   openAppDataDir,
   setCloseToTray,
   setPopplerDir,
+  type DatabaseImportEvent,
 } from "../lib/api";
 import {
   checkpointDatabase,
   clearAllData,
-  closeDatabase,
   findRedundantOriginals,
   getDatabaseTableSizes,
   getImportedFileNamesByBasename,
@@ -94,6 +95,8 @@ export default function SettingsPage() {
   const [exporting, setExporting] = useState(false);
   const [importConfirmText, setImportConfirmText] = useState("");
   const [importing, setImporting] = useState(false);
+  const [restartCountdown, setRestartCountdown] = useState<number | null>(null);
+  const [importEvents, setImportEvents] = useState<DatabaseImportEvent[]>([]);
 
   const [popplerStatus, setPopplerStatusState] = useState<PopplerStatus | null>(null);
   const [popplerDirInput, setPopplerDirInput] = useState("");
@@ -335,16 +338,44 @@ export default function SettingsPage() {
         setImporting(false);
         return;
       }
-      // Close this session's connection before the file underneath it gets
-      // replaced, then relaunch so the next connection opens fresh against
-      // the new file — nothing about the running app (cached DB promise,
-      // in-memory state) survives a straight file swap otherwise.
-      await closeDatabase();
-      await importDatabase(srcPath);
-      await relaunch();
+      // The Rust side only validates and stages the chosen file. The actual
+      // swap happens during the next startup, before SQLite is opened, so
+      // background queries cannot block this flow or leave a closed pool in
+      // the still-running UI.
+      const events = await importDatabase(srcPath);
+      setImportEvents(events);
+      localStorage.setItem("database-import-events", JSON.stringify(events));
+      setRestartCountdown(30);
     } catch (e) {
       setError(String(e));
       setImporting(false);
+    }
+  }
+
+  useEffect(() => {
+    if (restartCountdown === null) return;
+    if (restartCountdown <= 0) {
+      const restart = import.meta.env.DEV ? exit(0) : relaunch();
+      restart.catch((e) => {
+        setError(String(e));
+        setRestartCountdown(null);
+        setImporting(false);
+      });
+      return;
+    }
+    const timeout = setTimeout(() => setRestartCountdown((value) => value === null ? null : value - 1), 1000);
+    return () => clearTimeout(timeout);
+  }, [restartCountdown]);
+
+  async function cancelPendingImport() {
+    try {
+      await cancelDatabaseImport();
+      localStorage.removeItem("database-import-events");
+      setImportEvents([]);
+      setRestartCountdown(null);
+      setImporting(false);
+    } catch (e) {
+      setError(String(e));
     }
   }
 
@@ -766,9 +797,9 @@ export default function SettingsPage() {
 
         <p className="muted" style={{ fontSize: "0.85rem" }}>
           Substitui TODO o banco de dados atual (cadastro, histórico, configurações — tudo) pelo
-          arquivo escolhido. Uma cópia do que está aqui agora é salva automaticamente antes de
-          trocar, mas o que está na tela desaparece e vira o conteúdo desse arquivo. O app reinicia
-          sozinho logo em seguida. Só use se souber exatamente o que tem dentro desse arquivo.
+          arquivo escolhido. Durante a troca, o banco atual é mantido temporariamente para permitir
+          recuperação automática se houver erro; após o sucesso, essa cópia é apagada. O app
+          reinicia sozinho. Só use se souber exatamente o que há nesse arquivo.
         </p>
 
         <div className="field" style={{ maxWidth: "22rem", marginTop: "0.4rem", marginBottom: "1rem", gap: "0.6rem" }}>
@@ -836,6 +867,34 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+
+      {restartCountdown !== null && (
+        <Modal onClose={() => {}} closeOnEscape={false} closeOnBackdrop={false} width="30rem">
+          <h3 style={{ marginTop: 0 }}>Banco pronto para restauração</h3>
+          <p className="muted" style={{ lineHeight: 1.55 }}>
+            O arquivo foi validado e preparado. {import.meta.env.DEV
+              ? <>O modo de desenvolvimento será encerrado em <strong>{restartCountdown} segundo(s)</strong>. Depois, execute <code>yarn tauri dev</code> novamente para concluir a restauração.</>
+              : <>O PontoScan reiniciará em <strong>{restartCountdown} segundo(s)</strong> para restaurar o banco com segurança.</>}
+          </p>
+          <p className="muted" style={{ fontSize: "0.85rem" }}>
+            Se ocorrer algum erro, o banco atual será mantido. Nenhuma cópia extra permanecerá após uma restauração bem-sucedida.
+          </p>
+          <div style={{ display: "grid", gap: "0.4rem", margin: "1rem 0" }}>
+            {importEvents.map((event) => (
+              <div key={`${event.label}-${event.occurredAt}`} style={{ display: "flex", justifyContent: "space-between", gap: "1rem", padding: "0.5rem 0.65rem", background: "var(--sidebar-bg)", borderRadius: 6 }}>
+                <span>✓ {event.label}</span><code>{event.occurredAt}</code>
+              </div>
+            ))}
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", padding: "0.5rem 0.65rem", background: "var(--accent-soft)", borderRadius: 6 }}>
+              <span>⏳ Reinício pendente</span><code>em {restartCountdown}s</code>
+            </div>
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.1rem" }}>
+            <button type="button" className="secondary" onClick={cancelPendingImport}>Cancelar importação</button>
+            <button type="button" onClick={() => setRestartCountdown(0)}>{import.meta.env.DEV ? "Fechar modo dev agora" : "Reiniciar agora"}</button>
+          </div>
+        </Modal>
+      )}
 
       {showUpdateModal && availableUpdate && (
         <UpdateModal

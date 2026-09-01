@@ -232,9 +232,22 @@ export function exportDatabase(destPath: string): Promise<void> {
   return invoke("export_database", { destPath });
 }
 
-/** Replaces the live database file with `srcPath` — validates it's really a SQLite file and backs up the current one first (see the Rust side). Call `closeDatabase()` (lib/db) before this and relaunch the app right after. */
-export function importDatabase(srcPath: string): Promise<void> {
+/** Validates and stages a database file for replacement on the next launch. Relaunch the app right after this resolves. */
+export interface DatabaseImportEvent { label: string; occurredAt: string }
+export function importDatabase(srcPath: string): Promise<DatabaseImportEvent[]> {
   return invoke("import_database", { srcPath });
+}
+
+export function cancelDatabaseImport(): Promise<void> {
+  return invoke("cancel_database_import");
+}
+
+export interface DatabaseImportResult { success: boolean; message: string; events: DatabaseImportEvent[] }
+export function takeDatabaseImportResult(): Promise<DatabaseImportResult | null> {
+  return invoke("take_database_import_result");
+}
+export function clearDatabaseImportResult(): Promise<void> {
+  return invoke("clear_database_import_result");
 }
 
 /** Whether pdfinfo/pdftotext/pdfseparate/pdfunite were found — checked at startup and on Configurações. */

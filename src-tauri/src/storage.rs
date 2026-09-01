@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -198,32 +198,103 @@ pub fn export_database(data_dir: &Path, dest_path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Replaces the live database with `src_path`. Validates the 16-byte SQLite
-/// header first — cheap, and enough to catch "wrong file picked" without
-/// pulling in a full SQL engine just for this. Backs up whatever's
-/// currently in place before overwriting, so a bad import is always
-/// recoverable. Removes the current database's `-wal`/`-shm` sidecars
-/// rather than carrying them over — they hold pages relative to the OLD
-/// file, and applying them on top of the newly-imported one would corrupt
-/// it. The caller is responsible for closing the existing DB connection
-/// before calling this, and relaunching the app right after: this only
-/// touches files, so nothing else stays consistent with the swap otherwise.
-pub fn import_database(data_dir: &Path, src_path: &str) -> Result<(), String> {
+const PENDING_IMPORT_FILE: &str = "pontoscan.db.pending-import";
+const STAGING_IMPORT_FILE: &str = "pontoscan.db.import-copying";
+const ROLLBACK_IMPORT_FILE: &str = "pontoscan.db.import-rollback";
+const IMPORT_RESULT_FILE: &str = "database-import-result.json";
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseImportResult {
+    pub success: bool,
+    pub message: String,
+    pub events: Vec<DatabaseImportEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseImportEvent {
+    pub label: String,
+    pub occurred_at: String,
+}
+
+fn import_event(label: &str) -> DatabaseImportEvent {
+    DatabaseImportEvent {
+        label: label.into(),
+        occurred_at: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
+    }
+}
+
+/// Validates and stages an imported database without touching the live
+/// file. The running app may still have queries/connections in flight, so
+/// replacing `pontoscan.db` here can deadlock its pool or leave the UI alive
+/// with a closed DB if anything fails afterward. `apply_pending_database_import`
+/// performs the actual swap on the next launch, before the frontend opens
+/// SQLite at all.
+pub fn import_database(data_dir: &Path, src_path: &str) -> Result<Vec<DatabaseImportEvent>, String> {
+    let mut events = vec![import_event("Validando arquivo")];
     let mut header = [0u8; 16];
     let mut f = fs::File::open(src_path).map_err(|e| e.to_string())?;
-    f.read_exact(&mut header)
-        .map_err(|_| "Arquivo pequeno demais para ser um banco de dados SQLite válido.".to_string())?;
+    f.read_exact(&mut header).map_err(|_| {
+        "Arquivo pequeno demais para ser um banco de dados SQLite válido.".to_string()
+    })?;
     if &header != SQLITE_MAGIC {
         return Err("Esse arquivo não é um banco de dados SQLite válido.".to_string());
     }
+    events.push(import_event("Arquivo validado"));
+    events.push(import_event("Preparando restauração"));
 
+    let staging = data_dir.join(STAGING_IMPORT_FILE);
+    let pending = data_dir.join(PENDING_IMPORT_FILE);
+    let _ = fs::remove_file(&staging);
+    fs::copy(src_path, &staging).map_err(|e| e.to_string())?;
+    // Only this atomic rename makes the import eligible for startup. A
+    // forced close during `copy` leaves merely `import-copying`, which the
+    // next launch discards instead of treating as a complete database.
+    fs::rename(&staging, &pending).map_err(|e| e.to_string())?;
+    events.push(import_event("Restauração preparada"));
+    events.push(import_event("Aguardando reinício"));
+    Ok(events)
+}
+
+/// Applies a previously staged import during app startup, while no SQL
+/// plugin connection exists yet. The old DB is backed up first. If the
+/// final rename fails after removing the old file, the backup is restored
+/// immediately so startup never knowingly leaves the app without a DB.
+pub fn apply_pending_database_import(data_dir: &Path) -> Result<bool, String> {
+    let staging = data_dir.join(STAGING_IMPORT_FILE);
+    let pending = data_dir.join(PENDING_IMPORT_FILE);
+    let rollback = data_dir.join(ROLLBACK_IMPORT_FILE);
     let dest = data_dir.join("pontoscan.db");
+
+    // An interrupted staging copy was never declared ready and is safe to
+    // discard. It can be at most one selected DB in size and never grows
+    // across launches.
+    if staging.exists() {
+        let _ = fs::remove_file(&staging);
+    }
+
+    if !pending.exists() {
+        // Crash after installing the imported DB but before deleting the
+        // rollback: finish the successful cleanup now.
+        if rollback.exists() && dest.exists() {
+            fs::remove_file(rollback).map_err(|e| e.to_string())?;
+            return Ok(true);
+        }
+        // No ready import exists, so an orphan rollback means the swap did
+        // not reach installation. Put the previous DB back.
+        if rollback.exists() && !dest.exists() {
+            fs::rename(rollback, dest).map_err(|e| e.to_string())?;
+            return Err("A restauração foi interrompida e o banco anterior foi recuperado.".into());
+        }
+        return Ok(false);
+    }
+
+    // Resume safely if a previous process stopped after moving the old DB
+    // aside but before installing the ready import.
     if dest.exists() {
-        let backup_name = format!(
-            "pontoscan.db.before-import-{}",
-            chrono::Local::now().format("%Y%m%d_%H%M%S")
-        );
-        fs::copy(&dest, data_dir.join(backup_name)).map_err(|e| e.to_string())?;
+        let _ = fs::remove_file(&rollback);
+        fs::rename(&dest, &rollback).map_err(|e| e.to_string())?;
     }
 
     for suffix in ["-wal", "-shm"] {
@@ -233,6 +304,54 @@ pub fn import_database(data_dir: &Path, src_path: &str) -> Result<(), String> {
         }
     }
 
-    fs::copy(src_path, &dest).map_err(|e| e.to_string())?;
+    if let Err(error) = fs::rename(&pending, &dest) {
+        if rollback.exists() {
+            let _ = fs::rename(&rollback, &dest);
+        }
+        return Err(error.to_string());
+    }
+    if rollback.exists() {
+        if let Err(error) = fs::remove_file(&rollback) {
+            let _ = fs::remove_file(&dest);
+            let _ = fs::rename(&rollback, &dest);
+            return Err(format!(
+                "A troca foi desfeita porque a cópia temporária não pôde ser apagada: {error}"
+            ));
+        }
+    }
+    Ok(true)
+}
+
+pub fn cancel_database_import(data_dir: &Path) -> Result<(), String> {
+    for name in [PENDING_IMPORT_FILE, STAGING_IMPORT_FILE] {
+        let path = data_dir.join(name);
+        if path.exists() {
+            fs::remove_file(path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+pub fn write_database_import_result(data_dir: &Path, result: &DatabaseImportResult) {
+    if let Ok(json) = serde_json::to_vec(result) {
+        let _ = fs::write(data_dir.join(IMPORT_RESULT_FILE), json);
+    }
+}
+
+pub fn take_database_import_result(data_dir: &Path) -> Result<Option<DatabaseImportResult>, String> {
+    let path = data_dir.join(IMPORT_RESULT_FILE);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+    let result = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    Ok(Some(result))
+}
+
+pub fn clear_database_import_result(data_dir: &Path) -> Result<(), String> {
+    let path = data_dir.join(IMPORT_RESULT_FILE);
+    if path.exists() {
+        fs::remove_file(path).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }

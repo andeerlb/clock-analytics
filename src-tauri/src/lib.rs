@@ -101,6 +101,32 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            // A database selected for import is staged by the previous app
+            // process. Swap it now, before the webview can load and before
+            // the SQL plugin creates its first connection pool.
+            let data_dir = app.path().app_data_dir()?;
+            let restoring_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+            match storage::apply_pending_database_import(&data_dir) {
+                Ok(true) => storage::write_database_import_result(&data_dir, &storage::DatabaseImportResult {
+                    success: true,
+                    message: "Banco de dados restaurado com sucesso.".into(),
+                    events: vec![
+                        storage::DatabaseImportEvent { label: "Aplicativo reiniciado".into(), occurred_at: restoring_at },
+                        storage::DatabaseImportEvent { label: "Banco de dados restaurado".into(), occurred_at: chrono::Local::now().format("%H:%M:%S%.3f").to_string() },
+                        storage::DatabaseImportEvent { label: "Cópia temporária removida".into(), occurred_at: chrono::Local::now().format("%H:%M:%S%.3f").to_string() },
+                    ],
+                }),
+                Ok(false) => {}
+                Err(error) => storage::write_database_import_result(&data_dir, &storage::DatabaseImportResult {
+                    success: false,
+                    message: format!("Não foi possível restaurar o banco. A versão anterior foi mantida. {error}"),
+                    events: vec![
+                        storage::DatabaseImportEvent { label: "Aplicativo reiniciado".into(), occurred_at: restoring_at },
+                        storage::DatabaseImportEvent { label: "Falha na restauração; banco anterior mantido".into(), occurred_at: chrono::Local::now().format("%H:%M:%S%.3f").to_string() },
+                    ],
+                }),
+            }
+
             // Built here instead of declaratively in `tauri.conf.json`
             // (whose `app.windows` is deliberately empty) so `transparent`
             // can differ by OS: Windows/macOS need it for `window_glass`'s
@@ -216,6 +242,9 @@ pub fn run() {
             commands::write_binary_file,
             commands::export_database,
             commands::import_database,
+            commands::cancel_database_import,
+            commands::take_database_import_result,
+            commands::clear_database_import_result,
             commands::check_poppler_status,
             commands::set_poppler_dir,
             commands::list_recent_payment_files,

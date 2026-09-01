@@ -765,14 +765,31 @@ pub fn export_database(app: AppHandle, dest_path: String) -> Result<(), String> 
     storage::export_database(&data_dir, &dest_path)
 }
 
-/// Replaces the live database file with `src_path` — see
-/// `storage::import_database` for the validation/backup/sidecar-cleanup it
-/// does before overwriting. The frontend closes its DB connection first and
-/// relaunches the app right after this returns.
+/// Validates and stages a database import. The actual swap happens early on
+/// the next launch, before SQLite is opened; the frontend relaunches after
+/// this returns.
 #[tauri::command]
-pub fn import_database(app: AppHandle, src_path: String) -> Result<(), String> {
+pub fn import_database(app: AppHandle, src_path: String) -> Result<Vec<storage::DatabaseImportEvent>, String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     storage::import_database(&data_dir, &src_path)
+}
+
+#[tauri::command]
+pub fn cancel_database_import(app: AppHandle) -> Result<(), String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    storage::cancel_database_import(&data_dir)
+}
+
+#[tauri::command]
+pub fn take_database_import_result(app: AppHandle) -> Result<Option<storage::DatabaseImportResult>, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    storage::take_database_import_result(&data_dir)
+}
+
+#[tauri::command]
+pub fn clear_database_import_result(app: AppHandle) -> Result<(), String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    storage::clear_database_import_result(&data_dir)
 }
 
 fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {

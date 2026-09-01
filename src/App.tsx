@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import { HashRouter, Link, Route, Routes } from "react-router-dom";
 import "./App.css";
 import PendingChangesTab from "./components/PendingChangesTab";
+import Modal from "./components/Modal";
 import Sidebar from "./components/Sidebar";
 import { FiltersProvider } from "./contexts/FiltersContext";
 import { RemoteFileUpdatesProvider } from "./contexts/RemoteFileUpdatesContext";
-import { checkPopplerStatus } from "./lib/api";
+import { checkPopplerStatus, clearDatabaseImportResult, takeDatabaseImportResult, type DatabaseImportResult } from "./lib/api";
 import { useWindowGlassInit } from "./lib/useWindowGlass";
 import ClientFormPage from "./pages/ClientFormPage";
 import ClientsPage from "./pages/ClientsPage";
@@ -45,11 +46,25 @@ import AnalyticsPage from "./pages/AnalyticsPage";
  */
 const IS_RECONCILIATION_WINDOW = getCurrentWindow().label === "reconciliation";
 
-function AppShell({ popplerMissing }: { popplerMissing: boolean }) {
+function AppShell({ popplerMissing, importResult, clearImportResult }: { popplerMissing: boolean; importResult: DatabaseImportResult | null; clearImportResult: () => void }) {
   return (
     <div className="app-shell">
       <Sidebar />
       <main className="app-content">
+        {importResult && (
+          <Modal onClose={() => {}} closeOnEscape={false} closeOnBackdrop={false} width="36rem">
+            <h3 style={{ marginTop: 0 }}>{importResult.success ? "Restauração concluída" : "Restauração não realizada"}</h3>
+            <div className={importResult.success ? "success-box" : "error-box"}>{importResult.message}</div>
+            <div style={{ display: "grid", gap: "0.4rem", margin: "1rem 0" }}>
+              {importResult.events.map((event) => (
+                <div key={`${event.label}-${event.occurredAt}`} style={{ display: "flex", justifyContent: "space-between", gap: "1rem", padding: "0.5rem 0.65rem", background: "var(--sidebar-bg)", borderRadius: 6 }}>
+                  <span>{importResult.success ? "✓" : "•"} {event.label}</span><code>{event.occurredAt}</code>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end" }}><button type="button" onClick={clearImportResult}>Concluir</button></div>
+          </Modal>
+        )}
         {popplerMissing && (
           <div className="error-box" style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
             <AlertTriangle size={18} style={{ flexShrink: 0 }} />
@@ -100,6 +115,7 @@ function AppShell({ popplerMissing }: { popplerMissing: boolean }) {
 
 function App() {
   const [popplerMissing, setPopplerMissing] = useState(false);
+  const [importResult, setImportResult] = useState<DatabaseImportResult | null>(null);
 
   // Reads back whether the native window blur applied at startup (see
   // `lib.rs`'s `setup`) actually took, and stamps `<html>` accordingly —
@@ -110,6 +126,18 @@ function App() {
     checkPopplerStatus()
       .then((status) => setPopplerMissing(!status.allFound))
       .catch(() => setPopplerMissing(false));
+  }, []);
+
+  useEffect(() => {
+    if (IS_RECONCILIATION_WINDOW) return;
+    takeDatabaseImportResult().then((result) => {
+      if (!result) return;
+      try {
+        const before = JSON.parse(localStorage.getItem("database-import-events") ?? "[]");
+        result.events = [...before, ...result.events];
+      } catch { /* malformed transient state is safe to ignore */ }
+      setImportResult(result);
+    }).catch(() => {});
   }, []);
 
   if (IS_RECONCILIATION_WINDOW) {
@@ -124,7 +152,12 @@ function App() {
     <HashRouter>
       <FiltersProvider>
         <RemoteFileUpdatesProvider>
-          <AppShell popplerMissing={popplerMissing} />
+          <AppShell popplerMissing={popplerMissing} importResult={importResult} clearImportResult={() => {
+            clearDatabaseImportResult().then(() => {
+              localStorage.removeItem("database-import-events");
+              setImportResult(null);
+            }).catch(() => {});
+          }} />
         </RemoteFileUpdatesProvider>
       </FiltersProvider>
     </HashRouter>
