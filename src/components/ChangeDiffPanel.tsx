@@ -54,15 +54,22 @@ export default function ChangeDiffPanel({
   /** "Visto" — acknowledges a card/line without resolving it (see `dismissCheckDiffs`): takes every `CheckDiffRow.id` the card is made of, since a card can bundle several field diffs for the same turno. Content-based (see `dismissed_diff_fingerprints`): a later check whose new row has identical content to a dismissed one arrives already dismissed, so it stays quiet everywhere — the pending banner AND this same single-check detail — until something actually changes. Omitted entirely only where there's truly no dismiss story (none currently). */
   onDismiss?: (rowIds: number[]) => void;
   dismissingIds?: Set<number>;
-  /** 'unresolved' cards (colaborador/rota não encontrado) get a "Reprocessar agora" button that calls this with the row's `configId` and the período THAT CHECK used (`CheckDiffRow.periodStart`/`periodEnd`, not whatever the live config resolves to today) — the fix is usually outside this panel entirely (an alias, a template tweak), so reprocessing with the exact same período is what lets the user find out whether it's actually resolved now. Omitted means no button offered. */
+  /** Every card/line (regardless of `changeKind`) gets a "Reprocessar agora" button whenever it carries a `configId`, calling this with that `configId` and the período THAT CHECK used (`CheckDiffRow.periodStart`/`periodEnd`, not whatever the live config resolves to today) — reprocessing with the exact same período is what lets the user find out whether whatever's shown here is still true. Omitted means no button offered anywhere. */
   onReprocess?: (configId: number, periodStart: string | null, periodEnd: string | null) => void;
 }) {
+  /** "Reprocessar agora" also marks the card "Visto" — reprocessing is itself an acknowledgment, and without this the card would keep nagging even while a reprocess is in flight. */
+  function handleReprocess(row: CheckDiffRow, groupRows: CheckDiffRow[]) {
+    if (!onReprocess || row.configId === null) return;
+    onReprocess(row.configId, row.periodStart, row.periodEnd);
+    onDismiss?.(groupRows.map((r) => r.id));
+  }
+
   /** Renders "Visto" for a card/line, keyed off the full rows (not just ids) so an already-dismissed group shows a static confirmation instead of a clickable button — dismissing never removes the card, just acknowledges it. */
   function renderDismissButton(groupRows: CheckDiffRow[]) {
     if (!onDismiss) return null;
     if (groupRows.every((r) => r.dismissedAt !== null)) {
       return (
-        <span className="badge neutral" style={{ display: "inline-flex", fontSize: "0.7rem" }}>
+        <span className="badge neutral" style={{ display: "inline-flex", fontSize: "0.7rem", borderRadius: 7 }}>
           Visto
         </span>
       );
@@ -93,17 +100,18 @@ export default function ChangeDiffPanel({
           key={`err-${i}`}
           className="error-box"
           style={{
-            display: "flex",
-            alignItems: "flex-start",
-            justifyContent: "space-between",
-            gap: "0.6rem",
             fontSize: "0.78rem",
             padding: "0.45rem 0.7rem",
             marginBottom: "0.4rem",
           }}
         >
-          <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{e.message}</span>
-          {renderDismissButton([e])}
+          <span style={{ overflowWrap: "anywhere" }}>{e.message}</span>
+          <div style={{ marginTop: "0.35rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
+            {onReprocess && e.configId !== null && (
+              <PillButton onClick={() => handleReprocess(e, [e])}>Reprocessar agora</PillButton>
+            )}
+            {renderDismissButton([e])}
+          </div>
         </div>
       ))}
       {Array.from(byIdentity.entries()).map(([idKey, entries]) => {
@@ -138,7 +146,12 @@ export default function ChangeDiffPanel({
                 <span className="badge ok" style={{ display: "inline-flex" }}>
                   {first.applied ? "Criado automaticamente" : "Possível novo turno"}
                 </span>
-                {renderDismissButton(entries)}
+                <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                  {onReprocess && first.configId !== null && (
+                    <PillButton onClick={() => handleReprocess(first, entries)}>Reprocessar agora</PillButton>
+                  )}
+                  {renderDismissButton(entries)}
+                </div>
               </div>
             ) : isUnresolved ? (
               <div style={{ marginTop: "0.35rem" }}>
@@ -164,9 +177,7 @@ export default function ChangeDiffPanel({
                   }}
                 >
                   {onReprocess && first.configId !== null && (
-                    <PillButton onClick={() => onReprocess(first.configId!, first.periodStart, first.periodEnd)}>
-                      Reprocessar agora
-                    </PillButton>
+                    <PillButton onClick={() => handleReprocess(first, entries)}>Reprocessar agora</PillButton>
                   )}
                   {renderDismissButton(entries)}
                 </div>
@@ -217,7 +228,12 @@ export default function ChangeDiffPanel({
                       </button>
                     ))
                   )}
-                  {renderDismissButton(entries)}
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    {onReprocess && first.configId !== null && (
+                      <PillButton onClick={() => handleReprocess(first, entries)}>Reprocessar agora</PillButton>
+                    )}
+                    {renderDismissButton(entries)}
+                  </div>
                 </div>
               </div>
             ) : (
@@ -273,7 +289,12 @@ export default function ChangeDiffPanel({
                       </button>
                     ))
                   )}
-                  {renderDismissButton(entries)}
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    {onReprocess && first.configId !== null && (
+                      <PillButton onClick={() => handleReprocess(first, entries)}>Reprocessar agora</PillButton>
+                    )}
+                    {renderDismissButton(entries)}
+                  </div>
                 </div>
               </div>
             )}

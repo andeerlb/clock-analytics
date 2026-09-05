@@ -173,14 +173,14 @@ export default function ConfirmPaymentModal({
                     gridTemplateColumns: "6.5rem minmax(0, 1fr) auto",
                     alignItems: "center",
                     gap: "0.75rem",
-                    padding: "0.78rem 0.85rem",
+                    padding: "1rem 1rem",
                     textAlign: "left",
                   }}
                 >
                   <span className="muted" style={{ fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase" }}>{PIX_KEY_TYPE_LABELS[key.keyType]}</span>
-                  <span style={{ minWidth: 0, overflowWrap: "anywhere", userSelect: "text", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: "0.96rem", fontWeight: 650, letterSpacing: "0.025em" }}>{key.keyValue}</span>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", color: copied ? "var(--success)" : "var(--text-muted)", fontSize: "0.74rem" }}>
-                    {copied ? <Check size={14} /> : <Copy size={14} />}
+                  <span style={{ minWidth: 0, overflowWrap: "anywhere", userSelect: "text", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: "1.55rem", fontWeight: 700, letterSpacing: "0.03em" }}>{key.keyValue}</span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", color: copied ? "var(--success)" : "var(--text-muted)", fontSize: "0.78rem" }}>
+                    {copied ? <Check size={18} /> : <Copy size={18} />}
                     {copied && "Copiada"}
                   </span>
                 </button>
@@ -209,11 +209,19 @@ export default function ConfirmPaymentModal({
       )}
       <div className="field" style={{ marginBottom: "1rem" }}>
         <label htmlFor="confirm-payment-amount">Valor</label>
-        <CurrencyInput id="confirm-payment-amount" size="md" digits={digits} onChange={setDigits} autoFocus />
-      </div>
-      <div className="info-box">
-        <Info size={14} style={{ flexShrink: 0, marginTop: "0.15rem" }} />
-        <span>Isso criará um novo registro com status "Pago". O registro original será arquivado no histórico.</span>
+        <CurrencyInput
+          id="confirm-payment-amount"
+          size="lg"
+          digits={digits}
+          onChange={setDigits}
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && amountValid && !busy) {
+              e.preventDefault();
+              onConfirm(centsMaskToAmount(digits));
+            }
+          }}
+        />
       </div>
       {error && (
         <div className="error-box" style={{ marginTop: "0.8rem", marginBottom: 0 }}>
