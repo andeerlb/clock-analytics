@@ -80,6 +80,7 @@ import {
 import { generatePaymentsExportXlsx, type PaymentExportResult } from "../lib/paymentExport";
 import { generatePaymentsPdfExport, type PaymentPdfExportResult } from "../lib/paymentPdfExport";
 import { ALL_COLUMN_IDS, FLAT_COLUMNS } from "../lib/paymentColumns";
+import { generatePaymentsReportPdf, type PaymentsReportResult } from "../lib/paymentsReport";
 import { acceptShiftChange } from "../lib/remoteCheckDiff";
 import type {
   PaymentExportTemplateListRow,
@@ -693,6 +694,11 @@ export default function PaymentsPage() {
   const [loading, setLoading] = useState(true);
   const [viewerPath, setViewerPath] = useState<string | null>(null);
 
+  const [generatingLegacyPdf, setGeneratingLegacyPdf] = useState(false);
+  const [legacyPdfError, setLegacyPdfError] = useState<string | null>(null);
+  const [generatedLegacyPdf, setGeneratedLegacyPdf] = useState<PaymentsReportResult | null>(null);
+  const [revealingLegacyPdf, setRevealingLegacyPdf] = useState(false);
+
   const [exportTemplates, setExportTemplates] = useState<PaymentExportTemplateListRow[]>([]);
   const [generatingExport, setGeneratingExport] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -955,6 +961,8 @@ export default function PaymentsPage() {
   // `page`/`pageSize`: those change how the table is paginated on screen,
   // not which rows (or how they're grouped) end up in a report.
   useEffect(() => {
+    setGeneratedLegacyPdf(null);
+    setLegacyPdfError(null);
     setGeneratedPdfExport(null);
     setPdfExportError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1184,6 +1192,33 @@ export default function PaymentsPage() {
     }
   }
 
+  async function handleGenerateLegacyPdf() {
+    setLegacyPdfError(null);
+    setGeneratedLegacyPdf(null);
+    setGeneratingLegacyPdf(true);
+    try {
+      const result = await generatePaymentsReportPdf(baseQuery(), grouped);
+      if (result.rowCount === 0) setLegacyPdfError(noReportRowsMessage(result.matchedCount));
+      else if (result.path) setGeneratedLegacyPdf(result);
+    } catch (e) {
+      setLegacyPdfError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setGeneratingLegacyPdf(false);
+    }
+  }
+
+  async function handleRevealLegacyPdf() {
+    if (!generatedLegacyPdf?.path) return;
+    setRevealingLegacyPdf(true);
+    try {
+      await revealInFileManager(generatedLegacyPdf.path);
+    } catch (e) {
+      setLegacyPdfError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setRevealingLegacyPdf(false);
+    }
+  }
+
   async function handleRevealPdfExport() {
     if (!generatedPdfExport?.path) return;
     setRevealingPdfExport(true);
@@ -1239,6 +1274,7 @@ export default function PaymentsPage() {
       </p>
       {exportError && <div className="error-box">{exportError}</div>}
       {pdfExportError && <div className="error-box">{pdfExportError}</div>}
+      {legacyPdfError && <div className="error-box">{legacyPdfError}</div>}
       {inlineEditError && <div className="error-box">{inlineEditError}</div>}
       {attention && (
         <div className="info-box">
@@ -1266,6 +1302,10 @@ export default function PaymentsPage() {
             >
               <FileDown size={15} style={{ marginRight: "0.4rem" }} />
               Exportar
+            </button>
+            <button type="button" className="secondary" onClick={handleGenerateLegacyPdf} disabled={generatingLegacyPdf} title="Gera o relatório fixo antigo considerando os filtros acima">
+              <FileDown size={15} style={{ marginRight: "0.4rem" }} />
+              {generatingLegacyPdf ? "Gerando..." : "Gerar PDF antigo"}
             </button>
             <button
               type="button"
@@ -1326,6 +1366,23 @@ export default function PaymentsPage() {
               <button type="button" className="outline" onClick={handleRevealPdfExport} disabled={revealingPdfExport}>
                 <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
                 Abrir no explorador
+              </button>
+            </div>
+          </div>
+        )}
+
+        {generatedLegacyPdf && generatedLegacyPdf.path && (
+          <div className="success-box" style={{ marginTop: "1rem", marginBottom: 0, display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <CheckCircle2 size={16} />
+              PDF antigo gerado com sucesso: {generatedLegacyPdf.title} ({generatedLegacyPdf.rowCount} turno(s))
+            </span>
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              <button type="button" className="outline" onClick={() => setViewerPath(generatedLegacyPdf.path)}>
+                <Eye size={15} style={{ marginRight: "0.4rem" }} /> Abrir PDF
+              </button>
+              <button type="button" className="outline" onClick={handleRevealLegacyPdf} disabled={revealingLegacyPdf}>
+                <FolderOpen size={15} style={{ marginRight: "0.4rem" }} /> Abrir no explorador
               </button>
             </div>
           </div>
@@ -1634,7 +1691,7 @@ export default function PaymentsPage() {
 
       <PdfViewerModal
         path={viewerPath}
-        title={generatedPdfExport?.title}
+        title={generatedLegacyPdf?.path === viewerPath ? generatedLegacyPdf.title : generatedPdfExport?.title}
         allowDownload={false}
         onClose={() => setViewerPath(null)}
       />
