@@ -1,10 +1,11 @@
-import { CircleHelp } from "lucide-react";
+import { CircleHelp, Eye } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import PaymentPdfTemplateHelpDrawer from "../components/PaymentPdfTemplateHelpDrawer";
+import PaymentPdfPreviewDrawer from "../components/PaymentPdfPreviewDrawer";
 import TemplateGridEditor, {
   FONT_FAMILIES,
   FONT_SIZES,
@@ -13,6 +14,7 @@ import TemplateGridEditor, {
 } from "../components/TemplateGridEditor";
 import { createPaymentPdfTemplate, getPaymentPdfTemplate, updatePaymentPdfTemplate } from "../lib/db";
 import { isBindableField } from "../lib/paymentExportGrid";
+import { buildPaymentPdfPreviewBytes } from "../lib/paymentPdfPreview";
 import type { PaymentPdfTemplateExample } from "../lib/paymentPdfTemplateExamples";
 import {
   PAYMENT_EXPORT_BINDABLE_FIELD_LABELS,
@@ -79,6 +81,10 @@ export default function PaymentPdfTemplateEditorPage() {
   const [error, setError] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [exampleTarget, setExampleTarget] = useState<PaymentPdfTemplateExample | null>(null);
+  /** Preview bytes — a fresh array identity re-renders the preview drawer. */
+  const [previewBytes, setPreviewBytes] = useState<Uint8Array | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   /** Bumped by `applyExample` — remounts the grid editor with the example's `initialGrid`. */
   const [gridRevision, setGridRevision] = useState(0);
 
@@ -330,6 +336,32 @@ export default function PaymentPdfTemplateEditorPage() {
     setContextMenu({ x, y, items });
   }
 
+  /** Builds the config exactly like `handleSave` does (without persisting) and previews it with fake data. */
+  function handlePreview() {
+    setPreviewError(null);
+    if (detailRowIndex === null) {
+      setPreviewError("Marque qual linha representa um turno antes de pré-visualizar — botão direito no número da linha → \"Marcar como Linha do Turno\".");
+      return;
+    }
+    try {
+      const grid = gridRef.current?.getGrid() ?? { rows: [], columnWidths: [], columnAutoFit: [], rowHeights: [], merges: [] };
+      const presentFields = fieldsPresentInGrid(grid);
+      const config: PaymentPdfTemplateConfig = {
+        grid,
+        detailRowIndex,
+        groupBy: groupBy.filter((field) => presentFields.has(field)),
+        groupHeader: groupHeaderRowIndex !== null ? { enabled: true, rowIndex: groupHeaderRowIndex } : null,
+        separator: separatorEnabled && separatorRowIndex !== null ? { enabled: true, rowIndex: separatorRowIndex } : null,
+        subtotal: subtotalEnabled && subtotalRowIndex !== null ? { enabled: true, rowIndex: subtotalRowIndex } : null,
+        orientation,
+      };
+      setPreviewBytes(buildPaymentPdfPreviewBytes(config));
+      setPreviewOpen(true);
+    } catch (e) {
+      setPreviewError(String(e instanceof Error ? e.message : e));
+    }
+  }
+
   /** Applies a help-drawer example: replaces the whole grid and every role/grouping state — nothing is persisted until "Salvar". */
   function applyExample() {
     if (!exampleTarget) return;
@@ -440,6 +472,9 @@ export default function PaymentPdfTemplateEditorPage() {
           <button type="button" className="secondary" onClick={() => setHelpOpen(true)}>
             <CircleHelp size={15} /> Como criar meu template
           </button>
+          <button type="button" className="secondary" onClick={handlePreview}>
+            <Eye size={15} /> Pré-visualizar
+          </button>
           <button type="button" onClick={handleSave} disabled={busy}>
             {busy ? "Salvando..." : "Salvar"}
           </button>
@@ -489,6 +524,8 @@ export default function PaymentPdfTemplateEditorPage() {
       {contextMenu && (
         <ContextMenu x={contextMenu.x} y={contextMenu.y} items={contextMenu.items} onClose={() => setContextMenu(null)} />
       )}
+      {previewError && !previewOpen && <div className="error-box">{previewError}</div>}
+      <PaymentPdfPreviewDrawer bytes={previewBytes} open={previewOpen} onClose={() => setPreviewOpen(false)} />
       <PaymentPdfTemplateHelpDrawer
         open={helpOpen}
         onClose={() => setHelpOpen(false)}

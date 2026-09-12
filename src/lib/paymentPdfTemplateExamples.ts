@@ -158,4 +158,17 @@ export const PAYMENT_PDF_TEMPLATE_EXAMPLES: PaymentPdfTemplateExample[] = [
       [cell("", { backgroundColor: "#f1f5f9" })],
     ], { groupBy: ["employeeName"], separator: { enabled: true, rowIndex: 2 } }),
   },
+  {
+    id: "standard_report",
+    category: "Do relatório antigo",
+    title: "Relatório de pagamentos (antigo)",
+    description: "Reproduz o antigo botão \"Gerar PDF\": tabela completa com cabeçalho escuro, agrupada por colaborador, com subtotal de horas e valor por pessoa.",
+    result: ["RELATÓRIO DE PAGAMENTOS", "LOCAL | DATA | FUNÇÃO | QTD/H | HORÁRIO | VALOR | NOME | STATUS", "Loja 12 | 02/08 | FLV | 06:00 | 07:00 às 13:00 | R$ 78,50 | Crislan | Pendente", "Total | 20:00 | R$ 250,00"],
+    config: config([
+      [cell("RELATÓRIO DE PAGAMENTOS", { bold: true, fontSize: 14 })],
+      [header("LOCAL"), header("DATA"), header("FUNÇÃO"), header("QTD/H"), header("HORÁRIO"), header("VALOR"), header("NOME"), header("STATUS")],
+      ["{{local}}", "{{workDate}}", "{{role}}", "{{workedHours}}", "{{horario}}", cell("{{valor}}", { horizontalAlign: "right" }), "{{employeeName}}", "{{status}}"],
+      ["", "", total("Total"), total("{{soma:workedHours}}"), "", total("{{soma:valor}}"), "", ""],
+    ], { detailRowIndex: 2, groupBy: ["employeeName"], subtotal: { enabled: true, rowIndex: 3 }, orientation: "landscape" }),
+  },
 ];

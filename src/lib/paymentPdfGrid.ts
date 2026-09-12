@@ -6,6 +6,7 @@ import type {
   TemplateGridCell,
   TemplateGridData,
 } from "./types";
+import type { PaymentPdfTemplateConfig } from "./types";
 import type { PaymentShiftReportRow } from "./db";
 
 /**
@@ -158,7 +159,7 @@ const DEFAULT_ROW_HEIGHT_PX = 30;
 
 export interface PdfGridPainterOptions {
   orientation: "portrait" | "landscape";
-  /** Outer page margin in mm — matches the hand-built report's own choice (`paymentsReport.ts`). */
+  /** Outer page margin in mm — the same generous-but-compact choice the hand-built report this file's painter replaced used to make. */
   pageMarginMm?: number;
 }
 
@@ -401,6 +402,110 @@ export class PdfGridPainter {
     else if (which === "left") this.doc.line(x + offset, y, x + offset, y + height);
     else this.doc.line(x + width + offset, y, x + width + offset, y + height);
   }
+}
+
+/**
+ * The whole "rows → painted PDF" flow shared by the real export
+ * (`paymentPdfExport.ts`) and the editor's live preview: sorts by the
+ * template's grouping (detail fields as a stable tiebreaker), draws the static
+ * header block once (the painter re-draws it on every page break), then per
+ * group the optional G row, one detail row per turno, and the trailing
+ * separator/SOMA rows in the order they sit in the grid itself. Returns the
+ * painter so the caller can either write `painter.doc` out or keep rendering.
+ */
+export function drawPdfDocument(
+  config: PaymentPdfTemplateConfig,
+  rows: PaymentShiftReportRow[],
+  amounts: Map<PaymentShiftReportRow, number | null>,
+): PdfGridPainter {
+  const grid = config.grid;
+  function groupKeyOf(row: PaymentShiftReportRow): string {
+    return config.groupBy.map((f) => groupKeyValue(f, row, amounts.get(row) ?? null)).join(" ");
+  }
+
+  // Groups must be contiguous runs, so sort by the same key that decides
+  // boundaries — same rule as the Excel export's sort (minus the independent
+  // SOMA grouping, which PDF templates don't have), with the detail fields as
+  // a stable tiebreaker inside each group.
+  const sorted = [...rows].sort((a, b) => {
+    const groupCompare = groupKeyOf(a).localeCompare(groupKeyOf(b), undefined, { numeric: true });
+    if (groupCompare !== 0) return groupCompare;
+    return (
+      a.workDate.localeCompare(b.workDate) ||
+      a.employeeName.localeCompare(b.employeeName) ||
+      (a.scheduleStartMinutes ?? -1) - (b.scheduleStartMinutes ?? -1)
+    );
+  });
+
+  const painter = new PdfGridPainter(grid, { orientation: config.orientation ?? "landscape" });
+
+  // The static block (rows above the detail row) is written once at the top,
+  // verbatim — and again at the top of every page the report spills onto.
+  const headerRows: number[] = [];
+  for (let r = 0; r < config.detailRowIndex && r < grid.rows.length; r++) headerRows.push(r);
+  painter.setHeaderRows(headerRows);
+  for (const r of headerRows) painter.drawRow(r, { honorRowSpan: true });
+
+  // Each group: optional header row, one detail row per turno, then the
+  // template's trailing rows (separator / SOMA) in the order they sit in the
+  // grid itself — same layout-decides-the-order rule as the Excel export.
+  const trailing = [
+    ...(config.separator?.enabled
+      ? [{ kind: "separator" as const, rowIndex: config.separator.rowIndex }]
+      : []),
+    ...(config.subtotal?.enabled
+      ? [{ kind: "subtotal" as const, rowIndex: config.subtotal.rowIndex }]
+      : []),
+  ].sort((a, b) => a.rowIndex - b.rowIndex);
+
+  let currentKey: string | null = null;
+  let groupRows: PaymentShiftReportRow[] = [];
+  let sums = { valor: 0, workedHoursMinutes: 0 };
+
+  function flushGroup() {
+    if (groupRows.length === 0) return;
+    if (config.groupHeader?.enabled) {
+      painter.drawRow(config.groupHeader.rowIndex, {
+        renderCell: (_c, raw) => renderPdfGroupCell(raw, groupRows, amounts),
+      });
+    }
+    for (const row of groupRows) {
+      const amount = amounts.get(row) ?? null;
+      painter.drawRow(config.detailRowIndex, {
+        renderCell: (_c, raw) => renderPdfCellText(raw, row, amount),
+      });
+    }
+    for (const trailingRow of trailing) {
+      if (trailingRow.kind === "separator") {
+        painter.drawRow(trailingRow.rowIndex);
+      } else {
+        painter.drawRow(trailingRow.rowIndex, {
+          renderCell: (_c, raw) => renderPdfSumCell(raw, sums),
+        });
+      }
+    }
+    groupRows = [];
+    sums = { valor: 0, workedHoursMinutes: 0 };
+  }
+
+  for (const row of sorted) {
+    const key = groupKeyOf(row);
+    if (currentKey === null) currentKey = key;
+    if (key !== currentKey) {
+      flushGroup();
+      currentKey = key;
+    }
+    groupRows.push(row);
+    sums.valor += amounts.get(row) ?? 0;
+    const start = row.scheduleStartMinutes;
+    const end = row.scheduleEndMinutes;
+    if (start !== null && end !== null) {
+      sums.workedHoursMinutes += start <= end ? end - start : 24 * 60 - start + end;
+    }
+  }
+  flushGroup();
+
+  return painter;
 }
 
 

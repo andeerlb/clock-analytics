@@ -4,7 +4,6 @@ import {
   ChevronRight,
   ClipboardCheck,
   Eye,
-  FileDown,
   FileSpreadsheet,
   FileText,
   Filter,
@@ -81,7 +80,6 @@ import {
 import { generatePaymentsExportXlsx, type PaymentExportResult } from "../lib/paymentExport";
 import { generatePaymentsPdfExport, type PaymentPdfExportResult } from "../lib/paymentPdfExport";
 import { ALL_COLUMN_IDS, FLAT_COLUMNS } from "../lib/paymentColumns";
-import { generatePaymentsReportPdf, type PaymentsReportResult } from "../lib/paymentsReport";
 import { acceptShiftChange } from "../lib/remoteCheckDiff";
 import type {
   PaymentExportTemplateListRow,
@@ -693,10 +691,6 @@ export default function PaymentsPage() {
   const [roles, setRoles] = useState<RoleRow[]>([]);
   const [locals, setLocals] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
-  const [generatingPdf, setGeneratingPdf] = useState(false);
-  const [pdfError, setPdfError] = useState<string | null>(null);
-  const [revealingPdf, setRevealingPdf] = useState(false);
-  const [generatedReport, setGeneratedReport] = useState<PaymentsReportResult | null>(null);
   const [viewerPath, setViewerPath] = useState<string | null>(null);
 
   const [exportTemplates, setExportTemplates] = useState<PaymentExportTemplateListRow[]>([]);
@@ -952,14 +946,14 @@ export default function PaymentsPage() {
 
   // A previously generated PDF reflects a specific set of filters (and,
   // since it now adds a per-colaborador subtotal when grouped, `grouped`
-  // itself) — changing any of them means the next "Gerar PDF" would produce
+  // itself) — changing any of them means the next export would produce
   // a different document, so the stale "PDF gerado com sucesso" banner (and
   // any leftover error) no longer applies. Deliberately excludes
   // `page`/`pageSize`: those change how the table is paginated on screen,
   // not which rows (or how they're grouped) end up in a report.
   useEffect(() => {
-    setGeneratedReport(null);
-    setPdfError(null);
+    setGeneratedPdfExport(null);
+    setPdfExportError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedEmployeeIds, selectedCompanyIds, selectedClientIds, selectedRoleIds, periodStart, periodEnd, selectedStatuses, selectedShiftPeriods, scheduleTimeFilter, grouped]);
 
@@ -1135,40 +1129,7 @@ export default function PaymentsPage() {
     setFiltersDrawerOpen(false);
   }
 
-  /** Every turno matching the current filters, not just the visible page — see `generatePaymentsReportPdf`. */
-  async function handleGeneratePdf() {
-    setPdfError(null);
-    setGeneratedReport(null);
-    setGeneratingPdf(true);
-    try {
-      const result = await generatePaymentsReportPdf(baseQuery(), grouped);
-      if (result.rowCount === 0) {
-        setPdfError(noReportRowsMessage(result.matchedCount));
-      } else if (result.path) {
-        // `path === null` with rows > 0 means the user cancelled the save
-        // dialog — nothing to show, same as LibraryPage's "Gerar zip".
-        setGeneratedReport(result);
-      }
-    } catch (e) {
-      setPdfError(String(e instanceof Error ? e.message : e));
-    } finally {
-      setGeneratingPdf(false);
-    }
-  }
-
-  async function handleRevealPdf() {
-    if (!generatedReport?.path) return;
-    setRevealingPdf(true);
-    try {
-      await revealInFileManager(generatedReport.path);
-    } catch (e) {
-      setPdfError(String(e instanceof Error ? e.message : e));
-    } finally {
-      setRevealingPdf(false);
-    }
-  }
-
-  /** Same shape as `handleGeneratePdf`, but a template has to be chosen first — see "Exportar Excel" below. */
+  /** Every turno matching the current filters, not just the visible page — see `generatePaymentsExportXlsx`/`generatePaymentsPdfExport`. */
   async function handleGenerateExport() {
     if (!selectedExportTemplateId) return;
     setExportError(null);
@@ -1200,7 +1161,7 @@ export default function PaymentsPage() {
     }
   }
 
-  /** Same shape as `handleGenerateExport`, but for a PDF template — the fixed-layout "Gerar PDF" stays untouched beside it. */
+  /** Same shape as `handleGenerateExport`, but for a PDF template — the template-driven replacement of the old fixed-layout "Gerar PDF" report. */
   async function handleGeneratePdfExport() {
     if (!selectedPdfTemplateId) return;
     setPdfExportError(null);
@@ -1273,7 +1234,6 @@ export default function PaymentsPage() {
           ? "Turnos importados, agrupados por colaborador e competência. Clique num colaborador para expandir os turnos individuais daquele mês."
           : "Turnos importados, um turno por linha."}
       </p>
-      {pdfError && <div className="error-box">{pdfError}</div>}
       {exportError && <div className="error-box">{exportError}</div>}
       {pdfExportError && <div className="error-box">{pdfExportError}</div>}
       {inlineEditError && <div className="error-box">{inlineEditError}</div>}
@@ -1374,10 +1334,6 @@ export default function PaymentsPage() {
               <ClipboardCheck size={15} style={{ marginRight: "0.4rem" }} />
               Conferência
             </button>
-            <button type="button" onClick={handleGeneratePdf} disabled={generatingPdf} title="Considera os filtros acima">
-              <FileDown size={15} style={{ marginRight: "0.4rem" }} />
-              {generatingPdf ? "Gerando..." : "Gerar PDF"}
-            </button>
           </div>
         </div>
 
@@ -1426,35 +1382,6 @@ export default function PaymentsPage() {
                 Abrir PDF
               </button>
               <button type="button" className="outline" onClick={handleRevealPdfExport} disabled={revealingPdfExport}>
-                <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-                Abrir no explorador
-              </button>
-            </div>
-          </div>
-        )}
-
-        {generatedReport && generatedReport.path && (
-          <div
-            className="success-box"
-            style={{
-              marginTop: "1rem",
-              marginBottom: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: "1rem",
-            }}
-          >
-            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              <CheckCircle2 size={16} />
-              PDF gerado com sucesso: {generatedReport.title} ({generatedReport.rowCount} turno(s))
-            </span>
-            <div style={{ display: "flex", gap: "0.6rem" }}>
-              <button type="button" className="outline" onClick={() => setViewerPath(generatedReport.path)}>
-                <Eye size={15} style={{ marginRight: "0.4rem" }} />
-                Abrir PDF
-              </button>
-              <button type="button" className="outline" onClick={handleRevealPdf} disabled={revealingPdf}>
                 <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
                 Abrir no explorador
               </button>
@@ -1742,7 +1669,7 @@ export default function PaymentsPage() {
 
       <PdfViewerModal
         path={viewerPath}
-        title={generatedReport?.title}
+        title={generatedPdfExport?.title}
         allowDownload={false}
         onClose={() => setViewerPath(null)}
       />
