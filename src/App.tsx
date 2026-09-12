@@ -1,7 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
-import { HashRouter, Link, Route, Routes } from "react-router-dom";
+import { HashRouter, Navigate, Link, Route, Routes } from "react-router-dom";
 import "./App.css";
 import PendingChangesTab from "./components/PendingChangesTab";
 import Modal from "./components/Modal";
@@ -26,7 +26,6 @@ import EmployeesPage from "./pages/EmployeesPage";
 import PaymentExportTemplateEditorPage from "./pages/PaymentExportTemplateEditorPage";
 import PaymentExportTemplatesPage from "./pages/PaymentExportTemplatesPage";
 import PaymentPdfTemplateEditorPage from "./pages/PaymentPdfTemplateEditorPage";
-import PaymentPdfTemplatesPage from "./pages/PaymentPdfTemplatesPage";
 import PaymentReconciliationWindowPage from "./pages/PaymentReconciliationWindowPage";
 import PaymentsPage from "./pages/PaymentsPage";
 import PaymentTemplatesPage from "./pages/PaymentTemplatesPage";
@@ -107,7 +106,10 @@ function AppShell({ popplerMissing, importResult, clearImportResult }: { poppler
           <Route path="/payments/export-templates" element={<PaymentExportTemplatesPage />} />
           <Route path="/payments/export-templates/new" element={<PaymentExportTemplateEditorPage />} />
           <Route path="/payments/export-templates/:id" element={<PaymentExportTemplateEditorPage />} />
-          <Route path="/payments/pdf-templates" element={<PaymentPdfTemplatesPage />} />
+          {/* Both template kinds are managed on the single `/payments/export-templates`
+              screen now — this old URL just redirects there. The PDF editor keeps
+              its own `pdf-templates/new|:id` paths below. */}
+          <Route path="/payments/pdf-templates" element={<Navigate to="/payments/export-templates" replace />} />
           <Route path="/payments/pdf-templates/new" element={<PaymentPdfTemplateEditorPage />} />
           <Route path="/payments/pdf-templates/:id" element={<PaymentPdfTemplateEditorPage />} />
           <Route path="/settings" element={<SettingsPage />} />

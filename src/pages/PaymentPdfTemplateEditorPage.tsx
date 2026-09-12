@@ -430,7 +430,7 @@ export default function PaymentPdfTemplateEditorPage() {
       if ((window.history.state?.idx ?? 0) > 0) {
         navigate(-1);
       } else {
-        navigate("/payments/pdf-templates", { replace: true });
+        navigate("/payments/export-templates", { replace: true });
       }
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
@@ -457,7 +457,7 @@ export default function PaymentPdfTemplateEditorPage() {
   if (loading) {
     return (
       <div>
-        <BackButton fallback="/payments/pdf-templates" />
+        <BackButton fallback="/payments/export-templates" />
         <p className="muted">Carregando...</p>
       </div>
     );
@@ -465,7 +465,7 @@ export default function PaymentPdfTemplateEditorPage() {
 
   return (
     <div>
-      <BackButton fallback="/payments/pdf-templates" />
+      <BackButton fallback="/payments/export-templates" />
       <div className="page-header">
         <h2>{isEditing ? "Editar template de PDF" : "Novo template de PDF"}</h2>
         <div style={{ display: "flex", gap: "0.5rem" }}>

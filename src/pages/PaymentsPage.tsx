@@ -4,8 +4,7 @@ import {
   ChevronRight,
   ClipboardCheck,
   Eye,
-  FileSpreadsheet,
-  FileText,
+  FileDown,
   Filter,
   FolderOpen,
   Info,
@@ -29,6 +28,7 @@ import Drawer from "../components/Drawer";
 import ExtraColumnsDrawer from "../components/ExtraColumnsDrawer";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
+import PaymentExportDrawer from "../components/PaymentExportDrawer";
 import PaymentsFiltersDrawer, { SHIFT_PERIOD_OPTIONS, STATUS_OPTIONS, type PaymentsFiltersValue } from "../components/PaymentsFiltersDrawer";
 import PdfViewerModal from "../components/PdfViewerModal";
 import PillButton from "../components/PillButton";
@@ -704,6 +704,9 @@ export default function PaymentsPage() {
   const [pdfExportError, setPdfExportError] = useState<string | null>(null);
   const [generatedPdfExport, setGeneratedPdfExport] = useState<PaymentPdfExportResult | null>(null);
   const [revealingPdfExport, setRevealingPdfExport] = useState(false);
+
+  /** The single "Exportar" drawer — format (Excel/PDF) and template are picked in there, selection state kept here so it survives reopening. */
+  const [exportDrawerOpen, setExportDrawerOpen] = useState(false);
   const [revealingExport, setRevealingExport] = useState(false);
   const [generatedExport, setGeneratedExport] = useState<PaymentExportResult | null>(null);
 
@@ -1130,17 +1133,17 @@ export default function PaymentsPage() {
   }
 
   /** Every turno matching the current filters, not just the visible page — see `generatePaymentsExportXlsx`/`generatePaymentsPdfExport`. */
-  async function handleGenerateExport() {
-    if (!selectedExportTemplateId) return;
+  async function handleGenerateExport(templateId: number) {
     setExportError(null);
     setGeneratedExport(null);
     setGeneratingExport(true);
     try {
-      const result = await generatePaymentsExportXlsx(Number(selectedExportTemplateId), baseQuery());
+      const result = await generatePaymentsExportXlsx(templateId, baseQuery());
       if (result.rowCount === 0) {
         setExportError(noReportRowsMessage(result.matchedCount));
       } else if (result.path) {
         setGeneratedExport(result);
+        setExportDrawerOpen(false);
       }
     } catch (e) {
       setExportError(String(e instanceof Error ? e.message : e));
@@ -1162,17 +1165,17 @@ export default function PaymentsPage() {
   }
 
   /** Same shape as `handleGenerateExport`, but for a PDF template — the template-driven replacement of the old fixed-layout "Gerar PDF" report. */
-  async function handleGeneratePdfExport() {
-    if (!selectedPdfTemplateId) return;
+  async function handleGeneratePdfExport(templateId: number) {
     setPdfExportError(null);
     setGeneratedPdfExport(null);
     setGeneratingPdfExport(true);
     try {
-      const result = await generatePaymentsPdfExport(Number(selectedPdfTemplateId), baseQuery());
+      const result = await generatePaymentsPdfExport(templateId, baseQuery());
       if (result.rowCount === 0) {
         setPdfExportError(noReportRowsMessage(result.matchedCount));
       } else if (result.path) {
         setGeneratedPdfExport(result);
+        setExportDrawerOpen(false);
       }
     } catch (e) {
       setPdfExportError(String(e instanceof Error ? e.message : e));
@@ -1255,76 +1258,15 @@ export default function PaymentsPage() {
             {activeFilterCount > 0 ? `Filtros (${activeFilterCount})` : "Filtros"}
           </button>
           <div style={{ marginLeft: "auto", display: "flex", gap: "0.6rem", alignItems: "center" }}>
-            {exportTemplates.length > 0 && (
-              <select
-                value={selectedExportTemplateId}
-                onChange={(e) => setSelectedExportTemplateId(e.target.value)}
-                title="Template de exportação Excel"
-              >
-                <option value="">Selecione um template...</option>
-                {exportTemplates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            )}
-            {pdfTemplates.length > 0 && (
-              <select
-                value={selectedPdfTemplateId}
-                onChange={(e) => setSelectedPdfTemplateId(e.target.value)}
-                title="Template de PDF"
-              >
-                <option value="">Selecione um template PDF...</option>
-                {pdfTemplates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            )}
             <button
               type="button"
               className="secondary"
-              onClick={() => navigate("/payments/export-templates")}
-              title="Gerenciar templates de exportação Excel — criar, editar ou excluir"
+              onClick={() => setExportDrawerOpen(true)}
+              title="Exportar turnos em Excel ou PDF, usando um template — considera os filtros acima"
             >
-              <Settings2 size={15} style={{ marginRight: "0.4rem" }} />
-              Templates Excel
+              <FileDown size={15} style={{ marginRight: "0.4rem" }} />
+              Exportar
             </button>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => navigate("/payments/pdf-templates")}
-              title="Gerenciar templates de PDF — criar, editar ou excluir"
-            >
-              <Settings2 size={15} style={{ marginRight: "0.4rem" }} />
-              Templates PDF
-            </button>
-            {exportTemplates.length > 0 && (
-              <button
-                type="button"
-                className="secondary"
-                onClick={handleGenerateExport}
-                disabled={generatingExport || !selectedExportTemplateId}
-                title="Considera os filtros acima"
-              >
-                <FileSpreadsheet size={15} style={{ marginRight: "0.4rem" }} />
-                {generatingExport ? "Exportando..." : "Exportar Excel"}
-              </button>
-            )}
-            {pdfTemplates.length > 0 && (
-              <button
-                type="button"
-                className="secondary"
-                onClick={handleGeneratePdfExport}
-                disabled={generatingPdfExport || !selectedPdfTemplateId}
-                title="Exporta com um template de PDF — considera os filtros acima"
-              >
-                <FileText size={15} style={{ marginRight: "0.4rem" }} />
-                {generatingPdfExport ? "Exportando..." : "Exportar PDF"}
-              </button>
-            )}
             <button
               type="button"
               className="secondary"
@@ -1665,6 +1607,29 @@ export default function PaymentsPage() {
         data={viewingExtraData?.data ?? null}
         sourceUrl={viewingExtraData?.sourceUrl ?? null}
         onClose={() => setViewingExtraData(null)}
+      />
+
+      <PaymentExportDrawer
+        open={exportDrawerOpen}
+        onClose={() => setExportDrawerOpen(false)}
+        excelTemplates={exportTemplates}
+        pdfTemplates={pdfTemplates}
+        selectedExcelTemplateId={selectedExportTemplateId}
+        selectedPdfTemplateId={selectedPdfTemplateId}
+        onSelectExcelTemplate={setSelectedExportTemplateId}
+        onSelectPdfTemplate={setSelectedPdfTemplateId}
+        exportingExcel={generatingExport}
+        exportingPdf={generatingPdfExport}
+        excelError={exportError}
+        pdfError={pdfExportError}
+        onExport={(format, templateId) => {
+          if (format === "excel") handleGenerateExport(templateId);
+          else handleGeneratePdfExport(templateId);
+        }}
+        onManageTemplates={() => {
+          setExportDrawerOpen(false);
+          navigate("/payments/export-templates");
+        }}
       />
 
       <PdfViewerModal
