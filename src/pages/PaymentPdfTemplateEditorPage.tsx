@@ -472,9 +472,6 @@ export default function PaymentPdfTemplateEditorPage() {
           <button type="button" className="secondary" onClick={() => setHelpOpen(true)}>
             <CircleHelp size={15} /> Como criar meu template
           </button>
-          <button type="button" className="secondary" onClick={handlePreview}>
-            <Eye size={15} /> Pré-visualizar
-          </button>
           <button type="button" onClick={handleSave} disabled={busy}>
             {busy ? "Salvando..." : "Salvar"}
           </button>
@@ -506,6 +503,9 @@ export default function PaymentPdfTemplateEditorPage() {
             <option value="portrait">Retrato</option>
           </select>
         </div>
+        <button type="button" className="secondary" onClick={handlePreview}>
+          <Eye size={15} /> Pré-visualizar
+        </button>
       </div>
 
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>
