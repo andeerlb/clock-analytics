@@ -795,6 +795,54 @@ export interface PaymentExportTemplateInput {
   config: PaymentExportTemplateConfig;
 }
 
+/**
+ * A saved, reusable layout for exporting payment shifts to a styled PDF — the
+ * PDF counterpart of `PaymentExportTemplateConfig`, see
+ * `src/lib/paymentPdfExport.ts`. Reuses the same `TemplateGridData` the Excel
+ * editor builds (so `TemplateGridEditor` renders it unchanged) and the same
+ * `{{field}}` token vocabulary, but deliberately drops everything with no PDF
+ * equivalent or that would complicate the (simpler, on purpose) PDF editor:
+ * no native outline (PDF can't collapse rows), no consolidated rows, no
+ * independent SOMA grouping (the SOMA row always breaks on `groupBy`).
+ */
+export interface PaymentPdfTemplateConfig {
+  grid: TemplateGridData;
+  /** 0-based row index within `grid.rows` that repeats once per payment-shift record within a group. Its cells may contain `{{field}}` tokens (see `PaymentExportBindableField`). Rows strictly above this are the static header/title block, written once (and repeated at the top of every new PDF page), verbatim. */
+  detailRowIndex: number;
+  /** In priority order; a new group starts whenever any of these differ between two consecutive (sorted) shifts. Empty means no grouping — every shift in one group. */
+  groupBy: PaymentExportBindableField[];
+  /** Optional row written once before each detail group — cells may use group tokens (`{{quantidade}}`, `{{soma:...}}`, `{{primeiro:...}}`, `{{ultimo:...}}`, `{{lista:...}}`). */
+  groupHeader?: { enabled: boolean; rowIndex: number } | null;
+  /** An optional blank row placed between groups, reusing one templated row's style. */
+  separator?: { enabled: boolean; rowIndex: number } | null;
+  /**
+   * An optional subtotal row. `{{valorSoma}}`/`{{soma:valor}}` and
+   * `{{soma:workedHours}}` print the group's already-computed totals (a PDF
+   * has no live formulas — unlike the Excel export's SUM ranges).
+   */
+  subtotal?: { enabled: boolean; rowIndex: number } | null;
+  /** Page orientation the PDF is generated in. Defaults to `"landscape"` for templates saved before this field existed (report tables are usually wide). */
+  orientation?: "portrait" | "landscape";
+}
+
+/** One row per saved payment PDF template — the list view. */
+export interface PaymentPdfTemplateListRow {
+  id: number;
+  name: string;
+  updatedAt: string;
+}
+
+/** Full shape of a payment PDF template, including its grid/grouping config. */
+export interface PaymentPdfTemplateRow extends PaymentPdfTemplateListRow {
+  config: PaymentPdfTemplateConfig;
+  createdAt: string;
+}
+
+export interface PaymentPdfTemplateInput {
+  name: string;
+  config: PaymentPdfTemplateConfig;
+}
+
 /** An existing import for the same employee+company whose period overlaps a freshly parsed sheet. */
 export interface ConflictInfo {
   sheetIndex: number;

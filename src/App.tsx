@@ -25,6 +25,8 @@ import EmployeeFormPage from "./pages/EmployeeFormPage";
 import EmployeesPage from "./pages/EmployeesPage";
 import PaymentExportTemplateEditorPage from "./pages/PaymentExportTemplateEditorPage";
 import PaymentExportTemplatesPage from "./pages/PaymentExportTemplatesPage";
+import PaymentPdfTemplateEditorPage from "./pages/PaymentPdfTemplateEditorPage";
+import PaymentPdfTemplatesPage from "./pages/PaymentPdfTemplatesPage";
 import PaymentReconciliationWindowPage from "./pages/PaymentReconciliationWindowPage";
 import PaymentsPage from "./pages/PaymentsPage";
 import PaymentTemplatesPage from "./pages/PaymentTemplatesPage";
@@ -105,6 +107,9 @@ function AppShell({ popplerMissing, importResult, clearImportResult }: { poppler
           <Route path="/payments/export-templates" element={<PaymentExportTemplatesPage />} />
           <Route path="/payments/export-templates/new" element={<PaymentExportTemplateEditorPage />} />
           <Route path="/payments/export-templates/:id" element={<PaymentExportTemplateEditorPage />} />
+          <Route path="/payments/pdf-templates" element={<PaymentPdfTemplatesPage />} />
+          <Route path="/payments/pdf-templates/new" element={<PaymentPdfTemplateEditorPage />} />
+          <Route path="/payments/pdf-templates/:id" element={<PaymentPdfTemplateEditorPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>

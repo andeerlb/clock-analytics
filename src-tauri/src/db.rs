@@ -460,5 +460,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0075_employee_pix_keys.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 76,
+            description: "adds payment_pdf_templates — user-designed layouts (columns, colors, grouping, subtotal rows) for exporting payment shifts to a styled PDF, the PDF counterpart of payment_export_templates",
+            sql: include_str!("../migrations/0076_payment_pdf_templates.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

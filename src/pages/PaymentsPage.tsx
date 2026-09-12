@@ -6,6 +6,7 @@ import {
   Eye,
   FileDown,
   FileSpreadsheet,
+  FileText,
   Filter,
   FolderOpen,
   Info,
@@ -47,6 +48,7 @@ import {
   listDistinctPaymentShiftLocals,
   listLatestFieldDiffsForShifts,
   listPaymentExportTemplates,
+  listPaymentPdfTemplates,
   listPaymentShiftSummaries,
   listPaymentShiftsFlat,
   listPaymentShiftsForGroup,
@@ -77,11 +79,13 @@ import {
   shiftDurationMinutes,
 } from "../lib/format";
 import { generatePaymentsExportXlsx, type PaymentExportResult } from "../lib/paymentExport";
+import { generatePaymentsPdfExport, type PaymentPdfExportResult } from "../lib/paymentPdfExport";
 import { ALL_COLUMN_IDS, FLAT_COLUMNS } from "../lib/paymentColumns";
 import { generatePaymentsReportPdf, type PaymentsReportResult } from "../lib/paymentsReport";
 import { acceptShiftChange } from "../lib/remoteCheckDiff";
 import type {
   PaymentExportTemplateListRow,
+  PaymentPdfTemplateListRow,
   PaymentShiftRow,
   PaymentShiftStatus,
   PaymentShiftSummaryRow,
@@ -698,6 +702,14 @@ export default function PaymentsPage() {
   const [exportTemplates, setExportTemplates] = useState<PaymentExportTemplateListRow[]>([]);
   const [generatingExport, setGeneratingExport] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+
+  /** PDF-template export — same pattern as the Excel one above, separate state so one failing doesn't clear the other's success message. */
+  const [pdfTemplates, setPdfTemplates] = useState<PaymentPdfTemplateListRow[]>([]);
+  const [selectedPdfTemplateId, setSelectedPdfTemplateId] = useState("");
+  const [generatingPdfExport, setGeneratingPdfExport] = useState(false);
+  const [pdfExportError, setPdfExportError] = useState<string | null>(null);
+  const [generatedPdfExport, setGeneratedPdfExport] = useState<PaymentPdfExportResult | null>(null);
+  const [revealingPdfExport, setRevealingPdfExport] = useState(false);
   const [revealingExport, setRevealingExport] = useState(false);
   const [generatedExport, setGeneratedExport] = useState<PaymentExportResult | null>(null);
 
@@ -770,6 +782,10 @@ export default function PaymentsPage() {
 
   useEffect(() => {
     listPaymentExportTemplates().then(setExportTemplates);
+  }, []);
+
+  useEffect(() => {
+    listPaymentPdfTemplates().then(setPdfTemplates);
   }, []);
 
   function ensureRulesLoaded(pairs: { clientId: number; companyId: number }[]) {
@@ -1184,6 +1200,38 @@ export default function PaymentsPage() {
     }
   }
 
+  /** Same shape as `handleGenerateExport`, but for a PDF template — the fixed-layout "Gerar PDF" stays untouched beside it. */
+  async function handleGeneratePdfExport() {
+    if (!selectedPdfTemplateId) return;
+    setPdfExportError(null);
+    setGeneratedPdfExport(null);
+    setGeneratingPdfExport(true);
+    try {
+      const result = await generatePaymentsPdfExport(Number(selectedPdfTemplateId), baseQuery());
+      if (result.rowCount === 0) {
+        setPdfExportError(noReportRowsMessage(result.matchedCount));
+      } else if (result.path) {
+        setGeneratedPdfExport(result);
+      }
+    } catch (e) {
+      setPdfExportError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setGeneratingPdfExport(false);
+    }
+  }
+
+  async function handleRevealPdfExport() {
+    if (!generatedPdfExport?.path) return;
+    setRevealingPdfExport(true);
+    try {
+      await revealInFileManager(generatedPdfExport.path);
+    } catch (e) {
+      setPdfExportError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setRevealingPdfExport(false);
+    }
+  }
+
   const hasFilters = Boolean(
     selectedEmployeeIds.size > 0 ||
       selectedCompanyIds.size > 0 ||
@@ -1227,6 +1275,7 @@ export default function PaymentsPage() {
       </p>
       {pdfError && <div className="error-box">{pdfError}</div>}
       {exportError && <div className="error-box">{exportError}</div>}
+      {pdfExportError && <div className="error-box">{pdfExportError}</div>}
       {inlineEditError && <div className="error-box">{inlineEditError}</div>}
       {attention && (
         <div className="info-box">
@@ -1260,14 +1309,37 @@ export default function PaymentsPage() {
                 ))}
               </select>
             )}
+            {pdfTemplates.length > 0 && (
+              <select
+                value={selectedPdfTemplateId}
+                onChange={(e) => setSelectedPdfTemplateId(e.target.value)}
+                title="Template de PDF"
+              >
+                <option value="">Selecione um template PDF...</option>
+                {pdfTemplates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            )}
             <button
               type="button"
               className="secondary"
               onClick={() => navigate("/payments/export-templates")}
-              title="Gerenciar templates de exportação — criar, editar ou excluir"
+              title="Gerenciar templates de exportação Excel — criar, editar ou excluir"
             >
               <Settings2 size={15} style={{ marginRight: "0.4rem" }} />
-              Templates
+              Templates Excel
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => navigate("/payments/pdf-templates")}
+              title="Gerenciar templates de PDF — criar, editar ou excluir"
+            >
+              <Settings2 size={15} style={{ marginRight: "0.4rem" }} />
+              Templates PDF
             </button>
             {exportTemplates.length > 0 && (
               <button
@@ -1279,6 +1351,18 @@ export default function PaymentsPage() {
               >
                 <FileSpreadsheet size={15} style={{ marginRight: "0.4rem" }} />
                 {generatingExport ? "Exportando..." : "Exportar Excel"}
+              </button>
+            )}
+            {pdfTemplates.length > 0 && (
+              <button
+                type="button"
+                className="secondary"
+                onClick={handleGeneratePdfExport}
+                disabled={generatingPdfExport || !selectedPdfTemplateId}
+                title="Exporta com um template de PDF — considera os filtros acima"
+              >
+                <FileText size={15} style={{ marginRight: "0.4rem" }} />
+                {generatingPdfExport ? "Exportando..." : "Exportar PDF"}
               </button>
             )}
             <button
@@ -1317,6 +1401,35 @@ export default function PaymentsPage() {
               <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
               Abrir no explorador
             </button>
+          </div>
+        )}
+
+        {generatedPdfExport && generatedPdfExport.path && (
+          <div
+            className="success-box"
+            style={{
+              marginTop: "1rem",
+              marginBottom: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "1rem",
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <CheckCircle2 size={16} />
+              PDF gerado com sucesso: {generatedPdfExport.title} ({generatedPdfExport.rowCount} turno(s))
+            </span>
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              <button type="button" className="outline" onClick={() => setViewerPath(generatedPdfExport.path)}>
+                <Eye size={15} style={{ marginRight: "0.4rem" }} />
+                Abrir PDF
+              </button>
+              <button type="button" className="outline" onClick={handleRevealPdfExport} disabled={revealingPdfExport}>
+                <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
+                Abrir no explorador
+              </button>
+            </div>
           </div>
         )}
 

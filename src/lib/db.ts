@@ -25,6 +25,10 @@ import type {
   PaymentExportTemplateListRow,
   PaymentExportTemplateRow,
   PaymentFileKind,
+  PaymentPdfTemplateConfig,
+  PaymentPdfTemplateInput,
+  PaymentPdfTemplateListRow,
+  PaymentPdfTemplateRow,
   PaymentRuleCondition,
   PaymentRuleField,
   PaymentTemplateFieldMapping,
@@ -2882,6 +2886,62 @@ export async function clonePaymentExportTemplate(id: number): Promise<number> {
 export async function deletePaymentExportTemplate(id: number): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM payment_export_templates WHERE id = $1", [id]);
+}
+
+export async function listPaymentPdfTemplates(): Promise<PaymentPdfTemplateListRow[]> {
+  const db = await getDb();
+  return db.select<PaymentPdfTemplateListRow[]>(
+    "SELECT id, name, updated_at AS updatedAt FROM payment_pdf_templates ORDER BY updated_at DESC",
+  );
+}
+
+export async function getPaymentPdfTemplate(id: number): Promise<PaymentPdfTemplateRow> {
+  const db = await getDb();
+  const rows = await db.select<
+    (Omit<PaymentPdfTemplateRow, "config"> & { configJson: string })[]
+  >(
+    "SELECT id, name, config_json AS configJson, created_at AS createdAt, updated_at AS updatedAt FROM payment_pdf_templates WHERE id = $1",
+    [id],
+  );
+  if (rows.length === 0) throw new Error("Template de PDF não encontrado.");
+  const { configJson, ...rest } = rows[0];
+  return { ...rest, config: JSON.parse(configJson) as PaymentPdfTemplateConfig };
+}
+
+export async function createPaymentPdfTemplate(input: PaymentPdfTemplateInput): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute("INSERT INTO payment_pdf_templates (name, config_json) VALUES ($1, $2)", [
+    input.name,
+    JSON.stringify(input.config),
+  ]);
+  return result.lastInsertId as number;
+}
+
+export async function updatePaymentPdfTemplate(id: number, input: PaymentPdfTemplateInput): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE payment_pdf_templates SET name = $1, config_json = $2, updated_at = datetime('now') WHERE id = $3",
+    [input.name, JSON.stringify(input.config), id],
+  );
+}
+
+/** Creates an independent copy of a PDF template, including its entire grid configuration. */
+export async function clonePaymentPdfTemplate(id: number): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute(
+    `INSERT INTO payment_pdf_templates (name, config_json)
+     SELECT name || ' (cópia)', config_json
+     FROM payment_pdf_templates
+     WHERE id = $1`,
+    [id],
+  );
+  if (result.rowsAffected === 0) throw new Error("Template de PDF não encontrado.");
+  return result.lastInsertId as number;
+}
+
+export async function deletePaymentPdfTemplate(id: number): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM payment_pdf_templates WHERE id = $1", [id]);
 }
 
 export async function listEmployeeTemplates(): Promise<EmployeeTemplateListRow[]> {
