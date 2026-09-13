@@ -485,28 +485,28 @@ export default function PaymentPdfTemplateEditorPage() {
 
       {error && <div className="error-box">{error}</div>}
 
-      <div className="pdf-template-editor-layout">
-        <div>
-          <div className="field-row" style={{ alignItems: "end", marginBottom: "1rem", gap: "1rem" }}>
-            <div className="field" style={{ maxWidth: 420, marginBottom: 0 }}>
-              <label>Nome do template</label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Ex: Recibo de pagamentos — Santo Amaro"
-              />
-            </div>
-            <div className="field" style={{ maxWidth: 220, marginBottom: 0 }}>
-              <label>Orientação da página</label>
-              <select value={orientation} onChange={(e) => setOrientation(e.target.value as "portrait" | "landscape")}>
-                <option value="landscape">Paisagem</option>
-                <option value="portrait">Retrato</option>
-              </select>
-            </div>
-          </div>
+      <div className="field-row" style={{ alignItems: "end", marginBottom: "1rem", gap: "1rem" }}>
+        <div className="field" style={{ maxWidth: 420, marginBottom: 0 }}>
+          <label>Nome do template</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ex: Recibo de pagamentos — Santo Amaro"
+          />
+        </div>
+        <div className="field" style={{ maxWidth: 220, marginBottom: 0 }}>
+          <label>Orientação da página</label>
+          <select value={orientation} onChange={(e) => setOrientation(e.target.value as "portrait" | "landscape")}>
+            <option value="landscape">Paisagem</option>
+            <option value="portrait">Retrato</option>
+          </select>
+        </div>
+      </div>
 
-          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+      <div className="pdf-template-editor-layout">
+        <div className="pdf-template-grid-column">
+          <div className="card pdf-template-grid-card" style={{ padding: 0, overflow: "hidden" }}>
             <TemplateGridEditor
               key={gridRevision}
               ref={gridRef}

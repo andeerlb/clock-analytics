@@ -555,10 +555,21 @@ button.pill-button {
 }
 .pdf-template-editor-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 520px);
+  grid-template-columns: fit-content(100%) auto;
   align-items: start;
+  justify-content: start;
   gap: 1.5rem;
 }
+
+.pdf-template-grid-column {
+  min-width: 0;
+}
+
+.pdf-template-grid-card {
+  width: fit-content;
+  max-width: 100%;
+}
+
 .pdf-preview-panel {
   position: sticky;
   top: 1rem;
@@ -569,15 +580,57 @@ button.pill-button {
   background: var(--card-bg);
   overflow: hidden;
 }
+
+.pdf-preview-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
 .pdf-preview-panel h3 {
   margin: 0 0 0.7rem;
 }
-@media (max-width: 1100px) {
+
+.pdf-preview-panel-heading h3 {
+  margin-bottom: 0.7rem;
+}
+
+.pdf-preview-resize-handle {
+  position: absolute;
+  left: -0.55rem;
+  top: 50%;
+  z-index: 1;
+  width: 1.1rem;
+  height: 3rem;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-variant);
+  color: var(--text-muted);
+  cursor: ew-resize;
+  transform: translateY(-50%);
+  touch-action: none;
+}
+
+.pdf-preview-panel-fullscreen {
+  position: fixed;
+  inset: 1rem;
+  z-index: 20;
+  width: auto;
+  max-width: none;
+  overflow: auto;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+}
+
+@media (max-width: 1200px) {
   .pdf-template-editor-layout {
     grid-template-columns: 1fr;
   }
   .pdf-preview-panel {
     position: static;
+    width: min(760px, 100%) !important;
   }
 }
 /* A <button> that needs to look and behave like the plain `a` styles above

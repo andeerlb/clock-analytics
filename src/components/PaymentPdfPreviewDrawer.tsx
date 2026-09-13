@@ -1,7 +1,8 @@
 import * as pdfjsLib from "pdfjs-dist";
+import { Maximize2, Minimize2, MoveHorizontal } from "lucide-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 
@@ -25,6 +26,8 @@ export default function PaymentPdfPreviewDrawer({
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [panelWidth, setPanelWidth] = useState(760);
+  const [fullscreen, setFullscreen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -83,9 +86,30 @@ export default function PaymentPdfPreviewDrawer({
     };
   }, [doc]);
 
+  function startResize(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = panelWidth;
+    const handleMove = (moveEvent: PointerEvent) => {
+      setPanelWidth(Math.max(480, Math.min(1100, startWidth + startX - moveEvent.clientX)));
+    };
+    const stopResize = () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", stopResize);
+    };
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", stopResize);
+  }
+
   return (
-    <section className="pdf-preview-panel" aria-label="Pré-visualização do PDF">
-      <h3>Pré-visualização</h3>
+    <section className={`pdf-preview-panel${fullscreen ? " pdf-preview-panel-fullscreen" : ""}`} style={fullscreen ? undefined : { width: `${panelWidth}px` }} aria-label="Pré-visualização do PDF">
+      {!fullscreen && <div className="pdf-preview-resize-handle" onPointerDown={startResize} role="separator" aria-label="Redimensionar pré-visualização" title="Arraste para redimensionar"><MoveHorizontal size={14} /></div>}
+      <div className="pdf-preview-panel-heading">
+        <h3>Pré-visualização</h3>
+        <button type="button" className="ghost" onClick={() => setFullscreen((value) => !value)} aria-label={fullscreen ? "Sair da tela cheia" : "Abrir pré-visualização em tela cheia"} title={fullscreen ? "Sair da tela cheia" : "Tela cheia"}>
+          {fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+        </button>
+      </div>
       <p className="muted" style={{ marginTop: 0, lineHeight: 1.5 }}>
         Como o PDF vai sair — gerado com <strong>dados de exemplo</strong> (3 colaboradores, 7
         turnos), passando pelo mesmo renderizador da exportação real.
