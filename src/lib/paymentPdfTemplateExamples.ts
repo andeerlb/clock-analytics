@@ -160,9 +160,9 @@ export const PAYMENT_PDF_TEMPLATE_EXAMPLES: PaymentPdfTemplateExample[] = [
   },
   {
     id: "standard_report",
-    category: "Do relatório antigo",
-    title: "Relatório de pagamentos (antigo)",
-    description: "Reproduz o antigo botão \"Gerar PDF\": tabela completa com cabeçalho escuro, agrupada por colaborador, com subtotal de horas e valor por pessoa.",
+    category: "Relatórios fixos",
+    title: "Relatório por valor",
+    description: "Tabela completa com cabeçalho escuro, agrupada por colaborador, com subtotal de horas e valor por pessoa.",
     result: ["RELATÓRIO DE PAGAMENTOS", "LOCAL | DATA | FUNÇÃO | QTD/H | HORÁRIO | VALOR | NOME | STATUS", "Loja 12 | 02/08 | FLV | 06:00 | 07:00 às 13:00 | R$ 78,50 | Crislan | Pendente", "Total | 20:00 | R$ 250,00"],
     config: config([
       [cell("RELATÓRIO DE PAGAMENTOS", { bold: true, fontSize: 14 })],
@@ -170,5 +170,18 @@ export const PAYMENT_PDF_TEMPLATE_EXAMPLES: PaymentPdfTemplateExample[] = [
       ["{{local}}", "{{workDate}}", "{{role}}", "{{workedHours}}", "{{horario}}", cell("{{valor}}", { horizontalAlign: "right" }), "{{employeeName}}", "{{status}}"],
       ["", "", total("Total"), total("{{soma:workedHours}}"), "", total("{{soma:valor}}"), "", ""],
     ], { detailRowIndex: 2, groupBy: ["employeeName"], subtotal: { enabled: true, rowIndex: 3 }, orientation: "landscape" }),
+  },
+  {
+    id: "shift_report",
+    category: "Relatórios fixos",
+    title: "Relatório por turno",
+    description: "Lista cada turno individualmente, agrupando por colaborador e mostrando a quantidade de turnos e a soma dos valores de cada grupo.",
+    result: ["RELATÓRIO DE TURNOS", "LOCAL | DATA | FUNÇÃO | HORAS | HORÁRIO | VALOR | STATUS", "Crislan | 4 turnos | R$ 320,00", "Loja 12 | 02/08 | FLV | 06:00 | 07:00 às 13:00 | R$ 78,50 | Pendente"],
+    config: config([
+      [cell("RELATÓRIO DE TURNOS", { bold: true, fontSize: 14 })],
+      [header("LOCAL"), header("DATA"), header("FUNÇÃO"), header("HORAS"), header("HORÁRIO"), header("VALOR"), header("STATUS")],
+      ["{{local}}", "{{workDate}}", "{{role}}", "{{workedHours}}", "{{horario}}", cell("{{valor}}", { horizontalAlign: "right" }), "{{status}}"],
+      [group("{{employeeName}}"), group("{{quantidade}} turno(s)"), group(""), group(""), group(""), group("{{soma:valor}}"), group("")],
+    ], { detailRowIndex: 2, groupBy: ["employeeName"], groupHeader: { enabled: true, rowIndex: 3 }, orientation: "landscape" }),
   },
 ];

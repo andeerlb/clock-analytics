@@ -134,16 +134,6 @@ export default function PaymentExportTemplatesPage() {
       <BackButton fallback="/payments" />
       <div className="page-header">
         <h2>Templates de exportação</h2>
-        <div style={{ display: "flex", gap: "0.5rem" }}>
-          <button type="button" className="secondary" onClick={() => navigate("/payments/pdf-templates/new")}>
-            <Plus size={15} style={{ marginRight: "0.4rem" }} />
-            Novo template PDF
-          </button>
-          <button type="button" onClick={() => navigate("/payments/export-templates/new")}>
-            <Plus size={15} style={{ marginRight: "0.4rem" }} />
-            Novo template Excel
-          </button>
-        </div>
       </div>
       <p className="page-subtitle">
         Layouts para exportar turnos de pagamento — em Excel ou em PDF, com colunas, cores,
@@ -152,15 +142,29 @@ export default function PaymentExportTemplatesPage() {
 
       {error && <div className="error-box">{error}</div>}
 
-      <h3 style={{ display: "flex", alignItems: "center", gap: "0.5rem", margin: "1.4rem 0 0.6rem" }}>
-        <FileSpreadsheet size={17} /> Excel
+      <h3 style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", margin: "1.4rem 0 0.6rem" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}><FileSpreadsheet size={17} /> Excel</span>
+        <button type="button" className="secondary" onClick={() => navigate("/payments/export-templates/new")} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+          <Plus size={15} />
+          Novo template Excel
+        </button>
       </h3>
       <div className="card table-card">
         {templateTable(excelRows, "Nenhum template de Excel cadastrado ainda. Crie um para definir como os turnos de pagamento saem em planilha.")}
       </div>
 
-      <h3 style={{ display: "flex", alignItems: "center", gap: "0.5rem", margin: "1.4rem 0 0.6rem" }}>
-        <FileText size={17} /> PDF
+      <div role="separator" aria-label="Separação entre templates de Excel e PDF" style={{ display: "flex", alignItems: "center", gap: "0.7rem", margin: "7rem 0 2.5rem" }}>
+        <span style={{ height: "2px", flex: 1, background: "var(--border-soft)" }} />
+        <span style={{ width: "2.8rem", height: "4px", borderRadius: "999px", background: "var(--accent)" }} />
+        <span style={{ height: "2px", flex: 1, background: "var(--border-soft)" }} />
+      </div>
+
+      <h3 style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", margin: "0 0 1rem" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}><FileText size={17} /> PDF</span>
+        <button type="button" className="secondary" onClick={() => navigate("/payments/pdf-templates/new")} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+          <Plus size={15} />
+          Novo template PDF
+        </button>
       </h3>
       <div className="card table-card">
         {templateTable(pdfRows, "Nenhum template de PDF cadastrado ainda. Crie um para definir como os turnos de pagamento saem em PDF.")}
