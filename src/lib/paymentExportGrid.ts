@@ -1,5 +1,5 @@
 import type ExcelJS from "exceljs";
-import { columnLetter, formatDateSlash, formatMinutesAsTime, shiftDurationMinutes } from "./format";
+import { columnLetter, formatDateAbbrev, formatMinutesAsTime, shiftDurationMinutes } from "./format";
 import { PAYMENT_SHIFT_STATUS_LABELS, type CellBorderSide, type PaymentExportBindableField, type TemplateGridData } from "./types";
 import type { PaymentShiftReportRow } from "./db";
 
@@ -28,7 +28,8 @@ export function isBindableField(field: string): field is PaymentExportBindableFi
     field === "shiftPeriod" ||
     field === "valor" ||
     field === "status" ||
-    field === "employeeName"
+    field === "employeeName" ||
+    field === "generatedAt"
   );
 }
 
@@ -49,7 +50,7 @@ export function fieldDisplayValue(field: PaymentExportBindableField, row: Paymen
     case "local":
       return row.local;
     case "workDate":
-      return formatDateSlash(row.workDate);
+      return formatDateAbbrev(row.workDate);
     case "role":
       return row.role;
     case "horario":
@@ -68,6 +69,8 @@ export function fieldDisplayValue(field: PaymentExportBindableField, row: Paymen
       return PAYMENT_SHIFT_STATUS_LABELS[row.status];
     case "employeeName":
       return row.employeeName;
+    case "generatedAt":
+      return new Intl.DateTimeFormat("pt-BR", { dateStyle: "long", timeStyle: "short" }).format(new Date());
     default:
       return "";
   }
@@ -107,6 +110,8 @@ export function groupKeyValue(field: PaymentExportBindableField, row: PaymentShi
       return row.status;
     case "employeeName":
       return row.employeeName;
+    case "generatedAt":
+      return new Intl.DateTimeFormat("pt-BR", { dateStyle: "long", timeStyle: "short" }).format(new Date());
     default:
       return "";
   }

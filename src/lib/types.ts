@@ -631,7 +631,8 @@ export type PaymentExportBindableField =
   | "shiftPeriod"
   | "valor"
   | "status"
-  | "employeeName";
+  | "employeeName"
+  | "generatedAt";
 
 export const PAYMENT_EXPORT_BINDABLE_FIELD_LABELS: Record<PaymentExportBindableField, string> = {
   companyName: "Loja/Empresa",
@@ -645,6 +646,7 @@ export const PAYMENT_EXPORT_BINDABLE_FIELD_LABELS: Record<PaymentExportBindableF
   valor: "Valor",
   status: "Status",
   employeeName: "Colaborador",
+  generatedAt: "Data de geração",
 };
 
 /** A border line's dash pattern — independent of its thickness (see `CellBorderSide.width`). "double" is its own pattern (not a thickness) because that's how Excel itself models it: a fixed two-line motif, not a thick single line. */

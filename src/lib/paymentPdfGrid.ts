@@ -26,6 +26,10 @@ import type { PaymentShiftReportRow } from "./db";
 const TOKEN_RE = /\{\{(\w+)\}\}/g;
 const EXACT_TOKEN_RE = /^\{\{(\w+)\}\}$/;
 
+function generatedAtText(): string {
+  return new Intl.DateTimeFormat("pt-BR", { dateStyle: "long", timeStyle: "short" }).format(new Date());
+}
+
 /** 96dpi screen px → mm — every grid geometry (column widths, row heights, border widths) comes in editor pixels. */
 const PX_TO_MM = 25.4 / 96;
 /** PostScript points → mm — jsPDF font sizes are in pt, grid font sizes are editor px. */
@@ -77,11 +81,12 @@ export function renderPdfCellText(rawValue: string, row: PaymentShiftReportRow, 
     const field = exact[1];
     if (!isBindableField(field)) return rawValue;
     if (field === "valor") return amount !== null ? formatCurrencyBRL(amount) : "";
+    if (field === "generatedAt") return generatedAtText();
     return fieldDisplayValue(field, row, amount);
   }
   if (!rawValue.includes("{{")) return rawValue;
   return rawValue.replace(TOKEN_RE, (whole, field: string) =>
-    isBindableField(field) ? fieldDisplayValue(field, row, amount) : whole,
+    isBindableField(field) ? field === "generatedAt" ? generatedAtText() : fieldDisplayValue(field, row, amount) : whole,
   );
 }
 
@@ -173,6 +178,8 @@ export interface DrawTemplateRowOptions {
    * draws there, same rule as `writeTemplateRow` on the Excel side.
    */
   honorRowSpan?: boolean;
+  /** Optional fallback fill for cells without their own background, used for zebra-striped detail rows. */
+  rowBackgroundColor?: string;
 }
 
 /** jsPDF's standard fonts have uneven style support (courier has no italic) — degrade instead of throwing. */
@@ -216,7 +223,7 @@ export class PdfGridPainter {
     const pageWidth = this.doc.internal.pageSize.getWidth();
     const gridWidthMm = grid.columnWidths.reduce((total, w) => total + w * PX_TO_MM, 0);
     const printableWidth = pageWidth - 2 * this.margin;
-    this.scale = gridWidthMm > printableWidth ? printableWidth / gridWidthMm : 1;
+    this.scale = printableWidth / gridWidthMm;
     this.colX = [];
     this.colW = [];
     let x = this.margin;
@@ -305,8 +312,9 @@ export class PdfGridPainter {
     templateRow.forEach((cell, c) => {
       if (this.coveredByEarlierMerge(templateRowIndex, c)) return;
       const { x, width, height: fullHeight } = cellRect(c);
-      if (cell.backgroundColor) {
-        const [r, g, b] = hexToRgb(cell.backgroundColor);
+      const backgroundColor = cell.backgroundColor ?? options.rowBackgroundColor;
+      if (backgroundColor) {
+        const [r, g, b] = hexToRgb(backgroundColor);
         this.doc.setFillColor(r, g, b);
         this.doc.rect(x, top, width, fullHeight, "F");
       }
@@ -354,7 +362,7 @@ export class PdfGridPainter {
     const align = cell.horizontalAlign === "center" ? "center" : cell.horizontalAlign === "right" ? "right" : "left";
     const textX = align === "center" ? x + width / 2 : align === "right" ? x + width - pad : x + pad;
 
-    const [r, g, b] = hexToRgb(cell.fontColor ?? "#000000");
+    const [r, g, b] = hexToRgb(cell.fontColor ?? "#444444");
     this.doc.setTextColor(r, g, b);
     this.doc.text(lines, textX, firstBaseline, { align, baseline: "alphabetic" });
   }
@@ -432,6 +440,7 @@ export function drawPdfDocument(
     if (groupCompare !== 0) return groupCompare;
     return (
       a.workDate.localeCompare(b.workDate) ||
+      a.local.localeCompare(b.local) ||
       a.employeeName.localeCompare(b.employeeName) ||
       (a.scheduleStartMinutes ?? -1) - (b.scheduleStartMinutes ?? -1)
     );
@@ -444,7 +453,12 @@ export function drawPdfDocument(
   const headerRows: number[] = [];
   for (let r = 0; r < config.detailRowIndex && r < grid.rows.length; r++) headerRows.push(r);
   painter.setHeaderRows(headerRows);
-  for (const r of headerRows) painter.drawRow(r, { honorRowSpan: true });
+  for (const r of headerRows) {
+    painter.drawRow(r, {
+      honorRowSpan: true,
+      renderCell: (_c, raw) => raw.replace(TOKEN_RE, (whole, field: string) => field === "generatedAt" ? generatedAtText() : whole),
+    });
+  }
 
   // Each group: optional header row, one detail row per turno, then the
   // template's trailing rows (separator / SOMA) in the order they sit in the
@@ -461,6 +475,7 @@ export function drawPdfDocument(
   let currentKey: string | null = null;
   let groupRows: PaymentShiftReportRow[] = [];
   let sums = { valor: 0, workedHoursMinutes: 0 };
+  let detailRowCount = 0;
 
   function flushGroup() {
     if (groupRows.length === 0) return;
@@ -473,7 +488,9 @@ export function drawPdfDocument(
       const amount = amounts.get(row) ?? null;
       painter.drawRow(config.detailRowIndex, {
         renderCell: (_c, raw) => renderPdfCellText(raw, row, amount),
+        rowBackgroundColor: detailRowCount % 2 === 1 ? "#f3f3f3" : "#ffffff",
       });
+      detailRowCount += 1;
     }
     for (const trailingRow of trailing) {
       if (trailingRow.kind === "separator") {
@@ -481,6 +498,7 @@ export function drawPdfDocument(
       } else {
         painter.drawRow(trailingRow.rowIndex, {
           renderCell: (_c, raw) => renderPdfSumCell(raw, sums),
+          rowBackgroundColor: grid.rows[trailingRow.rowIndex]?.find((cell) => cell.backgroundColor)?.backgroundColor ?? undefined,
         });
       }
     }

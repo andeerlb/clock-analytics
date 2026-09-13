@@ -1,4 +1,4 @@
-import type { PaymentPdfTemplateConfig, TemplateGridCell, TemplateGridData } from "./types";
+import type { PaymentPdfTemplateConfig, TemplateGridCell, TemplateGridData, TemplateGridMerge } from "./types";
 
 export interface PaymentPdfTemplateExample {
   id: string;
@@ -25,7 +25,7 @@ function cell(value = "", options: Partial<TemplateGridCell> = {}): TemplateGrid
   };
 }
 
-function grid(rows: Array<Array<string | TemplateGridCell>>, widths?: number[]): TemplateGridData {
+function grid(rows: Array<Array<string | TemplateGridCell>>, widths?: number[], merges: TemplateGridMerge[] = []): TemplateGridData {
   const columnCount = Math.max(8, ...rows.map((row) => row.length));
   const normalized = rows.map((row) => Array.from({ length: columnCount }, (_, col) => {
     const value = row[col];
@@ -39,27 +39,32 @@ function grid(rows: Array<Array<string | TemplateGridCell>>, widths?: number[]):
     // and scales the whole grid to fit the page, so predictable is better.
     columnAutoFit: Array.from({ length: columnCount }, () => false),
     rowHeights: Array.from({ length: normalized.length }, () => 30),
-    merges: [],
+    merges,
   };
 }
 
-const header = (value: string) => cell(value, { bold: true, backgroundColor: "#1e293b", fontColor: "#ffffff", horizontalAlign: "center" });
+const header = (value: string) => cell(value, { bold: true, backgroundColor: "#2d3449", fontColor: "#ffffff", horizontalAlign: "left" });
 const group = (value: string) => cell(value, { bold: true, backgroundColor: "#dbeafe", fontColor: "#172554" });
-const total = (value: string) => cell(value, { bold: true, backgroundColor: "#e5e7eb", fontColor: "#111827" });
+const total = (value: string) => cell(value, { bold: true, backgroundColor: "#e6e6e6", fontColor: "#141414" });
 
 function config(
   rows: Array<Array<string | TemplateGridCell>>,
-  options: Partial<PaymentPdfTemplateConfig> = {},
+  options: Partial<PaymentPdfTemplateConfig> & { gridMerges?: TemplateGridMerge[]; gridRowHeights?: number[] } = {},
 ): PaymentPdfTemplateConfig {
+  const { gridMerges = [], gridRowHeights, ...templateOptions } = options;
+  const templateGrid = grid(rows, undefined, gridMerges);
+  if (gridRowHeights) {
+    templateGrid.rowHeights = templateGrid.rowHeights.map((height, index) => gridRowHeights[index] ?? height);
+  }
   return {
-    grid: grid(rows),
+    grid: templateGrid,
     detailRowIndex: 1,
     groupBy: [],
     groupHeader: null,
     separator: null,
     subtotal: null,
     orientation: "landscape",
-    ...options,
+    ...templateOptions,
   };
 }
 
@@ -163,25 +168,27 @@ export const PAYMENT_PDF_TEMPLATE_EXAMPLES: PaymentPdfTemplateExample[] = [
     category: "Relatórios fixos",
     title: "Relatório por valor",
     description: "Tabela completa com cabeçalho escuro, agrupada por colaborador, com subtotal de horas e valor por pessoa.",
-    result: ["RELATÓRIO DE PAGAMENTOS", "LOCAL | DATA | FUNÇÃO | QTD/H | HORÁRIO | VALOR | NOME | STATUS", "Loja 12 | 02/08 | FLV | 06:00 | 07:00 às 13:00 | R$ 78,50 | Crislan | Pendente", "Total | 20:00 | R$ 250,00"],
+    result: ["RELATÓRIO DE PAGAMENTOS", "Gerado em 13 de setembro de 2026 às 14:11", "LOCAL | DATA | FUNÇÃO | QTD/H | HORÁRIO | VALOR | NOME | STATUS", "Loja 12 | 02/08 | FLV | 06:00 | 07:00 às 13:00 | R$ 78,50 | Crislan | Pendente", "Total | 20:00 | R$ 250,00"],
     config: config([
-      [cell("RELATÓRIO DE PAGAMENTOS", { bold: true, fontSize: 14 })],
+      [cell("Relatório de pagamentos", { fontSize: 14 })],
+      [cell("Gerado em {{generatedAt}}", { fontSize: 9, fontColor: "#787878" })],
       [header("LOCAL"), header("DATA"), header("FUNÇÃO"), header("QTD/H"), header("HORÁRIO"), header("VALOR"), header("NOME"), header("STATUS")],
-      ["{{local}}", "{{workDate}}", "{{role}}", "{{workedHours}}", "{{horario}}", cell("{{valor}}", { horizontalAlign: "right" }), "{{employeeName}}", "{{status}}"],
-      ["", "", total("Total"), total("{{soma:workedHours}}"), "", total("{{soma:valor}}"), "", ""],
-    ], { detailRowIndex: 2, groupBy: ["employeeName"], subtotal: { enabled: true, rowIndex: 3 }, orientation: "landscape" }),
+      ["{{local}}", "{{workDate}}", "{{role}}", "{{workedHours}}", "{{horario}}", cell("{{valor}}"), "{{employeeName}}", "{{status}}"],
+      [total(""), total(""), total("Total"), total("{{soma:workedHours}}"), total(""), total("{{soma:valor}}"), total(""), total("")],
+    ], { detailRowIndex: 3, groupBy: ["workDate"], subtotal: { enabled: true, rowIndex: 4 }, orientation: "landscape", gridMerges: [{ row: 0, col: 0, rowSpan: 1, colSpan: 8 }, { row: 1, col: 0, rowSpan: 1, colSpan: 8 }], gridRowHeights: [24, 18, 24, 24, 24] }),
   },
   {
     id: "shift_report",
     category: "Relatórios fixos",
     title: "Relatório por turno",
-    description: "Lista cada turno individualmente, agrupando por colaborador e mostrando a quantidade de turnos e a soma dos valores de cada grupo.",
-    result: ["RELATÓRIO DE TURNOS", "LOCAL | DATA | FUNÇÃO | HORAS | HORÁRIO | VALOR | STATUS", "Crislan | 4 turnos | R$ 320,00", "Loja 12 | 02/08 | FLV | 06:00 | 07:00 às 13:00 | R$ 78,50 | Pendente"],
+    description: "Lista cada turno individualmente, agrupando por dia e mostrando a quantidade de turnos e a soma dos valores de cada grupo.",
+    result: ["RELATÓRIO DE TURNOS", "Gerado em 13 de setembro de 2026 às 14:11", "LOCAL | DATA | FUNÇÃO | HORAS | HORÁRIO | VALOR | NOME | STATUS", "02/Ago/2026 | 2 turnos | R$ 196,75", "Loja 12 | 02/Ago | FLV | 06:00 | 07:00 às 13:00 | R$ 78,50 | Crislan | Pendente"],
     config: config([
-      [cell("RELATÓRIO DE TURNOS", { bold: true, fontSize: 14 })],
-      [header("LOCAL"), header("DATA"), header("FUNÇÃO"), header("HORAS"), header("HORÁRIO"), header("VALOR"), header("STATUS")],
-      ["{{local}}", "{{workDate}}", "{{role}}", "{{workedHours}}", "{{horario}}", cell("{{valor}}", { horizontalAlign: "right" }), "{{status}}"],
-      [group("{{employeeName}}"), group("{{quantidade}} turno(s)"), group(""), group(""), group(""), group("{{soma:valor}}"), group("")],
-    ], { detailRowIndex: 2, groupBy: ["employeeName"], groupHeader: { enabled: true, rowIndex: 3 }, orientation: "landscape" }),
+      [cell("Relatório de turnos", { fontSize: 14 })],
+      [cell("Gerado em {{generatedAt}}", { fontSize: 9, fontColor: "#787878" })],
+      [header("LOCAL"), header("DATA"), header("FUNÇÃO"), header("HORAS"), header("HORÁRIO"), header("VALOR"), header("NOME"), header("STATUS")],
+      ["{{local}}", "{{workDate}}", "{{role}}", "{{workedHours}}", "{{horario}}", cell("{{valor}}"), "{{employeeName}}", "{{status}}"],
+      [total("{{workDate}}"), total("{{quantidade}} turno(s)"), total(""), total(""), total(""), total("{{soma:valor}}"), total(""), total("")],
+    ], { detailRowIndex: 3, groupBy: ["workDate"], groupHeader: { enabled: true, rowIndex: 4 }, orientation: "landscape", gridMerges: [{ row: 0, col: 0, rowSpan: 1, colSpan: 8 }, { row: 1, col: 0, rowSpan: 1, colSpan: 8 }], gridRowHeights: [24, 18, 24, 24, 24] }),
   },
 ];
