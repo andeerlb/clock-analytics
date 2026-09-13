@@ -19,6 +19,15 @@ function reportTitle(statuses: PaymentShiftStatus[]): string {
   return "Relatório de pagamentos";
 }
 
+function shiftReportTitle(statuses: PaymentShiftStatus[]): string {
+  if (statuses.length === 1) {
+    if (statuses[0] === "pendente") return "Turnos pendentes";
+    if (statuses[0] === "pago") return "Turnos pagos";
+    if (statuses[0] === "erro") return "Turnos com erro";
+  }
+  return "Relatório de turnos";
+}
+
 export interface PaymentsReportResult {
   rowCount: number;
   matchedCount: number;
@@ -30,15 +39,32 @@ export async function generatePaymentsReportPdf(
   query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
   grouped = false,
 ): Promise<PaymentsReportResult> {
+  return generateReportPdf(query, grouped, true);
+}
+
+export async function generatePaymentsShiftReportPdf(
+  query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
+  grouped = false,
+): Promise<PaymentsReportResult> {
+  return generateReportPdf(query, grouped, false);
+}
+
+async function generateReportPdf(
+  query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
+  grouped: boolean,
+  onlyRowsWithValue: boolean,
+): Promise<PaymentsReportResult> {
   const allRows = await listPaymentShiftsForReport(query);
-  const title = reportTitle(query.statuses);
+  const title = onlyRowsWithValue ? reportTitle(query.statuses) : shiftReportTitle(query.statuses);
   if (allRows.length === 0) return { rowCount: 0, matchedCount: 0, path: null, title };
 
   const shiftValue = await buildShiftValueResolver(allRows);
-  const rows = allRows.filter((row) => {
-    const value = shiftValue(row);
-    return value !== null && value !== 0;
-  });
+  const rows = onlyRowsWithValue
+    ? allRows.filter((row) => {
+        const value = shiftValue!(row);
+        return value !== null && value !== 0;
+      })
+    : allRows;
   if (rows.length === 0) return { rowCount: 0, matchedCount: allRows.length, path: null, title };
 
   const orderedRows = grouped
@@ -52,9 +78,13 @@ export async function generatePaymentsReportPdf(
   let currentEmployeeName = "";
   let employeeMinutes = 0;
   let employeeValue = 0;
+  let employeeShiftCount = 0;
+  let totalShiftCount = 0;
 
   function pushSubtotal() {
-    body.push(["", "", "Subtotal", formatMinutesAsTime(employeeMinutes), "", formatCurrencyBRL(employeeValue), currentEmployeeName, ""]);
+    body.push(onlyRowsWithValue
+      ? ["", "", "Subtotal", formatMinutesAsTime(employeeMinutes), "", formatCurrencyBRL(employeeValue), currentEmployeeName, ""]
+      : ["", "", "Total de turnos", formatMinutesAsTime(employeeMinutes), "", formatCurrencyBRL(employeeValue), currentEmployeeName, "", String(employeeShiftCount)]);
     subtotalRowIndexes.add(body.length - 1);
   }
 
@@ -63,22 +93,29 @@ export async function generatePaymentsReportPdf(
       pushSubtotal();
       employeeMinutes = 0;
       employeeValue = 0;
+      employeeShiftCount = 0;
     }
     currentEmployeeId = row.employeeId;
     currentEmployeeName = row.employeeName;
+    employeeShiftCount += 1;
     const hasSchedule = row.scheduleStartMinutes !== null && row.scheduleEndMinutes !== null;
     const duration = hasSchedule ? shiftDurationMinutes(row.scheduleStartMinutes!, row.scheduleEndMinutes!) : null;
     if (duration !== null) {
       totalMinutes += duration;
       employeeMinutes += duration;
     }
-    const value = shiftValue(row)!;
-    totalValue += value;
-    employeeValue += value;
+    const value = shiftValue(row);
+    totalShiftCount += 1;
+    if (value !== null) {
+      totalValue += value;
+      employeeValue += value;
+    }
     const schedule = hasSchedule
       ? `${formatMinutesAsTime(row.scheduleStartMinutes!)} - ${formatMinutesAsTime(row.scheduleEndMinutes!)}${row.shiftPeriod ? ` (${SHIFT_PERIOD_LABELS[row.shiftPeriod]})` : ""}`
       : "-";
-    body.push([row.local, formatDateAbbrev(row.workDate), row.role, duration !== null ? formatMinutesAsTime(duration) : "-", schedule, formatCurrencyBRL(value), row.employeeName, STATUS_LABELS[row.status]]);
+    body.push(onlyRowsWithValue
+      ? [row.local, formatDateAbbrev(row.workDate), row.role, duration !== null ? formatMinutesAsTime(duration) : "-", schedule, value !== null ? formatCurrencyBRL(value) : "-", row.employeeName, STATUS_LABELS[row.status]]
+      : [row.local, formatDateAbbrev(row.workDate), row.role, duration !== null ? formatMinutesAsTime(duration) : "-", schedule, value !== null ? formatCurrencyBRL(value) : "-", row.employeeName, STATUS_LABELS[row.status], "1"]);
   }
   if (grouped) pushSubtotal();
 
@@ -91,9 +128,13 @@ export async function generatePaymentsReportPdf(
   autoTable(doc, {
     startY: 26,
     margin: { top: 26, right: 8, bottom: 8, left: 8 },
-    head: [["Local", "Data", "Função", "Qtd/h", "Horário", "Valor", "Nome", "Status"]],
+    head: [onlyRowsWithValue
+      ? ["Local", "Data", "Função", "Qtd/h", "Horário", "Valor", "Nome", "Status"]
+      : ["Local", "Data", "Função", "Qtd/h", "Horário", "Valor", "Nome", "Status", "Turnos"]],
     body,
-    foot: grouped ? undefined : [["", "", "Total", formatMinutesAsTime(totalMinutes), "", formatCurrencyBRL(totalValue), "", ""]],
+    foot: grouped ? undefined : [onlyRowsWithValue
+      ? ["", "", "Total", formatMinutesAsTime(totalMinutes), "", formatCurrencyBRL(totalValue), "", ""]
+      : ["", "", "Total de turnos", formatMinutesAsTime(totalMinutes), "", formatCurrencyBRL(totalValue), "", "", String(totalShiftCount)]],
     showFoot: grouped ? undefined : "lastPage",
     styles: { fontSize: 8, cellPadding: 2.5 },
     headStyles: { fillColor: [45, 52, 73] },

@@ -80,7 +80,7 @@ import {
 import { generatePaymentsExportXlsx, type PaymentExportResult } from "../lib/paymentExport";
 import { generatePaymentsPdfExport, type PaymentPdfExportResult } from "../lib/paymentPdfExport";
 import { ALL_COLUMN_IDS, FLAT_COLUMNS } from "../lib/paymentColumns";
-import { generatePaymentsReportPdf, type PaymentsReportResult } from "../lib/paymentsReport";
+import { generatePaymentsReportPdf, generatePaymentsShiftReportPdf, type PaymentsReportResult } from "../lib/paymentsReport";
 import { acceptShiftChange } from "../lib/remoteCheckDiff";
 import type {
   PaymentExportTemplateListRow,
@@ -698,6 +698,10 @@ export default function PaymentsPage() {
   const [legacyPdfError, setLegacyPdfError] = useState<string | null>(null);
   const [generatedLegacyPdf, setGeneratedLegacyPdf] = useState<PaymentsReportResult | null>(null);
   const [revealingLegacyPdf, setRevealingLegacyPdf] = useState(false);
+  const [generatingShiftPdf, setGeneratingShiftPdf] = useState(false);
+  const [shiftPdfError, setShiftPdfError] = useState<string | null>(null);
+  const [generatedShiftPdf, setGeneratedShiftPdf] = useState<PaymentsReportResult | null>(null);
+  const [revealingShiftPdf, setRevealingShiftPdf] = useState(false);
 
   const [exportTemplates, setExportTemplates] = useState<PaymentExportTemplateListRow[]>([]);
   const [generatingExport, setGeneratingExport] = useState(false);
@@ -963,6 +967,8 @@ export default function PaymentsPage() {
   useEffect(() => {
     setGeneratedLegacyPdf(null);
     setLegacyPdfError(null);
+    setGeneratedShiftPdf(null);
+    setShiftPdfError(null);
     setGeneratedPdfExport(null);
     setPdfExportError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1207,6 +1213,21 @@ export default function PaymentsPage() {
     }
   }
 
+  async function handleGenerateShiftPdf() {
+    setShiftPdfError(null);
+    setGeneratedShiftPdf(null);
+    setGeneratingShiftPdf(true);
+    try {
+      const result = await generatePaymentsShiftReportPdf(baseQuery(), grouped);
+      if (result.rowCount === 0) setShiftPdfError(noReportRowsMessage(result.matchedCount));
+      else if (result.path) setGeneratedShiftPdf(result);
+    } catch (e) {
+      setShiftPdfError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setGeneratingShiftPdf(false);
+    }
+  }
+
   async function handleRevealLegacyPdf() {
     if (!generatedLegacyPdf?.path) return;
     setRevealingLegacyPdf(true);
@@ -1216,6 +1237,18 @@ export default function PaymentsPage() {
       setLegacyPdfError(String(e instanceof Error ? e.message : e));
     } finally {
       setRevealingLegacyPdf(false);
+    }
+  }
+
+  async function handleRevealShiftPdf() {
+    if (!generatedShiftPdf?.path) return;
+    setRevealingShiftPdf(true);
+    try {
+      await revealInFileManager(generatedShiftPdf.path);
+    } catch (e) {
+      setShiftPdfError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setRevealingShiftPdf(false);
     }
   }
 
@@ -1275,6 +1308,7 @@ export default function PaymentsPage() {
       {exportError && <div className="error-box">{exportError}</div>}
       {pdfExportError && <div className="error-box">{pdfExportError}</div>}
       {legacyPdfError && <div className="error-box">{legacyPdfError}</div>}
+      {shiftPdfError && <div className="error-box">{shiftPdfError}</div>}
       {inlineEditError && <div className="error-box">{inlineEditError}</div>}
       {attention && (
         <div className="info-box">
@@ -1303,9 +1337,13 @@ export default function PaymentsPage() {
               <FileDown size={15} style={{ marginRight: "0.4rem" }} />
               Exportar
             </button>
-            <button type="button" className="secondary" onClick={handleGenerateLegacyPdf} disabled={generatingLegacyPdf} title="Gera o relatório fixo antigo considerando os filtros acima">
+            <button type="button" className="secondary" onClick={handleGenerateLegacyPdf} disabled={generatingLegacyPdf} title="Gera o relatório fixo por valor considerando os filtros acima">
               <FileDown size={15} style={{ marginRight: "0.4rem" }} />
-              {generatingLegacyPdf ? "Gerando..." : "Gerar PDF antigo"}
+              {generatingLegacyPdf ? "Gerando..." : "Relatório por valor"}
+            </button>
+            <button type="button" className="secondary" onClick={handleGenerateShiftPdf} disabled={generatingShiftPdf} title="Gera o relatório fixo por turno considerando os filtros acima">
+              <FileDown size={15} style={{ marginRight: "0.4rem" }} />
+              {generatingShiftPdf ? "Gerando..." : "Relatório por turno"}
             </button>
             <button
               type="button"
@@ -1375,13 +1413,30 @@ export default function PaymentsPage() {
           <div className="success-box" style={{ marginTop: "1rem", marginBottom: 0, display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem" }}>
             <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
               <CheckCircle2 size={16} />
-              PDF antigo gerado com sucesso: {generatedLegacyPdf.title} ({generatedLegacyPdf.rowCount} turno(s))
+              Relatório por valor gerado com sucesso: {generatedLegacyPdf.title} ({generatedLegacyPdf.rowCount} turno(s))
             </span>
             <div style={{ display: "flex", gap: "0.6rem" }}>
               <button type="button" className="outline" onClick={() => setViewerPath(generatedLegacyPdf.path)}>
                 <Eye size={15} style={{ marginRight: "0.4rem" }} /> Abrir PDF
               </button>
               <button type="button" className="outline" onClick={handleRevealLegacyPdf} disabled={revealingLegacyPdf}>
+                <FolderOpen size={15} style={{ marginRight: "0.4rem" }} /> Abrir no explorador
+              </button>
+            </div>
+          </div>
+        )}
+
+        {generatedShiftPdf && generatedShiftPdf.path && (
+          <div className="success-box" style={{ marginTop: "1rem", marginBottom: 0, display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <CheckCircle2 size={16} />
+              Relatório por turno gerado com sucesso: {generatedShiftPdf.title} ({generatedShiftPdf.rowCount} turno(s))
+            </span>
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              <button type="button" className="outline" onClick={() => setViewerPath(generatedShiftPdf.path)}>
+                <Eye size={15} style={{ marginRight: "0.4rem" }} /> Abrir PDF
+              </button>
+              <button type="button" className="outline" onClick={handleRevealShiftPdf} disabled={revealingShiftPdf}>
                 <FolderOpen size={15} style={{ marginRight: "0.4rem" }} /> Abrir no explorador
               </button>
             </div>
