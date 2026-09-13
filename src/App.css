@@ -553,6 +553,33 @@ button.pill-button {
   -webkit-appearance: none;
   margin: 0;
 }
+.pdf-template-editor-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 520px);
+  align-items: start;
+  gap: 1.5rem;
+}
+.pdf-preview-panel {
+  position: sticky;
+  top: 1rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  overflow: hidden;
+}
+.pdf-preview-panel h3 {
+  margin: 0 0 0.7rem;
+}
+@media (max-width: 1100px) {
+  .pdf-template-editor-layout {
+    grid-template-columns: 1fr;
+  }
+  .pdf-preview-panel {
+    position: static;
+  }
+}
 /* A <button> that needs to look and behave like the plain `a` styles above
    — for actions that aren't real navigation (they run extra logic first),
    so a <Link> isn't the right element even though the visual should match

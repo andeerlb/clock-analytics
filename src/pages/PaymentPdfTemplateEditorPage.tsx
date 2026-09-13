@@ -1,4 +1,4 @@
-import { CircleHelp, Eye } from "lucide-react";
+import { CircleHelp } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
@@ -83,7 +83,7 @@ export default function PaymentPdfTemplateEditorPage() {
   const [exampleTarget, setExampleTarget] = useState<PaymentPdfTemplateExample | null>(null);
   /** Preview bytes — a fresh array identity re-renders the preview drawer. */
   const [previewBytes, setPreviewBytes] = useState<Uint8Array | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewGrid, setPreviewGrid] = useState<TemplateGridData | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   /** Bumped by `applyExample` — remounts the grid editor with the example's `initialGrid`. */
   const [gridRevision, setGridRevision] = useState(0);
@@ -336,18 +336,16 @@ export default function PaymentPdfTemplateEditorPage() {
     setContextMenu({ x, y, items });
   }
 
-  /** Builds the config exactly like `handleSave` does (without persisting) and previews it with fake data. */
-  function handlePreview() {
-    setPreviewError(null);
-    if (detailRowIndex === null) {
-      setPreviewError("Marque qual linha representa um turno antes de pré-visualizar — botão direito no número da linha → \"Marcar como Linha do Turno\".");
+  useEffect(() => {
+    if (!previewGrid || detailRowIndex === null) {
+      setPreviewBytes(null);
+      setPreviewError(null);
       return;
     }
     try {
-      const grid = gridRef.current?.getGrid() ?? { rows: [], columnWidths: [], columnAutoFit: [], rowHeights: [], merges: [] };
-      const presentFields = fieldsPresentInGrid(grid);
+      const presentFields = fieldsPresentInGrid(previewGrid);
       const config: PaymentPdfTemplateConfig = {
-        grid,
+        grid: previewGrid,
         detailRowIndex,
         groupBy: groupBy.filter((field) => presentFields.has(field)),
         groupHeader: groupHeaderRowIndex !== null ? { enabled: true, rowIndex: groupHeaderRowIndex } : null,
@@ -356,11 +354,12 @@ export default function PaymentPdfTemplateEditorPage() {
         orientation,
       };
       setPreviewBytes(buildPaymentPdfPreviewBytes(config));
-      setPreviewOpen(true);
+      setPreviewError(null);
     } catch (e) {
+      setPreviewBytes(null);
       setPreviewError(String(e instanceof Error ? e.message : e));
     }
-  }
+  }, [previewGrid, detailRowIndex, groupBy, groupHeaderRowIndex, separatorEnabled, separatorRowIndex, subtotalEnabled, subtotalRowIndex, orientation]);
 
   /** Applies a help-drawer example: replaces the whole grid and every role/grouping state — nothing is persisted until "Salvar". */
   function applyExample() {
@@ -486,46 +485,49 @@ export default function PaymentPdfTemplateEditorPage() {
 
       {error && <div className="error-box">{error}</div>}
 
-      <div className="field-row" style={{ alignItems: "end", marginBottom: "1rem", gap: "1rem" }}>
-        <div className="field" style={{ maxWidth: 420, marginBottom: 0 }}>
-          <label>Nome do template</label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Ex: Recibo de pagamentos — Santo Amaro"
-          />
-        </div>
-        <div className="field" style={{ maxWidth: 220, marginBottom: 0 }}>
-          <label>Orientação da página</label>
-          <select value={orientation} onChange={(e) => setOrientation(e.target.value as "portrait" | "landscape")}>
-            <option value="landscape">Paisagem</option>
-            <option value="portrait">Retrato</option>
-          </select>
-        </div>
-        <button type="button" className="secondary" onClick={handlePreview}>
-          <Eye size={15} /> Pré-visualizar
-        </button>
-      </div>
+      <div className="pdf-template-editor-layout">
+        <div>
+          <div className="field-row" style={{ alignItems: "end", marginBottom: "1rem", gap: "1rem" }}>
+            <div className="field" style={{ maxWidth: 420, marginBottom: 0 }}>
+              <label>Nome do template</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Ex: Recibo de pagamentos — Santo Amaro"
+              />
+            </div>
+            <div className="field" style={{ maxWidth: 220, marginBottom: 0 }}>
+              <label>Orientação da página</label>
+              <select value={orientation} onChange={(e) => setOrientation(e.target.value as "portrait" | "landscape")}>
+                <option value="landscape">Paisagem</option>
+                <option value="portrait">Retrato</option>
+              </select>
+            </div>
+          </div>
 
-      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-        <TemplateGridEditor
-          key={gridRevision}
-          ref={gridRef}
-          initialGrid={initialGrid}
-          rowBadges={rowBadges}
-          highlightExactValues={groupByHighlights}
-          onCellContextMenu={handleCellContextMenu}
-          onRowContextMenu={handleRowContextMenu}
-          onGroupingMenu={handleGroupingMenu}
-        />
+          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+            <TemplateGridEditor
+              key={gridRevision}
+              ref={gridRef}
+              initialGrid={initialGrid}
+              onGridChange={setPreviewGrid}
+              rowBadges={rowBadges}
+              highlightExactValues={groupByHighlights}
+              onCellContextMenu={handleCellContextMenu}
+              onRowContextMenu={handleRowContextMenu}
+              onGroupingMenu={handleGroupingMenu}
+            />
+          </div>
+        </div>
+
+        <PaymentPdfPreviewDrawer bytes={previewBytes} />
       </div>
 
       {contextMenu && (
         <ContextMenu x={contextMenu.x} y={contextMenu.y} items={contextMenu.items} onClose={() => setContextMenu(null)} />
       )}
-      {previewError && !previewOpen && <div className="error-box">{previewError}</div>}
-      <PaymentPdfPreviewDrawer bytes={previewBytes} open={previewOpen} onClose={() => setPreviewOpen(false)} />
+      {previewError && <div className="error-box">{previewError}</div>}
       <PaymentPdfTemplateHelpDrawer
         open={helpOpen}
         onClose={() => setHelpOpen(false)}

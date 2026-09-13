@@ -99,6 +99,8 @@ export interface RowBadge {
 interface TemplateGridEditorProps {
   /** A previously-saved grid (from `getGrid()`), or `null`/`undefined` for a fresh blank starter grid. */
   initialGrid?: TemplateGridData | null;
+  /** Fires whenever the editable grid changes, so an owning screen can render a live preview. */
+  onGridChange?: (grid: TemplateGridData) => void;
   /** row index -> badge, for rows currently marked as a role (detail/separator/SOMA). */
   rowBadges?: Map<number, RowBadge>;
   /** Fires on right-clicking a data cell — the parent owns building/rendering the actual `ContextMenu` (this component knows nothing about "campos"/"agrupamento", only the grid). `backgroundColor`/`fontColor` are that cell's own current values, so the parent can conditionally offer "Remover cor..." without a separate round-trip query. */
@@ -749,6 +751,7 @@ function AlignMenu<T extends string>({
 const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEditorProps>(function TemplateGridEditor(
   {
     initialGrid,
+    onGridChange,
     rowBadges,
     onCellContextMenu,
     onRowContextMenu,
@@ -761,6 +764,10 @@ const TemplateGridEditor = forwardRef<TemplateGridEditorHandle, TemplateGridEdit
   ref,
 ) {
   const [grid, setGrid] = useState<TemplateGridData>(() => (initialGrid ? normalizeGrid(initialGrid) : blankGrid()));
+
+  useEffect(() => {
+    onGridChange?.(grid);
+  }, [grid, onGridChange]);
   const [range, setRange] = useState<CellRange | null>(null);
   const [editingCell, setEditingCell] = useState<{ row: number; col: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);

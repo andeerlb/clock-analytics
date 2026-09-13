@@ -2,30 +2,25 @@ import * as pdfjsLib from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { useEffect, useRef, useState } from "react";
-import Drawer from "./Drawer";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 
 const RENDER_SCALE = 1.5;
 
 /**
- * In-editor "Pré-visualizar": renders freshly generated PDF bytes (from
- * `buildPaymentPdfPreviewBytes` — the template drawn with FAKE data) right in
- * a Drawer, so the user checks layout, colors, grouping and orientation
- * before saving. Much simpler than `PdfViewerModal` on purpose: preview
+ * In-editor preview: renders freshly generated PDF bytes (from
+ * `buildPaymentPdfPreviewBytes` — the template drawn with FAKE data) in an
+ * embedded panel, so the user checks layout, colors, grouping and orientation
+ * while editing. Much simpler than `PdfViewerModal` on purpose: preview
  * documents are tiny (a handful of fake turnos), so every page renders
  * eagerly onto its own canvas — no lazy intersection-observer machinery, no
  * download/reveal actions (there's no file on disk to reveal).
  */
 export default function PaymentPdfPreviewDrawer({
   bytes,
-  open,
-  onClose,
 }: {
-  /** `null` with `open: false` keeps the drawer unmounted. A NEW array identity re-renders the preview. */
+  /** A NEW array identity re-renders the preview. */
   bytes: Uint8Array | null;
-  open: boolean;
-  onClose: () => void;
 }) {
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [loading, setLoading] = useState(false);
@@ -33,8 +28,9 @@ export default function PaymentPdfPreviewDrawer({
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!open || !bytes) {
+    if (!bytes) {
       setDoc(null);
+      setLoading(false);
       return;
     }
     let cancelled = false;
@@ -57,7 +53,7 @@ export default function PaymentPdfPreviewDrawer({
     return () => {
       cancelled = true;
     };
-  }, [open, bytes]);
+  }, [bytes]);
 
   useEffect(() => {
     if (!doc || !containerRef.current) return;
@@ -88,11 +84,13 @@ export default function PaymentPdfPreviewDrawer({
   }, [doc]);
 
   return (
-    <Drawer open={open} onClose={onClose} title="Pré-visualização" width="min(760px, 95vw)">
+    <section className="pdf-preview-panel" aria-label="Pré-visualização do PDF">
+      <h3>Pré-visualização</h3>
       <p className="muted" style={{ marginTop: 0, lineHeight: 1.5 }}>
         Como o PDF vai sair — gerado com <strong>dados de exemplo</strong> (3 colaboradores, 7
         turnos), passando pelo mesmo renderizador da exportação real.
       </p>
+      {!bytes && <p className="muted">Marque uma linha como Linha do Turno para visualizar o PDF.</p>}
       {error && <div className="error-box">{error}</div>}
       {loading && <p className="muted">Renderizando...</p>}
       <div ref={containerRef} style={{ display: "grid", gap: "1rem", justifyItems: "center" }} />
@@ -101,6 +99,6 @@ export default function PaymentPdfPreviewDrawer({
           {doc.numPages} página(s)
         </p>
       )}
-    </Drawer>
+    </section>
   );
 }
