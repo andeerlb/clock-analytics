@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import Database from "@tauri-apps/plugin-sql";
 import { overtimeMinutesForDay, sumIntervalMinutes } from "./analysis";
@@ -67,6 +68,30 @@ function inClause(column: string, values: (string | number)[], params: (string |
   const placeholders = values.map((_, i) => `$${params.length + i + 1}`).join(", ");
   params.push(...values);
   return `${column} IN (${placeholders})`;
+}
+
+/** `{ $lastInsertId: n }` stands for the id the batch's own statement `n` (0-based) inserted. */
+type BatchParam = string | number | null | { $lastInsertId: number };
+interface BatchStatement {
+  sql: string;
+  params?: BatchParam[];
+  /** Error to fail (and roll back) the whole batch with when this statement changes no rows. */
+  expectChanges?: string;
+}
+
+/**
+ * Runs `statements` as ONE transaction (see `run_write_batch` in
+ * src-tauri/src/db_batch.rs) — all of them apply or, on the first error,
+ * none do. Use for any write that spans several statements: separate
+ * `db.execute` calls can't share a transaction, since the plugin hands each
+ * one to whichever pooled connection is free.
+ */
+async function runWriteBatch(
+  statements: BatchStatement[],
+): Promise<{ rowsAffected: number; lastInsertId: number }[]> {
+  // The batch runs on the pool `Database.load` registers — make sure it exists.
+  await getDb();
+  return invoke("run_write_batch", { db: DB_URL, statements });
 }
 
 /**
@@ -260,14 +285,19 @@ export async function markSourceFileSaved(fileHash: string): Promise<void> {
  * foreign keys when `PRAGMA foreign_keys = ON` was set on the connection,
  * which isn't guaranteed here.
  */
+function deleteImportStatements(importId: number): BatchStatement[] {
+  return [
+    {
+      sql: "DELETE FROM punches WHERE day_record_id IN (SELECT id FROM day_records WHERE import_id = $1)",
+      params: [importId],
+    },
+    { sql: "DELETE FROM day_records WHERE import_id = $1", params: [importId] },
+    { sql: "DELETE FROM imports WHERE id = $1", params: [importId] },
+  ];
+}
+
 export async function deleteImport(importId: number): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    "DELETE FROM punches WHERE day_record_id IN (SELECT id FROM day_records WHERE import_id = $1)",
-    [importId],
-  );
-  await db.execute("DELETE FROM day_records WHERE import_id = $1", [importId]);
-  await db.execute("DELETE FROM imports WHERE id = $1", [importId]);
+  await runWriteBatch(deleteImportStatements(importId));
 }
 
 /**
@@ -291,10 +321,6 @@ export async function saveParsedTimesheet(
   sourceFileId?: number,
 ): Promise<number> {
   const db = await getDb();
-
-  if (replaceImportId !== undefined) {
-    await deleteImport(replaceImportId);
-  }
 
   // A client can be linked to more than one company, so the pairing has to
   // be validated explicitly rather than derived.
@@ -348,13 +374,18 @@ export async function saveParsedTimesheet(
     if (day.punches.length % 2 !== 0) pendingCount++;
   }
 
-  const importResult = await db.execute(
-    `INSERT INTO imports
+  // The replaced import's removal and the new import's rows go in one
+  // transaction, so a failure part-way never leaves the old import gone
+  // with only half of the new one written.
+  const statements: BatchStatement[] = replaceImportId !== undefined ? deleteImportStatements(replaceImportId) : [];
+  const importStatementIndex = statements.length;
+  statements.push({
+    sql: `INSERT INTO imports
        (provider, employee_id, client_id, company_id, period_start, period_end, original_pdf_path, import_file_id,
         source_file_id, max_punches, total_worked_minutes, overtime_minutes, absence_minutes,
         late_minutes, regular_minutes, interval_minutes, pending_count)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
-    [
+    params: [
       sheet.provider,
       employeeId,
       clientId,
@@ -373,16 +404,16 @@ export async function saveParsedTimesheet(
       intervalMinutes,
       pendingCount,
     ],
-  );
-  const importId = importResult.lastInsertId as number;
+  });
 
   for (const day of sheet.days) {
-    const dayResult = await db.execute(
-      `INSERT INTO day_records
+    const dayStatementIndex = statements.length;
+    statements.push({
+      sql: `INSERT INTO day_records
          (import_id, date, weekday, total_worked_minutes, normal_hours_minutes, absence_minutes, observation)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        importId,
+      params: [
+        { $lastInsertId: importStatementIndex },
         day.date,
         day.weekday,
         day.totalWorkedMinutes,
@@ -390,16 +421,18 @@ export async function saveParsedTimesheet(
         day.absenceMinutes,
         day.observation,
       ],
-    );
-    const dayRecordId = dayResult.lastInsertId as number;
+    });
 
     for (let i = 0; i < day.punches.length; i++) {
-      await db.execute(
-        "INSERT INTO punches (day_record_id, punch_time, sequence_index) VALUES ($1, $2, $3)",
-        [dayRecordId, day.punches[i], i],
-      );
+      statements.push({
+        sql: "INSERT INTO punches (day_record_id, punch_time, sequence_index) VALUES ($1, $2, $3)",
+        params: [{ $lastInsertId: dayStatementIndex }, day.punches[i], i],
+      });
     }
   }
+
+  const results = await runWriteBatch(statements);
+  const importId = results[importStatementIndex].lastInsertId;
 
   return importId;
 }
@@ -428,26 +461,30 @@ export interface CompanyDetail extends CompanyRow {
   valueRules: PaymentValueRule[];
 }
 
-/** Inserted in array order — same evaluation-by-insertion-order convention as the payment-template rule chains, see `resolvePaymentValue`. */
-async function insertCompanyValueRules(db: Database, companyId: number, rules: PaymentValueRule[]): Promise<void> {
-  for (const rule of rules) {
-    await db.execute(
-      `INSERT INTO payment_value_rules (company_id, kind, conditions_json, operator, threshold_minutes, amount)
+/**
+ * One INSERT per rule into `table` (`payment_value_rules` for a company,
+ * `client_payment_value_rules` for a client's override), in array order —
+ * same evaluation-by-insertion-order convention as the payment-template
+ * rule chains, see `resolvePaymentValue`.
+ */
+function valueRuleInserts(
+  table: "payment_value_rules" | "client_payment_value_rules",
+  ownerColumn: "company_id" | "client_id",
+  ownerId: BatchParam,
+  rules: PaymentValueRule[],
+): BatchStatement[] {
+  return rules.map((rule) => ({
+    sql: `INSERT INTO ${table} (${ownerColumn}, kind, conditions_json, operator, threshold_minutes, amount)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [
-        companyId,
-        rule.kind,
-        rule.kind === "condition" && rule.conditions.length > 0 ? JSON.stringify(rule.conditions) : null,
-        rule.kind === "condition" ? rule.operator : null,
-        rule.kind === "condition" ? rule.thresholdMinutes : null,
-        rule.amount,
-      ],
-    );
-  }
-}
-
-async function deleteCompanyValueRules(db: Database, companyId: number): Promise<void> {
-  await db.execute("DELETE FROM payment_value_rules WHERE company_id = $1", [companyId]);
+    params: [
+      ownerId,
+      rule.kind,
+      rule.kind === "condition" && rule.conditions.length > 0 ? JSON.stringify(rule.conditions) : null,
+      rule.kind === "condition" ? rule.operator : null,
+      rule.kind === "condition" ? rule.thresholdMinutes : null,
+      rule.amount,
+    ],
+  }));
 }
 
 /**
@@ -476,13 +513,14 @@ export async function createCompany(
   if (existing.length > 0) {
     throw new Error("Já existe uma empresa cadastrada com esse CNPJ.");
   }
-  const result = await db.execute(
-    "INSERT INTO companies (name, cnpj, night_start_time, night_end_time, night_shift_rule) VALUES ($1, $2, $3, $4, $5)",
-    [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule],
-  );
-  const companyId = result.lastInsertId as number;
-  await insertCompanyValueRules(db, companyId, valueRules);
-  return companyId;
+  const results = await runWriteBatch([
+    {
+      sql: "INSERT INTO companies (name, cnpj, night_start_time, night_end_time, night_shift_rule) VALUES ($1, $2, $3, $4, $5)",
+      params: [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule],
+    },
+    ...valueRuleInserts("payment_value_rules", "company_id", { $lastInsertId: 0 }, valueRules),
+  ]);
+  return results[0].lastInsertId;
 }
 
 export async function getCompany(id: number): Promise<CompanyDetail> {
@@ -529,12 +567,14 @@ export async function updateCompany(
   if (existing.length > 0) {
     throw new Error("Já existe uma empresa cadastrada com esse CNPJ.");
   }
-  await db.execute(
-    "UPDATE companies SET name = $1, cnpj = $2, night_start_time = $3, night_end_time = $4, night_shift_rule = $5 WHERE id = $6",
-    [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule, id],
-  );
-  await deleteCompanyValueRules(db, id);
-  await insertCompanyValueRules(db, id, valueRules);
+  await runWriteBatch([
+    {
+      sql: "UPDATE companies SET name = $1, cnpj = $2, night_start_time = $3, night_end_time = $4, night_shift_rule = $5 WHERE id = $6",
+      params: [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule, id],
+    },
+    { sql: "DELETE FROM payment_value_rules WHERE company_id = $1", params: [id] },
+    ...valueRuleInserts("payment_value_rules", "company_id", id, valueRules),
+  ]);
 }
 
 // One row per (client, company) link — a client with multiple companies
@@ -593,34 +633,33 @@ export async function createClient(
     normalizedCnpj,
   ]);
 
-  let clientId: number;
+  const statements: BatchStatement[] = [];
+  let clientId: BatchParam;
   if (existing.length > 0) {
     // Linking an existing client to one more empresa isn't an edit of that
     // client — its rule overrides (if any) are left exactly as they are,
     // any `nightStartTime`/`valueRules` passed here are silently ignored.
     clientId = existing[0].id;
   } else {
-    const result = await db.execute(
-      "INSERT INTO clients (name, cnpj, night_start_time, night_end_time, night_shift_rule) VALUES ($1, $2, $3, $4, $5)",
-      [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule],
-    );
-    clientId = result.lastInsertId as number;
-    await insertClientValueRules(db, clientId, valueRules);
+    statements.push({
+      sql: "INSERT INTO clients (name, cnpj, night_start_time, night_end_time, night_shift_rule) VALUES ($1, $2, $3, $4, $5)",
+      params: [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule],
+    });
+    clientId = { $lastInsertId: 0 };
+    statements.push(...valueRuleInserts("client_payment_value_rules", "client_id", clientId, valueRules));
   }
 
   for (const companyId of companyIds) {
-    const existingLink = await db.select<{ clientId: number }[]>(
-      "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
-      [clientId, companyId],
-    );
-    if (existingLink.length > 0) continue;
-    await db.execute("INSERT INTO client_companies (client_id, company_id) VALUES ($1, $2)", [
-      clientId,
-      companyId,
-    ]);
+    statements.push({
+      sql: `INSERT INTO client_companies (client_id, company_id)
+            SELECT $1, $2
+            WHERE NOT EXISTS (SELECT 1 FROM client_companies WHERE client_id = $1 AND company_id = $2)`,
+      params: [clientId, companyId],
+    });
   }
 
-  return clientId;
+  const results = await runWriteBatch(statements);
+  return typeof clientId === "number" ? clientId : results[0].lastInsertId;
 }
 
 export interface ClientDetail {
@@ -634,28 +673,6 @@ export interface ClientDetail {
   nightShiftRule: NightShiftRule | null;
   /** Empty means "no override — inherit the linked company's own chain entirely", not "worth zero" — same convention `CompanyDetail.valueRules` already uses. */
   valueRules: PaymentValueRule[];
-}
-
-/** Inserted in array order, same evaluation-by-insertion-order convention as `insertCompanyValueRules`. */
-async function insertClientValueRules(db: Database, clientId: number, rules: PaymentValueRule[]): Promise<void> {
-  for (const rule of rules) {
-    await db.execute(
-      `INSERT INTO client_payment_value_rules (client_id, kind, conditions_json, operator, threshold_minutes, amount)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [
-        clientId,
-        rule.kind,
-        rule.kind === "condition" && rule.conditions.length > 0 ? JSON.stringify(rule.conditions) : null,
-        rule.kind === "condition" ? rule.operator : null,
-        rule.kind === "condition" ? rule.thresholdMinutes : null,
-        rule.amount,
-      ],
-    );
-  }
-}
-
-async function deleteClientValueRules(db: Database, clientId: number): Promise<void> {
-  await db.execute("DELETE FROM client_payment_value_rules WHERE client_id = $1", [clientId]);
 }
 
 export async function getClient(id: number): Promise<ClientDetail> {
@@ -757,12 +774,14 @@ export async function updateClient(
   if (existing.length > 0) {
     throw new Error("Já existe um cliente cadastrado com esse CNPJ.");
   }
-  await db.execute(
-    "UPDATE clients SET name = $1, cnpj = $2, night_start_time = $3, night_end_time = $4, night_shift_rule = $5 WHERE id = $6",
-    [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule, id],
-  );
-  await deleteClientValueRules(db, id);
-  await insertClientValueRules(db, id, valueRules);
+  await runWriteBatch([
+    {
+      sql: "UPDATE clients SET name = $1, cnpj = $2, night_start_time = $3, night_end_time = $4, night_shift_rule = $5 WHERE id = $6",
+      params: [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule, id],
+    },
+    { sql: "DELETE FROM client_payment_value_rules WHERE client_id = $1", params: [id] },
+    ...valueRuleInserts("client_payment_value_rules", "client_id", id, valueRules),
+  ]);
 }
 
 /** The night-shift window/rule + pay-value chain actually in effect for one (cliente, empresa) pair — the client's own override when it has one, falling back field-by-field (night window) or as a whole chain (value rules) to the company's otherwise. Mirrored in SQL by `shiftPeriodSql` for night-shift classification (the only one of the two ever resolved SQL-side). */
@@ -1103,23 +1122,22 @@ export async function updateEmployee(id: number, name: string, cpf: string): Pro
  * connection, which isn't guaranteed here. Irreversible.
  */
 export async function deleteEmployee(employeeId: number): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `DELETE FROM punches WHERE day_record_id IN (
+  const params = [employeeId];
+  await runWriteBatch([
+    {
+      sql: `DELETE FROM punches WHERE day_record_id IN (
        SELECT id FROM day_records WHERE import_id IN (SELECT id FROM imports WHERE employee_id = $1)
      )`,
-    [employeeId],
-  );
-  await db.execute(
-    "DELETE FROM day_records WHERE import_id IN (SELECT id FROM imports WHERE employee_id = $1)",
-    [employeeId],
-  );
-  await db.execute("DELETE FROM imports WHERE employee_id = $1", [employeeId]);
-  await db.execute("DELETE FROM payment_shifts WHERE employee_id = $1", [employeeId]);
-  await db.execute("DELETE FROM employee_aliases WHERE employee_id = $1", [employeeId]);
-  await db.execute("DELETE FROM employee_pix_keys WHERE employee_id = $1", [employeeId]);
-  await db.execute("DELETE FROM employee_client_companies WHERE employee_id = $1", [employeeId]);
-  await db.execute("DELETE FROM employees WHERE id = $1", [employeeId]);
+      params,
+    },
+    { sql: "DELETE FROM day_records WHERE import_id IN (SELECT id FROM imports WHERE employee_id = $1)", params },
+    { sql: "DELETE FROM imports WHERE employee_id = $1", params },
+    { sql: "DELETE FROM payment_shifts WHERE employee_id = $1", params },
+    { sql: "DELETE FROM employee_aliases WHERE employee_id = $1", params },
+    { sql: "DELETE FROM employee_pix_keys WHERE employee_id = $1", params },
+    { sql: "DELETE FROM employee_client_companies WHERE employee_id = $1", params },
+    { sql: "DELETE FROM employees WHERE id = $1", params },
+  ]);
 }
 
 /**
@@ -1153,8 +1171,6 @@ export async function reassignEmployeeHistoryToClientCompany(
   periodStart: string | null,
   periodEnd: string | null,
 ): Promise<void> {
-  const db = await getDb();
-
   const shiftConditions = ["employee_id = $3"];
   const shiftParams: (string | number)[] = [newClientId, newCompanyId, employeeId];
   if (periodStart) {
@@ -1165,10 +1181,6 @@ export async function reassignEmployeeHistoryToClientCompany(
     shiftParams.push(periodEnd);
     shiftConditions.push(`work_date <= $${shiftParams.length}`);
   }
-  await db.execute(
-    `UPDATE payment_shifts SET client_id = $1, company_id = $2 WHERE ${shiftConditions.join(" AND ")}`,
-    shiftParams,
-  );
 
   const importConditions = ["employee_id = $3"];
   const importParams: (string | number)[] = [newClientId, newCompanyId, employeeId];
@@ -1180,10 +1192,16 @@ export async function reassignEmployeeHistoryToClientCompany(
     importParams.push(periodStart);
     importConditions.push(`period_end >= $${importParams.length}`);
   }
-  await db.execute(
-    `UPDATE imports SET client_id = $1, company_id = $2 WHERE ${importConditions.join(" AND ")}`,
-    importParams,
-  );
+  await runWriteBatch([
+    {
+      sql: `UPDATE payment_shifts SET client_id = $1, company_id = $2 WHERE ${shiftConditions.join(" AND ")}`,
+      params: shiftParams,
+    },
+    {
+      sql: `UPDATE imports SET client_id = $1, company_id = $2 WHERE ${importConditions.join(" AND ")}`,
+      params: importParams,
+    },
+  ]);
 }
 
 const IMPORT_SELECT_COLUMNS = `
@@ -1826,13 +1844,14 @@ export async function setConfigCheckDisabled(id: number, disabled: boolean): Pro
 }
 
 export async function deleteReimportConfig(id: number): Promise<void> {
-  const db = await getDb();
   // Unlike source_url_check_diffs (which keeps a config_label snapshot for
   // audit even after the config is gone), this table has no audit value on
   // its own — it's pure scheduling bookkeeping (see `isConfigDue`), so once
   // the config no longer exists there's nothing left to compute from it.
-  await db.execute("DELETE FROM source_url_check_log_configs WHERE config_id = $1", [id]);
-  await db.execute("DELETE FROM source_url_reimport_configs WHERE id = $1", [id]);
+  await runWriteBatch([
+    { sql: "DELETE FROM source_url_check_log_configs WHERE config_id = $1", params: [id] },
+    { sql: "DELETE FROM source_url_reimport_configs WHERE id = $1", params: [id] },
+  ]);
 }
 
 /**
@@ -1842,20 +1861,22 @@ export async function deleteReimportConfig(id: number): Promise<void> {
  * URL," not "undo what was ever imported from it."
  */
 export async function untrackPaymentUrl(sourceUrl: string): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `DELETE FROM source_url_check_diffs
+  const params = [sourceUrl];
+  await runWriteBatch([
+    {
+      sql: `DELETE FROM source_url_check_diffs
      WHERE check_log_id IN (SELECT id FROM source_url_check_log WHERE source_url = $1)`,
-    [sourceUrl],
-  );
-  await db.execute(
-    `DELETE FROM source_url_check_log_configs
+      params,
+    },
+    {
+      sql: `DELETE FROM source_url_check_log_configs
      WHERE check_log_id IN (SELECT id FROM source_url_check_log WHERE source_url = $1)`,
-    [sourceUrl],
-  );
-  await db.execute("DELETE FROM source_url_check_log WHERE source_url = $1", [sourceUrl]);
-  await db.execute("DELETE FROM source_url_reimport_configs WHERE source_url = $1", [sourceUrl]);
-  await db.execute("DELETE FROM source_url_settings WHERE source_url = $1", [sourceUrl]);
+      params,
+    },
+    { sql: "DELETE FROM source_url_check_log WHERE source_url = $1", params },
+    { sql: "DELETE FROM source_url_reimport_configs WHERE source_url = $1", params },
+    { sql: "DELETE FROM source_url_settings WHERE source_url = $1", params },
+  ]);
 }
 
 /**
@@ -2673,148 +2694,137 @@ export interface PaymentTemplateInput {
   statusRules: PaymentTemplateStatusRuleInput[];
 }
 
-async function insertTemplateGroups(
-  db: Database,
-  templateId: number,
+function pushTemplateGroupInserts(
+  statements: BatchStatement[],
+  templateId: BatchParam,
   groups: PaymentTemplateGroup[],
-): Promise<void> {
+): void {
   for (const group of groups) {
-    const result = await db.execute(
-      "INSERT INTO payment_template_groups (template_id) VALUES ($1)",
-      [templateId],
-    );
-    const groupId = result.lastInsertId as number;
+    const groupId = { $lastInsertId: statements.length };
+    statements.push({ sql: "INSERT INTO payment_template_groups (template_id) VALUES ($1)", params: [templateId] });
     for (const sheetName of group.sheetNames) {
-      await db.execute(
-        "INSERT INTO payment_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 1)",
-        [groupId, sheetName],
-      );
+      statements.push({
+        sql: "INSERT INTO payment_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 1)",
+        params: [groupId, sheetName],
+      });
     }
     for (const sheetName of group.excludedSheetNames) {
-      await db.execute(
-        "INSERT INTO payment_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 0)",
-        [groupId, sheetName],
-      );
+      statements.push({
+        sql: "INSERT INTO payment_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 0)",
+        params: [groupId, sheetName],
+      });
     }
     for (const mapping of group.fieldMappings) {
-      await db.execute(
-        `INSERT INTO payment_template_fields (group_id, column_letter, target_field, header_label)
+      statements.push({
+        sql: `INSERT INTO payment_template_fields (group_id, column_letter, target_field, header_label)
          VALUES ($1, $2, $3, $4)`,
-        [groupId, mapping.columnLetter, mapping.targetField, mapping.headerLabel],
-      );
+        params: [groupId, mapping.columnLetter, mapping.targetField, mapping.headerLabel],
+      });
     }
   }
 }
 
 /** Deletes every group under a template, and (via their group_id) every sheet/field row under those groups. */
-async function deleteTemplateGroups(db: Database, templateId: number): Promise<void> {
-  const groupRows = await db.select<{ id: number }[]>(
-    "SELECT id FROM payment_template_groups WHERE template_id = $1",
-    [templateId],
-  );
-  if (groupRows.length === 0) return;
-  const ids = groupRows.map((r) => r.id);
-  const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
-  await db.execute(`DELETE FROM payment_template_fields WHERE group_id IN (${placeholders})`, ids);
-  await db.execute(`DELETE FROM payment_template_sheets WHERE group_id IN (${placeholders})`, ids);
-  await db.execute("DELETE FROM payment_template_groups WHERE template_id = $1", [templateId]);
+function deleteTemplateGroupsStatements(templateId: number): BatchStatement[] {
+  const groupIds = "SELECT id FROM payment_template_groups WHERE template_id = $1";
+  return [
+    { sql: `DELETE FROM payment_template_fields WHERE group_id IN (${groupIds})`, params: [templateId] },
+    { sql: `DELETE FROM payment_template_sheets WHERE group_id IN (${groupIds})`, params: [templateId] },
+    { sql: "DELETE FROM payment_template_groups WHERE template_id = $1", params: [templateId] },
+  ];
 }
 
 /** Inserted in array order — evaluation order for the if/else-if/else chain matches insertion (id) order, see `resolvePaymentRoute`. */
-async function insertTemplateRules(
-  db: Database,
-  templateId: number,
+function pushTemplateRuleInserts(
+  statements: BatchStatement[],
+  templateId: BatchParam,
   rules: PaymentTemplateRuleInput[],
-): Promise<void> {
+): void {
   for (const rule of rules) {
-    await db.execute(
-      `INSERT INTO payment_template_rules
+    statements.push({
+      sql: `INSERT INTO payment_template_rules
          (template_id, kind, conditions_json, company_id, client_id)
        VALUES ($1, $2, $3, $4, $5)`,
-      [
+      params: [
         templateId,
         rule.kind,
         rule.kind === "condition" ? JSON.stringify(rule.conditions) : null,
         rule.companyId,
         rule.clientId,
       ],
-    );
+    });
   }
 }
 
-async function deleteTemplateRules(db: Database, templateId: number): Promise<void> {
-  await db.execute("DELETE FROM payment_template_rules WHERE template_id = $1", [templateId]);
-}
-
-/** Inserted in array order — same evaluation-by-insertion-order convention as `insertTemplateRules`, see `resolvePaymentStatus`. */
-async function insertTemplateStatusRules(
-  db: Database,
-  templateId: number,
+/** Inserted in array order — same evaluation-by-insertion-order convention as `pushTemplateRuleInserts`, see `resolvePaymentStatus`. */
+function pushTemplateStatusRuleInserts(
+  statements: BatchStatement[],
+  templateId: BatchParam,
   rules: PaymentTemplateStatusRuleInput[],
-): Promise<void> {
+): void {
   for (const rule of rules) {
-    await db.execute(
-      `INSERT INTO payment_template_status_rules
+    statements.push({
+      sql: `INSERT INTO payment_template_status_rules
          (template_id, kind, conditions_json, status)
        VALUES ($1, $2, $3, $4)`,
-      [
+      params: [
         templateId,
         rule.kind,
         rule.kind === "condition" ? JSON.stringify(rule.conditions) : null,
         rule.status,
       ],
-    );
+    });
   }
 }
 
-async function deleteTemplateStatusRules(db: Database, templateId: number): Promise<void> {
-  await db.execute("DELETE FROM payment_template_status_rules WHERE template_id = $1", [templateId]);
-}
-
 export async function createPaymentTemplate(input: PaymentTemplateInput): Promise<number> {
-  const db = await getDb();
-  const result = await db.execute(
-    `INSERT INTO payment_templates (name, file_kind, accepted_file_kinds_json, delimiter, date_format, identifier_priority)
+  const statements: BatchStatement[] = [
+    {
+      sql: `INSERT INTO payment_templates (name, file_kind, accepted_file_kinds_json, delimiter, date_format, identifier_priority)
      VALUES ($1, $2, $3, $4, $5, $6)`,
-    [
-      input.name,
-      input.fileKind,
-      JSON.stringify(input.acceptedFileKinds),
-      input.delimiter,
-      input.dateFormat,
-      JSON.stringify(input.identifierPriority),
-    ],
-  );
-  const templateId = result.lastInsertId as number;
-  await insertTemplateGroups(db, templateId, input.groups);
-  await insertTemplateRules(db, templateId, input.rules);
-  await insertTemplateStatusRules(db, templateId, input.statusRules);
-  return templateId;
+      params: [
+        input.name,
+        input.fileKind,
+        JSON.stringify(input.acceptedFileKinds),
+        input.delimiter,
+        input.dateFormat,
+        JSON.stringify(input.identifierPriority),
+      ],
+    },
+  ];
+  const templateId = { $lastInsertId: 0 };
+  pushTemplateGroupInserts(statements, templateId, input.groups);
+  pushTemplateRuleInserts(statements, templateId, input.rules);
+  pushTemplateStatusRuleInserts(statements, templateId, input.statusRules);
+  const results = await runWriteBatch(statements);
+  return results[0].lastInsertId;
 }
 
 export async function updatePaymentTemplate(id: number, input: PaymentTemplateInput): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `UPDATE payment_templates SET
+  const statements: BatchStatement[] = [
+    {
+      sql: `UPDATE payment_templates SET
        name = $1, file_kind = $2, accepted_file_kinds_json = $3, delimiter = $4, date_format = $5,
        identifier_priority = $6, updated_at = datetime('now')
      WHERE id = $7`,
-    [
-      input.name,
-      input.fileKind,
-      JSON.stringify(input.acceptedFileKinds),
-      input.delimiter,
-      input.dateFormat,
-      JSON.stringify(input.identifierPriority),
-      id,
-    ],
-  );
-  await deleteTemplateGroups(db, id);
-  await insertTemplateGroups(db, id, input.groups);
-  await deleteTemplateRules(db, id);
-  await insertTemplateRules(db, id, input.rules);
-  await deleteTemplateStatusRules(db, id);
-  await insertTemplateStatusRules(db, id, input.statusRules);
+      params: [
+        input.name,
+        input.fileKind,
+        JSON.stringify(input.acceptedFileKinds),
+        input.delimiter,
+        input.dateFormat,
+        JSON.stringify(input.identifierPriority),
+        id,
+      ],
+    },
+    ...deleteTemplateGroupsStatements(id),
+    { sql: "DELETE FROM payment_template_rules WHERE template_id = $1", params: [id] },
+    { sql: "DELETE FROM payment_template_status_rules WHERE template_id = $1", params: [id] },
+  ];
+  pushTemplateGroupInserts(statements, id, input.groups);
+  pushTemplateRuleInserts(statements, id, input.rules);
+  pushTemplateStatusRuleInserts(statements, id, input.statusRules);
+  await runWriteBatch(statements);
 }
 
 /**
@@ -2824,12 +2834,13 @@ export async function updatePaymentTemplate(id: number, input: PaymentTemplateIn
  * lose the (nullable, purely informational) back-reference to it.
  */
 export async function deletePaymentTemplate(id: number): Promise<void> {
-  const db = await getDb();
-  await db.execute("UPDATE payment_shifts SET template_id = NULL WHERE template_id = $1", [id]);
-  await deleteTemplateGroups(db, id);
-  await deleteTemplateRules(db, id);
-  await deleteTemplateStatusRules(db, id);
-  await db.execute("DELETE FROM payment_templates WHERE id = $1", [id]);
+  await runWriteBatch([
+    { sql: "UPDATE payment_shifts SET template_id = NULL WHERE template_id = $1", params: [id] },
+    ...deleteTemplateGroupsStatements(id),
+    { sql: "DELETE FROM payment_template_rules WHERE template_id = $1", params: [id] },
+    { sql: "DELETE FROM payment_template_status_rules WHERE template_id = $1", params: [id] },
+    { sql: "DELETE FROM payment_templates WHERE id = $1", params: [id] },
+  ]);
 }
 
 export async function listPaymentExportTemplates(): Promise<PaymentExportTemplateListRow[]> {
@@ -3020,89 +3031,88 @@ export interface EmployeeTemplateInput {
   groups: EmployeeTemplateGroup[];
 }
 
-async function insertEmployeeTemplateGroups(
-  db: Database,
-  templateId: number,
+function pushEmployeeTemplateGroupInserts(
+  statements: BatchStatement[],
+  templateId: BatchParam,
   groups: EmployeeTemplateGroup[],
-): Promise<void> {
+): void {
   for (const group of groups) {
-    const result = await db.execute(
-      "INSERT INTO employee_template_groups (template_id, header_row) VALUES ($1, $2)",
-      [templateId, group.headerRow],
-    );
-    const groupId = result.lastInsertId as number;
+    const groupId = { $lastInsertId: statements.length };
+    statements.push({
+      sql: "INSERT INTO employee_template_groups (template_id, header_row) VALUES ($1, $2)",
+      params: [templateId, group.headerRow],
+    });
     for (const sheetName of group.sheetNames) {
-      await db.execute(
-        "INSERT INTO employee_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 1)",
-        [groupId, sheetName],
-      );
+      statements.push({
+        sql: "INSERT INTO employee_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 1)",
+        params: [groupId, sheetName],
+      });
     }
     for (const sheetName of group.excludedSheetNames) {
-      await db.execute(
-        "INSERT INTO employee_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 0)",
-        [groupId, sheetName],
-      );
+      statements.push({
+        sql: "INSERT INTO employee_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 0)",
+        params: [groupId, sheetName],
+      });
     }
     for (const mapping of group.fieldMappings) {
-      await db.execute(
-        `INSERT INTO employee_template_fields (group_id, column_letter, target_field, header_label)
+      statements.push({
+        sql: `INSERT INTO employee_template_fields (group_id, column_letter, target_field, header_label)
          VALUES ($1, $2, $3, $4)`,
-        [groupId, mapping.columnLetter, mapping.targetField, mapping.headerLabel],
-      );
+        params: [groupId, mapping.columnLetter, mapping.targetField, mapping.headerLabel],
+      });
     }
   }
 }
 
 /** Deletes every group under a template, and (via their group_id) every sheet/field row under those groups. */
-async function deleteEmployeeTemplateGroups(db: Database, templateId: number): Promise<void> {
-  const groupRows = await db.select<{ id: number }[]>(
-    "SELECT id FROM employee_template_groups WHERE template_id = $1",
-    [templateId],
-  );
-  if (groupRows.length === 0) return;
-  const ids = groupRows.map((r) => r.id);
-  const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
-  await db.execute(`DELETE FROM employee_template_fields WHERE group_id IN (${placeholders})`, ids);
-  await db.execute(`DELETE FROM employee_template_sheets WHERE group_id IN (${placeholders})`, ids);
-  await db.execute("DELETE FROM employee_template_groups WHERE template_id = $1", [templateId]);
+function deleteEmployeeTemplateGroupsStatements(templateId: number): BatchStatement[] {
+  const groupIds = "SELECT id FROM employee_template_groups WHERE template_id = $1";
+  return [
+    { sql: `DELETE FROM employee_template_fields WHERE group_id IN (${groupIds})`, params: [templateId] },
+    { sql: `DELETE FROM employee_template_sheets WHERE group_id IN (${groupIds})`, params: [templateId] },
+    { sql: "DELETE FROM employee_template_groups WHERE template_id = $1", params: [templateId] },
+  ];
 }
 
 export async function createEmployeeTemplate(input: EmployeeTemplateInput): Promise<number> {
-  const db = await getDb();
-  const result = await db.execute(
-    `INSERT INTO employee_templates (name, file_kind, accepted_file_kinds_json, delimiter, identifier_priority)
+  const statements: BatchStatement[] = [
+    {
+      sql: `INSERT INTO employee_templates (name, file_kind, accepted_file_kinds_json, delimiter, identifier_priority)
      VALUES ($1, $2, $3, $4, $5)`,
-    [
-      input.name,
-      input.fileKind,
-      JSON.stringify(input.acceptedFileKinds),
-      input.delimiter,
-      JSON.stringify(input.identifierPriority),
-    ],
-  );
-  const templateId = result.lastInsertId as number;
-  await insertEmployeeTemplateGroups(db, templateId, input.groups);
-  return templateId;
+      params: [
+        input.name,
+        input.fileKind,
+        JSON.stringify(input.acceptedFileKinds),
+        input.delimiter,
+        JSON.stringify(input.identifierPriority),
+      ],
+    },
+  ];
+  pushEmployeeTemplateGroupInserts(statements, { $lastInsertId: 0 }, input.groups);
+  const results = await runWriteBatch(statements);
+  return results[0].lastInsertId;
 }
 
 export async function updateEmployeeTemplate(id: number, input: EmployeeTemplateInput): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `UPDATE employee_templates SET
+  const statements: BatchStatement[] = [
+    {
+      sql: `UPDATE employee_templates SET
        name = $1, file_kind = $2, accepted_file_kinds_json = $3, delimiter = $4,
        identifier_priority = $5, updated_at = datetime('now')
      WHERE id = $6`,
-    [
-      input.name,
-      input.fileKind,
-      JSON.stringify(input.acceptedFileKinds),
-      input.delimiter,
-      JSON.stringify(input.identifierPriority),
-      id,
-    ],
-  );
-  await deleteEmployeeTemplateGroups(db, id);
-  await insertEmployeeTemplateGroups(db, id, input.groups);
+      params: [
+        input.name,
+        input.fileKind,
+        JSON.stringify(input.acceptedFileKinds),
+        input.delimiter,
+        JSON.stringify(input.identifierPriority),
+        id,
+      ],
+    },
+    ...deleteEmployeeTemplateGroupsStatements(id),
+  ];
+  pushEmployeeTemplateGroupInserts(statements, id, input.groups);
+  await runWriteBatch(statements);
 }
 
 /**
@@ -3112,9 +3122,10 @@ export async function updateEmployeeTemplate(id: number, input: EmployeeTemplate
  * template that created them.
  */
 export async function deleteEmployeeTemplate(id: number): Promise<void> {
-  const db = await getDb();
-  await deleteEmployeeTemplateGroups(db, id);
-  await db.execute("DELETE FROM employee_templates WHERE id = $1", [id]);
+  await runWriteBatch([
+    ...deleteEmployeeTemplateGroupsStatements(id),
+    { sql: "DELETE FROM employee_templates WHERE id = $1", params: [id] },
+  ]);
 }
 
 export interface EmployeeImportRow {
@@ -3385,10 +3396,11 @@ export async function updateRole(id: number, name: string): Promise<void> {
  * being deleted along with the função.
  */
 export async function deleteRole(roleId: number): Promise<void> {
-  const db = await getDb();
-  await db.execute("UPDATE payment_shifts SET role_id = NULL WHERE role_id = $1", [roleId]);
-  await db.execute("DELETE FROM role_aliases WHERE role_id = $1", [roleId]);
-  await db.execute("DELETE FROM roles WHERE id = $1", [roleId]);
+  await runWriteBatch([
+    { sql: "UPDATE payment_shifts SET role_id = NULL WHERE role_id = $1", params: [roleId] },
+    { sql: "DELETE FROM role_aliases WHERE role_id = $1", params: [roleId] },
+    { sql: "DELETE FROM roles WHERE id = $1", params: [roleId] },
+  ]);
 }
 
 export interface RoleAliasRow {
@@ -3909,15 +3921,19 @@ export interface PaymentShiftInput {
 
 /** Bulk-inserts shifts — `valor` and any further `pago` transition still happen in a later step. Never sets `edited_manually` — that's exclusively for the manual transition functions above, never for anything import-originated. */
 export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void> {
-  const db = await getDb();
-  for (const r of rows) {
-    await db.execute(
-      `INSERT INTO payment_shifts
+  // One transaction for the whole import, so a failure part-way never
+  // leaves only some of the file's shifts saved. A row reprocessing an
+  // existing shift gets the same fork guard as the manual transitions (see
+  // `successorShiftId`); if that guard trips, the whole batch rolls back.
+  await runWriteBatch(
+    rows.map((r) => ({
+      sql: `INSERT INTO payment_shifts
          (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
           schedule_start_minutes, schedule_end_minutes, status, extra_data, previous_shift_id,
           source_row_number, source_sheet_name)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-      [
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+       WHERE $13 IS NULL OR NOT EXISTS (SELECT 1 FROM payment_shifts WHERE previous_shift_id = $13)`,
+      params: [
         r.employeeId,
         r.templateId,
         r.sourceFileId,
@@ -3934,8 +3950,9 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
         r.sourceRowNumber,
         r.sourceSheetName,
       ],
-    );
-  }
+      expectChanges: SHIFT_ALREADY_SUPERSEDED_ERROR,
+    })),
+  );
 }
 
 /**
@@ -4095,6 +4112,17 @@ export async function listDistinctPaymentShiftLocals(): Promise<string[]> {
   return rows.map((r) => r.local);
 }
 
+/** SQL twin of `shiftDurationMinutes` (start == end is a full 24h, not 0) — needs both schedule columns non-null. */
+const SHIFT_DURATION_SQL =
+  "(CASE WHEN ps.schedule_end_minutes > ps.schedule_start_minutes THEN ps.schedule_end_minutes - ps.schedule_start_minutes ELSE 1440 - ps.schedule_start_minutes + ps.schedule_end_minutes END)";
+
+/** `ps.id IN (...)` for `query.shiftIds`, passed as one JSON array param so a long list can't hit SQLite's bound-parameter limit. */
+function shiftIdsCondition(shiftIds: number[] | undefined, params: (string | number)[]): string | null {
+  if (shiftIds === undefined) return null;
+  params.push(JSON.stringify(shiftIds));
+  return `ps.id IN (SELECT value FROM json_each($${params.length}))`;
+}
+
 /**
  * Row-level WHERE conditions shared by every flat (non-aggregated) shift
  * query — `listPaymentShiftsForReport`, `listPaymentShiftsFlat`, and
@@ -4143,17 +4171,19 @@ function buildPaymentShiftRowConditions(
     if (cond) conditions.push(cond);
   }
   if (query.attention === "missing-amount") conditions.push("ps.amount IS NULL");
+  const idsCondition = shiftIdsCondition(query.shiftIds, params);
+  if (idsCondition) conditions.push(idsCondition);
   if (query.attention === "pending-audit") {
     conditions.push("ps.status = 'pago'");
     conditions.push("NOT EXISTS (SELECT 1 FROM payment_audits pa_attention WHERE pa_attention.payment_shift_id = ps.id)");
   }
   if (query.analytics === "journey-over-12h") {
     conditions.push("ps.schedule_start_minutes IS NOT NULL AND ps.schedule_end_minutes IS NOT NULL");
-    conditions.push("(CASE WHEN ps.schedule_end_minutes >= ps.schedule_start_minutes THEN ps.schedule_end_minutes - ps.schedule_start_minutes ELSE 1440 - ps.schedule_start_minutes + ps.schedule_end_minutes END) > 720");
+    conditions.push(`${SHIFT_DURATION_SQL} > 720`);
   }
   if (query.analytics === "journey-under-4h") {
     conditions.push("ps.schedule_start_minutes IS NOT NULL AND ps.schedule_end_minutes IS NOT NULL");
-    conditions.push("(CASE WHEN ps.schedule_end_minutes >= ps.schedule_start_minutes THEN ps.schedule_end_minutes - ps.schedule_start_minutes ELSE 1440 - ps.schedule_start_minutes + ps.schedule_end_minutes END) BETWEEN 1 AND 239");
+    conditions.push(`${SHIFT_DURATION_SQL} BETWEEN 1 AND 239`);
   }
   if (query.analytics === "rest-under-11h") {
     const ids = inClause("ps.id", query.analyticsShiftIds ?? [], params);
@@ -4218,6 +4248,8 @@ export interface ListPaymentShiftSummariesQuery {
   analyticsWeekday?: number;
   analyticsTimeBucket?: number;
   analyticsShiftIds?: number[];
+  /** Restricts to exactly these shift ids — set by `withMissingValueShiftIds` for `attention: "missing-amount"`, whose real condition (no recorded amount AND no value-rule estimate) can't be expressed in SQL. Omitted means no restriction; an empty array matches nothing. */
+  shiftIds?: number[];
   page: number;
   pageSize: number;
 }
@@ -4260,6 +4292,8 @@ export async function listPaymentShiftSummaries(
     conditions.push(`ps.work_date <= $${params.length}`);
   }
   if (query.attention === "missing-amount") conditions.push("ps.amount IS NULL");
+  const idsCondition = shiftIdsCondition(query.shiftIds, params);
+  if (idsCondition) conditions.push(idsCondition);
   if (query.attention === "pending-audit") {
     conditions.push("ps.status = 'pago'");
     conditions.push("NOT EXISTS (SELECT 1 FROM payment_audits pa_attention WHERE pa_attention.payment_shift_id = ps.id)");
@@ -4636,6 +4670,23 @@ interface PaymentShiftCoreFields {
   previousShiftId: number | null;
 }
 
+const SHIFT_ALREADY_SUPERSEDED_ERROR =
+  "Esse turno já foi alterado em outro lugar (outra janela ou a verificação automática). Atualize a lista e tente de novo.";
+
+/**
+ * Every append-only transition below inserts its new row with
+ * `INSERT ... SELECT ... WHERE NOT EXISTS (a row already pointing back at
+ * shiftId)` — one statement, so SQLite checks and inserts atomically. That
+ * keeps a chain from forking when two writers act on the same head at once
+ * (a double click, the detached "Conferência" window, a background
+ * auto-apply), which would otherwise leave two heads for one shift. Zero
+ * rows inserted means another writer got there first.
+ */
+function successorShiftId(result: { rowsAffected: number; lastInsertId?: number }): number {
+  if (result.rowsAffected === 0) throw new Error(SHIFT_ALREADY_SUPERSEDED_ERROR);
+  return result.lastInsertId as number;
+}
+
 /** Shared by every status-transition function below — the fields that always carry over unchanged into the new row. */
 async function readPaymentShiftCoreFields(db: Database, shiftId: number): Promise<PaymentShiftCoreFields> {
   const rows = await db.select<PaymentShiftCoreFields[]>(
@@ -4680,7 +4731,8 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
        (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
         schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
         source_row_number, source_sheet_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pago', $11, $12, $13, $14, $15, $16)`,
+     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pago', $11, $12, $13, $14, $15, $16
+     WHERE NOT EXISTS (SELECT 1 FROM payment_shifts WHERE previous_shift_id = $12)`,
     [
       s.employeeId,
       s.templateId,
@@ -4701,7 +4753,7 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
     ],
   );
   notifyPaymentShiftsChanged();
-  return result.lastInsertId as number;
+  return successorShiftId(result);
 }
 
 /**
@@ -4730,7 +4782,8 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
        (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
         schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
         source_row_number, source_sheet_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pendente', NULL, $11, $12, $13, $14, $15)`,
+     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pendente', NULL, $11, $12, $13, $14, $15
+     WHERE NOT EXISTS (SELECT 1 FROM payment_shifts WHERE previous_shift_id = $11)`,
     [
       s.employeeId,
       s.templateId,
@@ -4750,7 +4803,7 @@ export async function revertPaymentShiftToPending(shiftId: number): Promise<numb
     ],
   );
   notifyPaymentShiftsChanged();
-  return result.lastInsertId as number;
+  return successorShiftId(result);
 }
 
 /** Shown alongside the "Erro" badge on the Pagamentos page for a shift `markPaymentShiftAuditError` transitioned — same spot `error_message` already shows an import-time parse failure in. */
@@ -4775,7 +4828,8 @@ export async function markPaymentShiftAuditError(shiftId: number): Promise<numbe
        (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
         schedule_start_minutes, schedule_end_minutes, status, error_message, amount, previous_shift_id, extra_data, edited_manually,
         source_row_number, source_sheet_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'erro', $11, NULL, $12, $13, $14, $15, $16)`,
+     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'erro', $11, NULL, $12, $13, $14, $15, $16
+     WHERE NOT EXISTS (SELECT 1 FROM payment_shifts WHERE previous_shift_id = $12)`,
     [
       s.employeeId,
       s.templateId,
@@ -4796,7 +4850,7 @@ export async function markPaymentShiftAuditError(shiftId: number): Promise<numbe
     ],
   );
   notifyPaymentShiftsChanged();
-  return result.lastInsertId as number;
+  return successorShiftId(result);
 }
 
 /**
@@ -4821,7 +4875,8 @@ export async function undoPaymentShiftAuditError(shiftId: number): Promise<numbe
        (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
         schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
         source_row_number, source_sheet_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pago', $11, $12, $13, $14, $15, $16)`,
+     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pago', $11, $12, $13, $14, $15, $16
+     WHERE NOT EXISTS (SELECT 1 FROM payment_shifts WHERE previous_shift_id = $12)`,
     [
       s.employeeId,
       s.templateId,
@@ -4842,7 +4897,7 @@ export async function undoPaymentShiftAuditError(shiftId: number): Promise<numbe
     ],
   );
   notifyPaymentShiftsChanged();
-  return result.lastInsertId as number;
+  return successorShiftId(result);
 }
 
 /**
@@ -4942,7 +4997,8 @@ export async function editPaymentShift(
        (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
         schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
         source_row_number, source_sheet_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, $15, $16)`,
+     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, $15, $16
+     WHERE NOT EXISTS (SELECT 1 FROM payment_shifts WHERE previous_shift_id = $13)`,
     [
       s.employeeId,
       s.templateId,
@@ -4963,7 +5019,7 @@ export async function editPaymentShift(
     ],
   );
   notifyPaymentShiftsChanged();
-  return result.lastInsertId as number;
+  return successorShiftId(result);
 }
 
 /**
@@ -5026,7 +5082,8 @@ export async function applyAutoSyncedFieldUpdate(
        (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
         schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data,
         edited_manually, source_row_number, source_sheet_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16)`,
+     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16
+     WHERE NOT EXISTS (SELECT 1 FROM payment_shifts WHERE previous_shift_id = $13)`,
     [
       s.employeeId,
       s.templateId,
@@ -5046,7 +5103,7 @@ export async function applyAutoSyncedFieldUpdate(
       sourceSheetName,
     ],
   );
-  return result.lastInsertId as number;
+  return successorShiftId(result);
 }
 
 /**

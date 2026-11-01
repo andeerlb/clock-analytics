@@ -157,7 +157,7 @@ export function normalizeCnpj(cnpj: string): string {
   return cnpj.replace(/\D/g, "");
 }
 
-/** "62489830000181" -> "62.489.830/0001-81". Falls back to the raw input if it isn't 14 digits. */
+/** "11222333000181" -> "11.222.333/0001-81". Falls back to the raw input if it isn't 14 digits. */
 export function formatCnpj(cnpj: string): string {
   const digits = normalizeCnpj(cnpj);
   if (digits.length !== 14) return cnpj;
@@ -495,6 +495,15 @@ export function shiftDurationMinutes(start: number, end: number): number {
   return end > start ? end - start : 1440 - start + end;
 }
 
+/** A shift's horas trabalhadas per `shiftDurationMinutes`, or `null` when it has no horário to measure. */
+export function scheduleDurationMinutes(shift: {
+  scheduleStartMinutes: number | null;
+  scheduleEndMinutes: number | null;
+}): number | null {
+  if (shift.scheduleStartMinutes === null || shift.scheduleEndMinutes === null) return null;
+  return shiftDurationMinutes(shift.scheduleStartMinutes, shift.scheduleEndMinutes);
+}
+
 /**
  * Classifies a payment shift as "diurno" or "noturno" against a company's
  * night window, per whichever `rule` that company has configured — see
@@ -703,4 +712,29 @@ export function resolvePaymentValue(
     if (matches) return rule.amount;
   }
   return null;
+}
+
+/**
+ * A shift's Valor, the one rule every screen and export uses: its own
+ * recorded `amount` when it has one (a `pago` row's frozen amount, or a
+ * hand-typed one); otherwise the estimate from `valueRules` — the effective
+ * chain for its (cliente, empresa) pair, see `getEffectivePaymentRules`.
+ * `null` when there's nothing to go on: no rules loaded yet, no horário to
+ * measure, or no rule matched.
+ */
+export function shiftValue(
+  shift: {
+    amount: number | null;
+    workDate: string;
+    local: string;
+    role: string;
+    scheduleStartMinutes: number | null;
+    scheduleEndMinutes: number | null;
+  },
+  valueRules: Parameters<typeof resolvePaymentValue>[0] | null,
+): number | null {
+  if (shift.amount !== null) return shift.amount;
+  const duration = scheduleDurationMinutes(shift);
+  if (valueRules === null || duration === null) return null;
+  return resolvePaymentValue(valueRules, duration, shift);
 }

@@ -182,8 +182,8 @@ mod tests {
     const SAMPLE: &str = "\
 Emissão: 03/08/2026 13:25:03
 ESPELHO PONTO: 01/07/2026 - 31/07/2026
-FUNCIONÁRIO: Ademilson Oliveira Lima | CPF: 00533799260
-EMPRESA: RF MERCHANDISING E PROMOCOES LTDA | CNPJ: 62489830000181
+FUNCIONÁRIO: Fulano de Tal Exemplo | CPF: 52998224725
+EMPRESA: EMPRESA EXEMPLO LTDA | CNPJ: 11222333000181
 Jornada realizada Jornada
 Data Ent. 1 Saí. 1 Ent. 2 Saí. 2 Total
 trabalhado
@@ -215,10 +215,10 @@ Assinatura: ";
         let sheet = &sheets[0];
 
         assert_eq!(sheet.provider, "coalize");
-        assert_eq!(sheet.employee.name, "Ademilson Oliveira Lima");
-        assert_eq!(sheet.employee.cpf, "00533799260");
-        assert_eq!(sheet.company.name, "RF MERCHANDISING E PROMOCOES LTDA");
-        assert_eq!(sheet.company.cnpj, "62489830000181");
+        assert_eq!(sheet.employee.name, "Fulano de Tal Exemplo");
+        assert_eq!(sheet.employee.cpf, "52998224725");
+        assert_eq!(sheet.company.name, "EMPRESA EXEMPLO LTDA");
+        assert_eq!(sheet.company.cnpj, "11222333000181");
         assert_eq!(sheet.period.start, "2026-07-01");
         assert_eq!(sheet.period.end, "2026-07-31");
     }
@@ -263,8 +263,8 @@ Assinatura: ";
 Emissão: 03/08/2026 13:25:03
 
                                                                ESPELHO PONTO: 01/07/2026 - 31/07/2026
-  FUNCIONÁRIO: LUANA VIEIRA | CPF: 06485482954 | Cargo: REPOSITOR (A)
-  EMPRESA: RF MERCHANDISING E PROMOCOES LTDA | CNPJ: 62489830000181
+  FUNCIONÁRIO: MARIA EXEMPLO | CPF: 11144477735 | Cargo: REPOSITOR (A)
+  EMPRESA: EMPRESA EXEMPLO LTDA | CNPJ: 11222333000181
 
                                                   Jornada realizada                              Jornada
                                                                                        Total                Horas
@@ -282,8 +282,8 @@ Assinatura: ";
         assert_eq!(sheets.len(), 1);
         let sheet = &sheets[0];
 
-        assert_eq!(sheet.employee.name, "LUANA VIEIRA");
-        assert_eq!(sheet.employee.cpf, "06485482954");
+        assert_eq!(sheet.employee.name, "MARIA EXEMPLO");
+        assert_eq!(sheet.employee.cpf, "11144477735");
         assert_eq!(sheet.days.len(), 3);
 
         let no_punch = sheet.days.iter().find(|d| d.date == "2026-07-01").unwrap();
@@ -303,8 +303,8 @@ Assinatura: ";
     const NO_TOTAL_WORKED_COLUMN_SAMPLE: &str = "\
 Emissão: 03/08/2026 13:12:58
 ESPELHO PONTO: 01/07/2026 - 31/07/2026
-FUNCIONÁRIO: ADAO PINTO FAGUNDES | CPF: 80998852015 | Cargo: operador de caixa
-EMPRESA: FC MERCHANDISING LTDA | CNPJ: 64953192000133
+FUNCIONÁRIO: JOAO TESTE SILVA | CPF: 12345678909 | Cargo: operador de caixa
+EMPRESA: OUTRA EMPRESA EXEMPLO LTDA | CNPJ: 11444777000161
 Jornada realizada Jornada
 Data Ent. 1 Saí. 1 Ent. 2 Saí. 2 Horas
 normais Faltas Observação

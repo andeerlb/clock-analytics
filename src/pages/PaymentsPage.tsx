@@ -74,10 +74,11 @@ import {
   formatDateTimeAbbrevYY,
   formatMinutesAsTime,
   parseTimeToMinutes,
-  resolvePaymentValue,
-  shiftDurationMinutes,
+  scheduleDurationMinutes,
+  shiftValue,
 } from "../lib/format";
 import { generatePaymentsExportXlsx, type PaymentExportResult } from "../lib/paymentExport";
+import { withMissingValueShiftIds } from "../lib/paymentShiftValue";
 import { generatePaymentsPdfExport, type PaymentPdfExportResult } from "../lib/paymentPdfExport";
 import { ALL_COLUMN_IDS, FLAT_COLUMNS } from "../lib/paymentColumns";
 import { generatePaymentsReportPdf, generatePaymentsShiftReportPdf, type PaymentsReportResult } from "../lib/paymentsReport";
@@ -465,20 +466,9 @@ function ShiftRow({
   onRowMouseDown: (shiftId: number) => void;
 }) {
   const badge = STATUS_BADGE[s.status];
-  const hasSchedule = s.scheduleStartMinutes !== null && s.scheduleEndMinutes !== null;
-  const duration = hasSchedule ? shiftDurationMinutes(s.scheduleStartMinutes!, s.scheduleEndMinutes!) : null;
-  const value =
-    s.amount !== null
-      ? s.amount
-      : rules && duration !== null
-        ? resolvePaymentValue(rules.valueRules, duration, {
-            workDate: s.workDate,
-            local: s.local,
-            role: s.role,
-            scheduleStartMinutes: s.scheduleStartMinutes,
-            scheduleEndMinutes: s.scheduleEndMinutes,
-          })
-        : null;
+  const duration = scheduleDurationMinutes(s);
+  const hasSchedule = duration !== null;
+  const value = shiftValue(s, rules?.valueRules ?? null);
   // A pending change (found by the automatic verification, not yet
   // reviewed/accepted) blocks every other row action — the only thing left
   // to do with the row is review it (see `onReview`). One already applied
@@ -878,8 +868,13 @@ export default function PaymentsPage() {
     };
   }
 
+  /** `baseQuery()` plus, for "turnos sem valor", the ids that are really without a value — see `withMissingValueShiftIds`. What every list and export actually queries with. */
+  function tableQuery(): Promise<Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">> {
+    return withMissingValueShiftIds(baseQuery());
+  }
+
   async function refetchFlat() {
-    const { rows, total } = await listPaymentShiftsFlat({ ...baseQuery(), page, pageSize });
+    const { rows, total } = await listPaymentShiftsFlat({ ...(await tableQuery()), page, pageSize });
     setFlatRows(rows);
     setFlatTotal(total);
     ensureRulesLoaded(rows.map((r) => ({ clientId: r.clientId, companyId: r.companyId })));
@@ -887,13 +882,13 @@ export default function PaymentsPage() {
   }
 
   async function refetchSummaries() {
-    const { rows, total } = await listPaymentShiftSummaries({ ...baseQuery(), page, pageSize });
+    const { rows, total } = await listPaymentShiftSummaries({ ...(await tableQuery()), page, pageSize });
     setSummaries(rows);
     setSummariesTotal(total);
   }
 
   async function refetchGroup(employeeId: number, competencia: string) {
-    const rows = await listPaymentShiftsForGroup(employeeId, competencia, baseQuery());
+    const rows = await listPaymentShiftsForGroup(employeeId, competencia, await tableQuery());
     setGroupRows((prev) => new Map(prev).set(groupKey(employeeId, competencia), rows));
     refreshShiftDiffs(rows.map((r) => r.id));
   }
@@ -1029,7 +1024,8 @@ export default function PaymentsPage() {
     });
     if (!groupRows.has(key)) {
       setLoadingGroups((prev) => new Set(prev).add(key));
-      listPaymentShiftsForGroup(s.employeeId, s.competencia, baseQuery())
+      tableQuery()
+        .then((query) => listPaymentShiftsForGroup(s.employeeId, s.competencia, query))
         .then((rows) => {
           setGroupRows((prev) => new Map(prev).set(key, rows));
           ensureRulesLoaded([{ clientId: s.clientId, companyId: s.companyId }]);
@@ -1115,18 +1111,9 @@ export default function PaymentsPage() {
   }
 
   function shiftValueFor(s: PaymentShiftRow, companyId: number): number | null {
-    if (s.amount !== null) return s.amount;
-    const rules = rulesByPair.get(`${s.clientId}:${companyId}`);
-    if (!rules || s.scheduleStartMinutes === null || s.scheduleEndMinutes === null) return null;
-    const duration = shiftDurationMinutes(s.scheduleStartMinutes, s.scheduleEndMinutes);
-    return resolvePaymentValue(rules.valueRules, duration, {
-      workDate: s.workDate,
-      local: s.local,
-      role: s.role,
-      scheduleStartMinutes: s.scheduleStartMinutes,
-      scheduleEndMinutes: s.scheduleEndMinutes,
-    });
+    return shiftValue(s, rulesByPair.get(`${s.clientId}:${companyId}`)?.valueRules ?? null);
   }
+
 
   const [filtersDrawerOpen, setFiltersDrawerOpen] = useState(false);
 
@@ -1152,7 +1139,7 @@ export default function PaymentsPage() {
     setGeneratedExport(null);
     setGeneratingExport(true);
     try {
-      const result = await generatePaymentsExportXlsx(templateId, baseQuery());
+      const result = await generatePaymentsExportXlsx(templateId, await tableQuery());
       if (result.rowCount === 0) {
         setExportError(noReportRowsMessage(result.matchedCount));
       } else if (result.path) {
@@ -1184,7 +1171,7 @@ export default function PaymentsPage() {
     setGeneratedPdfExport(null);
     setGeneratingPdfExport(true);
     try {
-      const result = await generatePaymentsPdfExport(templateId, baseQuery());
+      const result = await generatePaymentsPdfExport(templateId, await tableQuery());
       if (result.rowCount === 0) {
         setPdfExportError(noReportRowsMessage(result.matchedCount));
       } else if (result.path) {
@@ -1203,7 +1190,7 @@ export default function PaymentsPage() {
     setGeneratedLegacyPdf(null);
     setGeneratingLegacyPdf(true);
     try {
-      const result = await generatePaymentsReportPdf(baseQuery(), grouped);
+      const result = await generatePaymentsReportPdf(await tableQuery(), grouped);
       if (result.rowCount === 0) setLegacyPdfError(noReportRowsMessage(result.matchedCount));
       else if (result.path) setGeneratedLegacyPdf(result);
     } catch (e) {
@@ -1218,7 +1205,7 @@ export default function PaymentsPage() {
     setGeneratedShiftPdf(null);
     setGeneratingShiftPdf(true);
     try {
-      const result = await generatePaymentsShiftReportPdf(baseQuery(), grouped);
+      const result = await generatePaymentsShiftReportPdf(await tableQuery(), grouped);
       if (result.rowCount === 0) setShiftPdfError(noReportRowsMessage(result.matchedCount));
       else if (result.path) setGeneratedShiftPdf(result);
     } catch (e) {

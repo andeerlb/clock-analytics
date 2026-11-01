@@ -37,6 +37,10 @@ regex = "1.13.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 uuid = { version = "1.24.0", features = ["v4", "serde"] }
 tauri-plugin-sql = { version = "2.4.0", features = ["sqlite"] }
+# Same sqlx the SQL plugin already pulls in — used directly only by
+# `db_batch::run_write_batch`, to run a multi-statement write as one
+# transaction on the plugin's own pool.
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "json"] }
 thiserror = "2.0.19"
 tauri-plugin-dialog = "2.7.2"
 tauri-plugin-fs = "2.5.1"

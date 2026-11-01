@@ -21,7 +21,8 @@ import { applyPaymentsFiltersSnapshot, snapshotPaymentsFilters, usePaymentsFilte
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { countPaymentShiftsPendingAudit, listAllLatestShiftDiffs, listClients, listCompanies, listDistinctPaymentShiftLocals, listPaymentShiftsForReport, listRolesGlobal, type CheckDiffRow, type ClientRow, type CompanyRow, type ListPaymentShiftSummariesQuery, type PaymentShiftReportRow, type RoleRow } from "../lib/db";
 import { toIso, todayUtc } from "../lib/calendar";
-import { formatCurrencyBRL, formatDateCompact } from "../lib/format";
+import { formatCurrencyBRL, formatDateCompact, scheduleDurationMinutes } from "../lib/format";
+import { buildShiftValueResolver } from "../lib/paymentShiftValue";
 import { exportAnalyticsPdf, exportAnalyticsXlsx } from "../lib/analyticsExport";
 
 type Tab = "overview" | "costs" | "journeys" | "audit" | "occurrences";
@@ -37,10 +38,21 @@ function currentMonth(): [string, string] {
   return [toIso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1))), toIso(today)];
 }
 
+/** Same horas trabalhadas as every other screen (`scheduleDurationMinutes`), 0 for a shift with no horário. */
 function durationMinutes(row: PaymentShiftReportRow): number {
-  const { scheduleStartMinutes: start, scheduleEndMinutes: end } = row;
-  if (start === null || end === null) return 0;
-  return end >= start ? end - start : 1440 - start + end;
+  return scheduleDurationMinutes(row) ?? 0;
+}
+
+/**
+ * `amount` is only recorded once a shift is paid (or typed by hand) — a
+ * pending one has `null` there. Swaps in each row's Valor as Pagamentos and
+ * its exports show it (`buildShiftValueResolver`: the recorded amount, else
+ * the value-rule estimate), so every total, ranking and export on this page
+ * counts pending shifts at their estimated cost instead of R$ 0.
+ */
+async function withShiftValues(rows: PaymentShiftReportRow[]): Promise<PaymentShiftReportRow[]> {
+  const value = await buildShiftValueResolver(rows);
+  return rows.map((r) => ({ ...r, amount: value(r) }));
 }
 
 function formatHours(minutes: number): string {
@@ -156,7 +168,7 @@ export default function AnalyticsPage() {
       shiftPeriods: Array.from(paymentFilters.selectedShiftPeriods), scheduleTimeFilter:paymentFilters.scheduleTimeFilter,
     };
     const start=new Date(`${periodStart}T00:00:00Z`),end=new Date(`${periodEnd}T00:00:00Z`),days=Math.round((end.getTime()-start.getTime())/86400000)+1,previousEnd=new Date(start.getTime()-86400000),previousStart=new Date(previousEnd.getTime()-(days-1)*86400000);
-    Promise.all([listPaymentShiftsForReport(query), countPaymentShiftsPendingAudit(query),listPaymentShiftsForReport({...query,periodStart:toIso(previousStart),periodEnd:toIso(previousEnd)})])
+    Promise.all([listPaymentShiftsForReport(query).then(withShiftValues), countPaymentShiftsPendingAudit(query),listPaymentShiftsForReport({...query,periodStart:toIso(previousStart),periodEnd:toIso(previousEnd)}).then(withShiftValues)])
       .then(([nextRows, nextPending,previous]) => { if (!cancelled) { setRows(nextRows); setPendingAudit(nextPending); setPreviousRows(previous); } })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });

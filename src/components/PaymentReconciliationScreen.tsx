@@ -17,7 +17,7 @@ import {
   type PaymentShiftReportRow,
   type RoleRow,
 } from "../lib/db";
-import { formatCurrencyBRL, formatDateAbbrevYY, formatDateTimeAbbrevYY, formatMinutesAsTime, shiftDurationMinutes } from "../lib/format";
+import { formatCurrencyBRL, formatDateAbbrevYY, formatDateTimeAbbrevYY, formatMinutesAsTime, scheduleDurationMinutes } from "../lib/format";
 import { FLAT_COLUMNS } from "../lib/paymentColumns";
 import { PAYMENT_AUDIT_RESULT_LABELS, type PaymentAuditResult, type PaymentShiftStatus } from "../lib/types";
 import Avatar from "./Avatar";
@@ -611,8 +611,8 @@ export default function PaymentReconciliationScreen({
               </thead>
               <tbody>
                 {rows.map((r) => {
-                  const hasSchedule = r.scheduleStartMinutes !== null && r.scheduleEndMinutes !== null;
-                  const duration = hasSchedule ? shiftDurationMinutes(r.scheduleStartMinutes!, r.scheduleEndMinutes!) : null;
+                  const duration = scheduleDurationMinutes(r);
+                  const hasSchedule = duration !== null;
                   const audit = audits.get(r.id) ?? null;
                   // Both actions only ever apply to a `pago` row — once
                   // Marcar erro fires, the row's own status moves off
