@@ -55,7 +55,6 @@ import {
   listImportFiles,
   listPaymentTemplates,
   logSourceFile,
-  markSourceFileSaved,
   reassignEmployeeHistoryToClientCompany,
   savePaymentShifts,
   type DuplicatePaymentShiftMatch,
@@ -1595,10 +1594,7 @@ export default function ImportPaymentsPage() {
         });
         savedFileHashes.add(fileHash);
       }
-      await savePaymentShifts(shiftInputs);
-      for (const fileHash of savedFileHashes) {
-        await markSourceFileSaved(fileHash);
-      }
+      await savePaymentShifts(shiftInputs, savedFileHashes);
 
       // A URL not yet tracked becomes tracked — with its first reimport
       // config, from what this save just used — only if "Rastrear

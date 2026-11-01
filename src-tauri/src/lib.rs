@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod db_backup;
 mod db_batch;
 mod hashing;
 mod model;
@@ -126,6 +127,17 @@ pub fn run() {
                         storage::DatabaseImportEvent { label: "Falha na restauração; banco anterior mantido".into(), occurred_at: chrono::Local::now().format("%H:%M:%S%.3f").to_string() },
                     ],
                 }),
+            }
+
+            // After the swap above (so a just-restored database is the one
+            // protected) and before the SQL plugin's first `load`, which is
+            // what applies pending migrations. A failed backup is logged, not
+            // fatal: refusing to start would lock the user out of their data.
+            let known_versions: Vec<i64> = db::migrations().iter().map(|m| m.version).collect();
+            match tauri::async_runtime::block_on(db_backup::backup_if_migrations_pending(&data_dir, &known_versions)) {
+                Ok(Some(path)) => eprintln!("backup antes das migrations: {}", path.display()),
+                Ok(None) => {}
+                Err(error) => eprintln!("falha ao criar backup antes das migrations: {error}"),
             }
 
             // Built here instead of declaratively in `tauri.conf.json`
@@ -257,6 +269,7 @@ pub fn run() {
             commands::set_tray_status,
             commands::open_reconciliation_window,
             commands::is_reconciliation_window_open,
+            db_backup::backup_database_before_delete,
             db_batch::run_write_batch,
             window_glass::window_glass_active,
         ])

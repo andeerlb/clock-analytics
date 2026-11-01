@@ -719,6 +719,19 @@ export default function PaymentsPage() {
   const [rulesByPair, setRulesByPair] = useState<Map<string, EffectivePaymentRules>>(new Map());
   const fetchedRulePairKeys = useRef<Set<string>>(new Set());
 
+  // Each table/group load takes a ticket, and only the newest ticket's
+  // response is applied: a filter or page change (or the cross-window
+  // refetch) can start a second load before the first one returns, and
+  // without this a slower, older response landing last would overwrite the
+  // newer one.
+  const tableRequest = useRef(0);
+  const groupRequests = useRef<Map<string, number>>(new Map());
+  function nextGroupRequest(key: string): number {
+    const ticket = (groupRequests.current.get(key) ?? 0) + 1;
+    groupRequests.current.set(key, ticket);
+    return ticket;
+  }
+
   const [shiftDiffs, setShiftDiffs] = useState<Map<number, ShiftFieldDiffRow[]>>(new Map());
 
   const [payingShift, setPayingShift] = useState<{ shift: PaymentShiftRow; companyId: number; groupRef: GroupRef } | null>(null);
@@ -795,13 +808,19 @@ export default function PaymentsPage() {
     toFetch.forEach((_, key) => fetchedRulePairKeys.current.add(key));
     Promise.all(
       Array.from(toFetch.entries(), async ([key, p]) => [key, await getEffectivePaymentRules(p.clientId, p.companyId)] as const),
-    ).then((fetched) => {
-      setRulesByPair((prev) => {
-        const next = new Map(prev);
-        fetched.forEach(([key, rules]) => next.set(key, rules));
-        return next;
+    )
+      .then((fetched) => {
+        setRulesByPair((prev) => {
+          const next = new Map(prev);
+          fetched.forEach(([key, rules]) => next.set(key, rules));
+          return next;
+        });
+      })
+      .catch(() => {
+        // Forget these pairs so the next load tries again, instead of
+        // leaving their Valor blank until the page is reopened.
+        toFetch.forEach((_, key) => fetchedRulePairKeys.current.delete(key));
       });
-    });
   }
 
   /** Refreshed on every load of `flatRows`/a group's rows, not cached long-term like `rulesByPair` — the background verification keeps running while this page is open, so what it last found can change out from under an already-loaded row. */
@@ -874,7 +893,9 @@ export default function PaymentsPage() {
   }
 
   async function refetchFlat() {
+    const ticket = ++tableRequest.current;
     const { rows, total } = await listPaymentShiftsFlat({ ...(await tableQuery()), page, pageSize });
+    if (ticket !== tableRequest.current) return;
     setFlatRows(rows);
     setFlatTotal(total);
     ensureRulesLoaded(rows.map((r) => ({ clientId: r.clientId, companyId: r.companyId })));
@@ -882,14 +903,19 @@ export default function PaymentsPage() {
   }
 
   async function refetchSummaries() {
+    const ticket = ++tableRequest.current;
     const { rows, total } = await listPaymentShiftSummaries({ ...(await tableQuery()), page, pageSize });
+    if (ticket !== tableRequest.current) return;
     setSummaries(rows);
     setSummariesTotal(total);
   }
 
   async function refetchGroup(employeeId: number, competencia: string) {
+    const key = groupKey(employeeId, competencia);
+    const ticket = nextGroupRequest(key);
     const rows = await listPaymentShiftsForGroup(employeeId, competencia, await tableQuery());
-    setGroupRows((prev) => new Map(prev).set(groupKey(employeeId, competencia), rows));
+    if (ticket !== groupRequests.current.get(key)) return;
+    setGroupRows((prev) => new Map(prev).set(key, rows));
     refreshShiftDiffs(rows.map((r) => r.id));
   }
 
@@ -900,6 +926,8 @@ export default function PaymentsPage() {
     setListError(null);
     setExpandedKeys(new Set());
     setGroupRows(new Map());
+    // Any group load still in flight was for the old filters.
+    groupRequests.current = new Map();
     const run = grouped ? refetchSummaries() : refetchFlat();
     run
       .catch((e) => {
@@ -1024,13 +1052,16 @@ export default function PaymentsPage() {
     });
     if (!groupRows.has(key)) {
       setLoadingGroups((prev) => new Set(prev).add(key));
+      const ticket = nextGroupRequest(key);
       tableQuery()
         .then((query) => listPaymentShiftsForGroup(s.employeeId, s.competencia, query))
         .then((rows) => {
+          if (ticket !== groupRequests.current.get(key)) return;
           setGroupRows((prev) => new Map(prev).set(key, rows));
           ensureRulesLoaded([{ clientId: s.clientId, companyId: s.companyId }]);
           refreshShiftDiffs(rows.map((r) => r.id));
         })
+        .catch((e) => setListError(String(e instanceof Error ? e.message : e)))
         .finally(() => {
           setLoadingGroups((prev) => {
             const next = new Set(prev);

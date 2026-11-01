@@ -10,6 +10,7 @@ import {
   createEmployeeManual,
   deleteEmployee,
   getEmployee,
+  getEmployeeDeletionImpact,
   linkEmployeeToClientCompany,
   listClients,
   listEmployeeAliases,
@@ -23,9 +24,11 @@ import {
   type ClientRow,
   type EmployeeAliasRow,
   type EmployeeClientCompanyLink,
+  type EmployeeDeletionImpact,
   type EmployeePixKeyRow,
 } from "../lib/db";
-import { maskCpf } from "../lib/format";
+import { backupDatabaseBeforeDelete } from "../lib/api";
+import { formatCurrencyBRL, maskCpf } from "../lib/format";
 import { detectPixKeyType, PIX_KEY_TYPE_LABELS, PIX_KEY_TYPES, type PixKeyType } from "../lib/pix";
 
 /**
@@ -83,17 +86,37 @@ export default function EmployeeFormPage() {
   const [linkError, setLinkError] = useState<string | null>(null);
 
   // "Excluir colaborador" — irreversible, wipes payment_shifts/imports too
-  // (see `deleteEmployee`). No count query first — the confirm message
-  // just names what categories of data go with it, not exact numbers.
+  // (see `deleteEmployee`). A colaborador who was ever paid can only go
+  // through "Excluir mesmo assim": the modal shows exactly what would be
+  // erased, the name has to be typed to confirm, and a backup of the
+  // database is taken right before.
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteImpact, setDeleteImpact] = useState<EmployeeDeletionImpact | null>(null);
+  const [deleteTypedName, setDeleteTypedName] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const forceDelete = (deleteImpact?.paymentRecords ?? 0) > 0;
+  const deleteNameConfirmed = name.trim() !== "" && deleteTypedName.trim().toLowerCase() === name.trim().toLowerCase();
+
+  async function openDeleteConfirm() {
+    setDeleteError(null);
+    setDeleteTypedName("");
+    // Opens either way: if the impact can't be loaded, `deleteEmployee`
+    // still refuses a paid colaborador on its own.
+    setDeleteImpact(await getEmployeeDeletionImpact(Number(id)).catch(() => null));
+    setDeleteConfirmOpen(true);
+  }
 
   async function handleConfirmDelete() {
     setDeleting(true);
     setDeleteError(null);
     try {
-      await deleteEmployee(Number(id));
+      if (forceDelete) {
+        await backupDatabaseBeforeDelete(name);
+        await deleteEmployee(Number(id), { allowPaid: true });
+      } else {
+        await deleteEmployee(Number(id));
+      }
       navigate("/employees");
     } catch (e) {
       setDeleteError(String(e instanceof Error ? e.message : e));
@@ -592,9 +615,9 @@ export default function EmployeeFormPage() {
             icon={Trash2}
             title="Excluir colaborador"
             danger
-            description={`Remove ${name || "este colaborador"} do cadastro, junto com todo o histórico vinculado a ele — turnos de pagamento, cartões de ponto, chaves PIX e apelidos. Não pode ser desfeito.`}
+            description={`Remove ${name || "este colaborador"} do cadastro, junto com todo o histórico vinculado a ele — turnos de pagamento, cartões de ponto, chaves PIX e apelidos. Não pode ser desfeito. Se ele já recebeu algum pagamento, a exclusão pede uma confirmação extra.`}
           >
-            <button type="button" className="danger" onClick={() => setDeleteConfirmOpen(true)}>
+            <button type="button" className="danger" onClick={openDeleteConfirm}>
               <Trash2 size={14} style={{ marginRight: "0.4rem" }} />
               Excluir colaborador
             </button>
@@ -602,7 +625,7 @@ export default function EmployeeFormPage() {
         )}
       </div>
 
-      {deleteConfirmOpen && (
+      {deleteConfirmOpen && !forceDelete && (
         <ConfirmModal
           title="Excluir colaborador?"
           message={`Isso exclui ${name || "este colaborador"} permanentemente, junto com todo o histórico vinculado a ele — turnos de pagamento, cartões de ponto, chaves PIX e apelidos cadastrados. Não pode ser desfeito.`}
@@ -612,6 +635,43 @@ export default function EmployeeFormPage() {
           onCancel={() => setDeleteConfirmOpen(false)}
           error={deleteError}
         />
+      )}
+
+      {deleteConfirmOpen && forceDelete && deleteImpact && (
+        <ConfirmModal
+          title="Este colaborador já recebeu pagamentos"
+          message={`Excluir ${name || "este colaborador"} mesmo assim apaga permanentemente todo o histórico dele, inclusive os pagamentos já feitos. Relatórios de períodos passados vão sair sem esses valores.`}
+          confirmLabel={deleting ? "Excluindo..." : "Excluir mesmo assim"}
+          confirmDisabled={deleting || !deleteNameConfirmed}
+          onConfirm={handleConfirmDelete}
+          onCancel={() => setDeleteConfirmOpen(false)}
+          error={deleteError}
+        >
+          <ul style={{ margin: "0 0 1rem", paddingLeft: "1.2rem" }}>
+            <li>
+              {deleteImpact.paymentRecords} {deleteImpact.paymentRecords === 1 ? "registro de pagamento" : "registros de pagamento"} no histórico
+              {deleteImpact.paidShifts > 0 && ` (${deleteImpact.paidShifts} pagos hoje, ${formatCurrencyBRL(deleteImpact.paidAmount)})`}
+            </li>
+            <li>{deleteImpact.shifts} {deleteImpact.shifts === 1 ? "turno de pagamento" : "turnos de pagamento"}</li>
+            <li>{deleteImpact.timesheets} {deleteImpact.timesheets === 1 ? "cartão de ponto" : "cartões de ponto"}</li>
+            <li>{deleteImpact.pixKeys} {deleteImpact.pixKeys === 1 ? "chave PIX" : "chaves PIX"}</li>
+          </ul>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Antes de excluir, uma cópia de segurança do banco é salva na pasta <span className="mono">backups/</span> dos dados do app.
+          </p>
+          <div className="field">
+            <label htmlFor="delete-confirm-name">
+              Digite <strong>{name}</strong> para confirmar
+            </label>
+            <input
+              id="delete-confirm-name"
+              value={deleteTypedName}
+              onChange={(e) => setDeleteTypedName(e.target.value)}
+              autoComplete="off"
+              autoFocus
+            />
+          </div>
+        </ConfirmModal>
       )}
     </div>
   );

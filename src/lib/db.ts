@@ -273,10 +273,15 @@ export async function logSourceFile(input: {
  * that case it should still be reprocessable.
  */
 export async function markSourceFileSaved(fileHash: string): Promise<void> {
-  const db = await getDb();
-  await db.execute("UPDATE source_files SET saved_at = datetime('now') WHERE file_hash = $1", [
-    fileHash,
-  ]);
+  await runWriteBatch(markSourceFilesSavedStatements([fileHash]));
+}
+
+/** `markSourceFileSaved` as batch statements, for a save that must mark its files in the same transaction as the rows it wrote. */
+function markSourceFilesSavedStatements(fileHashes: Iterable<string>): BatchStatement[] {
+  return Array.from(fileHashes, (fileHash) => ({
+    sql: "UPDATE source_files SET saved_at = datetime('now') WHERE file_hash = $1",
+    params: [fileHash],
+  }));
 }
 
 /**
@@ -1119,9 +1124,50 @@ export async function updateEmployee(id: number, name: string, cpf: string): Pro
  * apelidos, and cliente/empresa links. Cascades done by hand rather than
  * relying on `ON DELETE CASCADE`, same reasoning as `deleteImport` — sqlite
  * only enforces foreign keys when `PRAGMA foreign_keys = ON` was set on the
- * connection, which isn't guaranteed here. Irreversible.
+ * connection, which isn't guaranteed here. Irreversible — and so refused
+ * for a colaborador with any paid shift in their history unless `allowPaid`.
  */
-export async function deleteEmployee(employeeId: number): Promise<void> {
+export interface EmployeeDeletionImpact {
+  /** Rows with status 'pago' anywhere in the colaborador's shift chains — a payment that was later reverted still counts. Non-zero means deleting needs `allowPaid`. */
+  paymentRecords: number;
+  /** Current (head, not removed) shifts — what Pagamentos lists for them. */
+  shifts: number;
+  /** Of `shifts`, the ones currently paid, and their total. */
+  paidShifts: number;
+  paidAmount: number;
+  timesheets: number;
+  pixKeys: number;
+}
+
+/** What `deleteEmployee` would erase — shown before a delete so the user sees exactly what goes with it. */
+export async function getEmployeeDeletionImpact(employeeId: number): Promise<EmployeeDeletionImpact> {
+  const db = await getDb();
+  const rows = await db.select<EmployeeDeletionImpact[]>(
+    `SELECT
+       (SELECT COUNT(*) FROM payment_shifts WHERE employee_id = $1 AND status = 'pago') AS paymentRecords,
+       (SELECT COUNT(*) FROM payment_shifts ps WHERE ps.employee_id = $1 AND ${HEAD_SHIFT_CONDITION}) AS shifts,
+       (SELECT COUNT(*) FROM payment_shifts ps WHERE ps.employee_id = $1 AND ps.status = 'pago' AND ${HEAD_SHIFT_CONDITION}) AS paidShifts,
+       (SELECT COALESCE(SUM(ps.amount), 0) FROM payment_shifts ps WHERE ps.employee_id = $1 AND ps.status = 'pago' AND ${HEAD_SHIFT_CONDITION}) AS paidAmount,
+       (SELECT COUNT(*) FROM imports WHERE employee_id = $1) AS timesheets,
+       (SELECT COUNT(*) FROM employee_pix_keys WHERE employee_id = $1) AS pixKeys`,
+    [employeeId],
+  );
+  return rows[0];
+}
+
+export async function deleteEmployee(employeeId: number, options: { allowPaid?: boolean } = {}): Promise<void> {
+  // A payment that was made is a financial record — refused unless the
+  // user explicitly forced it ("Excluir mesmo assim", which also takes a
+  // backup first — see EmployeeFormPage).
+  if (!options.allowPaid) {
+    const { paymentRecords } = await getEmployeeDeletionImpact(employeeId);
+    if (paymentRecords > 0) {
+      throw new Error(
+        `Este colaborador tem ${paymentRecords} ${paymentRecords === 1 ? "registro de pagamento" : "registros de pagamento"} no histórico e não pode ser excluído sem confirmação — isso apagaria pagamentos já feitos.`,
+      );
+    }
+  }
+
   const params = [employeeId];
   await runWriteBatch([
     {
@@ -3151,18 +3197,39 @@ export interface EmployeeImportRow {
  * "vincular a este cliente/empresa") before calling this — see
  * `findEmployeeAnywhereByAttempts`.
  */
-export async function createEmployeesFromImport(rows: EmployeeImportRow[]): Promise<void> {
+export async function createEmployeesFromImport(rows: EmployeeImportRow[], savedFileHashes: Iterable<string> = []): Promise<void> {
   const db = await getDb();
+
+  // Everything is checked and resolved with reads first, then written as
+  // one transaction (together with marking `savedFileHashes` saved) — a bad
+  // row anywhere fails the import before anything is written, instead of
+  // leaving the rows before it saved and the rest not.
+  const pairKeys = new Set(rows.map((r) => `${r.clientId}:${r.companyId}`));
+  for (const key of pairKeys) {
+    const [clientId, companyId] = key.split(":").map(Number);
+    const link = await db.select<{ clientId: number }[]>(
+      "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
+      [clientId, companyId],
+    );
+    if (link.length === 0) throw new Error("Esse cliente não está vinculado à empresa selecionada.");
+  }
+
+  const statements: BatchStatement[] = [];
+  // A CPF new to the database can appear on more than one row (the same
+  // person under several cliente/empresa pairs) — the first row creates the
+  // colaborador, the later ones reuse it.
+  const createdByCpf = new Map<string, BatchParam>();
   for (const row of rows) {
     const normalizedCpf = row.cpf === null ? "" : normalizeCpf(row.cpf);
-    const existing = row.employeeId !== null
-      ? [{ id: row.employeeId }]
-      : await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1", [normalizedCpf]);
-    let employeeId: number;
-    if (existing.length > 0) {
-      employeeId = existing[0].id;
+    const existingId =
+      row.employeeId ??
+      (await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1", [normalizedCpf]))[0]?.id ??
+      null;
+    let employeeId: BatchParam;
+    if (existingId !== null) {
+      employeeId = existingId;
       if (row.name?.trim()) {
-        await db.execute("UPDATE employees SET name = $1 WHERE id = $2", [row.name.trim(), employeeId]);
+        statements.push({ sql: "UPDATE employees SET name = $1 WHERE id = $2", params: [row.name.trim(), employeeId] });
       }
       if (row.cpf !== null) {
         if (normalizedCpf.length !== 11) throw new Error("CPF mapeado deve ter 11 dígitos.");
@@ -3171,29 +3238,37 @@ export async function createEmployeesFromImport(rows: EmployeeImportRow[]): Prom
           employeeId,
         ]);
         if (cpfOwner.length > 0) throw new Error("O CPF mapeado já pertence a outro colaborador.");
-        await db.execute("UPDATE employees SET cpf = $1 WHERE id = $2", [normalizedCpf, employeeId]);
+        statements.push({ sql: "UPDATE employees SET cpf = $1 WHERE id = $2", params: [normalizedCpf, employeeId] });
       }
+    } else if (createdByCpf.has(normalizedCpf)) {
+      employeeId = createdByCpf.get(normalizedCpf)!;
     } else {
       if (normalizedCpf.length !== 11 || !row.name?.trim()) {
         throw new Error("Para criar um colaborador novo, a linha precisa ter CPF válido e Nome.");
       }
-      const result = await db.execute("INSERT INTO employees (name, cpf) VALUES ($1, $2)", [
-        row.name.trim(),
-        normalizedCpf,
-      ]);
-      employeeId = result.lastInsertId as number;
+      employeeId = { $lastInsertId: statements.length };
+      statements.push({ sql: "INSERT INTO employees (name, cpf) VALUES ($1, $2)", params: [row.name.trim(), normalizedCpf] });
+      createdByCpf.set(normalizedCpf, employeeId);
     }
-    const currentLink = await db.select<{ id: number }[]>(
-      "SELECT rowid AS id FROM employee_client_companies WHERE employee_id = $1 AND client_id = $2 AND company_id = $3",
-      [employeeId, row.clientId, row.companyId],
-    );
-    if (currentLink.length === 0 || row.matriculaMapped) {
-      await linkEmployeeToClientCompany(employeeId, row.clientId, row.companyId, row.matricula);
-    }
-    for (const keyValue of row.pixKeys) {
-      await addEmployeePixKey(employeeId, keyValue, detectPixKeyType(keyValue));
+
+    // An existing link keeps its matrícula unless the template maps one.
+    statements.push({
+      sql: `INSERT INTO employee_client_companies (employee_id, client_id, company_id, matricula) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (employee_id, client_id, company_id) DO ${row.matriculaMapped ? "UPDATE SET matricula = excluded.matricula" : "NOTHING"}`,
+      params: [employeeId, row.clientId, row.companyId, row.matricula?.trim() || null],
+    });
+    for (const rawKey of row.pixKeys) {
+      const keyValue = rawKey.trim();
+      if (!keyValue) throw new Error("Informe uma chave PIX.");
+      statements.push({
+        sql: `INSERT INTO employee_pix_keys (employee_id, key_value, key_type) VALUES ($1, $2, $3)
+     ON CONFLICT(employee_id, key_value) DO UPDATE SET key_type = excluded.key_type`,
+        params: [employeeId, keyValue, detectPixKeyType(keyValue)],
+      });
     }
   }
+  statements.push(...markSourceFilesSavedStatements(savedFileHashes));
+  await runWriteBatch(statements);
 }
 
 export interface EmployeePixKeyRow {
@@ -3920,13 +3995,16 @@ export interface PaymentShiftInput {
 }
 
 /** Bulk-inserts shifts — `valor` and any further `pago` transition still happen in a later step. Never sets `edited_manually` — that's exclusively for the manual transition functions above, never for anything import-originated. */
-export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void> {
+export async function savePaymentShifts(rows: PaymentShiftInput[], savedFileHashes: Iterable<string> = []): Promise<void> {
   // One transaction for the whole import, so a failure part-way never
   // leaves only some of the file's shifts saved. A row reprocessing an
   // existing shift gets the same fork guard as the manual transitions (see
   // `successorShiftId`); if that guard trips, the whole batch rolls back.
-  await runWriteBatch(
-    rows.map((r) => ({
+  // `savedFileHashes` are marked saved (`markSourceFileSaved`) in the same
+  // transaction: shifts saved without their file marked would let the same
+  // file be imported again as new, duplicating them.
+  await runWriteBatch([
+    ...rows.map((r) => ({
       sql: `INSERT INTO payment_shifts
          (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
           schedule_start_minutes, schedule_end_minutes, status, extra_data, previous_shift_id,
@@ -3952,7 +4030,8 @@ export async function savePaymentShifts(rows: PaymentShiftInput[]): Promise<void
       ],
       expectChanges: SHIFT_ALREADY_SUPERSEDED_ERROR,
     })),
-  );
+    ...markSourceFilesSavedStatements(savedFileHashes),
+  ]);
 }
 
 /**

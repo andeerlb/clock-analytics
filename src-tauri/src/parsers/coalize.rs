@@ -160,13 +160,14 @@ fn parse_br_date(s: &str) -> Result<NaiveDate, ParseError> {
 /// Sums each Entrada→Saída pair (punches[0]→punches[1], punches[2]→punches[3],
 /// ...) — used when the source doesn't print its own "Total trabalhado"
 /// column. A trailing unmatched punch (odd count) contributes nothing, same
-/// as the source itself would leave that day's total incomplete.
+/// as the source itself would leave that day's total incomplete. A Saída
+/// earlier than its Entrada crossed midnight (22:00→06:00 is 8h, not -16h).
 fn worked_minutes_from_punches(punches: &[&str]) -> i32 {
     let mut total = 0;
     let mut i = 0;
     while i + 1 < punches.len() {
         if let (Some(start), Some(end)) = (hhmm_to_minutes(punches[i]), hhmm_to_minutes(punches[i + 1])) {
-            total += end - start;
+            total += if end >= start { end - start } else { end + 24 * 60 - start };
         }
         i += 2;
     }
@@ -341,5 +342,11 @@ Assinatura: ";
         let trailing_single = sheet.days.iter().find(|d| d.date == "2026-07-28").unwrap();
         assert_eq!(trailing_single.punches, vec!["12:54"]);
         assert_eq!(trailing_single.total_worked_minutes, 0);
+    }
+
+    #[test]
+    fn worked_minutes_wrap_past_midnight() {
+        assert_eq!(worked_minutes_from_punches(&["22:00", "06:00"]), 8 * 60);
+        assert_eq!(worked_minutes_from_punches(&["08:00", "12:00", "13:00", "17:00"]), 8 * 60);
     }
 }
