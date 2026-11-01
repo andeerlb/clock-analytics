@@ -494,18 +494,18 @@ function ShiftRow({
   // Same actions the old Ações column rendered as buttons, now offered
   // through a right-click menu instead (see `onRowContextMenu`) — a blocked
   // row only offers "Revisar alteração" plus "Ver histórico", nothing else.
-  // Two items are always present but individually `disabled` rather than
-  // omitted when they don't currently apply, so the option stays
-  // discoverable instead of the menu's shape shifting row to row:
-  // "Fazer pagamento" needs an horário to compute horas/valor from, and
-  // "Ver histórico" needs an earlier state in the chain (`previousShiftId`).
+  // "Ver histórico" is always present but `disabled` rather than omitted
+  // when there's no earlier state in the chain (`previousShiftId`), so the
+  // option stays discoverable instead of the menu's shape shifting row to
+  // row. "Fazer pagamento" doesn't need an horário — without one there's
+  // just no suggested valor, so the amount is typed in the modal.
   const rowActions: ContextMenuItem[] = [
     ...(isBlocked
       ? [{ label: "Revisar alteração", onClick: () => onReview(s, groupRef) }]
       : [
           ...(appliedChanges.length > 0 ? [{ label: "Ver o que mudou", onClick: () => onReview(s, groupRef) }] : []),
           ...(s.status === "pendente" || s.status === "erro"
-            ? [{ label: "Fazer pagamento", disabled: !hasSchedule, onClick: () => onPay(s, companyId, groupRef) }]
+            ? [{ label: "Fazer pagamento", onClick: () => onPay(s, companyId, groupRef) }]
             : []),
           ...(s.status === "pago" ? [{ label: "Voltar para pendente", onClick: () => onRevert(s, groupRef) }] : []),
         ]),

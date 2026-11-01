@@ -10,7 +10,7 @@ export interface ContextMenuItem {
   danger?: boolean;
   /** Persistent selected/toggled state — highlights the entire row, distinct from the transient hover state. */
   selected?: boolean;
-  /** Grays the row out and blocks the click instead of omitting it — for an action that's conceptually always there but not currently possible (e.g. "Fazer pagamento" on a turno with no horário to compute a valor from), so the option stays discoverable instead of the menu silently shrinking depending on the row. */
+  /** Grays the row out and blocks the click instead of omitting it — for an action that's conceptually always there but not currently possible (e.g. "Ver histórico" on a turno with no earlier state in its chain), so the option stays discoverable instead of the menu silently shrinking depending on the row. */
   disabled?: boolean;
   /** Renders a horizontal divider instead of a row — every other field is ignored when this is set. */
   separator?: boolean;
