@@ -1,8 +1,9 @@
 {
   "name": "pontoscan",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.83",
   "type": "module",
+  "packageManager": "yarn@1.22.22",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",

@@ -1,42 +1,81 @@
 #!/usr/bin/env node
-// Bumps tauri.conf.json's and Cargo.toml's version together, in one place,
-// so they can't drift apart. Run this *before* tagging a release — commit
-// the result, then `git tag vX.Y.Z` that commit — so the tag actually
-// points at the code it describes, and `getVersion()` (read at runtime by
-// the Settings > Sobre update check) matches what the tag says once built.
+// The app version lives in package.json — tauri.conf.json reads it from
+// there (`"version": "../package.json"`), and that's what `getVersion()`
+// returns at runtime (the Settings > Sobre update check). Cargo.toml and
+// the app's own entry in Cargo.lock carry a copy, kept in step here.
 //
-// `release.yml` also runs this same script per build, as a fallback in
-// case a release ever gets tagged without bumping first — but that's a
-// safety net, not the primary flow: it patches the CI runner's own
-// checkout only, never commits anything back.
+//   yarn version:bump 0.2.0           sets the version in all three files
+//   node scripts/bump-version.mjs --check v0.2.0
+//                                     fails unless all three already say 0.2.0
+//
+// Run the bump *before* tagging a release — commit the result, then
+// `git tag vX.Y.Z` that commit — so the tag points at the code it
+// describes. release.yml runs `--check` against the pushed tag and stops
+// the build when they disagree, instead of quietly building a version the
+// tagged commit doesn't contain.
 import { readFileSync, writeFileSync } from "node:fs";
 
-const raw = process.argv[2];
+const PACKAGE_JSON = "package.json";
+const CARGO_TOML = "src-tauri/Cargo.toml";
+const CARGO_LOCK = "src-tauri/Cargo.lock";
+
+// Only the [package] version — the first `version = "..."` line, since that
+// section always comes first. Dependency constraints further down use a
+// different key shape, so this won't touch those.
+const CARGO_TOML_VERSION = /^version = "(.*)"$/m;
+// This app's own [[package]] entry, not any dependency's.
+const CARGO_LOCK_VERSION = /(\[\[package\]\]\nname = "pontoscan"\nversion = )"(.*)"/;
+
+const args = process.argv.slice(2);
+const check = args[0] === "--check";
+const raw = check ? args[1] : args[0];
 if (!raw) {
-  console.error("Usage: yarn version:bump <version>   (e.g. yarn version:bump 0.2.0)");
+  console.error("Usage: yarn version:bump <version>              (e.g. yarn version:bump 0.2.0)");
+  console.error("       node scripts/bump-version.mjs --check <version-or-tag>");
   process.exit(1);
 }
-// Accepts a bare "0.2.0" (the documented CLI usage) or a "v"-prefixed tag
-// name like "v0.2.0" (what release.yml passes, straight from the git tag) —
-// stripped here instead of in the workflow's shell, since bash's
-// `${VAR#v}` syntax silently breaks on Windows runners (`run:` steps there
-// default to PowerShell, which doesn't understand that syntax at all).
+// Accepts a bare "0.2.0" or a "v"-prefixed tag name like "v0.2.0" (what
+// release.yml passes, straight from the git tag) — stripped here instead of
+// in the workflow's shell, since bash's `${VAR#v}` syntax breaks on Windows
+// runners (`run:` steps there default to PowerShell).
 const version = raw.replace(/^v/, "");
+if (!/^\d+\.\d+\.\d+$/.test(version)) {
+  console.error(`"${raw}" is not a version like 0.2.0 (or a tag like v0.2.0).`);
+  process.exit(1);
+}
 
-const confPath = "src-tauri/tauri.conf.json";
-const conf = JSON.parse(readFileSync(confPath, "utf8"));
-conf.version = version;
-writeFileSync(confPath, JSON.stringify(conf, null, 2) + "\n");
+function currentVersions() {
+  const cargoToml = readFileSync(CARGO_TOML, "utf8").match(CARGO_TOML_VERSION);
+  const cargoLock = readFileSync(CARGO_LOCK, "utf8").match(CARGO_LOCK_VERSION);
+  return {
+    [PACKAGE_JSON]: JSON.parse(readFileSync(PACKAGE_JSON, "utf8")).version,
+    [CARGO_TOML]: cargoToml?.[1],
+    [CARGO_LOCK]: cargoLock?.[2],
+  };
+}
 
-// Only the [package] version — the first `version = "..."` line, since
-// that section always comes first in this file. Dependency version
-// constraints live under `[dependencies]`/`[dependencies.foo]` further
-// down and use a different key shape (`name = "1.2"` or `{ version = ... }`
-// inside a table), so this regex won't touch those.
-const cargoPath = "src-tauri/Cargo.toml";
-const cargo = readFileSync(cargoPath, "utf8");
-const updated = cargo.replace(/^version = ".*"$/m, `version = "${version}"`);
-writeFileSync(cargoPath, updated);
+if (check) {
+  const mismatched = Object.entries(currentVersions()).filter(([, v]) => v !== version);
+  if (mismatched.length > 0) {
+    for (const [file, v] of mismatched) console.error(`${file} has version ${v ?? "(not found)"}, expected ${version}.`);
+    console.error(`Run "yarn version:bump ${version}", commit, and move the tag to that commit.`);
+    process.exit(1);
+  }
+  console.log(`Version ${version} matches ${Object.keys(currentVersions()).join(", ")}.`);
+  process.exit(0);
+}
 
-console.log(`Bumped app version to ${version} in tauri.conf.json and Cargo.toml.`);
+const pkg = JSON.parse(readFileSync(PACKAGE_JSON, "utf8"));
+pkg.version = version;
+writeFileSync(PACKAGE_JSON, JSON.stringify(pkg, null, 2) + "\n");
+
+const cargoToml = readFileSync(CARGO_TOML, "utf8");
+if (!CARGO_TOML_VERSION.test(cargoToml)) throw new Error(`No [package] version found in ${CARGO_TOML}.`);
+writeFileSync(CARGO_TOML, cargoToml.replace(CARGO_TOML_VERSION, `version = "${version}"`));
+
+const cargoLock = readFileSync(CARGO_LOCK, "utf8");
+if (!CARGO_LOCK_VERSION.test(cargoLock)) throw new Error(`No "pontoscan" package entry found in ${CARGO_LOCK}.`);
+writeFileSync(CARGO_LOCK, cargoLock.replace(CARGO_LOCK_VERSION, `$1"${version}"`));
+
+console.log(`Bumped app version to ${version} in ${PACKAGE_JSON}, ${CARGO_TOML} and ${CARGO_LOCK}.`);
 console.log(`Next: review the diff, commit, then "git tag v${version}" that commit.`);
