@@ -260,6 +260,11 @@ export function setPopplerDir(dir: string | null): Promise<PopplerStatus> {
   return invoke("set_poppler_dir", { dir });
 }
 
+/** Snapshots the database into the app's `backups/` folder before a forced delete, with `label` in the file name — resolves to the backup's path. */
+export function backupDatabaseBeforeDelete(label: string): Promise<string> {
+  return invoke("backup_database_before_delete", { label });
+}
+
 /** Whether "Minimizar na bandeja ao fechar" is on — checked on Configurações' mount. */
 export function getCloseToTray(): Promise<boolean> {
   return invoke("get_close_to_tray");

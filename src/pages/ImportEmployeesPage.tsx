@@ -37,7 +37,6 @@ import {
   listEmployeeTemplates,
   listImportFiles,
   logSourceFile,
-  markSourceFileSaved,
   type ClientRow,
   type EmployeeImportRow,
   type EmployeeRow,
@@ -575,10 +574,7 @@ export default function ImportEmployeesPage() {
         });
         savedFileHashes.add(employeeRowFileHash[i]);
       }
-      await createEmployeesFromImport(importRows);
-      for (const fileHash of savedFileHashes) {
-        await markSourceFileSaved(fileHash);
-      }
+      await createEmployeesFromImport(importRows, savedFileHashes);
 
       refreshRecentFiles();
       reset();

@@ -466,5 +466,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0076_payment_pdf_templates.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 77,
+            description: "payment_shifts.previous_shift_id becomes UNIQUE — a shift has at most one successor, so two writers acting on the same shift at once can't fork its history; any fork already in the data is repaired first by detaching every successor but the earliest (nothing deleted)",
+            sql: include_str!("../migrations/0077_unique_previous_shift.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
