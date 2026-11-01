@@ -7,8 +7,8 @@ import {
   formatDateTime,
   formatMinutesAsTime,
   parseTimeToMinutes,
-  resolvePaymentValue,
-  shiftDurationMinutes,
+  scheduleDurationMinutes,
+  shiftValue,
 } from "../lib/format";
 import type { PaymentShiftRow, PaymentShiftStatus } from "../lib/types";
 import Drawer from "./Drawer";
@@ -39,27 +39,15 @@ function HistoryEntry({
   rules: EffectivePaymentRules | null;
   isLast: boolean;
 }) {
-  const hasSchedule = shift.scheduleStartMinutes !== null && shift.scheduleEndMinutes !== null;
-  const durationMinutes = hasSchedule
-    ? shiftDurationMinutes(shift.scheduleStartMinutes!, shift.scheduleEndMinutes!)
-    : null;
+  const durationMinutes = scheduleDurationMinutes(shift);
+  const hasSchedule = durationMinutes !== null;
   const nightStart = rules ? parseTimeToMinutes(rules.nightStartTime) : null;
   const nightEnd = rules ? parseTimeToMinutes(rules.nightEndTime) : null;
   const period =
     rules && hasSchedule && nightStart !== null && nightEnd !== null
       ? classifyShiftPeriod(rules.nightShiftRule, nightStart, nightEnd, shift.scheduleStartMinutes!, shift.scheduleEndMinutes!)
       : null;
-  const value =
-    shift.amount ??
-    (rules && durationMinutes !== null
-      ? resolvePaymentValue(rules.valueRules, durationMinutes, {
-          workDate: shift.workDate,
-          local: shift.local,
-          role: shift.role,
-          scheduleStartMinutes: shift.scheduleStartMinutes,
-          scheduleEndMinutes: shift.scheduleEndMinutes,
-        })
-      : null);
+  const value = shiftValue(shift, rules?.valueRules ?? null);
   return (
     <div
       style={{

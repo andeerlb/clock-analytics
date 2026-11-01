@@ -29,10 +29,12 @@ export default function ClientsPage() {
   const navigate = useNavigate();
   const [rawClients, setRawClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     listClients()
       .then(setRawClients)
+      .catch((e) => setError(String(e instanceof Error ? e.message : e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -53,9 +55,11 @@ export default function ClientsPage() {
         ele estiver vinculado a mais de uma empresa, escolha qual delas.
       </p>
 
+      {error && <div className="error-box">Não foi possível carregar os clientes: {error}</div>}
+
       <div className="card table-card">
         {loading && <p className="muted" style={{ padding: "1.4rem" }}>Carregando...</p>}
-        {!loading && clients.length === 0 && (
+        {!loading && !error && clients.length === 0 && (
           <p className="muted" style={{ padding: "1.4rem" }}>
             Nenhum cliente cadastrado ainda.
           </p>

@@ -8,10 +8,12 @@ export default function CompaniesPage() {
   const navigate = useNavigate();
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     listCompanies()
       .then(setCompanies)
+      .catch((e) => setError(String(e instanceof Error ? e.message : e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -28,9 +30,11 @@ export default function CompaniesPage() {
         Cadastre as empresas que podem ser selecionadas ao importar espelhos de ponto.
       </p>
 
+      {error && <div className="error-box">Não foi possível carregar as empresas: {error}</div>}
+
       <div className="card table-card">
         {loading && <p className="muted" style={{ padding: "1.4rem" }}>Carregando...</p>}
-        {!loading && companies.length === 0 && (
+        {!loading && !error && companies.length === 0 && (
           <p className="muted" style={{ padding: "1.4rem" }}>
             Nenhuma empresa cadastrada ainda.
           </p>

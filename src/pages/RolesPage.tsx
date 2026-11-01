@@ -20,6 +20,7 @@ export default function RolesPage() {
   const [roles, setRoles] = useState<RoleRow[]>([]);
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<Set<string>>(new Set());
@@ -33,6 +34,7 @@ export default function RolesPage() {
         setCompanies(companyRows);
         setRoles(roleRows);
       })
+      .catch((e) => setError(String(e instanceof Error ? e.message : e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -117,9 +119,11 @@ export default function RolesPage() {
         </div>
       </div>
 
+      {error && <div className="error-box">Não foi possível carregar as funções: {error}</div>}
+
       <div className="card table-card">
         {loading && roles.length === 0 && <p className="muted" style={{ padding: "1.4rem" }}>Carregando...</p>}
-        {!loading && total === 0 && !hasFilters && (
+        {!loading && !error && total === 0 && !hasFilters && (
           <p className="muted" style={{ padding: "1.4rem" }}>
             Nenhuma função cadastrada ainda.
           </p>

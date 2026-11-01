@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod db_batch;
 mod hashing;
 mod model;
 mod parsers;
@@ -256,6 +257,7 @@ pub fn run() {
             commands::set_tray_status,
             commands::open_reconciliation_window,
             commands::is_reconciliation_window_open,
+            db_batch::run_write_batch,
             window_glass::window_glass_active,
         ])
         .run(tauri::generate_context!())

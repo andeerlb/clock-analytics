@@ -3,7 +3,7 @@ import jsPDF from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import { writeBinaryFile } from "./api";
 import { listPaymentShiftsForReport, type ListPaymentShiftSummariesQuery } from "./db";
-import { formatCurrencyBRL, formatDateAbbrev, formatMinutesAsTime, formatTimestampForFileName, sanitizeFileName, shiftDurationMinutes } from "./format";
+import { formatCurrencyBRL, formatDateAbbrev, formatMinutesAsTime, formatTimestampForFileName, sanitizeFileName, scheduleDurationMinutes } from "./format";
 import { buildShiftValueResolver } from "./paymentShiftValue";
 import type { PaymentShiftStatus } from "./types";
 
@@ -98,8 +98,8 @@ async function generateReportPdf(
     currentEmployeeId = row.employeeId;
     currentEmployeeName = row.employeeName;
     employeeShiftCount += 1;
-    const hasSchedule = row.scheduleStartMinutes !== null && row.scheduleEndMinutes !== null;
-    const duration = hasSchedule ? shiftDurationMinutes(row.scheduleStartMinutes!, row.scheduleEndMinutes!) : null;
+    const duration = scheduleDurationMinutes(row);
+    const hasSchedule = duration !== null;
     if (duration !== null) {
       totalMinutes += duration;
       employeeMinutes += duration;

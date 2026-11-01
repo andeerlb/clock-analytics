@@ -7,7 +7,7 @@ import {
   formatDate,
   formatDateTimeAbbrevYY,
   formatMinutesAsTime,
-  shiftDurationMinutes,
+  scheduleDurationMinutes,
 } from "../lib/format";
 import type { PaymentShiftRow } from "../lib/types";
 import { PIX_KEY_TYPE_LABELS } from "../lib/pix";
@@ -93,8 +93,8 @@ export default function ConfirmPaymentModal({
   }
 
   const amountValid = digits !== "";
-  const hasSchedule = shift.scheduleStartMinutes !== null && shift.scheduleEndMinutes !== null;
-  const duration = hasSchedule ? shiftDurationMinutes(shift.scheduleStartMinutes!, shift.scheduleEndMinutes!) : null;
+  const duration = scheduleDurationMinutes(shift);
+  const hasSchedule = duration !== null;
 
   return (
     <Modal

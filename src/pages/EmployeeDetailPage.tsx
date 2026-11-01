@@ -127,12 +127,14 @@ export default function EmployeeDetailPage() {
     () => new Set(DAY_STATUS_OPTIONS.map((o) => o.id)),
   );
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [viewer, setViewer] = useState<{ path: string; title: string } | null>(null);
 
   useEffect(() => {
     if (!importId) return;
     const id = Number(importId);
     setLoading(true);
+    setError(null);
     Promise.all([
       listStoredDayRecords({ importId: id }),
       getImportById(id),
@@ -141,6 +143,7 @@ export default function EmployeeDetailPage() {
         setDays(dayRows);
         setImportInfo(imp);
       })
+      .catch((e) => setError(String(e instanceof Error ? e.message : e)))
       .finally(() => setLoading(false));
   }, [importId]);
 
@@ -184,6 +187,7 @@ export default function EmployeeDetailPage() {
   );
 
   if (loading) return <p className="muted">Carregando...</p>;
+  if (error) return <div className="error-box">Não foi possível carregar o cartão de ponto: {error}</div>;
   if (!importInfo) return <p className="muted">Import não encontrado.</p>;
 
   // "Entrada 1", "Saída 1", "Entrada 2", "Saída 2", ... — however many
