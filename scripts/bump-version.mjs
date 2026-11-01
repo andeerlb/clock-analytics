@@ -23,8 +23,10 @@ const CARGO_LOCK = "src-tauri/Cargo.lock";
 // section always comes first. Dependency constraints further down use a
 // different key shape, so this won't touch those.
 const CARGO_TOML_VERSION = /^version = "(.*)"$/m;
-// This app's own [[package]] entry, not any dependency's.
-const CARGO_LOCK_VERSION = /(\[\[package\]\]\nname = "pontoscan"\nversion = )"(.*)"/;
+// This app's own [[package]] entry, not any dependency's. `\r?\n`, not
+// `\n`: a Windows checkout (the Windows CI runner included) has CRLF line
+// endings, which a bare `\n` never matches.
+const CARGO_LOCK_VERSION = /(\[\[package\]\]\r?\nname = "pontoscan"\r?\nversion = )"(.*)"/;
 
 const args = process.argv.slice(2);
 const check = args[0] === "--check";
