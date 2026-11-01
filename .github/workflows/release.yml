@@ -57,23 +57,19 @@ jobs:
           node-version: 22
           cache: yarn
 
-      # Safety net, not the primary flow: releasing is supposed to start
-      # with `yarn version:bump X.Y.Z` (commit, then tag that commit), so
-      # tauri.conf.json/Cargo.toml already match the tag by the time this
-      # runs. This just re-applies the same bump to the CI runner's own
-      # checkout — never committed anywhere — in case a release ever gets
-      # tagged without bumping first, so the build still embeds a version
-      # matching its own tag (the Settings > Sobre update check compares
-      # `getVersion()` against the latest GitHub Release). A no-op on
-      # workflow_dispatch off a branch, where github.ref_name isn't a tag.
+      # Releasing starts with `yarn version:bump X.Y.Z` (commit, then tag
+      # that commit). This stops the build when the tag and the committed
+      # version disagree, instead of patching the runner's checkout and
+      # shipping a version the tagged commit doesn't contain — the Settings
+      # > Sobre update check compares `getVersion()` against the latest
+      # GitHub Release, so they have to match. Skipped on workflow_dispatch
+      # off a branch, where github.ref_name isn't a tag.
       # `${{ github.ref_name }}` is substituted by the Actions runner itself
       # before the shell ever sees it, so this is safe on every OS's default
-      # shell (bash on Linux/macOS, PowerShell on Windows) — unlike bash's
-      # `${GITHUB_REF_NAME#v}` parameter expansion, which PowerShell doesn't
-      # understand at all (that's what broke the Windows job).
-      - name: Ensure app version matches the release tag
+      # shell (bash on Linux/macOS, PowerShell on Windows).
+      - name: Check app version matches the release tag
         if: startsWith(github.ref_name, 'v')
-        run: node scripts/bump-version.mjs "${{ github.ref_name }}"
+        run: node scripts/bump-version.mjs --check "${{ github.ref_name }}"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

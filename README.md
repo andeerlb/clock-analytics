@@ -60,7 +60,7 @@ Bundled artifacts land under `src-tauri/target/release/bundle/`.
 
 The [`Release`](.github/workflows/release.yml) GitHub Actions workflow builds `.deb`/`.rpm`/`.AppImage` (Linux) and a universal `.app`/`.dmg` that runs on both Apple Silicon and Intel Macs, publishing everything to a single draft GitHub Release. It runs automatically whenever a version tag is pushed.
 
-Bump the version *before* tagging, so the tag actually points at the commit it describes (the app reads its own version at runtime — Configurações shows it and flags when a newer GitHub Release exists — so this has to be accurate):
+Bump the version *before* tagging, so the tag actually points at the commit it describes (the app reads its own version at runtime — Configurações shows it and flags when a newer GitHub Release exists — so this has to be accurate). The version lives in `package.json` (`tauri.conf.json` reads it from there); `version:bump` also updates the copies in `src-tauri/Cargo.toml` and `src-tauri/Cargo.lock`. The release workflow fails if the tag doesn't match those files:
 
 ```sh
 yarn version:bump 0.2.0
