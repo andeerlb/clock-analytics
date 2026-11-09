@@ -32,6 +32,10 @@ const ALL_SHIFT_PERIODS = 2;
 const MIN_PANEL_WIDTH = 400;
 const PANEL_WIDTH_KEY = "ai-assistant-width";
 const PANEL_WIDTH_STEP = 24;
+/** Handle plus the panel's right margin, around its own width. */
+const PANEL_COLUMN_EXTRA = 24;
+/** Matches `.ai-side`'s width transition. */
+const PANEL_TRANSITION_MS = 260;
 
 /** Keeps room for the page: the sidebar plus a usable table. */
 function clampPanelWidth(width: number): number {
@@ -221,6 +225,9 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
   const paymentsFilters = usePaymentsFilters();
   const libraryFilters = useLibraryFilters();
   const [open, setOpen] = useState(false);
+  // Stays mounted through the closing slide; `visible` is what drives it.
+  const [rendered, setRendered] = useState(false);
+  const [visible, setVisible] = useState(false);
   const [ready, setReady] = useState<boolean | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversation, setConversation] = useState<unknown[]>([]);
@@ -251,14 +258,38 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
         : { label, detail: "", rows: [{ label: "Tela", value: label }], forAi: `${label} (${pathname}).` };
 
   useEffect(() => {
-    if (!open) return;
+    if (open) {
+      setRendered(true);
+      return;
+    }
+    setVisible(false);
+    const timeout = setTimeout(() => setRendered(false), PANEL_TRANSITION_MS);
+    return () => clearTimeout(timeout);
+  }, [open]);
+
+  // Same reason as `Drawer`: the panel has to paint once at width 0 before
+  // `visible` flips, or the browser merges both and nothing animates.
+  useEffect(() => {
+    if (!open || !rendered) return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setVisible(true));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, [open, rendered]);
+
+  useEffect(() => {
+    if (!open || !rendered) return;
     setUnseenAnswer(false);
-    inputRef.current?.focus();
+    inputRef.current?.focus({ preventScroll: true });
     aiStatus()
       .then((status) => setReady(status.claudeCode || status.apiKey))
       .catch((e) => setError(String(e)));
     // Also re-checked on navigation, to pick up a key just saved in Configurações.
-  }, [open, pathname]);
+  }, [open, rendered, pathname]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
@@ -430,8 +461,8 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
     <AiAssistantContext.Provider value={contextValue}>
       <div className="ai-layout">
         <div className="ai-layout-main">{children}</div>
-        {open && (
-          <div className="ai-side">
+        {rendered && (
+          <div className={visible ? "ai-side ai-side-visible" : "ai-side"} style={{ width: visible ? panelWidth + PANEL_COLUMN_EXTRA : 0 }}>
             <div
               className="ai-resize-handle"
               role="separator"

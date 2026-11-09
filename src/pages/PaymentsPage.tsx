@@ -34,6 +34,7 @@ import PaymentsFiltersDrawer, { SHIFT_PERIOD_OPTIONS, STATUS_OPTIONS, type Payme
 import PdfViewerModal from "../components/PdfViewerModal";
 import PillButton from "../components/PillButton";
 import ShiftHistoryDrawer from "../components/ShiftHistoryDrawer";
+import TableScroll from "../components/TableScroll";
 import TimeField from "../components/TimeField";
 import { PAYMENTS_PAGE_SIZE_OPTIONS, usePaymentsFilters } from "../contexts/FiltersContext";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
@@ -1515,7 +1516,7 @@ export default function PaymentsPage() {
 
         {total > 0 && grouped && (
           <>
-            <div className="table-scroll">
+            <TableScroll>
               <table>
                 <thead>
                   <tr>
@@ -1614,7 +1615,7 @@ export default function PaymentsPage() {
                   })}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
 
             {total > PAYMENTS_PAGE_SIZE_OPTIONS[0] && (
               <Pagination
@@ -1635,7 +1636,7 @@ export default function PaymentsPage() {
 
         {total > 0 && !grouped && (
           <>
-            <div className="table-scroll">
+            <TableScroll>
               <table>
                 <thead>
                   <tr>
@@ -1670,7 +1671,7 @@ export default function PaymentsPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
 
             {total > PAYMENTS_PAGE_SIZE_OPTIONS[0] && (
               <Pagination

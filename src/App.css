@@ -1597,6 +1597,34 @@ input[type="checkbox"]:disabled {
   overflow-x: auto;
 }
 
+/* Styled on purpose: on the Linux webview the default scrollbar is an overlay
+   that takes up no space, so a bar around 1px of content was 1px tall and
+   invisible. A custom ::-webkit-scrollbar is a real, always-visible one. */
+.table-top-scroll {
+  height: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--surface-container);
+}
+
+.table-top-scroll::-webkit-scrollbar {
+  height: 12px;
+}
+
+.table-top-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.table-top-scroll::-webkit-scrollbar-thumb {
+  background: var(--outline);
+  border: 3px solid var(--surface-container);
+  border-radius: 6px;
+}
+
+.table-top-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
 .table-card thead tr {
   background: var(--surface-container);
 }
@@ -3006,6 +3034,9 @@ button.history-bar:hover {
   display: flex;
   min-height: 100vh;
   width: 100%;
+  /* `clip`, not `hidden`: the panel slides past the window edge, and `hidden`
+     would make this a scroll container and break `.ai-side`'s `sticky`. */
+  overflow-x: clip;
 }
 
 .ai-layout-main {
@@ -3020,6 +3051,7 @@ button.history-bar:hover {
   z-index: 150;
   width: 48px;
   height: 48px;
+  animation: ai-launcher-in 0.2s ease 0.12s backwards;
   padding: 0;
   display: flex;
   align-items: center;
@@ -3050,6 +3082,13 @@ button.history-bar:hover {
   animation: ai-spin 1s linear infinite;
 }
 
+@keyframes ai-launcher-in {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+}
+
 @keyframes ai-spin {
   to {
     transform: rotate(360deg);
@@ -3057,8 +3096,14 @@ button.history-bar:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ai-spin {
+  .ai-spin,
+  .ai-launcher {
     animation: none;
+  }
+
+  .ai-side,
+  .ai-panel {
+    transition: none;
   }
 }
 
@@ -3068,9 +3113,10 @@ button.history-bar:hover {
   height: 100vh;
   flex-shrink: 0;
   box-sizing: border-box;
-  padding: 12px 12px 12px 0;
+  padding: 12px 0;
   display: flex;
   z-index: 150;
+  transition: width 0.26s cubic-bezier(0.32, 0.72, 0, 1);
   color: #ededef;
   font-family: Inter, system-ui, sans-serif;
   font-size: 13px;
@@ -3089,6 +3135,11 @@ button.history-bar:hover {
 body.ai-resizing {
   cursor: col-resize;
   user-select: none;
+}
+
+/* The panel must follow the pointer exactly while being dragged. */
+body.ai-resizing .ai-side {
+  transition: none;
 }
 
 .ai-resize-handle {
@@ -3126,6 +3177,10 @@ body.ai-resizing .ai-resize-handle::after {
 .ai-panel {
   min-width: 400px;
   max-width: calc(100vw - 24px);
+  flex-shrink: 0;
+  margin-right: 12px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -3133,6 +3188,10 @@ body.ai-resizing .ai-resize-handle::after {
   border: 1px solid #2e2e33;
   border-radius: 12px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+}
+
+.ai-side-visible .ai-panel {
+  opacity: 1;
 }
 
 .ai-panel a {
