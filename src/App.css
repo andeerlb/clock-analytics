@@ -23,8 +23,8 @@
   --accent-soft: rgba(246, 246, 248, 0.12);
   --on-accent: #101013;
 
-  --nav-active-bg: #f6f6f8;
-  --nav-active-text: #101013;
+  --nav-active-bg: #33333b;
+  --nav-active-text: #f6f6f8;
 
   /* Distinct, more saturated violet used only for the payment template
      wizard's Mapeamento sidebar (its own reference mockup's
@@ -151,10 +151,11 @@ h6 {
   flex-shrink: 0;
   background: var(--sidebar-bg);
   border-right: 1px solid var(--border);
-  padding: 1.25rem 1rem;
+  padding: 12px 10px;
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 12px;
+  transition: width 0.26s cubic-bezier(0.32, 0.72, 0, 1), padding 0.26s cubic-bezier(0.32, 0.72, 0, 1);
   /* Pinned to the viewport so it never scrolls away with tall page
      content (e.g. a long import history) — only .app-content (and
      .app-nav-links below, for a tall nav list) scrolls. Deliberately NOT
@@ -169,26 +170,110 @@ h6 {
   height: 100vh;
 }
 
+/* A full-width band, flush with the menu's edges (the negative margin undoes
+   .app-nav's padding), so the top of the menu reads as its header. */
 .app-brand {
+  height: 60px;
+  margin: -12px -10px 0;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  font-family: "Hanken Grotesk", Avenir, Helvetica, Arial, sans-serif;
-  font-weight: 700;
-  font-size: 0.95rem;
-  padding: 0 0.25rem;
+  gap: 8px;
+  padding: 0 12px 0 20px;
+  font-family: Inter, system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 14px;
+  background: #1f1f24;
+  border-bottom: 1px solid var(--border);
 }
 
-.app-brand-icon {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: var(--accent-hover);
-  color: var(--on-accent);
+.app-brand-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+button.app-nav-toggle {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-muted);
+  box-shadow: none;
+}
+
+button.app-nav-toggle:hover {
+  background: var(--surface-bright);
+  color: var(--text);
+}
+
+.app-nav:not(.collapsed) .app-nav-label {
+  animation: app-fade-in 0.2s ease 0.08s backwards;
+}
+
+.app-nav.collapsed {
+  width: 68px;
+  padding: 12px 10px;
+}
+
+.app-nav.collapsed .app-nav-label {
+  display: none;
+}
+
+.app-nav.collapsed .app-brand {
+  justify-content: center;
+  padding: 0;
+}
+
+.app-nav.collapsed .app-nav-link {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-nav {
+    transition: none;
+  }
+
+  .app-nav:not(.collapsed) .app-nav-label {
+    animation: none;
+  }
+}
+
+.app-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-nav-group-title {
+  padding: 12px 10px 4px;
+  color: var(--outline);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.app-nav-group-rule {
+  display: none;
+  height: 1px;
+  margin: 0.5rem 0.35rem;
+  background: var(--border-soft);
+}
+
+.app-nav.collapsed .app-nav-group-rule {
+  display: block;
+}
+
+.app-nav.collapsed .app-nav-group:first-child .app-nav-group-rule {
+  display: none;
 }
 
 .app-nav-links {
@@ -196,6 +281,7 @@ h6 {
   flex-direction: column;
   gap: 0.2rem;
   flex: 1;
+  overflow-x: hidden;
   /* Scrolls internally (not .app-nav as a whole) if the nav list ever
      outgrows the sidebar's height — see the overflow note on .app-nav. */
   overflow-y: auto;
@@ -204,12 +290,14 @@ h6 {
 .app-nav-link {
   display: flex;
   align-items: center;
-  gap: 0.7rem;
-  padding: 0.55rem 0.7rem;
+  gap: 11px;
+  min-height: 38px;
+  box-sizing: border-box;
+  padding: 6px 10px;
   border-radius: 8px;
   color: var(--text-muted);
-  font-weight: 500;
-  font-size: 0.9rem;
+  font-weight: 400;
+  font-size: 13.5px;
 }
 
 .app-nav-link:hover {
@@ -221,6 +309,7 @@ h6 {
 .app-nav-link.active {
   background: var(--nav-active-bg);
   color: var(--nav-active-text);
+  font-weight: 600;
 }
 
 .app-nav-cta {
@@ -247,8 +336,8 @@ h6 {
 .app-nav-footer {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
-  padding: 0.4rem;
+  gap: 2px;
+  padding: 6px;
   border-radius: 12px;
   background: var(--surface-container);
   border: 1px solid var(--border-soft);

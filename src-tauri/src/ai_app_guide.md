@@ -4,7 +4,7 @@ O PontoScan é um aplicativo de computador para importar espelhos de ponto (PDF)
 
 ## Navegação
 
-Barra lateral, de cima para baixo: "Importar", "Empresas", "Clientes", "Colaboradores", "Funções", "Cartão Ponto", "Pagamentos", "Análises". No rodapé da barra: "Verificação automática" e "Configurações".
+Barra lateral, de cima para baixo. Em "Operação": "Importar", "Cartão Ponto", "Pagamentos", "Análises". Em "Cadastros": "Empresas", "Clientes", "Colaboradores", "Funções". No rodapé da barra: "Verificação automática" e "Configurações". O botão ao lado do nome PontoScan, no topo, fecha e abre a barra, que fica só com os ícones quando fechada e guarda o último estado.
 
 O ícone de "Verificação automática" tem uma bolinha de status (passe o mouse para ver o texto): "Verificando agora", "Falha na verificação", "Atualização encontrada", "Configuradas" ou "Nenhuma configurada".
 
