@@ -362,6 +362,8 @@ export interface AiAnswer {
   facts: { label: string; value: string }[];
   body: string;
   hypothesis: string | null;
+  /** Unrequested things worth a look; each only fills the input when used. */
+  tips: { note: string; question: string }[];
 }
 
 export type AiAskOutcome =

@@ -3476,6 +3476,45 @@ body.ai-resizing .ai-resize-handle::after {
   font-size: 12px;
 }
 
+.ai-tips {
+  display: flex;
+  flex-direction: column;
+  padding-top: 10px;
+  border-top: 1px solid #26262a;
+}
+
+.ai-tips-title {
+  padding-bottom: 4px;
+  color: #a1a1aa;
+  font-size: 12px;
+}
+
+.ai-tip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+}
+
+.ai-tip-note {
+  line-height: 1.45;
+}
+
+.ai-panel button.ai-tip-ask {
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 10px;
+  background: #2c2c31;
+  border: 0;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.ai-panel button.ai-tip-ask:hover {
+  background: #36363c;
+}
+
 .ai-choices {
   display: flex;
   flex-direction: column;

@@ -437,6 +437,12 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  /** Only fills the input: the user decides whether to send it. */
+  function applySuggestion(question: string) {
+    setDraft(question);
+    inputRef.current?.focus();
+  }
+
   function handleChoose(key: string, value: number | null) {
     if (!pending) return;
     const choices = { ...pending.choices, [key]: value };
@@ -574,6 +580,19 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
                           <ArrowRight size={16} />
                         </button>
                       ))}
+                      {message.answer.tips.length > 0 && (
+                        <div className="ai-tips">
+                          <span className="ai-tips-title">Vale olhar</span>
+                          {message.answer.tips.map((tip, tipIndex) => (
+                            <div key={tipIndex} className="ai-tip">
+                              <span className="ai-tip-note">{tip.note}</span>
+                              <button type="button" className="ai-tip-ask" onClick={() => applySuggestion(tip.question)}>
+                                Perguntar
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ),
                 )}
