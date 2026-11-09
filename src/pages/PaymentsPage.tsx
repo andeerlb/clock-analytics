@@ -95,7 +95,7 @@ import type {
 } from "../lib/types";
 
 const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: string }> = {
-  pendente: { className: "badge warn", label: "Pendente" },
+  pendente: { className: "badge overwrite", label: "Pendente" },
   erro: { className: "badge file-error", label: "Erro" },
   pago: { className: "badge ok", label: "Pago" },
 };
@@ -1551,7 +1551,7 @@ export default function PaymentsPage() {
                           <td style={{ textAlign: "right" }}>{s.total}</td>
                           <td>
                             <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
-                              {s.pendente > 0 && <span className="badge warn">{s.pendente} pendente</span>}
+                              {s.pendente > 0 && <span className="badge overwrite">{s.pendente} pendente</span>}
                               {s.erro > 0 && <span className="badge file-error">{s.erro} erro</span>}
                               {s.pago > 0 && <span className="badge ok">{s.pago} pago</span>}
                             </div>

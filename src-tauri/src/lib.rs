@@ -162,7 +162,7 @@ pub fn run() {
                 // moment between the native window appearing and the page's
                 // CSS actually loading, showing as a white flash before the
                 // real dark theme (or the transparent/Acrylic look) kicks in.
-                .background_color(tauri::window::Color(11, 14, 20, 255))
+                .background_color(tauri::window::Color(11, 11, 13, 255))
                 .build()?;
 
             // Applied once, for the window's whole lifetime — not toggled
