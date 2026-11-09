@@ -65,6 +65,16 @@ reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no
 # Magic-byte validation that a downloaded response is really an .xlsx/.xls
 # file, not e.g. an HTML login page some "direct download" links redirect to.
 infer = "0.19.0"
+# Stores the AI assistant's API key in the OS credential store instead of
+# settings.json. The async-secret-service/crypto-rust pairing talks to the
+# Linux Secret Service over pure-Rust zbus, so the release build doesn't need
+# libdbus headers.
+keyring = { version = "3", features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
+# The AI assistant locks its SQL connection down with a SQLite authorizer,
+# which sqlx doesn't expose. No features here: same library sqlx already builds.
+libsqlite3-sys = { version = "0.30", default-features = false }
+# Backoff between Claude API retries, and running the installed Claude Code.
+tokio = { version = "1", features = ["time", "process", "io-util"] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

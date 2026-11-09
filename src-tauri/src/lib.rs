@@ -1,3 +1,5 @@
+mod ai_claude_code;
+mod ai_investigation;
 mod commands;
 mod db;
 mod db_backup;
@@ -12,6 +14,8 @@ mod settings;
 mod spreadsheet;
 mod storage;
 mod window_glass;
+
+pub use ai_claude_code::run_tool_server_if_requested;
 
 use tauri::{
     image::Image,
@@ -272,6 +276,10 @@ pub fn run() {
             db_backup::backup_database_before_delete,
             db_batch::run_write_batch,
             window_glass::window_glass_active,
+            ai_investigation::ai_status,
+            ai_investigation::ai_set_api_key,
+            ai_investigation::ai_clear_api_key,
+            ai_investigation::ai_ask,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -310,3 +310,64 @@ export function openReconciliationWindow(): Promise<void> {
 export function isReconciliationWindowOpen(): Promise<boolean> {
   return invoke("is_reconciliation_window_open");
 }
+
+/** How the assistant can reach Claude. The installed Claude Code wins when both are present. */
+export function aiStatus(): Promise<{ claudeCode: boolean; apiKey: boolean }> {
+  return invoke("ai_status");
+}
+
+export function aiSetApiKey(apiKey: string): Promise<void> {
+  return invoke("ai_set_api_key", { apiKey });
+}
+
+export function aiClearApiKey(): Promise<void> {
+  return invoke("ai_clear_api_key");
+}
+
+export interface AiAskRequest {
+  /** Exactly what the previous `answer` outcome returned (`[]` to start), opaque to the UI. */
+  conversation: unknown[];
+  question: string;
+  /** Screen and active filters, described for the model; `null` when the user chose not to use them. */
+  screen: string | null;
+  shift: { shiftId: number; employeeId: number; workDate: string } | null;
+  /** `Ambiguity.key` -> the employee picked, or `null` for "não é uma pessoa". */
+  nameChoices: Record<string, number | null>;
+}
+
+export interface AiAmbiguity {
+  key: string;
+  term: string;
+  candidates: { id: number; name: string }[];
+}
+
+/** A button under an answer that opens a screen already filtered. Already validated on the Rust side. */
+export interface AiScreenLink {
+  label: string;
+  screen: "payments" | "library";
+  employeeIds: number[];
+  companyIds: number[];
+  clientIds: number[];
+  roleIds: number[];
+  locals: string[];
+  periodStart: string | null;
+  periodEnd: string | null;
+  statuses: string[];
+}
+
+/** An answer split into the parts the panel lays out differently. Every part is optional. */
+export interface AiAnswer {
+  conclusion: string | null;
+  facts: { label: string; value: string }[];
+  body: string;
+  hypothesis: string | null;
+}
+
+export type AiAskOutcome =
+  | { kind: "answer"; answer: AiAnswer; conversation: unknown[]; links: AiScreenLink[] }
+  | { kind: "needsChoice"; ambiguities: AiAmbiguity[] };
+
+/** Read-only question to the assistant — see `ai_investigation.rs`. */
+export function aiAsk(request: AiAskRequest): Promise<AiAskOutcome> {
+  return invoke("ai_ask", { request });
+}

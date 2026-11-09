@@ -17,6 +17,7 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import { Fragment, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useAiAssistant } from "../components/AiAssistant";
 import AnchoredPopover from "../components/AnchoredPopover";
 import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
@@ -437,6 +438,7 @@ function ShiftRow({
   onViewHistory,
   onViewExtra,
   onReview,
+  onInvestigate,
   onRowContextMenu,
   activeShiftId,
   onRowMouseDown,
@@ -458,6 +460,7 @@ function ShiftRow({
   onViewExtra: (data: Record<string, string>, sourceUrl: string | null) => void;
   /** Opens the review Drawer — the only other thing (besides "Ver histórico") a blocked row's right-click menu offers, and an optional "ver o que mudou" for an already-auto-applied one. */
   onReview: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
+  onInvestigate: (shift: PaymentShiftRow) => void;
   /** Right-clicking anywhere on the row opens this row's actions (same set the old Ações column used to render as buttons) as a context menu instead — see `ContextMenu`. Also marks this row "active" (see `activeShiftId`), same as picking any of the items themselves. */
   onRowContextMenu: (e: MouseEvent, items: ContextMenuItem[], shiftId: number) => void;
   /** The shift id last right-clicked (or whose action is still open in a Drawer/modal) — kept highlighted so closing that Drawer/modal doesn't leave you wondering which row it was for. `null` once cleared. */
@@ -500,6 +503,7 @@ function ShiftRow({
           ...(s.status === "pago" ? [{ label: "Voltar para pendente", onClick: () => onRevert(s, groupRef) }] : []),
         ]),
     { label: "Ver histórico", disabled: s.previousShiftId === null, onClick: () => onViewHistory(s.previousShiftId, companyId, s.clientId) },
+    { label: "Perguntar à IA", onClick: () => onInvestigate(s) },
     ...(isBlocked ? [] : [{ label: "Remover turno", danger: true, onClick: () => onDelete(s, groupRef) }]),
   ];
 
@@ -768,6 +772,10 @@ export default function PaymentsPage() {
   // action opens, so closing it doesn't leave you guessing which turno it
   // was for. Cleared only by a left-click landing on a *different* row.
   const [activeShiftId, setActiveShiftId] = useState<number | null>(null);
+  const { askAboutShift } = useAiAssistant();
+  function handleInvestigate(shift: PaymentShiftRow) {
+    askAboutShift({ shiftId: shift.id, employeeId: shift.employeeId, employeeName: shift.employeeName, workDate: shift.workDate });
+  }
   function handleRowContextMenu(e: MouseEvent, items: ContextMenuItem[], shiftId: number) {
     setActiveShiftId(shiftId);
     setContextMenu({ x: e.clientX, y: e.clientY, items });
@@ -1587,6 +1595,7 @@ export default function PaymentsPage() {
                                             onViewHistory={(shiftId, companyId, clientId) => setViewingHistory({ shiftId, companyId, clientId })}
                                             onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
                                             onReview={(shift, groupRef) => setReviewingShift({ shift, groupRef })}
+                                            onInvestigate={handleInvestigate}
                                             onRowContextMenu={handleRowContextMenu}
                                             activeShiftId={activeShiftId}
                                             onRowMouseDown={handleRowMouseDown}
@@ -1653,6 +1662,7 @@ export default function PaymentsPage() {
                       onViewHistory={(shiftId, companyId, clientId) => setViewingHistory({ shiftId, companyId, clientId })}
                       onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
                       onReview={(shift, groupRef) => setReviewingShift({ shift, groupRef })}
+                      onInvestigate={handleInvestigate}
                       onRowContextMenu={handleRowContextMenu}
                       activeShiftId={activeShiftId}
                       onRowMouseDown={handleRowMouseDown}
