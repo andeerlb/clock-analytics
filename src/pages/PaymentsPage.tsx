@@ -43,6 +43,7 @@ import {
   deletePaymentShift,
   editPaymentShift,
   getEffectivePaymentRules,
+  getPaymentShift,
   getPaymentVisibleColumns,
   listClients,
   listCompanies,
@@ -1005,6 +1006,35 @@ export default function PaymentsPage() {
     setPdfExportError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedEmployeeIds, selectedCompanyIds, selectedClientIds, selectedRoleIds, periodStart, periodEnd, selectedStatuses, selectedShiftPeriods, scheduleTimeFilter, grouped]);
+
+  // "Fazer pagamento" opened directly by an assistant button (`?pay=<id>`).
+  // Only opens the same confirmation as the row's own menu: nothing is paid
+  // until the user confirms it. The shift may not be in the current table, so
+  // its value rules are loaded here for the suggested amount.
+  const payParam = searchParams.get("pay");
+  useEffect(() => {
+    const shiftId = Number(payParam);
+    if (!payParam || !Number.isSafeInteger(shiftId)) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const shift = await getPaymentShift(shiftId);
+        if (shift.status === "pago") throw new Error("Este turno já foi pago.");
+        const rules = await getEffectivePaymentRules(shift.clientId, shift.companyId);
+        if (cancelled) return;
+        setRulesByPair((prev) => new Map(prev).set(`${shift.clientId}:${shift.companyId}`, rules));
+        setPayingShift({ shift, companyId: shift.companyId, groupRef: grouped ? { employeeId: shift.employeeId, competencia: shift.workDate.slice(0, 7) } : null });
+      } catch (e) {
+        if (!cancelled) setListError(String(e));
+      } finally {
+        if (!cancelled) setSearchParams({}, { replace: true });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payParam]);
 
   async function afterMutation(groupRef: GroupRef) {
     if (groupRef === null) {

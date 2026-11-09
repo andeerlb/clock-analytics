@@ -341,10 +341,10 @@ export interface AiAmbiguity {
   candidates: { id: number; name: string }[];
 }
 
-/** A button under an answer that opens a screen already filtered. Already validated on the Rust side. */
+/** A button under an answer that opens a screen, filtered or on one record. Already validated on the Rust side. */
 export interface AiScreenLink {
   label: string;
-  screen: "payments" | "library";
+  screen: string;
   employeeIds: number[];
   companyIds: number[];
   clientIds: number[];
@@ -353,6 +353,7 @@ export interface AiScreenLink {
   periodStart: string | null;
   periodEnd: string | null;
   statuses: string[];
+  recordId: number | null;
 }
 
 /** An answer split into the parts the panel lays out differently. Every part is optional. */

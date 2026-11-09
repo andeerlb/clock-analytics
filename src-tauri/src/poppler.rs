@@ -54,6 +54,10 @@ pub fn resolve(name: &str, custom_dir: Option<&str>) -> PathBuf {
         "C:/poppler/bin", // Windows
     ];
 
+    resolve_in(name, custom_dir, &KNOWN_DIRS)
+}
+
+fn resolve_in(name: &str, custom_dir: Option<&str>, known_dirs: &[&str]) -> PathBuf {
     let executable_name = executable_name(name);
 
     if let Some(dir) = custom_dir {
@@ -63,7 +67,7 @@ pub fn resolve(name: &str, custom_dir: Option<&str>) -> PathBuf {
         }
     }
 
-    KNOWN_DIRS
+    known_dirs
         .iter()
         .map(|dir| Path::new(dir).join(&executable_name))
         .find(|path| path.is_file())
@@ -72,7 +76,7 @@ pub fn resolve(name: &str, custom_dir: Option<&str>) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve;
+    use super::{resolve, resolve_in};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -107,7 +111,9 @@ mod tests {
 
     #[test]
     fn falls_back_to_platform_executable_name() {
-        let resolved = resolve("pdfinfo", None);
+        // No known dirs: whether this machine has Poppler installed must not
+        // decide the outcome.
+        let resolved = resolve_in("pdfinfo", None, &[]);
 
         if cfg!(target_os = "windows") {
             assert_eq!(resolved, PathBuf::from("pdfinfo.exe"));

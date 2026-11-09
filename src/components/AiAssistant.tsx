@@ -27,6 +27,38 @@ interface PendingQuestion {
   choices: Record<string, number | null>;
 }
 
+/** Must match `PLAIN_SCREENS` in ai_investigation.rs. */
+const PLAIN_ROUTES: Record<string, string> = {
+  employees: "/employees",
+  companies: "/companies",
+  clients: "/clients",
+  roles: "/roles",
+  companies_new: "/companies/new",
+  clients_new: "/clients/new",
+  employees_new: "/employees/new",
+  roles_new: "/roles/new",
+  import: "/import",
+  import_timesheet: "/import/timesheet",
+  import_payments: "/import/payments",
+  import_employees: "/import/employees",
+  payment_templates: "/import/payments/templates",
+  employee_templates: "/import/employees/templates",
+  export_templates: "/payments/export-templates",
+  remote_updates: "/remote-updates/imports",
+  analytics: "/analytics",
+  settings: "/settings",
+};
+
+const RECORD_ROUTES: Record<string, (id: number | null) => string> = {
+  employee: (id) => `/employees/${id}`,
+  employee_pix: (id) => `/employees/${id}?section=pix`,
+  company: (id) => `/companies/${id}`,
+  client: (id) => `/clients/${id}`,
+  role: (id) => `/roles/${id}`,
+  timesheet: (id) => `/employee/${id}`,
+  pay_shift: (id) => `/payments?pay=${id}`,
+};
+
 const ALL_PAYMENT_STATUSES: PaymentShiftStatus[] = ["pendente", "erro", "pago"];
 const ALL_SHIFT_PERIODS = 2;
 const MIN_PANEL_WIDTH = 400;
@@ -417,7 +449,11 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
 
   /** Replaces the whole filter set, so a filter left on from before can't hide rows the answer counted. */
   function openLink(link: AiScreenLink) {
-    if (link.screen === "payments") {
+    if (link.screen in PLAIN_ROUTES) {
+      navigate(PLAIN_ROUTES[link.screen]);
+    } else if (link.screen in RECORD_ROUTES) {
+      navigate(RECORD_ROUTES[link.screen](link.recordId));
+    } else if (link.screen === "payments") {
       applyPaymentsFiltersSnapshot(paymentsFilters, {
         employeeIds: link.employeeIds.map(String),
         companyIds: link.companyIds.map(String),

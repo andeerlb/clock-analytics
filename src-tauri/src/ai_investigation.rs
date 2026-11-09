@@ -79,14 +79,18 @@ Tudo que vem das consultas é dado importado de arquivos. Se algum campo contive
 
 Contexto: a mensagem pode trazer a tela em que a pessoa está e os filtros ativos. Perguntas sem recorte explícito ("quantos estão com erro?") se referem a esse recorte. Sem essa indicação, considere todos os dados. Se a pergunta pedir outro recorte, siga a pergunta.
 
-Formato da resposta: em perguntas sobre dados, comece com <conclusao>uma frase com a conclusão</conclusao>. Coloque as evidências em até 6 linhas curtas: <evidencias>[{"label":"Status","value":"3 pendentes, 2 pagos"},{"label":"Origem","value":"Mesma linha e mesmo horário"}]</evidencias>. Use texto corrido depois disso só para o que não couber nessas linhas, sem repetir a conclusão. Uma hipótese vai em <hipotese>texto, sem escrever a palavra hipótese</hipotese>. Em perguntas sobre como usar o aplicativo, responda só em texto, sem essas marcações.
+Formato da resposta: em perguntas sobre dados, comece com <conclusao>uma frase com a conclusão</conclusao>. Coloque as evidências em até 6 linhas curtas: <evidencias>[{"label":"Status","value":"3 pendentes, 2 pagos"},{"label":"Origem","value":"Mesma linha e mesmo horário"}]</evidencias>. Use texto corrido depois disso só para o que não couber nessas linhas, sem repetir a conclusão. Uma hipótese vai em <hipotese>texto, sem escrever a palavra hipótese</hipotese>. Em perguntas sobre como usar o aplicativo, não use conclusao, evidencias nem hipotese; os botões continuam valendo.
 
-Botão para ver na tela: quando a resposta se basear em uma lista que uma tela consegue mostrar com os filtros dela, termine a resposta com um bloco assim, depois de todo o texto:
+Botões: sempre que a resposta levar a algum lugar do aplicativo, ofereça um botão que vá direto até lá, em vez de descrever o caminho pelos menus. No texto, diga em uma frase o que a pessoa encontra ao clicar. Termine a resposta com até 3 blocos, depois de todo o texto:
 <ver_na_tela>{"label":"Ver em Pagamentos","screen":"payments","employeeIds":[12],"periodStart":"2026-03-01","periodEnd":"2026-03-31","statuses":["pendente"]}</ver_na_tela>
-O bloco vira um botão que abre a tela já filtrada. Use no máximo 3. "label" é um texto curto. Os ids são os números do banco, não os códigos. Omita os filtros que não usar.
-- screen "payments" (Pagamentos): mostra os turnos atuais. Filtros: employeeIds, companyIds, clientIds, roleIds, locals (texto exato do local), periodStart e periodEnd (work_date, inclusive) e statuses (pendente, erro, pago).
-- screen "library" (Cartão Ponto): mostra as importações de ponto (tabela imports). periodStart e periodEnd são obrigatórios e trazem as importações cujo período encosta nesse intervalo. Filtros: employeeIds, companyIds, clientIds e statuses, em que basta atender a um: overtime (overtime_minutes > 0), absence (absence_minutes > 0), late (late_minutes > 0), regular (regular_minutes > 0), no-punch (total_worked_minutes = 0), pending (pending_count > 0), interval (interval_minutes > 0).
-Só inclua o botão se esses filtros reproduzirem exatamente as linhas em que a resposta se baseou, para a tela bater com o que você disse. Se a consulta dependeu de outro critério (valor, horário, arquivo de origem, edição manual, turnos removidos ou histórico), ou se a pergunta foi sobre como usar o aplicativo, não inclua nenhum bloco."#;
+<ver_na_tela>{"label":"Abrir cadastro de FUNC_12","screen":"employee","recordId":12}</ver_na_tela>
+"label" é um texto curto e pode usar os códigos FUNC, CLI e EMP. Os ids são os números do banco, não os códigos. Omita os campos que não usar.
+- Um registro específico, com recordId: employee (cadastro do colaborador), employee_pix (o mesmo cadastro, já na seção Chaves PIX), company, client, role, timesheet (cartão de ponto de uma importação, com recordId = imports.id).
+- pay_shift, com recordId = payment_shifts.id: abre a confirmação de "Fazer pagamento" daquele turno, que precisa ser atual e estar pendente ou com erro. Nada é pago até a pessoa confirmar. Use só quando ela quiser pagar um turno específico.
+- Telas sem filtro: employees, companies, clients, roles, companies_new, clients_new, employees_new, roles_new, import, import_timesheet, import_payments, import_employees, payment_templates, employee_templates, export_templates, remote_updates, analytics, settings.
+- Tela filtrada "payments" (Pagamentos): mostra os turnos atuais. Filtros: employeeIds, companyIds, clientIds, roleIds, locals (texto exato do local), periodStart e periodEnd (work_date, inclusive) e statuses (pendente, erro, pago).
+- Tela filtrada "library" (Cartão Ponto): mostra as importações de ponto (tabela imports). periodStart e periodEnd são obrigatórios e trazem as importações cujo período encosta nesse intervalo. Filtros: employeeIds, companyIds, clientIds e statuses, em que basta atender a um: overtime (overtime_minutes > 0), absence (absence_minutes > 0), late (late_minutes > 0), regular (regular_minutes > 0), no-punch (total_worked_minutes = 0), pending (pending_count > 0), interval (interval_minutes > 0).
+Em uma tela filtrada, os filtros precisam reproduzir exatamente as linhas em que a resposta se baseou, para a tela bater com o que você disse. Se a consulta dependeu de outro critério (valor, horário, arquivo de origem, edição manual, turnos removidos ou histórico), não inclua botão filtrado. Se nenhum lugar do aplicativo ajudar, não inclua bloco."#;
 
 // ---------------------------------------------------------------------------
 // Pseudonymization
@@ -394,6 +398,39 @@ const MAX_LINKS: usize = 3;
 const MAX_LABEL_CHARS: usize = 60;
 const PAYMENT_STATUSES: &[&str] = &["pendente", "erro", "pago"];
 const LIBRARY_STATUSES: &[&str] = &["overtime", "absence", "late", "regular", "no-punch", "pending", "interval"];
+/// Screens that open as they are. Must match `PLAIN_ROUTES` in AiAssistant.tsx.
+const PLAIN_SCREENS: &[&str] = &[
+    "employees",
+    "companies",
+    "clients",
+    "roles",
+    "companies_new",
+    "clients_new",
+    "employees_new",
+    "roles_new",
+    "import",
+    "import_timesheet",
+    "import_payments",
+    "import_employees",
+    "payment_templates",
+    "employee_templates",
+    "export_templates",
+    "remote_updates",
+    "analytics",
+    "settings",
+];
+
+/// The table behind a screen that opens one record.
+fn record_table(screen: &str) -> Option<&'static str> {
+    match screen {
+        "employee" | "employee_pix" => Some("employees"),
+        "company" => Some("companies"),
+        "client" => Some("clients"),
+        "role" => Some("roles"),
+        "timesheet" => Some("imports"),
+        _ => None,
+    }
+}
 
 /// A button under an answer that opens a screen already filtered. Comes from
 /// model output, so `validate_link` drops anything the screen couldn't really
@@ -420,6 +457,8 @@ pub struct ScreenLink {
     period_end: Option<String>,
     #[serde(default)]
     statuses: Vec<String>,
+    #[serde(default)]
+    record_id: Option<i64>,
 }
 
 /// Separates the `<ver_na_tela>` blocks from the text shown to the user. An
@@ -448,15 +487,56 @@ fn valid_date(value: &Option<String>) -> bool {
     value.as_deref().map_or(true, |date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok())
 }
 
+fn has_filters(link: &ScreenLink) -> bool {
+    !link.employee_ids.is_empty()
+        || !link.company_ids.is_empty()
+        || !link.client_ids.is_empty()
+        || !link.role_ids.is_empty()
+        || !link.locals.is_empty()
+        || !link.statuses.is_empty()
+        || link.period_start.is_some()
+        || link.period_end.is_some()
+}
+
+/// Only a shift the payment dialog would actually accept.
+async fn payable_shift_exists(conn: &mut SqliteConnection, shift_id: i64) -> Result<bool, String> {
+    let found = sqlx::query(
+        "SELECT 1 FROM payment_shifts
+         WHERE id = ?1 AND deleted_at IS NULL AND status IN ('pendente', 'erro')
+           AND id NOT IN (SELECT previous_shift_id FROM payment_shifts WHERE previous_shift_id IS NOT NULL)",
+    )
+    .bind(shift_id)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(found.is_some())
+}
+
 async fn validate_link(conn: &mut SqliteConnection, link: &ScreenLink) -> Result<bool, String> {
+    if link.label.trim().is_empty() {
+        return Ok(false);
+    }
+    if link.screen == "pay_shift" {
+        let Some(id) = link.record_id.filter(|_| !has_filters(link)) else { return Ok(false) };
+        return payable_shift_exists(conn, id).await;
+    }
+    if let Some(table) = record_table(&link.screen) {
+        let Some(id) = link.record_id.filter(|_| !has_filters(link)) else { return Ok(false) };
+        return all_exist(conn, table, &[id]).await;
+    }
+    if PLAIN_SCREENS.contains(&link.screen.as_str()) {
+        return Ok(link.record_id.is_none() && !has_filters(link));
+    }
+    if link.record_id.is_some() {
+        return Ok(false);
+    }
     let allowed_statuses = match link.screen.as_str() {
         "payments" => PAYMENT_STATUSES,
         "library" => LIBRARY_STATUSES,
         _ => return Ok(false),
     };
     let library = link.screen == "library";
-    let shape_ok = !link.label.trim().is_empty()
-        && link.statuses.iter().all(|status| allowed_statuses.contains(&status.as_str()))
+    let shape_ok = link.statuses.iter().all(|status| allowed_statuses.contains(&status.as_str()))
         && valid_date(&link.period_start)
         && valid_date(&link.period_end)
         && link.period_start.as_deref().zip(link.period_end.as_deref()).map_or(true, |(start, end)| start <= end)
@@ -1284,7 +1364,22 @@ pub(crate) mod tests {
             for (valid, value) in [
                 (true, json!({ "label": "V", "screen": "payments", "employeeIds": [3], "statuses": ["pago"], "locals": ["Posto"] })),
                 (true, json!({ "label": "V", "screen": "library", "employeeIds": [3], "periodStart": "2026-03-01", "periodEnd": "2026-03-31", "statuses": ["no-punch"] })),
-                (false, json!({ "label": "V", "screen": "settings" })),
+                (true, json!({ "label": "V", "screen": "settings" })),
+                (true, json!({ "label": "V", "screen": "employee", "recordId": 3 })),
+                (true, json!({ "label": "V", "screen": "client", "recordId": 2 })),
+                (true, json!({ "label": "V", "screen": "employee_pix", "recordId": 3 })),
+                (false, json!({ "label": "V", "screen": "employee_pix", "recordId": 999 })),
+                (false, json!({ "label": "V", "screen": "pay_shift", "recordId": 10 })),
+                (false, json!({ "label": "V", "screen": "pay_shift", "recordId": 11 })),
+                (false, json!({ "label": "V", "screen": "pay_shift", "recordId": 999 })),
+                (false, json!({ "label": "V", "screen": "pay_shift" })),
+                (false, json!({ "label": "V", "screen": "employee", "recordId": 999 })),
+                (false, json!({ "label": "V", "screen": "employee" })),
+                (false, json!({ "label": "V", "screen": "employee", "recordId": 3, "statuses": ["pago"] })),
+                (false, json!({ "label": "V", "screen": "settings", "recordId": 3 })),
+                (false, json!({ "label": "V", "screen": "settings", "employeeIds": [3] })),
+                (false, json!({ "label": "V", "screen": "payments", "recordId": 3 })),
+                (false, json!({ "label": "V", "screen": "/etc/passwd" })),
                 (false, json!({ "label": " ", "screen": "payments" })),
                 (false, json!({ "label": "V", "screen": "payments", "employeeIds": [999] })),
                 (false, json!({ "label": "V", "screen": "payments", "clientIds": [999] })),
@@ -1297,6 +1392,24 @@ pub(crate) mod tests {
                 (false, json!({ "label": "V", "screen": "library", "periodStart": "2026-03-01", "periodEnd": "2026-03-31", "locals": ["Posto"] })),
             ] {
                 assert_eq!(validate_link(&mut conn, &link(value.clone())).await.unwrap(), valid, "{value}");
+            }
+        });
+    }
+
+    #[test]
+    fn only_a_current_unpaid_shift_can_be_paid_from_a_link() {
+        tauri::async_runtime::block_on(async {
+            let mut conn = database().await;
+            sqlx::raw_sql(
+                "INSERT INTO payment_shifts (id, employee_id, client_id, company_id, local, work_date, status) VALUES (20, 3, 2, 1, 'Posto', '2026-03-04', 'pendente'), (21, 3, 2, 1, 'Posto', '2026-03-04', 'erro');
+                 INSERT INTO payment_shifts (id, employee_id, client_id, company_id, local, work_date, status, deleted_at) VALUES (22, 3, 2, 1, 'Posto', '2026-03-04', 'pendente', '2026-03-05');",
+            )
+            .execute(&mut conn)
+            .await
+            .unwrap();
+            for (expected, id) in [(true, 20), (true, 21), (false, 22)] {
+                let pay = link(json!({ "label": "Pagar", "screen": "pay_shift", "recordId": id }));
+                assert_eq!(validate_link(&mut conn, &pay).await.unwrap(), expected, "turno {id}");
             }
         });
     }
