@@ -3,6 +3,7 @@ import { AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { HashRouter, Navigate, Link, Route, Routes } from "react-router-dom";
 import "./App.css";
+import { AiAssistantProvider } from "./components/AiAssistant";
 import PendingChangesTab from "./components/PendingChangesTab";
 import Modal from "./components/Modal";
 import Sidebar from "./components/Sidebar";
@@ -159,12 +160,14 @@ function App() {
     <HashRouter>
       <FiltersProvider>
         <RemoteFileUpdatesProvider>
-          <AppShell popplerMissing={popplerMissing} importResult={importResult} clearImportResult={() => {
-            clearDatabaseImportResult().then(() => {
-              localStorage.removeItem("database-import-events");
-              setImportResult(null);
-            }).catch(() => {});
-          }} />
+          <AiAssistantProvider>
+            <AppShell popplerMissing={popplerMissing} importResult={importResult} clearImportResult={() => {
+              clearDatabaseImportResult().then(() => {
+                localStorage.removeItem("database-import-events");
+                setImportResult(null);
+              }).catch(() => {});
+            }} />
+          </AiAssistantProvider>
         </RemoteFileUpdatesProvider>
       </FiltersProvider>
     </HashRouter>

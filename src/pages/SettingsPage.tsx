@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import AiSettingsCard from "../components/AiSettingsCard";
 import GithubIcon from "../components/GithubIcon";
 import Modal from "../components/Modal";
 import UpdateModal from "../components/UpdateModal";
@@ -825,6 +826,8 @@ export default function SettingsPage() {
           {importing ? "Substituindo..." : "Importar banco de dados"}
         </button>
       </div>
+
+      <AiSettingsCard />
 
       <div className="card">
         <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>

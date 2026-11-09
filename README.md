@@ -1,6 +1,6 @@
 # PontoScan
 
-A cross-platform desktop app (Linux, macOS, Windows) built with [Tauri](https://tauri.app/) for ingesting Brazilian "Espelho Ponto" (timesheet) PDF exports, parsing punch data per employee/day, and analyzing it locally — no data ever leaves the machine, everything is persisted to a local SQLite database.
+A cross-platform desktop app (Linux, macOS, Windows) built with [Tauri](https://tauri.app/) for ingesting Brazilian "Espelho Ponto" (timesheet) PDF exports, parsing punch data per employee/day, and analyzing it locally — everything is persisted to a local SQLite database, and no data leaves the machine unless you opt into the AI assistant below.
 
 ## Features
 
@@ -10,6 +10,8 @@ A cross-platform desktop app (Linux, macOS, Windows) built with [Tauri](https://
 - **Cartão de Ponto (employee detail).** A full day-by-day breakdown per import, with dynamic Entrada/Saída columns, computed metrics (worked hours, overtime, faltas/atrasos, breaks), and a multi-select filter over per-day status.
 - **Colaboradores.** The main list of already-imported timesheets, filterable by name, company, client, period, and per-period status — the same filters double as a report generator, bundling the matching employees' original PDFs into a single ZIP organized in `Company/Client/` folders, either one PDF per employee or one merged PDF per client.
 - **In-app PDF viewer.** PDFs are rendered inside the app with [pdf.js](https://mozilla.github.io/pdf.js/), with actions to download a copy or reveal the file in the OS file manager (Explorer/Finder/Nautilus — works on all three of Windows, macOS, and Linux, unlike the Poppler-dependent features below).
+
+- **AI assistant (optional, off by default).** A floating icon on every screen answers questions about the app, its settings and your data. It only answers and cannot change anything, and is active only when Claude Code is installed and logged in on the machine or an Anthropic API key is saved in Configurações. To answer, it runs read-only queries on the local database and sends the results to Anthropic. Employee names, CPF, PIX, matrícula, clients, companies and files are never sent; places, roles, dates, amounts and notes are, with recognized names and documents masked.
 
 ## Tech stack
 

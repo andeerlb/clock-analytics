@@ -9,15 +9,17 @@ import ChangeDiffPanel from "./ChangeDiffPanel";
 import Drawer from "./Drawer";
 import PillButton from "./PillButton";
 
-/** `.app-nav`'s own width (App.css) — the floating card can be dragged anywhere EXCEPT over the sidebar; that column is real layout, not an overlay, so this is the one thing that never moves either. */
-const SIDEBAR_WIDTH = 220;
+/** Measured, since the sidebar can be collapsed. The floating card can be dragged anywhere EXCEPT over it: that column is real layout, not an overlay. */
+function sidebarWidth(): number {
+  return document.querySelector(".app-nav")?.getBoundingClientRect().width ?? 220;
+}
 /** Minimum gap kept between the card and the sidebar/viewport edges while dragging. */
 const CARD_MARGIN = 8;
 /** Above a full-screen wizard (PaymentTemplateWizard etc., z-index 100) — the old sidebar-edge tab used to tie with those and could get painted over — but below a real dialog (ConfirmModal/UpdateModal/Drawer's own overlay, z-index 200), which should never have this floating card sitting on top of it. */
 const CARD_Z_INDEX = 150;
 
 function clampCardPosition(top: number, left: number, width: number, height: number): { top: number; left: number } {
-  const minLeft = SIDEBAR_WIDTH + CARD_MARGIN;
+  const minLeft = sidebarWidth() + CARD_MARGIN;
   const maxLeft = Math.max(minLeft, window.innerWidth - width - CARD_MARGIN);
   const minTop = CARD_MARGIN;
   const maxTop = Math.max(minTop, window.innerHeight - height - CARD_MARGIN);

@@ -1,6 +1,6 @@
 import { Briefcase, Info, KeyRound, Plus, Tags, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
 import FormPanel from "../components/FormPanel";
@@ -48,6 +48,8 @@ export default function EmployeeFormPage() {
   const isEditing = id !== undefined;
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const pixSectionRef = useRef<HTMLDivElement>(null);
   // Only used as the initial values below — irrelevant once editing takes
   // over the form, and never applies to `isEditing` at all (an existing
   // colaborador's fields always come from `getEmployee`).
@@ -66,6 +68,10 @@ export default function EmployeeFormPage() {
   const [cpf, setCpf] = useState("");
   const [matricula, setMatricula] = useState("");
   const [loading, setLoading] = useState(isEditing);
+  // An assistant button can land directly on the PIX keys (`?section=pix`).
+  useEffect(() => {
+    if (!loading && searchParams.get("section") === "pix") pixSectionRef.current?.scrollIntoView({ block: "start" });
+  }, [loading, searchParams]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -421,6 +427,7 @@ export default function EmployeeFormPage() {
         )}
 
         {!loading && isEditing && (
+          <div ref={pixSectionRef}>
           <FormPanel
             icon={KeyRound}
             title="Chaves PIX"
@@ -463,6 +470,7 @@ export default function EmployeeFormPage() {
               </button>
             </form>
           </FormPanel>
+          </div>
         )}
 
         {!loading && isEditing && (

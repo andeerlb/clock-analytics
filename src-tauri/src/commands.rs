@@ -957,7 +957,7 @@ pub async fn open_reconciliation_window(app: AppHandle) -> Result<(), String> {
         .title("Conferência de Pagamentos — PontoScan")
         .inner_size(1180.0, 780.0)
         .transparent(cfg!(any(target_os = "windows", target_os = "macos")))
-        .background_color(tauri::window::Color(11, 14, 20, 255))
+        .background_color(tauri::window::Color(11, 11, 13, 255))
         .build()
         .map_err(|e| e.to_string())?;
     let _ = crate::window_glass::enable(&window);

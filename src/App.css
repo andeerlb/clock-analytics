@@ -1,64 +1,65 @@
 :root {
-  /* Material 3 dark tokens, taken verbatim from the reference mockup */
-  --bg: #0b0e14;
-  --surface-container-lowest: #060e20;
-  --sidebar-bg: #131b2e;
-  --surface-container: #171f33;
-  --surface-container-high: #222a3d;
-  --surface-variant: #2d3449;
-  --surface-bright: #31394d;
+  /* Neutral graphite palette. Only the status colors below (--danger,
+     --success, --warning) carry hue, so they stay meaningful. */
+  --bg: #0b0b0d;
+  --surface-container-lowest: #08080a;
+  --sidebar-bg: #131316;
+  --surface-container: #25252b;
+  --surface-container-high: #2a2a31;
+  --surface-variant: #2f2f37;
+  --surface-bright: #3b3b44;
 
-  --card-bg: #161b22;
-  --card-bg-soft: rgba(22, 27, 34, 0.7);
+  --card-bg: #1a1a1e;
+  --card-bg-soft: rgba(26, 26, 30, 0.7);
 
-  --border: #424754;
-  --outline: #8c909f;
+  --border: #3b3b44;
+  --outline: #92929e;
 
-  --text: #dae2fd;
-  --text-muted: #c2c6d6;
+  --text: #f6f6f8;
+  --text-muted: #b8b8c2;
 
-  --accent: #adc6ff;
-  --accent-hover: #4d8eff;
-  --accent-soft: rgba(173, 198, 255, 0.15);
-  --on-accent: #002e6a;
+  --accent: #f6f6f8;
+  --accent-hover: #ffffff;
+  --accent-soft: rgba(246, 246, 248, 0.12);
+  --on-accent: #101013;
 
-  --nav-active-bg: #3131c0;
-  --nav-active-text: #b0b2ff;
+  --nav-active-bg: #33333b;
+  --nav-active-text: #f6f6f8;
 
   /* Distinct, more saturated violet used only for the payment template
      wizard's Mapeamento sidebar (its own reference mockup's
      secondary-container) — kept separate from --nav-active-bg so the
      app's real sidebar nav isn't affected. */
-  --mapper-active-bg: #7000ff;
+  --mapper-active-bg: #45454f;
   --mapper-active-text: #ffffff;
 
   /* Softer, translucent grid lines for the wizard's spreadsheet-style
      tables — same hue as --border, lower opacity, so a dense table of
      many columns doesn't read as a harsh grid. --border-softer is the
      even-lighter variant used for body-row separators specifically. */
-  --border-soft: rgba(66, 71, 84, 0.5);
-  --border-softer: rgba(66, 71, 84, 0.3);
+  --border-soft: rgba(59, 59, 68, 0.5);
+  --border-softer: rgba(59, 59, 68, 0.3);
 
   /* "Mission Control" accents for the wizard's Detalhes step — its own
      reference mockup's custom-glow/primary-fixed-dim (cyan) and
      secondary-fixed-dim (lavender), kept separate from --accent since
      they're notably more saturated than the app's normal accent. The
      -rgb twin lets glow-card rules compose their own alpha via rgba(). */
-  --mapper-glow: #00daf3;
-  --mapper-glow-rgb: 0, 218, 243;
-  --mapper-lavender: #d1bcff;
+  --mapper-glow: #dcdce2;
+  --mapper-glow-rgb: 220, 220, 226;
+  --mapper-lavender: #cacad2;
 
-  --danger: #ffb4ab;
-  --danger-soft: rgba(255, 180, 171, 0.15);
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.16);
   --error-container: #93000a;
   --error-container-soft: rgba(147, 0, 10, 0.1);
-  --success: #4edea3;
-  --success-soft: rgba(78, 222, 163, 0.15);
+  --success: #34d399;
+  --success-soft: rgba(52, 211, 153, 0.16);
   /* Not part of the M3 token set — used only to tell "will overwrite"
      apart from "failed to parse", which both would otherwise land on
      --danger. */
   --warning: #fbbf24;
-  --warning-soft: rgba(251, 191, 36, 0.15);
+  --warning-soft: rgba(251, 191, 36, 0.16);
 
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
   font-size: 15px;
@@ -150,10 +151,11 @@ h6 {
   flex-shrink: 0;
   background: var(--sidebar-bg);
   border-right: 1px solid var(--border);
-  padding: 1.25rem 1rem;
+  padding: 12px 10px;
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 12px;
+  transition: width 0.26s cubic-bezier(0.32, 0.72, 0, 1), padding 0.26s cubic-bezier(0.32, 0.72, 0, 1);
   /* Pinned to the viewport so it never scrolls away with tall page
      content (e.g. a long import history) — only .app-content (and
      .app-nav-links below, for a tall nav list) scrolls. Deliberately NOT
@@ -168,26 +170,110 @@ h6 {
   height: 100vh;
 }
 
+/* A full-width band, flush with the menu's edges (the negative margin undoes
+   .app-nav's padding), so the top of the menu reads as its header. */
 .app-brand {
+  height: 60px;
+  margin: -12px -10px 0;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  font-family: "Hanken Grotesk", Avenir, Helvetica, Arial, sans-serif;
-  font-weight: 700;
-  font-size: 0.95rem;
-  padding: 0 0.25rem;
+  gap: 8px;
+  padding: 0 12px 0 20px;
+  font-family: Inter, system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 14px;
+  background: #1f1f24;
+  border-bottom: 1px solid var(--border);
 }
 
-.app-brand-icon {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: var(--accent-hover);
-  color: var(--on-accent);
+.app-brand-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+button.app-nav-toggle {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-muted);
+  box-shadow: none;
+}
+
+button.app-nav-toggle:hover {
+  background: var(--surface-bright);
+  color: var(--text);
+}
+
+.app-nav:not(.collapsed) .app-nav-label {
+  animation: app-fade-in 0.2s ease 0.08s backwards;
+}
+
+.app-nav.collapsed {
+  width: 68px;
+  padding: 12px 10px;
+}
+
+.app-nav.collapsed .app-nav-label {
+  display: none;
+}
+
+.app-nav.collapsed .app-brand {
+  justify-content: center;
+  padding: 0;
+}
+
+.app-nav.collapsed .app-nav-link {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-nav {
+    transition: none;
+  }
+
+  .app-nav:not(.collapsed) .app-nav-label {
+    animation: none;
+  }
+}
+
+.app-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-nav-group-title {
+  padding: 12px 10px 4px;
+  color: var(--outline);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.app-nav-group-rule {
+  display: none;
+  height: 1px;
+  margin: 0.5rem 0.35rem;
+  background: var(--border-soft);
+}
+
+.app-nav.collapsed .app-nav-group-rule {
+  display: block;
+}
+
+.app-nav.collapsed .app-nav-group:first-child .app-nav-group-rule {
+  display: none;
 }
 
 .app-nav-links {
@@ -195,6 +281,7 @@ h6 {
   flex-direction: column;
   gap: 0.2rem;
   flex: 1;
+  overflow-x: hidden;
   /* Scrolls internally (not .app-nav as a whole) if the nav list ever
      outgrows the sidebar's height — see the overflow note on .app-nav. */
   overflow-y: auto;
@@ -203,12 +290,14 @@ h6 {
 .app-nav-link {
   display: flex;
   align-items: center;
-  gap: 0.7rem;
-  padding: 0.55rem 0.7rem;
+  gap: 11px;
+  min-height: 38px;
+  box-sizing: border-box;
+  padding: 6px 10px;
   border-radius: 8px;
   color: var(--text-muted);
-  font-weight: 500;
-  font-size: 0.9rem;
+  font-weight: 400;
+  font-size: 13.5px;
 }
 
 .app-nav-link:hover {
@@ -220,6 +309,7 @@ h6 {
 .app-nav-link.active {
   background: var(--nav-active-bg);
   color: var(--nav-active-text);
+  font-weight: 600;
 }
 
 .app-nav-cta {
@@ -246,14 +336,14 @@ h6 {
 .app-nav-footer {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
-  padding: 0.4rem;
+  gap: 2px;
+  padding: 6px;
   border-radius: 12px;
   background: var(--surface-container);
   border: 1px solid var(--border-soft);
 }
 
-.app-nav-footer .app-nav-link:hover {
+.app-nav-footer .app-nav-link:not(.active):hover {
   background: var(--surface-variant);
 }
 
@@ -428,7 +518,7 @@ button {
 input:focus,
 select:focus {
   outline: 2px solid var(--accent-soft);
-  border-color: var(--accent);
+  border-color: var(--outline);
 }
 
 select {
@@ -453,7 +543,7 @@ button {
   background: var(--accent);
   color: var(--on-accent);
   font-weight: 600;
-  box-shadow: 0 4px 14px rgba(173, 198, 255, 0.2);
+  box-shadow: none;
 }
 button:hover {
   background: var(--accent-hover);
@@ -478,7 +568,7 @@ button.secondary:hover {
 button.danger {
   background: var(--error-container);
   border-color: var(--error-container);
-  color: var(--danger);
+  color: #fecaca;
   box-shadow: none;
 }
 button.danger:hover {
@@ -811,7 +901,7 @@ tr:last-child td {
   align-items: center;
   gap: 0.3rem;
   padding: 0.15em 0.55em;
-  border-radius: 0;
+  border-radius: 999px;
   font-size: 0.75rem;
   font-weight: 600;
   /* Two badges sitting side by side as inline-flex elements default to
@@ -835,17 +925,17 @@ tr:last-child td {
 .badge.warn {
   background: var(--danger-soft);
   color: var(--danger);
-  border: 1px solid rgba(255, 180, 171, 0.3);
+  border: 1px solid rgba(248, 113, 113, 0.3);
 }
 .badge.info {
   background: var(--accent-soft);
   color: var(--accent);
-  border: 1px solid rgba(173, 198, 255, 0.3);
+  border: 1px solid rgba(246, 246, 248, 0.3);
 }
 .badge.ok {
   background: var(--success-soft);
   color: var(--success);
-  border: 1px solid rgba(78, 222, 163, 0.3);
+  border: 1px solid rgba(52, 211, 153, 0.3);
 }
 .badge.overwrite {
   background: var(--warning-soft);
@@ -857,8 +947,8 @@ tr:last-child td {
    tint so it reads as more urgent among the other badges. */
 .badge.file-error {
   background: var(--error-container);
-  color: var(--danger);
-  border: 1px solid rgba(255, 180, 171, 0.5);
+  color: #fecaca;
+  border: 1px solid rgba(248, 113, 113, 0.5);
 }
 /* Overtime isn't good or bad on its own — neutral, unlike ok/warn/overwrite. */
 .badge.neutral {
@@ -885,9 +975,9 @@ tr:last-child td {
   font-size: 0.75rem;
 }
 .badge.duplicate {
-  background: #171f33;
-  color: #ffb4ab;
-  border: 1px solid rgba(255, 180, 171, 0.2);
+  background: #25252b;
+  color: #f87171;
+  border: 1px solid rgba(248, 113, 113, 0.2);
   border-radius: 0;
   padding: 0.2rem 0.45rem;
   font-size: 0.65rem;
@@ -974,7 +1064,7 @@ tr:last-child td {
 .success-box {
   background: var(--success-soft);
   color: var(--success);
-  border: 1px solid rgba(78, 222, 163, 0.3);
+  border: 1px solid rgba(52, 211, 153, 0.3);
   border-radius: 8px;
   padding: 0.75rem 1rem;
   margin-bottom: 1rem;
@@ -1220,7 +1310,7 @@ tr:last-child td {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(6, 9, 16, 0.45);
+  background: rgba(8, 8, 10, 0.45);
   backdrop-filter: blur(28px) saturate(1.4);
   -webkit-backdrop-filter: blur(28px) saturate(1.4);
   z-index: 200;
@@ -1267,7 +1357,7 @@ tr:last-child td {
    instead of lighter — otherwise the dimming alone reads as too subtle to
    notice at a glance. */
 :root.glass-native .modal-overlay {
-  background: rgba(6, 9, 16, 0.68);
+  background: rgba(8, 8, 10, 0.68);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -1360,7 +1450,7 @@ tr:last-child td {
 .drawer-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(6, 9, 16, 0);
+  background: rgba(8, 8, 10, 0);
   backdrop-filter: blur(0px);
   -webkit-backdrop-filter: blur(0px);
   z-index: 200;
@@ -1370,7 +1460,7 @@ tr:last-child td {
 }
 
 .drawer-overlay-visible {
-  background: rgba(6, 9, 16, 0.45);
+  background: rgba(8, 8, 10, 0.45);
   backdrop-filter: blur(28px) saturate(1.4);
   -webkit-backdrop-filter: blur(28px) saturate(1.4);
 }
@@ -1382,7 +1472,7 @@ tr:last-child td {
    counterpart above) since there's no blur left to help sell "a layer is
    here". */
 :root.glass-native .drawer-overlay-visible {
-  background: rgba(6, 9, 16, 0.68);
+  background: rgba(8, 8, 10, 0.68);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -1597,6 +1687,34 @@ input[type="checkbox"]:disabled {
   overflow-x: auto;
 }
 
+/* Styled on purpose: on the Linux webview the default scrollbar is an overlay
+   that takes up no space, so a bar around 1px of content was 1px tall and
+   invisible. A custom ::-webkit-scrollbar is a real, always-visible one. */
+.table-top-scroll {
+  height: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--surface-container);
+}
+
+.table-top-scroll::-webkit-scrollbar {
+  height: 12px;
+}
+
+.table-top-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.table-top-scroll::-webkit-scrollbar-thumb {
+  background: var(--outline);
+  border: 3px solid var(--surface-container);
+  border-radius: 6px;
+}
+
+.table-top-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
 .table-card thead tr {
   background: var(--surface-container);
 }
@@ -1613,7 +1731,7 @@ input[type="checkbox"]:disabled {
 }
 
 .table-card tbody td {
-  border-bottom-color: rgba(66, 71, 84, 0.5);
+  border-bottom-color: rgba(59, 59, 68, 0.5);
 }
 
 tr.row-weekend {
@@ -1706,25 +1824,25 @@ tr.row-active td:first-child {
    (three classes) naturally outweighs `tr.row-confirmado:hover` (two) so
    focus wins visually over a simultaneous hover on the same row. */
 tr.row-confirmado {
-  background: rgba(78, 222, 163, 0.15);
+  background: rgba(52, 211, 153, 0.15);
 }
 tr.row-confirmado:hover {
-  background: rgba(78, 222, 163, 0.24);
+  background: rgba(52, 211, 153, 0.24);
 }
 tr.row-active.row-confirmado,
 tr.row-active.row-confirmado:hover {
-  background: rgba(78, 222, 163, 0.32);
+  background: rgba(52, 211, 153, 0.32);
 }
 
 tr.row-erro {
-  background: rgba(255, 180, 171, 0.15);
+  background: rgba(248, 113, 113, 0.15);
 }
 tr.row-erro:hover {
-  background: rgba(255, 180, 171, 0.24);
+  background: rgba(248, 113, 113, 0.24);
 }
 tr.row-active.row-erro,
 tr.row-active.row-erro:hover {
-  background: rgba(255, 180, 171, 0.32);
+  background: rgba(248, 113, 113, 0.32);
 }
 
 /* Payment template wizard — spacing/radii below mirror the reference
@@ -2125,7 +2243,7 @@ tr.row-active.row-erro:hover {
 }
 
 .glass-panel {
-  background: rgba(23, 31, 51, 0.6);
+  background: rgba(37, 37, 43, 0.6);
   backdrop-filter: blur(12px);
   border: 1px solid var(--border-soft);
   border-radius: 8px;
@@ -2185,7 +2303,7 @@ tr.row-active.row-erro:hover {
 }
 
 .glass-input {
-  background: rgba(45, 52, 73, 0.5);
+  background: rgba(47, 47, 55, 0.5);
   border: 1px solid var(--border);
   border-radius: 2px;
   padding: 8px 12px;
@@ -2224,7 +2342,7 @@ tr.row-active.row-erro:hover {
   justify-content: space-between;
   align-items: center;
   padding: 8px;
-  background: rgba(45, 52, 73, 0.3);
+  background: rgba(47, 47, 55, 0.3);
   border: 1px solid var(--border-softer);
   border-radius: 2px;
   font-family: "JetBrains Mono", ui-monospace, monospace;
@@ -2240,7 +2358,7 @@ tr.row-active.row-erro:hover {
 
 /* Logic cards — shared shell for identifier attempts and routing rules. */
 .logic-card {
-  background: rgba(45, 52, 73, 0.3);
+  background: rgba(47, 47, 55, 0.3);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 16px;
@@ -2504,7 +2622,7 @@ tr.row-active.row-erro:hover {
   padding: 48px 24px;
   border: 2px dashed var(--border);
   border-radius: 8px;
-  background: rgba(23, 31, 51, 0.3);
+  background: rgba(37, 37, 43, 0.3);
   text-align: center;
   cursor: pointer;
   transition: border-color 0.2s ease, background-color 0.2s ease;
@@ -2996,4 +3114,597 @@ button.history-bar:hover {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
+}
+
+
+/* Assistant: its own neutral palette on purpose, independent of the app's
+   theme tokens. `.ai-side` is a real column next to the page, sticky so it
+   stays in view while the page scrolls. Below Modal/Drawer (z-index 200). */
+.ai-layout {
+  display: flex;
+  min-height: 100vh;
+  width: 100%;
+  /* `clip`, not `hidden`: the panel slides past the window edge, and `hidden`
+     would make this a scroll container and break `.ai-side`'s `sticky`. */
+  overflow-x: clip;
+}
+
+.ai-layout-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.ai-launcher {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 150;
+  width: 48px;
+  height: 48px;
+  animation: ai-launcher-in 0.2s ease 0.12s backwards;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #202024;
+  border: 1px solid #3f3f46;
+  border-radius: 50%;
+  color: #ededef;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
+.ai-launcher:hover:not(:disabled) {
+  background: #303036;
+}
+
+.ai-launcher-dot {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 12px;
+  height: 12px;
+  background: #ededef;
+  border: 2px solid #111113;
+  border-radius: 50%;
+}
+
+.ai-spin {
+  animation: ai-spin 1s linear infinite;
+}
+
+@keyframes ai-launcher-in {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+}
+
+@keyframes ai-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-spin,
+  .ai-launcher {
+    animation: none;
+  }
+
+  .ai-side,
+  .ai-panel {
+    transition: none;
+  }
+}
+
+.ai-side {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 12px 0;
+  display: flex;
+  z-index: 150;
+  transition: width 0.26s cubic-bezier(0.32, 0.72, 0, 1);
+  color: #ededef;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 13px;
+}
+
+@media (max-width: 1000px) {
+  .ai-side {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    height: auto;
+  }
+}
+
+body.ai-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* The panel must follow the pointer exactly while being dragged. */
+body.ai-resizing .ai-side {
+  transition: none;
+}
+
+.ai-resize-handle {
+  width: 12px;
+  flex-shrink: 0;
+  position: relative;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.ai-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  width: 4px;
+  height: 40px;
+  transform: translateY(-50%);
+  border-radius: 2px;
+  background: #3f3f46;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.ai-resize-handle:hover::after,
+.ai-resize-handle:focus-visible::after,
+body.ai-resizing .ai-resize-handle::after {
+  opacity: 1;
+}
+
+.ai-resize-handle:focus-visible {
+  outline: none;
+}
+
+.ai-panel {
+  min-width: 400px;
+  max-width: calc(100vw - 24px);
+  flex-shrink: 0;
+  margin-right: 12px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background: #18181b;
+  border: 1px solid #2e2e33;
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+}
+
+.ai-side-visible .ai-panel {
+  opacity: 1;
+}
+
+.ai-panel a {
+  color: #ededef;
+}
+
+.ai-panel :focus-visible:not(textarea) {
+  outline: 2px solid #ededef;
+  outline-offset: 1px;
+}
+
+.ai-panel button {
+  box-shadow: none;
+  font: inherit;
+  font-weight: 400;
+  color: #ededef;
+}
+
+.ai-panel-header {
+  height: 48px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 0 8px 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #26262a;
+}
+
+.ai-panel-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ai-panel-header-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.ai-panel button.ai-icon-button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: #a1a1aa;
+}
+
+.ai-panel button.ai-icon-button:hover:not(:disabled) {
+  background: #26262a;
+  color: #ededef;
+}
+
+.ai-tooltip-anchor {
+  position: relative;
+  display: flex;
+}
+
+.ai-tooltip {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  padding: 6px 9px;
+  background: #2c2c31;
+  border: 1px solid #3f3f46;
+  border-radius: 6px;
+  color: #ededef;
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  z-index: 2;
+}
+
+.ai-tooltip-anchor:hover .ai-tooltip,
+.ai-tooltip-anchor:focus-within .ai-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
+.ai-panel-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ai-muted {
+  margin: 0;
+  color: #a1a1aa;
+  line-height: 1.55;
+}
+
+.ai-question {
+  align-self: flex-end;
+  max-width: 86%;
+  padding: 9px 12px;
+  background: #27272b;
+  border-radius: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ai-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ai-conclusion {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.ai-facts {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid #26262a;
+}
+
+.ai-fact {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid #26262a;
+}
+
+.ai-fact-label {
+  flex-shrink: 0;
+  color: #a1a1aa;
+}
+
+.ai-fact-value {
+  text-align: right;
+}
+
+.ai-body {
+  margin: 0;
+}
+
+.ai-hypothesis {
+  color: #c4c4cb;
+}
+
+.ai-panel button.ai-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: auto;
+  padding: 10px 12px;
+  background: transparent;
+  border: 1px solid #36363c;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.ai-panel button.ai-link:hover {
+  background: #202024;
+}
+
+.ai-link-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ai-link-label {
+  font-weight: 500;
+}
+
+.ai-link-summary {
+  color: #a1a1aa;
+  font-size: 12px;
+}
+
+.ai-tips {
+  display: flex;
+  flex-direction: column;
+  padding-top: 10px;
+  border-top: 1px solid #26262a;
+}
+
+.ai-tips-title {
+  padding-bottom: 4px;
+  color: #a1a1aa;
+  font-size: 12px;
+}
+
+.ai-tip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+}
+
+.ai-tip-note {
+  line-height: 1.45;
+}
+
+.ai-panel button.ai-tip-ask {
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 10px;
+  background: #2c2c31;
+  border: 0;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.ai-panel button.ai-tip-ask:hover {
+  background: #36363c;
+}
+
+.ai-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.ai-panel button.ai-choice {
+  padding: 7px 10px;
+  background: #202024;
+  border: 1px solid #2e2e33;
+  border-radius: 7px;
+  text-align: left;
+}
+
+.ai-panel button.ai-choice:hover {
+  background: #2c2c31;
+}
+
+.ai-error {
+  padding: 10px 12px;
+  background: #202024;
+  border: 1px solid #52525b;
+  border-radius: 8px;
+  line-height: 1.5;
+}
+
+.ai-panel-footer {
+  flex-shrink: 0;
+  padding: 0 12px 12px;
+}
+
+.ai-composer {
+  display: flex;
+  flex-direction: column;
+  background: #202024;
+  border: 1px solid #36363c;
+  border-radius: 10px;
+}
+
+.ai-composer:focus-within {
+  border-color: #52525b;
+}
+
+.ai-chips {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 8px 0;
+}
+
+.ai-panel .ai-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  box-sizing: border-box;
+  height: 26px;
+  padding: 0 8px;
+  background: #2c2c31;
+  border: 0;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.ai-panel button.ai-chip:hover {
+  background: #36363c;
+}
+
+.ai-panel button.ai-chip-off {
+  background: transparent;
+  border: 1px dashed #52525b;
+  color: #c4c4cb;
+}
+
+.ai-chip-detail {
+  color: #a1a1aa;
+}
+
+.ai-chip-caret {
+  color: #a1a1aa;
+  flex-shrink: 0;
+}
+
+.ai-panel button.ai-chip-remove {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  color: #a1a1aa;
+}
+
+.ai-panel button.ai-chip-remove:hover {
+  color: #ededef;
+}
+
+.ai-context-detail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  box-sizing: border-box;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  background: #202024;
+  border: 1px solid #36363c;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 1;
+}
+
+.ai-context-title {
+  padding-bottom: 8px;
+  font-weight: 500;
+}
+
+.ai-context-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 7px 0;
+  border-top: 1px solid #2e2e33;
+}
+
+.ai-panel button.ai-context-off {
+  margin-top: 6px;
+  height: 34px;
+  padding: 0;
+  background: #2c2c31;
+  border: 0;
+  border-radius: 7px;
+}
+
+.ai-panel button.ai-context-off:hover {
+  background: #36363c;
+}
+
+.ai-composer textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+  resize: none;
+  color: #ededef;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.ai-composer textarea::placeholder {
+  color: #8e8e96;
+}
+
+.ai-composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 0 8px 8px 12px;
+}
+
+.ai-panel button.ai-send {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ededef;
+  border: 0;
+  border-radius: 8px;
+  color: #18181b;
+}
+
+.ai-panel button.ai-send:hover:not(:disabled) {
+  background: #ffffff;
+}
+
+.ai-panel button.ai-send:disabled {
+  background: #2c2c31;
+  color: #8e8e96;
 }

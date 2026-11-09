@@ -26,7 +26,7 @@ import MultiSelectDropdown from "./MultiSelectDropdown";
 import PaymentsFiltersDrawer, { type PaymentsFiltersValue } from "./PaymentsFiltersDrawer";
 
 const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: string }> = {
-  pendente: { className: "badge warn", label: "Pendente" },
+  pendente: { className: "badge overwrite", label: "Pendente" },
   erro: { className: "badge file-error", label: "Erro" },
   pago: { className: "badge ok", label: "Pago" },
 };
