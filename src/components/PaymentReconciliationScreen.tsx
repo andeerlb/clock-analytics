@@ -18,11 +18,11 @@ import {
   type RoleRow,
 } from "../lib/db";
 import { formatCurrencyBRL, formatDateAbbrevYY, formatDateTimeAbbrevYY, formatMinutesAsTime, scheduleDurationMinutes } from "../lib/format";
-import { FLAT_COLUMNS } from "../lib/paymentColumns";
+import { ALWAYS_VISIBLE_COLUMN_ID, FLAT_COLUMNS, PAYMENT_PICKER_COLUMNS } from "../lib/paymentColumns";
 import { PAYMENT_AUDIT_RESULT_LABELS, type PaymentAuditResult, type PaymentShiftStatus } from "../lib/types";
 import Avatar from "./Avatar";
 import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
-import MultiSelectDropdown from "./MultiSelectDropdown";
+import ColumnPicker from "./ColumnPicker";
 import PaymentsFiltersDrawer, { type PaymentsFiltersValue } from "./PaymentsFiltersDrawer";
 
 const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: string }> = {
@@ -557,22 +557,14 @@ export default function PaymentReconciliationScreen({
               <Filter size={15} style={{ marginRight: "0.4rem" }} />
               Filtros
             </button>
-            <MultiSelectDropdown
-              options={FLAT_COLUMNS}
-              selected={visibleColumns}
-              onToggle={(id) =>
-                setVisibleColumns((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(id)) next.delete(id);
-                  else next.add(id);
-                  return next;
-                })
-              }
-              onSelectAll={() => setVisibleColumns(new Set(FLAT_COLUMNS.map((c) => c.id)))}
-              onSelectNone={() => setVisibleColumns(new Set())}
-              allLabel="Configurar colunas"
-              noneLabel="Nenhuma coluna"
-              countLabel={(n) => `Colunas (${n})`}
+            <ColumnPicker
+              columns={PAYMENT_PICKER_COLUMNS}
+              visible={visibleColumns}
+              defaults={Array.from(DEFAULT_VISIBLE_COLUMN_IDS)}
+              onChange={(next) => {
+                next.add(ALWAYS_VISIBLE_COLUMN_ID);
+                setVisibleColumns(next);
+              }}
               align="left"
             />
             <span className="muted" style={{ fontSize: "0.85rem", marginLeft: "auto" }}>

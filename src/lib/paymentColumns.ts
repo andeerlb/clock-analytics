@@ -1,3 +1,4 @@
+import type { PickerColumn } from "../components/ColumnPicker";
 import type { MultiSelectOption } from "../components/MultiSelectDropdown";
 
 /**
@@ -41,3 +42,15 @@ export const COLUMN_PICKER_DETAILS: Record<string, { group: string; name?: strin
 
 /** Without it a row doesn't say whose turno it is, so the picker keeps it on. */
 export const ALWAYS_VISIBLE_COLUMN_ID = "colaborador";
+
+/** `FLAT_COLUMNS` as the column picker lists them — shared by Pagamentos and Conferência. */
+export const PAYMENT_PICKER_COLUMNS: PickerColumn[] = FLAT_COLUMNS.map((c) => {
+  const details = COLUMN_PICKER_DETAILS[c.id];
+  return {
+    id: c.id,
+    name: details?.name ?? c.label,
+    group: details?.group ?? "Mais",
+    sample: details?.sample ?? "",
+    locked: c.id === ALWAYS_VISIBLE_COLUMN_ID,
+  };
+});

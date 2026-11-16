@@ -27,7 +27,7 @@ import CurrencyInput from "../components/CurrencyInput";
 import DatePicker from "../components/DatePicker";
 import Drawer from "../components/Drawer";
 import ExtraColumnsDrawer from "../components/ExtraColumnsDrawer";
-import ColumnPicker, { type PickerColumn } from "../components/ColumnPicker";
+import ColumnPicker from "../components/ColumnPicker";
 import Pagination from "../components/Pagination";
 import PaymentExportDrawer from "../components/PaymentExportDrawer";
 import PaymentsExportMenu from "../components/PaymentsExportMenu";
@@ -86,7 +86,7 @@ import {
 import { generatePaymentsExportXlsx, type PaymentExportResult } from "../lib/paymentExport";
 import { withMissingValueShiftIds } from "../lib/paymentShiftValue";
 import { generatePaymentsPdfExport, type PaymentPdfExportResult } from "../lib/paymentPdfExport";
-import { ALL_COLUMN_IDS, ALWAYS_VISIBLE_COLUMN_ID, COLUMN_PICKER_DETAILS, FLAT_COLUMNS } from "../lib/paymentColumns";
+import { ALL_COLUMN_IDS, ALWAYS_VISIBLE_COLUMN_ID, FLAT_COLUMNS, PAYMENT_PICKER_COLUMNS } from "../lib/paymentColumns";
 import { generatePaymentsReportPdf, generatePaymentsShiftReportPdf, type PaymentsReportResult } from "../lib/paymentsReport";
 import { acceptShiftChange } from "../lib/remoteCheckDiff";
 import type {
@@ -106,16 +106,6 @@ const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: strin
 
 /** What a fresh install (no saved column preference yet) shows — everything except "Importado em", which is metadata most people don't need visible by default. */
 const DEFAULT_VISIBLE_COLUMN_IDS = ALL_COLUMN_IDS.filter((id) => id !== "importado");
-const PICKER_COLUMNS: PickerColumn[] = FLAT_COLUMNS.map((c) => {
-  const details = COLUMN_PICKER_DETAILS[c.id];
-  return {
-    id: c.id,
-    name: details?.name ?? c.label,
-    group: details?.group ?? "Mais",
-    sample: details?.sample ?? "",
-    locked: c.id === ALWAYS_VISIBLE_COLUMN_ID,
-  };
-});
 const IDENTITY_COLUMN_IDS = new Set(["colaborador", "cliente", "empresa"]);
 const TURNO_COLUMNS = FLAT_COLUMNS.filter((c) => !IDENTITY_COLUMN_IDS.has(c.id));
 
@@ -1606,7 +1596,7 @@ export default function PaymentsPage() {
             </button>
           </div>
           <ColumnPicker
-            columns={PICKER_COLUMNS}
+            columns={PAYMENT_PICKER_COLUMNS}
             visible={visibleColumns}
             defaults={DEFAULT_VISIBLE_COLUMN_IDS}
             onChange={(next) => {

@@ -5231,3 +5231,8 @@ button.column-picker-option-locked:hover {
     transition: none;
   }
 }
+
+.column-picker-box-left {
+  right: auto;
+  left: 0;
+}

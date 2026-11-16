@@ -1,5 +1,5 @@
 import { Columns3, Lock } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 export interface PickerColumn {
   id: string;
@@ -21,11 +21,14 @@ export default function ColumnPicker({
   visible,
   defaults,
   onChange,
+  align = "right",
 }: {
   columns: PickerColumn[];
   visible: Set<string>;
   defaults: string[];
   onChange: (next: Set<string>) => void;
+  /** Which edge of the button the box lines up with. */
+  align?: "left" | "right";
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -36,19 +39,24 @@ export default function ColumnPicker({
     function onClickOutside(e: MouseEvent) {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        setOpen(false);
-        buttonRef.current?.focus();
-      }
-    }
     document.addEventListener("mousedown", onClickOutside);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onClickOutside);
-      document.removeEventListener("keydown", onKey);
-    };
+    return () => document.removeEventListener("mousedown", onClickOutside);
   }, [open]);
+
+  function close() {
+    setOpen(false);
+    buttonRef.current?.focus();
+  }
+
+  // Keys pressed in the picker stay in it: a page with its own shortcuts
+  // (Conferência confirms a payment on Enter) must not see them.
+  function handleKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      e.preventDefault();
+      close();
+    }
+  }
 
   const shownCount = columns.filter((c) => visible.has(c.id)).length;
   const isDefault = defaults.length === shownCount && defaults.every((id) => visible.has(id));
@@ -64,7 +72,7 @@ export default function ColumnPicker({
   let lastGroup: string | null = null;
 
   return (
-    <div className="column-picker" ref={rootRef}>
+    <div className="column-picker" ref={rootRef} onKeyDown={handleKeyDown}>
       <button
         ref={buttonRef}
         type="button"
@@ -80,7 +88,7 @@ export default function ColumnPicker({
         </span>
       </button>
       {open && (
-        <div className="column-picker-box" role="dialog" aria-label="Colunas da tabela">
+        <div className={`column-picker-box column-picker-box-${align}`} role="dialog" aria-label="Colunas da tabela">
           <div className="column-picker-head">
             <strong>Colunas da tabela</strong>
             <span>
@@ -132,10 +140,7 @@ export default function ColumnPicker({
             <button
               type="button"
               className="emp-picker-done"
-              onClick={() => {
-                setOpen(false);
-                buttonRef.current?.focus();
-              }}
+              onClick={close}
             >
               Pronto
             </button>
