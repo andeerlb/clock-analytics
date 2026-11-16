@@ -1,11 +1,12 @@
 import { save } from "@tauri-apps/plugin-dialog";
-import { Archive, CheckCircle2, Filter, FolderOpen } from "lucide-react";
+import { CheckCircle2, FolderOpen, ListFilter, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import LibraryFiltersPanel, { LibraryFilterChips, useLibraryActiveFilterCount } from "../components/LibraryFiltersPanel";
 import Pagination from "../components/Pagination";
 import PdfViewerModal from "../components/PdfViewerModal";
+import ZipExportButton from "../components/ZipExportButton";
 import { LIBRARY_PAGE_SIZE_OPTIONS, useLibraryFilters, type ReportMode } from "../contexts/FiltersContext";
 import { generateReportZip, revealInFileManager } from "../lib/api";
 import { listClients, listCompanies, listImports, type ClientRow, type CompanyRow } from "../lib/db";
@@ -195,67 +196,51 @@ export default function LibraryPage() {
 
   return (
     <div>
-      <div className="page-header">
-        <h2>Cartão Ponto</h2>
+      <div className="library-head">
+        <div className="library-head-text">
+          <h2>Cartão Ponto</h2>
+          <p className="page-subtitle">Espelhos de ponto importados, organizados em pastas por empresa e cliente.</p>
+        </div>
+        <ZipExportButton mode={mode} onModeChange={setMode} onGenerate={handleGenerateZip} busy={busy} total={loading ? null : total} />
       </div>
-      <p className="page-subtitle">
-        Espelhos de ponto importados — filtre e gere um zip com os PDFs de cada colaborador,
-        organizados em pastas por empresa e cliente.
-      </p>
 
       {error && <div className="error-box">{error}</div>}
 
-      <div className="card">
-        <div className="field-row" style={{ marginBottom: 0, alignItems: "center" }}>
-          <button
-            type="button"
-            className={filtersOpen ? undefined : "secondary"}
-            aria-expanded={filtersOpen}
-            onClick={() => toggleFilters(!filtersOpen)}
-          >
-            <Filter size={15} style={{ marginRight: "0.4rem" }} />
-            {activeFilterCount > 0 ? `Filtros (${activeFilterCount})` : "Filtros"}
-          </button>
-          {!filtersOpen && <LibraryFilterChips companies={companies} clients={clients} />}
-          <div style={{ marginLeft: "auto", display: "flex", gap: "0.6rem", alignItems: "center" }}>
-            <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value as ReportMode)}
-              title="Modo de geração do zip"
-            >
-              <option value="per-employee">Um PDF por colaborador</option>
-              <option value="per-client">Um PDF por cliente</option>
-            </select>
-            <button type="button" onClick={handleGenerateZip} disabled={busy || total === 0}>
-              <Archive size={15} style={{ marginRight: "0.4rem" }} />
-              {busy ? "Gerando..." : "Gerar zip"}
-            </button>
-          </div>
-        </div>
-
-        {generatedZipPath && (
-          <div
-            className="success-box"
-            style={{
-              marginTop: "1rem",
-              marginBottom: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: "1rem",
-            }}
-          >
-            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              <CheckCircle2 size={16} />
-              Zip gerado com sucesso: {fileNameFromPath(generatedZipPath)}
-            </span>
-            <button type="button" className="outline" onClick={() => handleReveal(generatedZipPath)}>
-              <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-              Abrir no explorador de arquivos
-            </button>
-          </div>
-        )}
+      <div className="library-bar">
+        <button
+          type="button"
+          className={filtersOpen ? "library-filters-button library-filters-button-on" : "library-filters-button"}
+          aria-expanded={filtersOpen}
+          onClick={() => toggleFilters(!filtersOpen)}
+        >
+          <ListFilter size={15} />
+          Filtros
+          {activeFilterCount > 0 && <span className="library-filters-count">{activeFilterCount}</span>}
+        </button>
+        <span className="library-bar-sep" aria-hidden="true" />
+        <LibraryFilterChips companies={companies} clients={clients} onOpen={() => toggleFilters(true)} />
+        <span className="library-bar-count">
+          {!loading && (
+            <>
+              <b>{total}</b> {total === 1 ? "espelho" : "espelhos"}
+            </>
+          )}
+        </span>
       </div>
+
+      {generatedZipPath && (
+        <div className="success-box library-zip-done">
+          <CheckCircle2 size={16} />
+          <span>Zip gerado: {fileNameFromPath(generatedZipPath)}</span>
+          <button type="button" className="outline" onClick={() => handleReveal(generatedZipPath)}>
+            <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
+            Abrir pasta
+          </button>
+          <button type="button" className="ghost library-zip-done-close" aria-label="Fechar aviso" onClick={() => setGeneratedZipPath(null)}>
+            <X size={15} />
+          </button>
+        </div>
+      )}
 
       <div className="card table-card">
         {loading && imports.length === 0 && <p className="muted" style={{ padding: "1.4rem" }}>Carregando...</p>}
@@ -338,7 +323,6 @@ export default function LibraryPage() {
         onClose={() => toggleFilters(false)}
         companies={companies}
         clients={clients}
-        total={loading ? null : total}
       />
     </div>
   );

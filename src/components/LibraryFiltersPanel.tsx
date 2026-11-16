@@ -1,9 +1,10 @@
-import { Building2, Calendar, ListFilter, RotateCcw, Search, Users, X } from "lucide-react";
+import { Building2, Calendar, CalendarDays, ListFilter, RotateCcw, Search, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLibraryFilters } from "../contexts/FiltersContext";
+import { colorForName, initials } from "../lib/avatar";
 import { addDaysIso, toIso, todayUtc } from "../lib/calendar";
-import { countImportsByStatus, type ClientRow, type CompanyRow } from "../lib/db";
-import { formatCnpj, formatDateSlash } from "../lib/format";
+import { countImportsByStatus, getEmployeesByIds, type ClientRow, type CompanyRow } from "../lib/db";
+import { formatCnpj, formatDateSlash, formatPersonName } from "../lib/format";
 import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
 import PeriodPicker, { formatPeriodShort, type PeriodPreset } from "./PeriodPicker";
 import EmployeeMultiSelectDropdown from "./EmployeeMultiSelectDropdown";
@@ -132,14 +133,11 @@ export default function LibraryFiltersPanel({
   onClose,
   companies,
   clients,
-  total,
 }: {
   open: boolean;
   onClose: () => void;
   companies: CompanyRow[];
   clients: ClientRow[];
-  /** How many imports the current filters match. */
-  total: number | null;
 }) {
   const { f, activeCount, setEmployees, setCompanies, setClients, setStatuses, setPeriod, clearAll } = useLibraryFilterActions();
   // Recomputed on open, so "Mês atual" follows the date if the app stays open overnight.
@@ -212,11 +210,6 @@ export default function LibraryFiltersPanel({
       badge={activeCount === 0 ? undefined : `${activeCount} ${activeCount === 1 ? "ativo" : "ativos"}`}
       footer={
         <>
-          {total !== null && (
-            <span className="side-panel-summary">
-              {total} {total === 1 ? "espelho" : "espelhos"}
-            </span>
-          )}
           <button type="button" className="ghost" onClick={clearAll} disabled={activeCount === 0 && f.periodStart === presets[0].start && f.periodEnd === presets[0].end}>
             <RotateCcw size={13} style={{ marginRight: "0.35rem" }} />
             Limpar filtros
@@ -344,58 +337,111 @@ export default function LibraryFiltersPanel({
   );
 }
 
-function Chip({ label, value, onRemove }: { label: string; value: string; onRemove?: () => void }) {
+/** One applied filter in the bar: a click opens the panel, the X removes it. */
+function Chip({ label, value, lead, onOpen, onRemove }: { label?: string; value: string; lead?: ReactNode; onOpen: () => void; onRemove?: () => void }) {
   return (
     <span className={onRemove ? "filter-chip" : "filter-chip filter-chip-static"}>
-      <span className="filter-chip-label">{label}</span>
-      {value}
+      <button type="button" className="filter-chip-open" onClick={onOpen} title="Abrir filtros">
+        {lead}
+        {label && <span className="filter-chip-label">{label}</span>}
+        <span className="filter-chip-value">{value}</span>
+      </button>
       {onRemove && (
-        <button type="button" className="filter-chip-remove" aria-label={`Remover filtro ${label}`} onClick={onRemove}>
-          <X size={11} />
+        <button type="button" className="filter-chip-remove" aria-label={`Remover filtro ${label ?? value}`} onClick={onRemove}>
+          <X size={12} />
         </button>
       )}
     </span>
   );
 }
 
-function namesOrCount(ids: Set<string>, rows: { id: number; name: string }[], noun: [string, string]): string {
-  if (ids.size === 1) {
-    const row = rows.find((r) => ids.has(String(r.id)));
-    if (row) return row.name;
-  }
-  return `${ids.size} ${ids.size === 1 ? noun[0] : noun[1]}`;
+function namesOrCount(ids: Set<string>, rows: { id: number; name: string }[]): string {
+  const names = rows.filter((r) => ids.has(String(r.id))).map((r) => r.name);
+  if (names.length === 0) return String(ids.size);
+  return names.length === 1 ? names[0] : `${names[0]} e mais ${names.length - 1}`;
 }
 
-/** The applied filters, shown beside "Filtros" while the panel is closed. */
-export function LibraryFilterChips({ companies, clients }: { companies: CompanyRow[]; clients: ClientRow[] }) {
+/** Names for the selected colaboradores, fetched once per selection, for the chip's initials and summary. */
+function useSelectedEmployeeNames(ids: Set<string>): string[] {
+  const [names, setNames] = useState<string[]>([]);
+  const key = Array.from(ids).sort().join(",");
+  useEffect(() => {
+    if (ids.size === 0) {
+      setNames([]);
+      return;
+    }
+    let cancelled = false;
+    getEmployeesByIds(Array.from(ids, Number))
+      .then((rows) => {
+        if (cancelled) return;
+        setNames(rows.map((r) => formatPersonName(r.name)).sort((a, b) => a.localeCompare(b)));
+      })
+      .catch(() => !cancelled && setNames([]));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return names;
+}
+
+/**
+ * The applied filters, in the bar under the page title. Período is always
+ * there (it always has a value), the rest only when set. Clearing them all
+ * at once lives in the panel ("Limpar filtros"), not here.
+ */
+export function LibraryFilterChips({ companies, clients, onOpen }: { companies: CompanyRow[]; clients: ClientRow[]; onOpen: () => void }) {
   const { f, statusFiltered, setEmployees, setCompanies, setClients, setStatuses } = useLibraryFilterActions();
+  const employeeNames = useSelectedEmployeeNames(f.selectedEmployeeIds);
+  const presets = periodPresets();
+  const preset = presets.find((p) => p.start === f.periodStart && p.end === f.periodEnd);
+  const statusLabels = STATUS_GROUPS.flatMap((g) => g.chips)
+    .filter((c) => f.selectedStatuses.has(c.id))
+    .map((c) => c.label);
+
+  let employeeSummary = `${f.selectedEmployeeIds.size} colaboradores`;
+  if (employeeNames.length === 1) employeeSummary = employeeNames[0];
+  else if (employeeNames.length > 1) employeeSummary = `${employeeNames[0].split(" ")[0]} e mais ${employeeNames.length - 1}`;
+
   return (
-    <div className="filter-chips">
-      <Chip label="Período" value={periodText(f.periodStart, f.periodEnd)} />
+    <>
+      <Chip
+        lead={<CalendarDays size={14} className="filter-chip-icon" />}
+        value={preset ? `${preset.label} · ${periodText(f.periodStart, f.periodEnd)}` : periodText(f.periodStart, f.periodEnd)}
+        onOpen={onOpen}
+      />
       {f.selectedEmployeeIds.size > 0 && (
         <Chip
-          label="Colaboradores"
-          value={String(f.selectedEmployeeIds.size)}
+          lead={
+            employeeNames.length > 0 && (
+              <span className="filter-chip-stack">
+                {employeeNames.slice(0, 3).map((name) => (
+                  <span key={name} className="filter-chip-avatar" style={{ background: colorForName(name) }}>
+                    {initials(name)}
+                  </span>
+                ))}
+              </span>
+            )
+          }
+          value={employeeSummary}
+          onOpen={onOpen}
           onRemove={() => setEmployees(new Set())}
         />
       )}
       {f.selectedCompanyIds.size > 0 && (
-        <Chip label="Empresa" value={namesOrCount(f.selectedCompanyIds, companies, ["empresa", "empresas"])} onRemove={() => setCompanies(new Set())} />
+        <Chip label="Empresa" value={namesOrCount(f.selectedCompanyIds, companies)} onOpen={onOpen} onRemove={() => setCompanies(new Set())} />
       )}
       {f.selectedClientIds.size > 0 && (
-        <Chip label="Cliente" value={namesOrCount(f.selectedClientIds, clients, ["cliente", "clientes"])} onRemove={() => setClients(new Set())} />
+        <Chip label="Cliente" value={namesOrCount(f.selectedClientIds, clients)} onOpen={onOpen} onRemove={() => setClients(new Set())} />
       )}
       {statusFiltered && (
         <Chip
           label="Status"
-          value={
-            f.selectedStatuses.size === 1
-              ? (STATUS_GROUPS.flatMap((g) => g.chips).find((c) => f.selectedStatuses.has(c.id))?.label ?? "1")
-              : `${f.selectedStatuses.size} ocorrências`
-          }
+          value={statusLabels.length <= 2 ? statusLabels.join(", ") : `${statusLabels.length} ocorrências`}
+          onOpen={onOpen}
           onRemove={() => setStatuses(new Set(ALL_STATUSES))}
         />
       )}
-    </div>
+    </>
   );
 }
