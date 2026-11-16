@@ -9,7 +9,6 @@ import {
   List,
   ListFilter,
   Moon,
-  Settings2,
   ShieldCheck,
   Sun,
   Trash2,
@@ -28,7 +27,7 @@ import CurrencyInput from "../components/CurrencyInput";
 import DatePicker from "../components/DatePicker";
 import Drawer from "../components/Drawer";
 import ExtraColumnsDrawer from "../components/ExtraColumnsDrawer";
-import MultiSelectDropdown from "../components/MultiSelectDropdown";
+import ColumnPicker, { type PickerColumn } from "../components/ColumnPicker";
 import Pagination from "../components/Pagination";
 import PaymentExportDrawer from "../components/PaymentExportDrawer";
 import PaymentsExportMenu from "../components/PaymentsExportMenu";
@@ -87,7 +86,7 @@ import {
 import { generatePaymentsExportXlsx, type PaymentExportResult } from "../lib/paymentExport";
 import { withMissingValueShiftIds } from "../lib/paymentShiftValue";
 import { generatePaymentsPdfExport, type PaymentPdfExportResult } from "../lib/paymentPdfExport";
-import { ALL_COLUMN_IDS, FLAT_COLUMNS } from "../lib/paymentColumns";
+import { ALL_COLUMN_IDS, ALWAYS_VISIBLE_COLUMN_ID, COLUMN_PICKER_DETAILS, FLAT_COLUMNS } from "../lib/paymentColumns";
 import { generatePaymentsReportPdf, generatePaymentsShiftReportPdf, type PaymentsReportResult } from "../lib/paymentsReport";
 import { acceptShiftChange } from "../lib/remoteCheckDiff";
 import type {
@@ -107,6 +106,16 @@ const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: strin
 
 /** What a fresh install (no saved column preference yet) shows — everything except "Importado em", which is metadata most people don't need visible by default. */
 const DEFAULT_VISIBLE_COLUMN_IDS = ALL_COLUMN_IDS.filter((id) => id !== "importado");
+const PICKER_COLUMNS: PickerColumn[] = FLAT_COLUMNS.map((c) => {
+  const details = COLUMN_PICKER_DETAILS[c.id];
+  return {
+    id: c.id,
+    name: details?.name ?? c.label,
+    group: details?.group ?? "Mais",
+    sample: details?.sample ?? "",
+    locked: c.id === ALWAYS_VISIBLE_COLUMN_ID,
+  };
+});
 const IDENTITY_COLUMN_IDS = new Set(["colaborador", "cliente", "empresa"]);
 const TURNO_COLUMNS = FLAT_COLUMNS.filter((c) => !IDENTITY_COLUMN_IDS.has(c.id));
 
@@ -807,7 +816,8 @@ export default function PaymentsPage() {
       },
     );
     getPaymentVisibleColumns().then((cols) => {
-      if (cols) setVisibleColumns(new Set(cols));
+      // Colaborador is always shown now, even if an older saved choice turned it off.
+      if (cols) setVisibleColumns(new Set([ALWAYS_VISIBLE_COLUMN_ID, ...cols]));
     });
   }, []);
 
@@ -877,16 +887,6 @@ export default function PaymentsPage() {
     refreshShiftDiffs(visibleIds);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trackedFiles]);
-
-  function toggleColumn(id: string) {
-    setVisibleColumns((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      setPaymentVisibleColumns(Array.from(next));
-      return next;
-    });
-  }
 
   function baseQuery(): Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize"> {
     return {
@@ -1605,23 +1605,16 @@ export default function PaymentsPage() {
               Por colaborador
             </button>
           </div>
-        <MultiSelectDropdown
-          options={FLAT_COLUMNS}
-          selected={visibleColumns}
-          onToggle={toggleColumn}
-          onSelectAll={() => {
-            setVisibleColumns(new Set(ALL_COLUMN_IDS));
-            setPaymentVisibleColumns(ALL_COLUMN_IDS);
-          }}
-          onSelectNone={() => {
-            setVisibleColumns(new Set());
-            setPaymentVisibleColumns([]);
-          }}
-          icon={Settings2}
-          allLabel="Configurar colunas"
-          noneLabel="Nenhuma coluna"
-          countLabel={(n) => `Colunas (${n})`}
-        />
+          <ColumnPicker
+            columns={PICKER_COLUMNS}
+            visible={visibleColumns}
+            defaults={DEFAULT_VISIBLE_COLUMN_IDS}
+            onChange={(next) => {
+              next.add(ALWAYS_VISIBLE_COLUMN_ID);
+              setVisibleColumns(next);
+              setPaymentVisibleColumns(Array.from(next));
+            }}
+          />
         </div>
       </div>
 

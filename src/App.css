@@ -5068,3 +5068,166 @@ button.payments-tab[aria-selected="true"] {
   color: #71717a;
   font-size: 0.74rem;
 }
+
+/* ---------- Column picker (Pagamentos) ---------- */
+
+.column-picker {
+  position: relative;
+}
+
+button.column-picker-button {
+  height: 32px;
+  padding: 0 10px 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-variant);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+button.column-picker-button:hover,
+button.column-picker-button[aria-expanded="true"] {
+  background: var(--surface-variant);
+  border-color: #52525b;
+}
+
+.column-picker-count {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.column-picker-box {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #1c1c20;
+  border: 1px solid #3a3a42;
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
+}
+
+.column-picker-head {
+  padding: 12px 14px 10px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid #26262a;
+}
+
+.column-picker-head strong {
+  font-size: 0.87rem;
+  font-weight: 600;
+}
+
+.column-picker-head span {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.column-picker-list {
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
+  padding: 0 6px 6px;
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a42 transparent;
+}
+
+button.column-picker-option {
+  width: 100%;
+  padding: 7px 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text);
+  font-weight: 400;
+}
+
+button.column-picker-option:hover {
+  background: #26262b;
+}
+
+button.column-picker-option-locked,
+button.column-picker-option-locked:hover {
+  background: transparent;
+  cursor: default;
+}
+
+.column-picker-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.column-picker-name {
+  font-weight: 500;
+}
+
+.column-picker-sample {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: #71717a;
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.column-picker-lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #71717a;
+  font-size: 0.72rem;
+}
+
+.column-picker-switch {
+  position: relative;
+  width: 30px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 9px;
+  background: #3a3a42;
+  transition: background 0.15s ease;
+}
+
+.column-picker-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #9a9aa3;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.column-picker-option[aria-checked="true"] .column-picker-switch {
+  background: var(--accent);
+}
+
+.column-picker-option[aria-checked="true"] .column-picker-switch::after {
+  transform: translateX(12px);
+  background: var(--on-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .column-picker-switch,
+  .column-picker-switch::after {
+    transition: none;
+  }
+}
