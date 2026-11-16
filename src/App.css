@@ -3818,8 +3818,9 @@ button.side-panel-icon-button:disabled {
   opacity: 0.35;
 }
 
-/* Visible, not scrolling: the dropdowns and the date picker inside open as
-   popovers wider than the panel, and a scroll container would clip them. */
+/* Scrolls once the fields don't fit (a short window, or the Conferência
+   one). The pickers open inside it: their boxes stay within the 16px
+   side padding, and their lists stop at the bottom of this area. */
 .side-panel-body {
   flex: 1;
   min-height: 0;
@@ -3827,12 +3828,9 @@ button.side-panel-icon-button:disabled {
   display: flex;
   flex-direction: column;
   gap: 18px;
-}
-
-@media (max-height: 620px) {
-  .side-panel-body {
-    overflow-y: auto;
-  }
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a42 transparent;
 }
 
 .side-panel-footer {
@@ -4655,7 +4653,7 @@ button.emp-picker-trigger[aria-expanded="true"] {
   position: absolute;
   top: -2px;
   z-index: 20;
-  width: max(calc(100% + 12px), 332px);
+  width: max(calc(100% + 12px), 320px);
   display: flex;
   flex-direction: column;
   overflow: hidden;

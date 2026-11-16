@@ -307,7 +307,7 @@ export default function PaymentsFiltersPanel({
         <FieldLabel icon={Clock3} action={clearAction(f.scheduleTimeFilter !== null, () => a.setScheduleTime(null))}>
           Horário
         </FieldLabel>
-        <ScheduleTimeFilterDropdown value={f.scheduleTimeFilter} onChange={a.setScheduleTime} align="right" fullWidth showIcon={false} />
+        <ScheduleTimeFilterDropdown value={f.scheduleTimeFilter} onChange={a.setScheduleTime} align="right" fullWidth showIcon={false} pickerLook />
       </div>
 
       {includeStatus && (

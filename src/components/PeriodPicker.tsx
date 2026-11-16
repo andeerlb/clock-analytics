@@ -203,8 +203,8 @@ export default function PeriodPicker({
               </span>
             </>
           ) : matchedPreset ? (
-            // A preset with no dates, e.g. "Todo o período" on Pagamentos.
-            <span className="period-trigger-preset">{matchedPreset.label}</span>
+            // A preset with no dates ("Todo o período" on Pagamentos) reads like the other fields' "no filter" text.
+            <span className="emp-picker-placeholder">{matchedPreset.label}</span>
           ) : (
             <span className="emp-picker-placeholder">Escolha o período</span>
           )}
