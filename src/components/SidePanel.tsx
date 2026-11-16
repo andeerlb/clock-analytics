@@ -4,8 +4,8 @@ import { createPortal } from "react-dom";
 
 /** Matches `.side-column`'s width transition. */
 const TRANSITION_MS = 260;
-/** The column's right margin around the panel itself. */
-const COLUMN_EXTRA = 12;
+/** The gap on each side of the panel inside its column (12px left, 12px right), same as the assistant’s. */
+const COLUMN_EXTRA = 24;
 
 /**
  * The spot in the app layout, between the page and the assistant, where a
@@ -74,7 +74,10 @@ export default function SidePanel({
 
   return createPortal(
     <div className={visible ? "side-column side-column-visible" : "side-column"} style={{ width: visible ? width + COLUMN_EXTRA : 0 }}>
-      <section className="side-panel" aria-label={title} style={{ width }}>
+      {/* Keys pressed in the panel stay in it: a page's own shortcuts
+          (Conferência confirms the selected payment on Enter) must not
+          fire from a filter button. */}
+      <section className="side-panel" aria-label={title} style={{ width }} onKeyDown={(e) => e.stopPropagation()}>
         <header className="side-panel-header">
           <span className="side-panel-title">
             {title}

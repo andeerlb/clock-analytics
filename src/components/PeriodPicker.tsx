@@ -202,6 +202,9 @@ export default function PeriodPicker({
                 {formatPeriodShort(start, end)}
               </span>
             </>
+          ) : matchedPreset ? (
+            // A preset with no dates ("Todo o período" on Pagamentos) reads like the other fields' "no filter" text.
+            <span className="emp-picker-placeholder">{matchedPreset.label}</span>
           ) : (
             <span className="emp-picker-placeholder">Escolha o período</span>
           )}
@@ -261,7 +264,7 @@ export default function PeriodPicker({
                 onClick={() => {
                   apply(p.start, p.end);
                   setEditing("start");
-                  setView(monthOf(p.end));
+                  if (p.end) setView(monthOf(p.end));
                 }}
               >
                 {p.label}

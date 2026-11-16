@@ -1,3 +1,4 @@
+import type { PickerColumn } from "../components/ColumnPicker";
 import type { MultiSelectOption } from "../components/MultiSelectDropdown";
 
 /**
@@ -22,3 +23,34 @@ export const FLAT_COLUMNS: MultiSelectOption<string>[] = [
 ];
 
 export const ALL_COLUMN_IDS = FLAT_COLUMNS.map((c) => c.id);
+
+/** What the column picker shows for each column: a group, the full name (the table header keeps the short one) and an example of the content. */
+export const COLUMN_PICKER_DETAILS: Record<string, { group: string; name?: string; sample: string }> = {
+  colaborador: { group: "Quem", sample: "Nome do colaborador" },
+  cliente: { group: "Quem", sample: "Cliente do turno" },
+  empresa: { group: "Quem", sample: "Empresa do turno" },
+  data: { group: "Turno", sample: "10/ago./26" },
+  local: { group: "Turno", sample: "Onde o turno foi feito" },
+  funcao: { group: "Turno", sample: "Função no turno" },
+  horario: { group: "Turno", sample: "08:00 – 17:00" },
+  horas: { group: "Turno", name: "Horas trabalhadas", sample: "8h00" },
+  valor: { group: "Pagamento", sample: "R$ 84,00" },
+  status: { group: "Pagamento", sample: "Pendente, Erro ou Pago" },
+  importado: { group: "Mais", sample: "Quando o turno foi importado" },
+  extras: { group: "Mais", sample: "Colunas do arquivo que não foram mapeadas" },
+};
+
+/** Without it a row doesn't say whose turno it is, so the picker keeps it on. */
+export const ALWAYS_VISIBLE_COLUMN_ID = "colaborador";
+
+/** `FLAT_COLUMNS` as the column picker lists them — shared by Pagamentos and Conferência. */
+export const PAYMENT_PICKER_COLUMNS: PickerColumn[] = FLAT_COLUMNS.map((c) => {
+  const details = COLUMN_PICKER_DETAILS[c.id];
+  return {
+    id: c.id,
+    name: details?.name ?? c.label,
+    group: details?.group ?? "Mais",
+    sample: details?.sample ?? "",
+    locked: c.id === ALWAYS_VISIBLE_COLUMN_ID,
+  };
+});

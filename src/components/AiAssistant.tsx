@@ -61,7 +61,6 @@ const RECORD_ROUTES: Record<string, (id: number | null) => string> = {
 };
 
 const ALL_PAYMENT_STATUSES: PaymentShiftStatus[] = ["pendente", "erro", "pago"];
-const ALL_SHIFT_PERIODS = 2;
 const MIN_PANEL_WIDTH = 400;
 const PANEL_WIDTH_KEY = "ai-assistant-width";
 const PANEL_WIDTH_STEP = 24;
@@ -174,8 +173,9 @@ interface ScreenContext {
 }
 
 function paymentsContext(pathname: string, label: string, f: PaymentsFilters): ScreenContext {
-  const statuses = f.selectedStatuses.size < ALL_PAYMENT_STATUSES.length ? listFilter("status", f.selectedStatuses) : null;
-  const periods = f.selectedShiftPeriods.size < ALL_SHIFT_PERIODS ? listFilter("turno", f.selectedShiftPeriods) : null;
+  // Empty = no filter; anything picked is a filter, all of them included.
+  const statuses = listFilter("status", f.selectedStatuses);
+  const periods = listFilter("turno", f.selectedShiftPeriods);
   const filters = [
     listFilter("employee_id", f.selectedEmployeeIds),
     listFilter("company_id", f.selectedCompanyIds),
@@ -209,7 +209,7 @@ function paymentsContext(pathname: string, label: string, f: PaymentsFilters): S
 }
 
 function libraryContext(pathname: string, label: string, f: LibraryFilters): ScreenContext {
-  const statuses = f.selectedStatuses.size < PERIOD_STATUS_OPTIONS.length ? listFilter("status", f.selectedStatuses) : null;
+  const statuses = listFilter("status", f.selectedStatuses);
   const filters = [
     listFilter("employee_id", f.selectedEmployeeIds),
     listFilter("company_id", f.selectedCompanyIds),
@@ -471,8 +471,9 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
         locals: link.locals,
         periodStart: link.periodStart ?? "",
         periodEnd: link.periodEnd ?? "",
-        statuses: link.statuses.length > 0 ? (link.statuses as PaymentShiftStatus[]) : ALL_PAYMENT_STATUSES,
-        shiftPeriods: ["diurno", "noturno"],
+        // Every status is the same as no status filter.
+        statuses: link.statuses.length < ALL_PAYMENT_STATUSES.length ? (link.statuses as PaymentShiftStatus[]) : [],
+        shiftPeriods: [],
         scheduleTimeFilter: null,
         grouped: false,
       });
@@ -483,7 +484,7 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
       libraryFilters.setSelectedCompanyIds(toIds(link.companyIds));
       libraryFilters.setSelectedClientIds(toIds(link.clientIds));
       libraryFilters.setPeriod(link.periodStart ?? "", link.periodEnd ?? "");
-      libraryFilters.setSelectedStatuses(new Set(link.statuses.length > 0 ? (link.statuses as PeriodStatusId[]) : PERIOD_STATUS_OPTIONS.map((o) => o.id)));
+      libraryFilters.setSelectedStatuses(new Set(link.statuses.length < PERIOD_STATUS_OPTIONS.length ? (link.statuses as PeriodStatusId[]) : []));
       libraryFilters.setPage(0);
       navigate("/");
     }

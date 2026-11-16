@@ -1,6 +1,7 @@
 import { emit, listen } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
 import PaymentReconciliationScreen from "../components/PaymentReconciliationScreen";
+import { SidePanelSlotContext } from "../components/SidePanel";
 import {
   applyPaymentsFiltersSnapshot,
   RECONCILIATION_WINDOW_READY_EVENT,
@@ -32,6 +33,7 @@ export default function PaymentReconciliationWindowPage() {
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [roles, setRoles] = useState<RoleRow[]>([]);
   const [locals, setLocals] = useState<string[]>([]);
+  const [sidePanelSlot, setSidePanelSlot] = useState<HTMLDivElement | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -64,9 +66,15 @@ export default function PaymentReconciliationWindowPage() {
     );
   }
 
+  // A row: the screen, then the slot where its Filtros panel docks (same as the main window's layout).
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh", width: "100vw" }}>
-      <PaymentReconciliationScreen companies={companies} clients={clients} roles={roles} locals={locals} />
+    <div style={{ display: "flex", height: "100vh", width: "100vw", overflow: "clip" }}>
+      <SidePanelSlotContext.Provider value={sidePanelSlot}>
+        <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
+          <PaymentReconciliationScreen companies={companies} clients={clients} roles={roles} locals={locals} />
+        </div>
+      </SidePanelSlotContext.Provider>
+      <div ref={setSidePanelSlot} className="side-panel-slot" />
     </div>
   );
 }

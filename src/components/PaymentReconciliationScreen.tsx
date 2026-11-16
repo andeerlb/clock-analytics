@@ -1,7 +1,8 @@
 import { listen } from "@tauri-apps/api/event";
-import { Filter, Moon, Sun } from "lucide-react";
+import { ListFilter, Moon, Sun } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { usePaymentsFilters } from "../contexts/FiltersContext";
+import { PAYMENT_SHIFT_STATUSES, SHIFT_PERIODS, usePaymentsFilters } from "../contexts/FiltersContext";
+import { orAll } from "../lib/filterSets";
 import {
   countPaymentShiftsPendingAudit,
   deletePaymentAudit,
@@ -18,12 +19,12 @@ import {
   type RoleRow,
 } from "../lib/db";
 import { formatCurrencyBRL, formatDateAbbrevYY, formatDateTimeAbbrevYY, formatMinutesAsTime, scheduleDurationMinutes } from "../lib/format";
-import { FLAT_COLUMNS } from "../lib/paymentColumns";
+import { ALWAYS_VISIBLE_COLUMN_ID, FLAT_COLUMNS, PAYMENT_PICKER_COLUMNS } from "../lib/paymentColumns";
 import { PAYMENT_AUDIT_RESULT_LABELS, type PaymentAuditResult, type PaymentShiftStatus } from "../lib/types";
 import Avatar from "./Avatar";
 import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
-import MultiSelectDropdown from "./MultiSelectDropdown";
-import PaymentsFiltersDrawer, { type PaymentsFiltersValue } from "./PaymentsFiltersDrawer";
+import ColumnPicker from "./ColumnPicker";
+import PaymentsFiltersPanel, { PaymentsFilterChips, usePaymentsActiveFilterCount } from "./PaymentsFiltersPanel";
 
 const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: string }> = {
   pendente: { className: "badge overwrite", label: "Pendente" },
@@ -33,6 +34,16 @@ const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: strin
 
 /** Columns most useful for matching a paid shift against a bank statement — the rest of `FLAT_COLUMNS` starts off unchecked, same picker mechanics as the main page's but a smaller default and never touching `payment_settings.visible_columns_json`. */
 const DEFAULT_VISIBLE_COLUMN_IDS = new Set(["colaborador", "data", "local", "valor", "status"]);
+
+const FILTERS_OPEN_KEY = "reconciliation-filters-open";
+
+function readFiltersOpen(): boolean {
+  try {
+    return localStorage.getItem(FILTERS_OPEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 /** Rows fetched per scroll chunk — see `loadMore`/the `IntersectionObserver` sentinel below. */
 const PAGE_SIZE = 50;
@@ -94,26 +105,15 @@ export default function PaymentReconciliationScreen({
 }) {
   const {
     selectedEmployeeIds,
-    setSelectedEmployeeIds,
     selectedCompanyIds,
-    setSelectedCompanyIds,
     selectedClientIds,
-    setSelectedClientIds,
     selectedRoleIds,
-    setSelectedRoleIds,
     selectedLocals,
-    setSelectedLocals,
     periodStart,
     periodEnd,
-    setPeriod,
     selectedStatuses,
-    setSelectedStatuses,
     selectedShiftPeriods,
-    setSelectedShiftPeriods,
     scheduleTimeFilter,
-    setScheduleTimeFilter,
-    grouped,
-    setGrouped,
   } = usePaymentsFilters();
 
   const [rows, setRows] = useState<PaymentShiftReportRow[]>([]);
@@ -127,7 +127,17 @@ export default function PaymentReconciliationScreen({
   const [focusedShiftId, setFocusedShiftId] = useState<number | null>(null);
   const [actingShiftId, setActingShiftId] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [filtersDrawerOpen, setFiltersDrawerOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(readFiltersOpen);
+  const activeFilterCount = usePaymentsActiveFilterCount(true);
+
+  function toggleFilters(open: boolean) {
+    setFiltersOpen(open);
+    try {
+      localStorage.setItem(FILTERS_OPEN_KEY, open ? "1" : "0");
+    } catch {
+      /* only a convenience */
+    }
+  }
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const collapsibleRef = useRef<HTMLDivElement | null>(null);
@@ -149,8 +159,8 @@ export default function PaymentReconciliationScreen({
       locals: Array.from(selectedLocals),
       periodStart: periodStart || undefined,
       periodEnd: periodEnd || undefined,
-      statuses: Array.from(selectedStatuses),
-      shiftPeriods: Array.from(selectedShiftPeriods),
+      statuses: orAll(selectedStatuses, PAYMENT_SHIFT_STATUSES),
+      shiftPeriods: orAll(selectedShiftPeriods, SHIFT_PERIODS),
       scheduleTimeFilter,
     };
   }
@@ -292,19 +302,6 @@ export default function PaymentReconciliationScreen({
     };
   }, []);
 
-  function handleApplyFilters(next: PaymentsFiltersValue) {
-    setSelectedEmployeeIds(next.employeeIds);
-    setSelectedCompanyIds(next.companyIds);
-    setSelectedClientIds(next.clientIds);
-    setSelectedRoleIds(next.roleIds);
-    setSelectedLocals(next.locals);
-    setPeriod(next.periodStart, next.periodEnd);
-    setSelectedStatuses(next.statuses);
-    setSelectedShiftPeriods(next.shiftPeriods);
-    setScheduleTimeFilter(next.scheduleTimeFilter);
-    setGrouped(next.grouped);
-    setFiltersDrawerOpen(false);
-  }
 
   // Focus/navigation ranges over every *loaded* row, not just the
   // actionable ones — a pendente/erro row (or an already-confirmado/erro
@@ -512,6 +509,7 @@ export default function PaymentReconciliationScreen({
         const naturalHeight = inner.scrollHeight;
         outer.style.height = `${(1 - progress) * naturalHeight}px`;
         outer.style.opacity = String(1 - progress);
+        outer.style.overflow = progress > 0 ? "hidden" : "";
         inner.style.transform = `translateY(-${progress * naturalHeight}px)`;
       }
     });
@@ -519,7 +517,9 @@ export default function PaymentReconciliationScreen({
 
   return (
     <>
-      <div ref={collapsibleRef} style={{ overflow: "hidden" }}>
+      {/* Clipped only while the bars are sliding away (see `handleScroll`):
+          fully shown, the Colunas box has to be able to open past them. */}
+      <div ref={collapsibleRef} style={{ position: "relative", zIndex: 5 }}>
         <div ref={collapsibleInnerRef}>
           <div
             style={{
@@ -553,28 +553,28 @@ export default function PaymentReconciliationScreen({
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <button type="button" className="secondary" onClick={() => setFiltersDrawerOpen(true)}>
-              <Filter size={15} style={{ marginRight: "0.4rem" }} />
+            <button
+              type="button"
+              className={filtersOpen ? "library-filters-button library-filters-button-on" : "library-filters-button"}
+              aria-expanded={filtersOpen}
+              onClick={() => toggleFilters(!filtersOpen)}
+            >
+              <ListFilter size={15} />
               Filtros
+              {activeFilterCount > 0 && <span className="library-filters-count">{activeFilterCount}</span>}
             </button>
-            <MultiSelectDropdown
-              options={FLAT_COLUMNS}
-              selected={visibleColumns}
-              onToggle={(id) =>
-                setVisibleColumns((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(id)) next.delete(id);
-                  else next.add(id);
-                  return next;
-                })
-              }
-              onSelectAll={() => setVisibleColumns(new Set(FLAT_COLUMNS.map((c) => c.id)))}
-              onSelectNone={() => setVisibleColumns(new Set())}
-              allLabel="Configurar colunas"
-              noneLabel="Nenhuma coluna"
-              countLabel={(n) => `Colunas (${n})`}
+            <ColumnPicker
+              columns={PAYMENT_PICKER_COLUMNS}
+              visible={visibleColumns}
+              defaults={Array.from(DEFAULT_VISIBLE_COLUMN_IDS)}
+              onChange={(next) => {
+                next.add(ALWAYS_VISIBLE_COLUMN_ID);
+                setVisibleColumns(next);
+              }}
               align="left"
             />
+            <span className="library-bar-sep" aria-hidden="true" />
+            <PaymentsFilterChips companies={companies} clients={clients} roles={roles} onOpen={() => toggleFilters(true)} includeStatus />
             <span className="muted" style={{ fontSize: "0.85rem", marginLeft: "auto" }}>
               {pendingCount === null
                 ? "Carregando..."
@@ -743,28 +743,14 @@ export default function PaymentReconciliationScreen({
         )}
       </div>
 
-      <PaymentsFiltersDrawer
-        open={filtersDrawerOpen}
-        onClose={() => setFiltersDrawerOpen(false)}
-        value={{
-          employeeIds: selectedEmployeeIds,
-          companyIds: selectedCompanyIds,
-          clientIds: selectedClientIds,
-          roleIds: selectedRoleIds,
-          locals: selectedLocals,
-          periodStart,
-          periodEnd,
-          statuses: selectedStatuses,
-          shiftPeriods: selectedShiftPeriods,
-          scheduleTimeFilter,
-          grouped,
-        }}
-        onApply={handleApplyFilters}
+      <PaymentsFiltersPanel
+        open={filtersOpen}
+        onClose={() => toggleFilters(false)}
         companies={companies}
         clients={clients}
         roles={roles}
         locals={locals}
-        showGroupedToggle={false}
+        includeStatus
       />
 
       {contextMenu && (
