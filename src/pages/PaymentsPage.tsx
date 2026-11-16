@@ -4,15 +4,16 @@ import {
   ChevronRight,
   ClipboardCheck,
   Eye,
-  FileDown,
-  Filter,
   FolderOpen,
   Info,
+  List,
+  ListFilter,
   Moon,
   Settings2,
   ShieldCheck,
   Sun,
   Trash2,
+  Users,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { Fragment, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
@@ -30,7 +31,9 @@ import ExtraColumnsDrawer from "../components/ExtraColumnsDrawer";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
 import PaymentExportDrawer from "../components/PaymentExportDrawer";
-import PaymentsFiltersDrawer, { SHIFT_PERIOD_OPTIONS, STATUS_OPTIONS, type PaymentsFiltersValue } from "../components/PaymentsFiltersDrawer";
+import PaymentsExportMenu from "../components/PaymentsExportMenu";
+import { SHIFT_PERIOD_OPTIONS, STATUS_OPTIONS } from "../components/PaymentsFiltersDrawer";
+import PaymentsFiltersPanel, { PaymentsFilterChips, usePaymentsActiveFilterCount } from "../components/PaymentsFiltersPanel";
 import PdfViewerModal from "../components/PdfViewerModal";
 import PillButton from "../components/PillButton";
 import ShiftHistoryDrawer from "../components/ShiftHistoryDrawer";
@@ -55,6 +58,7 @@ import {
   listPaymentShiftsFlat,
   listPaymentShiftsForGroup,
   listRolesGlobal,
+  countPaymentShiftsByStatus,
   markPaymentShiftPaid,
   PAYMENT_SHIFTS_CHANGED_EVENT,
   revertPaymentShiftToPending,
@@ -596,6 +600,11 @@ function ShiftRow({
           <span className={badge.className} title={s.status === "erro" ? s.errorMessage ?? undefined : undefined}>
             {badge.label}
           </span>
+          {s.status === "erro" && s.errorMessage && (
+            <span className="payments-error-reason" title={s.errorMessage}>
+              {s.errorMessage}
+            </span>
+          )}
         </td>
       )}
       {col("importado") && (
@@ -637,6 +646,16 @@ function ShiftRow({
   );
 }
 
+const FILTERS_OPEN_KEY = "payments-filters-open";
+
+function readFiltersOpen(): boolean {
+  try {
+    return localStorage.getItem(FILTERS_OPEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export default function PaymentsPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -649,24 +668,16 @@ export default function PaymentsPage() {
   const analyticsShiftIds = (searchParams.get("ids") || "").split(",").map(Number).filter((id) => Number.isSafeInteger(id) && id > 0);
   const {
     selectedEmployeeIds,
-    setSelectedEmployeeIds,
     selectedCompanyIds,
-    setSelectedCompanyIds,
     selectedClientIds,
-    setSelectedClientIds,
     selectedRoleIds,
-    setSelectedRoleIds,
     selectedLocals,
-    setSelectedLocals,
     periodStart,
     periodEnd,
-    setPeriod,
     selectedStatuses,
     setSelectedStatuses,
     selectedShiftPeriods,
-    setSelectedShiftPeriods,
     scheduleTimeFilter,
-    setScheduleTimeFilter,
     grouped,
     setGrouped,
     page,
@@ -980,7 +991,11 @@ export default function PaymentsPage() {
   // whichever `refetchFlat`/`refetchSummaries` closure (over `grouped`/
   // filters/page) is current at the moment the event actually arrives.
   const refetchTableRef = useRef(() => (grouped ? refetchSummaries() : refetchFlat()));
-  refetchTableRef.current = () => (grouped ? refetchSummaries() : refetchFlat());
+  refetchTableRef.current = () => {
+    // A payment confirmed elsewhere moves a shift between status tabs.
+    setStatusCountsTick((t) => t + 1);
+    return grouped ? refetchSummaries() : refetchFlat();
+  };
   useEffect(() => {
     const unlisten = listen(PAYMENT_SHIFTS_CHANGED_EVENT, () => {
       refetchTableRef.current().catch(() => {});
@@ -1185,23 +1200,55 @@ export default function PaymentsPage() {
   }
 
 
-  const [filtersDrawerOpen, setFiltersDrawerOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(readFiltersOpen);
+  const activeFilterCount = usePaymentsActiveFilterCount() + (attention !== undefined ? 1 : 0) + (analytics !== undefined ? 1 : 0);
 
-  function handleApplyFilters(next: PaymentsFiltersValue) {
-    setSearchParams({});
-    setSelectedEmployeeIds(next.employeeIds);
-    setSelectedCompanyIds(next.companyIds);
-    setSelectedClientIds(next.clientIds);
-    setSelectedRoleIds(next.roleIds);
-    setSelectedLocals(next.locals);
-    setPeriod(next.periodStart, next.periodEnd);
-    setSelectedStatuses(next.statuses);
-    setSelectedShiftPeriods(next.shiftPeriods);
-    setScheduleTimeFilter(next.scheduleTimeFilter);
-    setGrouped(next.grouped);
-    setPage(0);
-    setFiltersDrawerOpen(false);
+  function toggleFilters(open: boolean) {
+    setFiltersOpen(open);
+    try {
+      localStorage.setItem(FILTERS_OPEN_KEY, open ? "1" : "0");
+    } catch {
+      /* only a convenience */
+    }
   }
+
+  /** Any filter change from this page drops a filter that came from Análises (`?attention=`/`?analytics=`), same as applying the old Drawer did. */
+  function clearAnalysisFilter() {
+    if (searchParams.toString()) setSearchParams({});
+  }
+
+  function selectStatusTab(statuses: PaymentShiftStatus[]) {
+    clearAnalysisFilter();
+    setSelectedStatuses(new Set(statuses));
+    setPage(0);
+  }
+
+  // Counts for the status tabs and "Conferência": same filters, any status.
+  const [statusCounts, setStatusCounts] = useState<Record<PaymentShiftStatus, number> | null>(null);
+  const [statusCountsTick, setStatusCountsTick] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    withMissingValueShiftIds(baseQuery())
+      .then((query) => countPaymentShiftsByStatus(query))
+      .then((counts) => !cancelled && setStatusCounts(counts))
+      .catch(() => !cancelled && setStatusCounts(null));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    selectedEmployeeIds,
+    selectedCompanyIds,
+    selectedClientIds,
+    selectedRoleIds,
+    selectedLocals,
+    periodStart,
+    periodEnd,
+    selectedShiftPeriods,
+    scheduleTimeFilter,
+    searchParams,
+    statusCountsTick,
+  ]);
 
   /** Every turno matching the current filters, not just the visible page — see `generatePaymentsExportXlsx`/`generatePaymentsPdfExport`. */
   async function handleGenerateExport(templateId: number) {
@@ -1335,33 +1382,55 @@ export default function PaymentsPage() {
       attention !== undefined ||
       analytics !== undefined,
   );
-  /** How many filter categories are currently applied — shown as a count badge on the "Filtros" button so it's clear at a glance the list isn't unfiltered, without opening the Drawer. */
-  const activeFilterCount = [
-    selectedEmployeeIds.size > 0,
-    selectedCompanyIds.size > 0,
-    selectedClientIds.size > 0,
-    selectedRoleIds.size > 0,
-    selectedLocals.size > 0,
-    Boolean(periodStart || periodEnd),
-    selectedStatuses.size < STATUS_OPTIONS.length,
-    selectedShiftPeriods.size < SHIFT_PERIOD_OPTIONS.length,
-    scheduleTimeFilter !== null,
-    attention !== undefined,
-    analytics !== undefined,
-  ].filter(Boolean).length;
   const total = grouped ? summariesTotal : flatTotal;
+  /** Shifts the current filters match, status tab included — the count in the bar (in grouped mode `total` counts groups, not shifts). */
+  const shiftCount = statusCounts ? Array.from(selectedStatuses).reduce((sum, s) => sum + statusCounts[s], 0) : null;
+  const allStatuses = STATUS_OPTIONS.map((o) => o.id);
+  const statusTabs: { label: string; statuses: PaymentShiftStatus[]; dot?: string }[] = [
+    { label: "Todos", statuses: allStatuses },
+    { label: "Pendentes", statuses: ["pendente"], dot: "var(--warning)" },
+    { label: "Com erro", statuses: ["erro"], dot: "var(--danger)" },
+    { label: "Pagos", statuses: ["pago"], dot: "var(--success)" },
+  ];
+  const isTab = (statuses: PaymentShiftStatus[]) => statuses.length === selectedStatuses.size && statuses.every((s) => selectedStatuses.has(s));
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
   return (
     <div>
-      <div className="page-header">
-        <h2>Pagamentos</h2>
+      <div className="library-head">
+        <div className="library-head-text">
+          <h2>Pagamentos</h2>
+          <p className="page-subtitle">
+            {grouped
+              ? "Turnos importados, agrupados por colaborador e competência. Clique num colaborador para ver os turnos do mês."
+              : "Turnos importados, um turno por linha."}
+          </p>
+        </div>
+        <div className="payments-head-actions">
+          <PaymentsExportMenu
+            onTemplateExport={() => setExportDrawerOpen(true)}
+            onValueReport={handleGenerateLegacyPdf}
+            onShiftReport={handleGenerateShiftPdf}
+            generatingValueReport={generatingLegacyPdf}
+            generatingShiftReport={generatingShiftPdf}
+            shiftCount={shiftCount}
+          />
+          <button
+            type="button"
+            className="payments-reconcile"
+            onClick={() => openReconciliationWindow().catch(() => {})}
+            title="Conferência de Pagamentos — considera os filtros desta tela"
+          >
+            <ClipboardCheck size={15} />
+            Conferência
+            {statusCounts && statusCounts.pendente > 0 && (
+              <small>
+                {statusCounts.pendente} {statusCounts.pendente === 1 ? "pendente" : "pendentes"}
+              </small>
+            )}
+          </button>
+        </div>
       </div>
-      <p className="page-subtitle">
-        {grouped
-          ? "Turnos importados, agrupados por colaborador e competência. Clique num colaborador para expandir os turnos individuais daquele mês."
-          : "Turnos importados, um turno por linha."}
-      </p>
       {exportError && <div className="error-box">{exportError}</div>}
       {pdfExportError && <div className="error-box">{pdfExportError}</div>}
       {legacyPdfError && <div className="error-box">{legacyPdfError}</div>}
@@ -1370,50 +1439,43 @@ export default function PaymentsPage() {
       {attention && (
         <div className="info-box">
           Filtro da análise: {attention === "pending-audit" ? "pagamentos aguardando conferência" : "turnos sem valor definido"}.
+          <button type="button" className="ghost payments-analysis-clear" onClick={clearAnalysisFilter}>
+            Remover
+          </button>
         </div>
       )}
       {analytics && (
         <div className="info-box">
           Filtro da análise: {{ "journey-over-12h": "jornadas acima de 12h", "journey-under-4h": "jornadas abaixo de 4h", "rest-under-11h": "intervalos inferiores a 11h", heatmap: "célula do mapa de calor" }[analytics]}.
+          <button type="button" className="ghost payments-analysis-clear" onClick={clearAnalysisFilter}>
+            Remover
+          </button>
         </div>
       )}
 
-      <div className="card">
-        <div className="field-row" style={{ marginBottom: 0, alignItems: "center" }}>
-          <button type="button" className="secondary" onClick={() => setFiltersDrawerOpen(true)}>
-            <Filter size={15} style={{ marginRight: "0.4rem" }} />
-            {activeFilterCount > 0 ? `Filtros (${activeFilterCount})` : "Filtros"}
-          </button>
-          <div style={{ marginLeft: "auto", display: "flex", gap: "0.6rem", alignItems: "center" }}>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => setExportDrawerOpen(true)}
-              title="Exportar turnos em Excel ou PDF, usando um template — considera os filtros acima"
-            >
-              <FileDown size={15} style={{ marginRight: "0.4rem" }} />
-              Exportar
-            </button>
-            <button type="button" className="secondary" onClick={handleGenerateLegacyPdf} disabled={generatingLegacyPdf} title="Gera o relatório fixo por valor considerando os filtros acima">
-              <FileDown size={15} style={{ marginRight: "0.4rem" }} />
-              {generatingLegacyPdf ? "Gerando..." : "Relatório por valor"}
-            </button>
-            <button type="button" className="secondary" onClick={handleGenerateShiftPdf} disabled={generatingShiftPdf} title="Gera o relatório fixo por turno considerando os filtros acima">
-              <FileDown size={15} style={{ marginRight: "0.4rem" }} />
-              {generatingShiftPdf ? "Gerando..." : "Relatório por turno"}
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => openReconciliationWindow().catch(() => {})}
-              title="Conferência de Pagamentos — considera os filtros acima"
-            >
-              <ClipboardCheck size={15} style={{ marginRight: "0.4rem" }} />
-              Conferência
-            </button>
-          </div>
-        </div>
+      <div className="library-bar">
+        <button
+          type="button"
+          className={filtersOpen ? "library-filters-button library-filters-button-on" : "library-filters-button"}
+          aria-expanded={filtersOpen}
+          onClick={() => toggleFilters(!filtersOpen)}
+        >
+          <ListFilter size={15} />
+          Filtros
+          {activeFilterCount > 0 && <span className="library-filters-count">{activeFilterCount}</span>}
+        </button>
+        <span className="library-bar-sep" aria-hidden="true" />
+        <PaymentsFilterChips companies={companies} clients={clients} roles={roles} onOpen={() => toggleFilters(true)} onChange={clearAnalysisFilter} />
+        <span className="library-bar-count">
+          {shiftCount !== null && (
+            <>
+              <b>{shiftCount}</b> {shiftCount === 1 ? "turno" : "turnos"}
+            </>
+          )}
+        </span>
+      </div>
 
+      <div className="payments-notices">
         {generatedExport && generatedExport.path && (
           <div
             className="success-box"
@@ -1501,7 +1563,48 @@ export default function PaymentsPage() {
         )}
       </div>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "0.8rem", margin: "1rem 0" }}>
+      <div className="payments-view-row">
+        <div className="payments-tabs" role="tablist" aria-label="Status">
+          {statusTabs.map((tab) => (
+            <button
+              key={tab.label}
+              type="button"
+              role="tab"
+              aria-selected={isTab(tab.statuses)}
+              className="payments-tab"
+              onClick={() => selectStatusTab(tab.statuses)}
+            >
+              {tab.dot && <i style={{ background: tab.dot }} />}
+              {tab.label}
+              {statusCounts && <span className="payments-tab-count">{tab.statuses.reduce((sum, st) => sum + statusCounts[st], 0)}</span>}
+            </button>
+          ))}
+        </div>
+        <div className="payments-view-right">
+          <div className="payments-segmented" role="group" aria-label="Exibição">
+            <button
+              type="button"
+              aria-pressed={!grouped}
+              onClick={() => {
+                setGrouped(false);
+                setPage(0);
+              }}
+            >
+              <List size={14} />
+              Turnos
+            </button>
+            <button
+              type="button"
+              aria-pressed={grouped}
+              onClick={() => {
+                setGrouped(true);
+                setPage(0);
+              }}
+            >
+              <Users size={14} />
+              Por colaborador
+            </button>
+          </div>
         <MultiSelectDropdown
           options={FLAT_COLUMNS}
           selected={visibleColumns}
@@ -1519,6 +1622,7 @@ export default function PaymentsPage() {
           noneLabel="Nenhuma coluna"
           countLabel={(n) => `Colunas (${n})`}
         />
+        </div>
       </div>
 
       <div className="card table-card">
@@ -1923,23 +2027,10 @@ export default function PaymentsPage() {
           })()}
       </Drawer>
 
-      <PaymentsFiltersDrawer
-        open={filtersDrawerOpen}
-        onClose={() => setFiltersDrawerOpen(false)}
-        value={{
-          employeeIds: selectedEmployeeIds,
-          companyIds: selectedCompanyIds,
-          clientIds: selectedClientIds,
-          roleIds: selectedRoleIds,
-          locals: selectedLocals,
-          periodStart,
-          periodEnd,
-          statuses: selectedStatuses,
-          shiftPeriods: selectedShiftPeriods,
-          scheduleTimeFilter,
-          grouped,
-        }}
-        onApply={handleApplyFilters}
+      <PaymentsFiltersPanel
+        open={filtersOpen}
+        onClose={() => toggleFilters(false)}
+        onChange={clearAnalysisFilter}
         companies={companies}
         clients={clients}
         roles={roles}

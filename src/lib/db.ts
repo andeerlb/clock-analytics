@@ -4658,6 +4658,33 @@ export async function listPaymentShiftsFlat(
   return { rows: rows.map((r) => ({ ...parsePaymentShiftRow(r), companyName: r.companyName, clientName: r.clientName, shiftPeriod: r.shiftPeriod })), total };
 }
 
+/**
+ * How many shifts match the current filters in each status, ignoring the
+ * status filter itself — the counts on the Pagamentos status tabs and on
+ * "Conferência". Same row conditions as `listPaymentShiftsFlat`.
+ */
+export async function countPaymentShiftsByStatus(
+  query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
+): Promise<Record<PaymentShiftStatus, number>> {
+  const counts: Record<PaymentShiftStatus, number> = { pendente: 0, erro: 0, pago: 0 };
+  if (query.shiftPeriods.length === 0) return counts;
+  const db = await getDb();
+  const params: (string | number)[] = [];
+  const conditions = buildPaymentShiftRowConditions({ ...query, statuses: ["pendente", "erro", "pago"] }, params);
+  const rows = await db.select<{ status: PaymentShiftStatus; count: number }[]>(
+    `SELECT ps.status AS status, COUNT(*) AS count
+     FROM payment_shifts ps
+     JOIN employees e ON e.id = ps.employee_id
+     JOIN clients cl ON cl.id = ps.client_id
+     JOIN companies c ON c.id = ps.company_id
+     WHERE ${conditions.join(" AND ")}
+     GROUP BY ps.status`,
+    params,
+  );
+  for (const row of rows) if (row.status in counts) counts[row.status] = row.count;
+  return counts;
+}
+
 const PAYMENT_SHIFT_SELECT_COLUMNS = `
   ps.id, ps.employee_id AS employeeId, e.name AS employeeName,
   ps.client_id AS clientId, ps.company_id AS companyId,

@@ -39,7 +39,7 @@ function monthStart(today: Date, monthsBack: number): string {
 }
 
 /** Shortcuts inside the Período box. "Mês atual" comes first: it's also the page's default period. */
-function periodPresets(): PeriodPreset[] {
+export function periodPresets(): PeriodPreset[] {
   const today = todayUtc();
   const todayIso = toIso(today);
   const lastMonthEnd = toIso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0)));
@@ -52,20 +52,20 @@ function periodPresets(): PeriodPreset[] {
   ];
 }
 
-function periodText(start: string, end: string): string {
+export function periodText(start: string, end: string): string {
   if (!start && !end) return "Todo o período";
   if (start && end) return formatPeriodShort(start, end);
   return start ? `desde ${formatDateSlash(start)}` : `até ${formatDateSlash(end)}`;
 }
 
-function toggled<T>(set: Set<T>, id: T): Set<T> {
+export function toggled<T>(set: Set<T>, id: T): Set<T> {
   const next = new Set(set);
   if (next.has(id)) next.delete(id);
   else next.add(id);
   return next;
 }
 
-function FieldLabel({ icon: Icon, children, action }: { icon: typeof Building2; children: ReactNode; action?: ReactNode }) {
+export function FieldLabel({ icon: Icon, children, action }: { icon: typeof Building2; children: ReactNode; action?: ReactNode }) {
   return (
     <div className="field-label-row">
       <label>
@@ -338,7 +338,7 @@ export default function LibraryFiltersPanel({
 }
 
 /** One applied filter in the bar: a click opens the panel, the X removes it. */
-function Chip({ label, value, lead, onOpen, onRemove }: { label?: string; value: string; lead?: ReactNode; onOpen: () => void; onRemove?: () => void }) {
+export function Chip({ label, value, lead, onOpen, onRemove }: { label?: string; value: string; lead?: ReactNode; onOpen: () => void; onRemove?: () => void }) {
   return (
     <span className={onRemove ? "filter-chip" : "filter-chip filter-chip-static"}>
       <button type="button" className="filter-chip-open" onClick={onOpen} title="Abrir filtros">
@@ -355,14 +355,14 @@ function Chip({ label, value, lead, onOpen, onRemove }: { label?: string; value:
   );
 }
 
-function namesOrCount(ids: Set<string>, rows: { id: number; name: string }[]): string {
+export function namesOrCount(ids: Set<string>, rows: { id: number; name: string }[]): string {
   const names = rows.filter((r) => ids.has(String(r.id))).map((r) => r.name);
   if (names.length === 0) return String(ids.size);
   return names.length === 1 ? names[0] : `${names[0]} e mais ${names.length - 1}`;
 }
 
 /** Names for the selected colaboradores, fetched once per selection, for the chip's initials and summary. */
-function useSelectedEmployeeNames(ids: Set<string>): string[] {
+export function useSelectedEmployeeNames(ids: Set<string>): string[] {
   const [names, setNames] = useState<string[]>([]);
   const key = Array.from(ids).sort().join(",");
   useEffect(() => {
