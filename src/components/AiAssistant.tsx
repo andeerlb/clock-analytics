@@ -6,6 +6,7 @@ import { applyPaymentsFiltersSnapshot, useLibraryFilters, usePaymentsFilters, ty
 import { aiAsk, aiStatus, type AiAmbiguity, type AiAnswer, type AiScreenLink } from "../lib/api";
 import { formatDateSlash } from "../lib/format";
 import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
+import { SidePanelSlotContext } from "./SidePanel";
 import type { PaymentShiftStatus } from "../lib/types";
 
 export interface AiShiftTarget {
@@ -273,6 +274,8 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
   const [unseenAnswer, setUnseenAnswer] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [panelWidth, setPanelWidth] = useState(readSavedPanelWidth);
+  // Where a page docks its own side panel: between the page and this one.
+  const [sidePanelSlot, setSidePanelSlot] = useState<HTMLDivElement | null>(null);
   const contextRef = useRef<HTMLDivElement>(null);
   // "Nova conversa" during a run makes its late result land nowhere.
   const currentRun = useRef(0);
@@ -502,7 +505,10 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
   return (
     <AiAssistantContext.Provider value={contextValue}>
       <div className="ai-layout">
-        <div className="ai-layout-main">{children}</div>
+        <SidePanelSlotContext.Provider value={sidePanelSlot}>
+          <div className="ai-layout-main">{children}</div>
+        </SidePanelSlotContext.Provider>
+        <div ref={setSidePanelSlot} className="side-panel-slot" />
         {rendered && (
           <div className={visible ? "ai-side ai-side-visible" : "ai-side"} style={{ width: visible ? panelWidth + PANEL_COLUMN_EXTRA : 0 }}>
             <div

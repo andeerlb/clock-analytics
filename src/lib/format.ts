@@ -175,6 +175,25 @@ export function formatCpf(cpf: string): string {
   return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`;
 }
 
+/** "12345678901" -> "•••.456.789-••": enough to tell two people apart in a list without showing the whole CPF. */
+export function formatCpfPartial(cpf: string): string {
+  const digits = normalizeCpf(cpf);
+  if (digits.length !== 11) return "";
+  return `•••.${digits.slice(3, 6)}.${digits.slice(6, 9)}-••`;
+}
+
+const NAME_LOWERCASE_WORDS = new Set(["de", "da", "do", "das", "dos", "e"]);
+
+/** "ANA PAULA DE SOUZA" -> "Ana Paula de Souza": names are imported in caps, which reads as shouting in a list. Display only. */
+export function formatPersonName(name: string): string {
+  return name
+    .trim()
+    .toLocaleLowerCase("pt-BR")
+    .split(/\s+/)
+    .map((word, i) => (i > 0 && NAME_LOWERCASE_WORDS.has(word) ? word : word.charAt(0).toLocaleUpperCase("pt-BR") + word.slice(1)))
+    .join(" ");
+}
+
 /**
  * As-you-type CNPJ mask for a controlled input's `onChange` — unlike
  * `formatCnpj` (which only formats an already-complete value and falls

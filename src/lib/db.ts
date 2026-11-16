@@ -923,7 +923,15 @@ export async function listEmployeesGlobal(query: EmployeesGlobalQuery): Promise<
   const search = query.search?.trim();
   if (search) {
     params.push(search);
-    conditions.push(`${foldAccentsSql("e.name")} LIKE '%' || ${foldAccentsSql(`$${params.length}`)} || '%'`);
+    const byName = `${foldAccentsSql("e.name")} LIKE '%' || ${foldAccentsSql(`$${params.length}`)} || '%'`;
+    // A search made only of digits and CPF punctuation also matches the CPF.
+    const cpfDigits = /^[\d.\s-]+$/.test(search) ? search.replace(/\D/g, "") : "";
+    if (cpfDigits.length >= 3) {
+      params.push(cpfDigits);
+      conditions.push(`(${byName} OR REPLACE(REPLACE(e.cpf, '.', ''), '-', '') LIKE '%' || $${params.length} || '%')`);
+    } else {
+      conditions.push(byName);
+    }
   }
   const companyClause = inClause("ecc_company.company_id", query.companyIds ?? [], params);
   if (companyClause) {
@@ -1316,17 +1324,10 @@ export interface ListImportsQuery {
   pageSize?: number;
 }
 
-/**
- * The Cartão Ponto library, filtered and paginated in SQL, not in memory.
- * An empty `statuses` matches nothing (same as the in-memory
- * `matchesSelectedStatuses` did for an empty selected set) — short-circuits
- * before querying, since an always-false SQL condition would just be
- * spelling out the same thing more expensively.
- */
-export async function listImports(query: ListImportsQuery): Promise<PagedResult<StoredImport>> {
-  if (query.statuses.length === 0) return { rows: [], total: 0 };
+type ImportScopeQuery = Pick<ListImportsQuery, "employeeIds" | "companyIds" | "clientIds" | "periodStart" | "periodEnd">;
 
-  const db = await getDb();
+/** Everything but "Status no período": colaborador, empresa, cliente and the period overlap. */
+function importScopeConditions(query: ImportScopeQuery): { conditions: string[]; params: (string | number)[] } {
   const conditions: string[] = [];
   const params: (string | number)[] = [];
 
@@ -1339,6 +1340,38 @@ export async function listImports(query: ListImportsQuery): Promise<PagedResult<
 
   params.push(query.periodStart, query.periodEnd);
   conditions.push(`i.period_end >= $${params.length - 1} AND i.period_start <= $${params.length}`);
+
+  return { conditions, params };
+}
+
+/**
+ * How many imports in scope match each "Status no período" category, for
+ * the counts on the status chips. Ignores the status filter itself, so
+ * each count says what picking that chip alone would bring in.
+ */
+export async function countImportsByStatus(query: ImportScopeQuery): Promise<Record<PeriodStatusId, number>> {
+  const db = await getDb();
+  const { conditions, params } = importScopeConditions(query);
+  const ids = Object.keys(STATUS_SQL_CONDITIONS) as PeriodStatusId[];
+  const sums = ids.map((id, index) => `COALESCE(SUM(CASE WHEN ${STATUS_SQL_CONDITIONS[id]} THEN 1 ELSE 0 END), 0) AS s${index}`).join(", ");
+  const rows = await db.select<Record<string, number>[]>(`SELECT ${sums} ${IMPORT_FROM_CLAUSE} WHERE ${conditions.join(" AND ")}`, params);
+  const counts = {} as Record<PeriodStatusId, number>;
+  ids.forEach((id, index) => (counts[id] = rows[0]?.[`s${index}`] ?? 0));
+  return counts;
+}
+
+/**
+ * The Cartão Ponto library, filtered and paginated in SQL, not in memory.
+ * An empty `statuses` matches nothing (same as the in-memory
+ * `matchesSelectedStatuses` did for an empty selected set) — short-circuits
+ * before querying, since an always-false SQL condition would just be
+ * spelling out the same thing more expensively.
+ */
+export async function listImports(query: ListImportsQuery): Promise<PagedResult<StoredImport>> {
+  if (query.statuses.length === 0) return { rows: [], total: 0 };
+
+  const db = await getDb();
+  const { conditions, params } = importScopeConditions(query);
 
   if (query.statuses.length < PERIOD_STATUS_OPTIONS.length) {
     conditions.push(`(${query.statuses.map((s) => STATUS_SQL_CONDITIONS[s]).join(" OR ")})`);
