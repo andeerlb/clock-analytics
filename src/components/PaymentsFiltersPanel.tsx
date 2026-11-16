@@ -360,7 +360,10 @@ export function PaymentsFilterChips({
 
   return (
     <>
-      <Chip lead={<CalendarDays size={14} className="filter-chip-icon" />} value={periodValue} onOpen={onOpen} />
+      {/* No period is the default here (every date), so it only shows up, removable, once one is picked. */}
+      {(f.periodStart || f.periodEnd) && (
+        <Chip lead={<CalendarDays size={14} className="filter-chip-icon" />} value={periodValue} onOpen={onOpen} onRemove={() => a.setPeriod("", "")} />
+      )}
       {f.selectedEmployeeIds.size > 0 && (
         <Chip
           lead={
