@@ -1,0 +1,96 @@
+import { X } from "lucide-react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+
+/** Matches `.side-column`'s width transition. */
+const TRANSITION_MS = 260;
+/** The column's right margin around the panel itself. */
+const COLUMN_EXTRA = 12;
+
+/**
+ * The spot in the app layout, between the page and the assistant, where a
+ * page's side panel is mounted. Provided by `AiAssistantProvider`, which
+ * owns that layout.
+ */
+export const SidePanelSlotContext = createContext<HTMLElement | null>(null);
+
+/**
+ * A panel docked next to the page, same as the assistant: it takes its own
+ * column and pushes the page aside instead of covering it, and stays open
+ * until closed. Used for a page's filters, so the results stay visible
+ * while they're being changed.
+ */
+export default function SidePanel({
+  open,
+  onClose,
+  title,
+  badge,
+  actions,
+  footer,
+  children,
+  width = 340,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  /** Short text next to the title, e.g. how many filters are active. */
+  badge?: ReactNode;
+  /** Extra icon buttons, shown before "Fechar". */
+  actions?: ReactNode;
+  footer?: ReactNode;
+  children: ReactNode;
+  width?: number;
+}) {
+  const slot = useContext(SidePanelSlotContext);
+  // Stays mounted through the closing slide; `visible` is what drives it.
+  const [rendered, setRendered] = useState(open);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setRendered(true);
+      return;
+    }
+    setVisible(false);
+    const timeout = setTimeout(() => setRendered(false), TRANSITION_MS);
+    return () => clearTimeout(timeout);
+  }, [open]);
+
+  // The column has to paint once at width 0 before `visible` flips, or the
+  // browser merges both and nothing animates (same as the assistant).
+  useEffect(() => {
+    if (!open || !rendered) return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setVisible(true));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, [open, rendered]);
+
+  if (!rendered || !slot) return null;
+
+  return createPortal(
+    <div className={visible ? "side-column side-column-visible" : "side-column"} style={{ width: visible ? width + COLUMN_EXTRA : 0 }}>
+      <section className="side-panel" aria-label={title} style={{ width }}>
+        <header className="side-panel-header">
+          <span className="side-panel-title">
+            {title}
+            {badge !== undefined && <span className="side-panel-badge">{badge}</span>}
+          </span>
+          <div className="side-panel-header-actions">
+            {actions}
+            <button type="button" className="side-panel-icon-button" aria-label="Fechar" title="Fechar" onClick={onClose}>
+              <X size={16} />
+            </button>
+          </div>
+        </header>
+        <div className="side-panel-body">{children}</div>
+        {footer && <footer className="side-panel-footer">{footer}</footer>}
+      </section>
+    </div>,
+    slot,
+  );
+}

@@ -3708,3 +3708,608 @@ body.ai-resizing .ai-resize-handle::after {
   background: #2c2c31;
   color: #8e8e96;
 }
+
+/* ---------- Side panel (a page's own panel, docked like the assistant) ----------
+   Same column behavior and chrome as `.ai-side` / `.ai-panel`: it takes its
+   own column between the page and the assistant, pushing the page aside. */
+
+.side-panel-slot {
+  display: contents;
+}
+
+.side-column {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 12px 0;
+  display: flex;
+  z-index: 149;
+  transition: width 0.26s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@media (max-width: 1000px) {
+  .side-column {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    height: auto;
+  }
+}
+
+.side-panel {
+  flex-shrink: 0;
+  margin-right: 12px;
+  max-width: calc(100vw - 24px);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background: #18181b;
+  border: 1px solid #2e2e33;
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.side-column-visible .side-panel {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.side-panel-header {
+  height: 48px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 0 8px 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #26262a;
+}
+
+.side-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.side-panel-badge {
+  padding: 1px 7px;
+  border: 1px solid #3f3f46;
+  border-radius: 10px;
+  background: #202024;
+  color: #a1a1aa;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.side-panel-header-actions {
+  display: flex;
+  gap: 2px;
+}
+
+button.side-panel-icon-button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: #a1a1aa;
+  font-weight: 400;
+}
+
+button.side-panel-icon-button:hover:not(:disabled) {
+  background: #26262a;
+  color: #ededef;
+}
+
+button.side-panel-icon-button:disabled {
+  background: transparent;
+  opacity: 0.35;
+}
+
+/* Visible, not scrolling: the dropdowns and the date picker inside open as
+   popovers wider than the panel, and a scroll container would clip them. */
+.side-panel-body {
+  flex: 1;
+  min-height: 0;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+@media (max-height: 620px) {
+  .side-panel-body {
+    overflow-y: auto;
+  }
+}
+
+.side-panel-footer {
+  flex-shrink: 0;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid #26262a;
+}
+
+.side-panel .field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.side-panel .field-label-row label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.side-panel button.field-reset {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.side-panel button.field-reset:hover {
+  background: none;
+  color: var(--text);
+}
+
+.period-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+button.period-preset {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid #3f3f46;
+  border-radius: 13px;
+  background: transparent;
+  color: #a1a1aa;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+button.period-preset:hover {
+  background: transparent;
+  border-color: #52525b;
+  color: #ededef;
+}
+
+button.period-preset-active,
+button.period-preset-active:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.status-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.status-check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.status-check:hover {
+  background: #26262a;
+}
+
+.status-check input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.side-panel-footer .side-panel-summary {
+  color: #a1a1aa;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.side-panel-footer button.ghost {
+  margin-left: auto;
+}
+
+/* Applied filters, shown next to "Filtros" while the panel is closed. */
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 4px 0 9px;
+  border: 1px solid #3f3f46;
+  border-radius: 13px;
+  background: #202024;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.filter-chip-static {
+  padding-right: 9px;
+}
+
+.filter-chip-label {
+  color: #a1a1aa;
+}
+
+button.filter-chip-remove {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #a1a1aa;
+}
+
+button.filter-chip-remove:hover {
+  background: #2f2f37;
+  color: #ededef;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .side-column,
+  .side-panel {
+    transition: none;
+  }
+}
+
+/* ---------- Colaborador picker (EmployeeMultiSelectDropdown) ---------- */
+
+.emp-picker {
+  position: relative;
+  display: inline-block;
+  align-self: flex-start;
+}
+
+.emp-picker-full {
+  display: block;
+  width: 100%;
+}
+
+button.emp-picker-trigger {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 8px 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  background: var(--surface-variant);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+button.emp-picker-trigger:hover,
+button.emp-picker-trigger[aria-expanded="true"] {
+  background: var(--surface-variant);
+  border-color: #52525b;
+}
+
+.emp-picker-muted {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.emp-picker-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.emp-picker-placeholder {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.emp-picker-avatar {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.emp-picker-stack {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.emp-picker-stack .emp-picker-avatar {
+  width: 22px;
+  height: 22px;
+  margin-left: -7px;
+  border: 2px solid var(--surface-variant);
+  font-size: 9px;
+}
+
+.emp-picker-stack .emp-picker-avatar:first-child {
+  margin-left: 0;
+}
+
+/* Grows out of the field itself: 6px wider on each side and only 2px up
+   (clear of the label above), so its search row lands where the field's
+   summary was. */
+.emp-picker-popover {
+  position: absolute;
+  top: -2px;
+  z-index: 20;
+  width: max(calc(100% + 12px), 332px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #1c1c20;
+  border: 1px solid #3a3a42;
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(0, 0, 0, 0.3);
+  animation: emp-picker-grow 0.18s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.emp-picker-popover > * {
+  animation: emp-picker-fade 0.2s ease;
+}
+
+@keyframes emp-picker-grow {
+  from {
+    clip-path: inset(2px 6px calc(100% - 38px) 6px round 7px);
+  }
+  to {
+    clip-path: inset(0 0 0 0 round 12px);
+  }
+}
+
+@keyframes emp-picker-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.emp-picker-popover-left {
+  left: -6px;
+}
+
+.emp-picker-popover-right {
+  right: -6px;
+}
+
+/* The box covers the field while open; hiding it keeps its stacked
+   avatars from showing through the edges during the grow animation. */
+.emp-picker-open button.emp-picker-trigger {
+  visibility: hidden;
+}
+
+.emp-picker-search {
+  height: 40px;
+  flex-shrink: 0;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid #26262a;
+}
+
+.emp-picker-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  outline: none;
+  box-shadow: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.87rem;
+  font-weight: 500;
+}
+
+.emp-picker-search + .emp-picker-list {
+  border-top: 1px solid #26262a;
+}
+
+.emp-picker-search kbd {
+  padding: 0 5px;
+  border: 1px solid #34343b;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 10.5px;
+  line-height: 16px;
+}
+
+/* `max-height` is set inline: down to the bottom of the window (see `listMaxHeight`). */
+.emp-picker-list {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a42 transparent;
+}
+
+.emp-picker-section {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 8px 4px;
+  color: #71717a;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+button.emp-picker-more {
+  width: 100%;
+  padding: 6px 8px;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+  text-align: left;
+}
+
+button.emp-picker-more:hover {
+  background: #26262b;
+  color: var(--text);
+}
+
+.emp-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.emp-picker-row:hover,
+.emp-picker-row-active {
+  background: #26262b;
+}
+
+.emp-picker-who {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.emp-picker-name,
+.emp-picker-meta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.emp-picker-name {
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.emp-picker-meta {
+  color: #71717a;
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.emp-picker-tick {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid #4a4a53;
+  border-radius: 50%;
+  color: transparent;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.emp-picker-row:hover .emp-picker-tick {
+  border-color: #6b6b75;
+}
+
+.emp-picker-row[aria-selected="true"] .emp-picker-tick {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.emp-picker-empty {
+  margin: 0;
+  padding: 16px 8px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.emp-picker-footer {
+  flex-shrink: 0;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid #26262a;
+}
+
+button.emp-picker-clear {
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+button.emp-picker-clear:hover:not(:disabled) {
+  background: none;
+  color: var(--text);
+}
+
+button.emp-picker-clear:disabled {
+  background: none;
+  opacity: 0.4;
+}
+
+button.emp-picker-done {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .emp-picker-tick {
+    transition: none;
+  }
+
+  .emp-picker-popover,
+  .emp-picker-popover > * {
+    animation: none;
+  }
+}

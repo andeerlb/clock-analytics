@@ -3,7 +3,7 @@ import { Archive, CheckCircle2, Filter, FolderOpen } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import Avatar from "../components/Avatar";
-import LibraryFiltersDrawer, { type LibraryFiltersValue } from "../components/LibraryFiltersDrawer";
+import LibraryFiltersPanel, { LibraryFilterChips, useLibraryActiveFilterCount } from "../components/LibraryFiltersPanel";
 import Pagination from "../components/Pagination";
 import PdfViewerModal from "../components/PdfViewerModal";
 import { LIBRARY_PAGE_SIZE_OPTIONS, useLibraryFilters, type ReportMode } from "../contexts/FiltersContext";
@@ -17,7 +17,6 @@ import {
   formatTimestampForFileName,
   sanitizeFileName,
 } from "../lib/format";
-import { PERIOD_STATUS_OPTIONS } from "../lib/periodStatus";
 import type { ReportZipEntry, StoredImport } from "../lib/types";
 
 /**
@@ -69,19 +68,24 @@ function buildZipEntries(imports: StoredImport[], mode: ReportMode): ReportZipEn
   return entries;
 }
 
+const FILTERS_OPEN_KEY = "library-filters-open";
+
+function readFiltersOpen(): boolean {
+  try {
+    return localStorage.getItem(FILTERS_OPEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export default function LibraryPage() {
   const {
     selectedEmployeeIds,
-    setSelectedEmployeeIds,
     selectedCompanyIds,
-    setSelectedCompanyIds,
     selectedClientIds,
-    setSelectedClientIds,
     periodStart,
     periodEnd,
-    setPeriod,
     selectedStatuses,
-    setSelectedStatuses,
     mode,
     setMode,
     page,
@@ -100,7 +104,17 @@ export default function LibraryPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generatedZipPath, setGeneratedZipPath] = useState<string | null>(null);
-  const [filtersDrawerOpen, setFiltersDrawerOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(readFiltersOpen);
+  const activeFilterCount = useLibraryActiveFilterCount();
+
+  function toggleFilters(open: boolean) {
+    setFiltersOpen(open);
+    try {
+      localStorage.setItem(FILTERS_OPEN_KEY, open ? "1" : "0");
+    } catch {
+      /* only a convenience */
+    }
+  }
 
   useEffect(() => {
     Promise.all([listCompanies(), listClients()]).then(([companyRows, clientRows]) => {
@@ -135,25 +149,6 @@ export default function LibraryPage() {
       cancelled = true;
     };
   }, [selectedEmployeeIds, selectedCompanyIds, selectedClientIds, periodStart, periodEnd, selectedStatuses, page, pageSize]);
-
-  /** Applied from the "Filtros" Drawer — every field commits together, same as Pagamentos' own `handleApplyFilters`. */
-  function handleApplyFilters(next: LibraryFiltersValue) {
-    setSelectedEmployeeIds(next.employeeIds);
-    setSelectedCompanyIds(next.companyIds);
-    setSelectedClientIds(next.clientIds);
-    setPeriod(next.periodStart, next.periodEnd);
-    setSelectedStatuses(next.statuses);
-    setPage(0);
-    setFiltersDrawerOpen(false);
-  }
-
-  /** How many filter categories are currently applied — shown as a count badge on the "Filtros" button, same as Pagamentos. Período is excluded since it always defaults to the current month rather than "empty". */
-  const activeFilterCount = [
-    selectedEmployeeIds.size > 0,
-    selectedCompanyIds.size > 0,
-    selectedClientIds.size > 0,
-    selectedStatuses.size < PERIOD_STATUS_OPTIONS.length,
-  ].filter(Boolean).length;
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
@@ -212,10 +207,16 @@ export default function LibraryPage() {
 
       <div className="card">
         <div className="field-row" style={{ marginBottom: 0, alignItems: "center" }}>
-          <button type="button" className="secondary" onClick={() => setFiltersDrawerOpen(true)}>
+          <button
+            type="button"
+            className={filtersOpen ? undefined : "secondary"}
+            aria-expanded={filtersOpen}
+            onClick={() => toggleFilters(!filtersOpen)}
+          >
             <Filter size={15} style={{ marginRight: "0.4rem" }} />
             {activeFilterCount > 0 ? `Filtros (${activeFilterCount})` : "Filtros"}
           </button>
+          {!filtersOpen && <LibraryFilterChips companies={companies} clients={clients} />}
           <div style={{ marginLeft: "auto", display: "flex", gap: "0.6rem", alignItems: "center" }}>
             <select
               value={mode}
@@ -332,13 +333,12 @@ export default function LibraryPage() {
         onClose={() => setViewerImport(null)}
       />
 
-      <LibraryFiltersDrawer
-        open={filtersDrawerOpen}
-        onClose={() => setFiltersDrawerOpen(false)}
-        value={{ employeeIds: selectedEmployeeIds, companyIds: selectedCompanyIds, clientIds: selectedClientIds, periodStart, periodEnd, statuses: selectedStatuses }}
-        onApply={handleApplyFilters}
+      <LibraryFiltersPanel
+        open={filtersOpen}
+        onClose={() => toggleFilters(false)}
         companies={companies}
         clients={clients}
+        total={loading ? null : total}
       />
     </div>
   );

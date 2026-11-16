@@ -923,7 +923,15 @@ export async function listEmployeesGlobal(query: EmployeesGlobalQuery): Promise<
   const search = query.search?.trim();
   if (search) {
     params.push(search);
-    conditions.push(`${foldAccentsSql("e.name")} LIKE '%' || ${foldAccentsSql(`$${params.length}`)} || '%'`);
+    const byName = `${foldAccentsSql("e.name")} LIKE '%' || ${foldAccentsSql(`$${params.length}`)} || '%'`;
+    // A search made only of digits and CPF punctuation also matches the CPF.
+    const cpfDigits = /^[\d.\s-]+$/.test(search) ? search.replace(/\D/g, "") : "";
+    if (cpfDigits.length >= 3) {
+      params.push(cpfDigits);
+      conditions.push(`(${byName} OR REPLACE(REPLACE(e.cpf, '.', ''), '-', '') LIKE '%' || $${params.length} || '%')`);
+    } else {
+      conditions.push(byName);
+    }
   }
   const companyClause = inClause("ecc_company.company_id", query.companyIds ?? [], params);
   if (companyClause) {
