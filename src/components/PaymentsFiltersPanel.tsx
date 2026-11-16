@@ -1,10 +1,10 @@
-import { Briefcase, Building2, Calendar, CalendarDays, Clock3, MapPin, Moon, RotateCcw, Search, Sun, Users } from "lucide-react";
+import { Briefcase, Building2, Calendar, CalendarDays, Clock3, ListFilter, MapPin, Moon, RotateCcw, Search, Sun, Users } from "lucide-react";
 import { useMemo } from "react";
 import { usePaymentsFilters } from "../contexts/FiltersContext";
 import { colorForName, initials } from "../lib/avatar";
 import type { ClientRow, CompanyRow, RoleRow } from "../lib/db";
 import { formatCnpj } from "../lib/format";
-import { SCHEDULE_TIME_RULE_LABELS, type ShiftPeriod } from "../lib/types";
+import { SCHEDULE_TIME_RULE_LABELS, type PaymentShiftStatus, type ShiftPeriod } from "../lib/types";
 import EmployeeMultiSelectDropdown from "./EmployeeMultiSelectDropdown";
 import { Chip, FieldLabel, namesOrCount, periodPresets, periodText, toggled, useSelectedEmployeeNames } from "./LibraryFiltersPanel";
 import OptionPicker, { type PickerOption } from "./OptionPicker";
@@ -19,12 +19,20 @@ function paymentsPeriodPresets(): PeriodPreset[] {
   return [{ label: "Todo o período", start: "", end: "" }, ...periodPresets()];
 }
 
+const STATUS_CHIPS: { id: PaymentShiftStatus; label: string; color: string }[] = [
+  { id: "pendente", label: "Pendente", color: "var(--warning)" },
+  { id: "erro", label: "Erro", color: "var(--danger)" },
+  { id: "pago", label: "Pago", color: "var(--success)" },
+];
+const ALL_STATUSES = STATUS_CHIPS.map((s) => s.id);
+
 /**
- * The Pagamentos filters, applied as soon as they change. Status isn't
- * here: it's the tabs above the table. `onChange` runs after every change
+ * The Pagamentos filters, applied as soon as they change. On Pagamentos
+ * status isn't here (it's the tabs above the table); Conferência, which
+ * has no tabs, passes `includeStatus`. `onChange` runs after every change
  * (the page uses it to drop a filter that came from Análises).
  */
-function usePaymentsFilterActions(onChange?: () => void) {
+function usePaymentsFilterActions(onChange?: () => void, includeStatus = false) {
   const f = usePaymentsFilters();
 
   function update(apply: () => void) {
@@ -34,6 +42,7 @@ function usePaymentsFilterActions(onChange?: () => void) {
   }
 
   const shiftPeriodFiltered = f.selectedShiftPeriods.size < ALL_SHIFT_PERIODS.length;
+  const statusFiltered = includeStatus && f.selectedStatuses.size < ALL_STATUSES.length;
   const activeCount = [
     f.selectedEmployeeIds.size > 0,
     f.selectedCompanyIds.size > 0,
@@ -42,12 +51,15 @@ function usePaymentsFilterActions(onChange?: () => void) {
     f.selectedLocals.size > 0,
     shiftPeriodFiltered,
     f.scheduleTimeFilter !== null,
+    statusFiltered,
   ].filter(Boolean).length;
 
   return {
     f,
     activeCount,
     shiftPeriodFiltered,
+    statusFiltered,
+    setStatuses: (ids: Set<PaymentShiftStatus>) => update(() => f.setSelectedStatuses(ids)),
     setEmployees: (ids: Set<string>) => update(() => f.setSelectedEmployeeIds(ids)),
     setCompanies: (ids: Set<string>) =>
       update(() => {
@@ -71,12 +83,13 @@ function usePaymentsFilterActions(onChange?: () => void) {
         f.setPeriod("", "");
         f.setSelectedShiftPeriods(new Set(ALL_SHIFT_PERIODS));
         f.setScheduleTimeFilter(null);
+        if (includeStatus) f.setSelectedStatuses(new Set(ALL_STATUSES));
       }),
   };
 }
 
-export function usePaymentsActiveFilterCount(): number {
-  return usePaymentsFilterActions().activeCount;
+export function usePaymentsActiveFilterCount(includeStatus = false): number {
+  return usePaymentsFilterActions(undefined, includeStatus).activeCount;
 }
 
 /** The "Filtros" panel of Pagamentos, docked like the one on Cartão Ponto. */
@@ -88,6 +101,7 @@ export default function PaymentsFiltersPanel({
   clients,
   roles,
   locals,
+  includeStatus = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -96,8 +110,10 @@ export default function PaymentsFiltersPanel({
   clients: ClientRow[];
   roles: RoleRow[];
   locals: string[];
+  /** Adds a Status field — for Conferência, which has no status tabs. */
+  includeStatus?: boolean;
 }) {
-  const a = usePaymentsFilterActions(onChange);
+  const a = usePaymentsFilterActions(onChange, includeStatus);
   const { f } = a;
   // Recomputed on open, so "Mês atual" follows the date if the app stays open overnight.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -142,6 +158,13 @@ export default function PaymentsFiltersPanel({
   );
 
   const localOptions = useMemo<PickerOption[]>(() => [...locals].sort((x, y) => x.localeCompare(y)).map((l) => ({ id: l, label: l })), [locals]);
+
+  // Nothing picked means every status, same as the Cartão Ponto status chips.
+  const pickedStatuses = a.statusFiltered ? f.selectedStatuses : new Set<PaymentShiftStatus>();
+  function togglePickedStatus(id: PaymentShiftStatus) {
+    const next = toggled(pickedStatuses, id);
+    a.setStatuses(next.size === 0 ? new Set(ALL_STATUSES) : next);
+  }
 
   const pickedShiftPeriods = a.shiftPeriodFiltered ? f.selectedShiftPeriods : new Set<ShiftPeriod>();
   function toggleShiftPeriod(id: ShiftPeriod) {
@@ -286,25 +309,43 @@ export default function PaymentsFiltersPanel({
         </FieldLabel>
         <ScheduleTimeFilterDropdown value={f.scheduleTimeFilter} onChange={a.setScheduleTime} align="right" fullWidth showIcon={false} />
       </div>
+
+      {includeStatus && (
+        <div className="field" style={{ position: "relative", zIndex: 1 }}>
+          <FieldLabel icon={ListFilter} action={clearAction(a.statusFiltered, () => a.setStatuses(new Set(ALL_STATUSES)))}>
+            Status
+          </FieldLabel>
+          <div className="status-chips">
+            {STATUS_CHIPS.map((s) => (
+              <button key={s.id} type="button" className="status-chip" aria-pressed={pickedStatuses.has(s.id)} onClick={() => togglePickedStatus(s.id)}>
+                <i style={{ background: s.color }} />
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </SidePanel>
   );
 }
 
-/** The applied Pagamentos filters as chips in the bar; status is left to the tabs. */
+/** The applied Pagamentos filters as chips in the bar; status only with `includeStatus` (on Pagamentos it's the tabs). */
 export function PaymentsFilterChips({
   companies,
   clients,
   roles,
   onOpen,
   onChange,
+  includeStatus = false,
 }: {
   companies: CompanyRow[];
   clients: ClientRow[];
   roles: RoleRow[];
   onOpen: () => void;
   onChange?: () => void;
+  includeStatus?: boolean;
 }) {
-  const a = usePaymentsFilterActions(onChange);
+  const a = usePaymentsFilterActions(onChange, includeStatus);
   const { f } = a;
   const employeeNames = useSelectedEmployeeNames(f.selectedEmployeeIds);
   const preset = paymentsPeriodPresets().find((p) => p.start === f.periodStart && p.end === f.periodEnd);
@@ -358,6 +399,16 @@ export function PaymentsFilterChips({
           value={`${SCHEDULE_TIME_RULE_LABELS[f.scheduleTimeFilter.rule].toLowerCase()} ${f.scheduleTimeFilter.time}`}
           onOpen={onOpen}
           onRemove={() => a.setScheduleTime(null)}
+        />
+      )}
+      {a.statusFiltered && (
+        <Chip
+          label="Status"
+          value={STATUS_CHIPS.filter((s) => f.selectedStatuses.has(s.id))
+            .map((s) => s.label)
+            .join(", ")}
+          onOpen={onOpen}
+          onRemove={() => a.setStatuses(new Set(ALL_STATUSES))}
         />
       )}
     </>
