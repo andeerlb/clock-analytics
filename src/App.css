@@ -4083,13 +4083,13 @@ button.side-panel-icon-button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
-/* Shortcuts inside the Período box: one row, scrolling sideways if needed. */
+/* Shortcuts inside the Período box: they wrap rather than scroll sideways,
+   which a mouse wheel can't do and would hide the selected one. */
 .period-presets {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 10px 12px 2px;
-  overflow-x: auto;
-  scrollbar-width: none;
 }
 
 button.period-preset {
