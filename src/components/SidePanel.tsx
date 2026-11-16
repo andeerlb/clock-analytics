@@ -4,8 +4,8 @@ import { createPortal } from "react-dom";
 
 /** Matches `.side-column`'s width transition. */
 const TRANSITION_MS = 260;
-/** The column's right margin around the panel itself. */
-const COLUMN_EXTRA = 12;
+/** The gap on each side of the panel inside its column (12px left, 12px right), same as the assistant’s. */
+const COLUMN_EXTRA = 24;
 
 /**
  * The spot in the app layout, between the page and the assistant, where a

@@ -3723,7 +3723,7 @@ body.ai-resizing .ai-resize-handle::after {
   height: 100vh;
   flex-shrink: 0;
   box-sizing: border-box;
-  padding: 12px 0;
+  padding: 12px 0 12px 12px;
   display: flex;
   z-index: 149;
   transition: width 0.26s cubic-bezier(0.32, 0.72, 0, 1);
