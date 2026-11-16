@@ -4,12 +4,12 @@ import { usePaymentsFilters } from "../contexts/FiltersContext";
 import { colorForName, initials } from "../lib/avatar";
 import type { ClientRow, CompanyRow, RoleRow } from "../lib/db";
 import { formatCnpj } from "../lib/format";
-import { SCHEDULE_TIME_RULE_LABELS, type PaymentShiftStatus, type ShiftPeriod } from "../lib/types";
+import type { PaymentShiftStatus, ShiftPeriod } from "../lib/types";
 import EmployeeMultiSelectDropdown from "./EmployeeMultiSelectDropdown";
 import { Chip, FieldLabel, namesOrCount, periodPresets, periodText, toggled, useSelectedEmployeeNames } from "./LibraryFiltersPanel";
 import OptionPicker, { type PickerOption } from "./OptionPicker";
 import PeriodPicker, { type PeriodPreset } from "./PeriodPicker";
-import ScheduleTimeFilterDropdown from "./ScheduleTimeFilterDropdown";
+import ScheduleTimePicker, { scheduleTimeSentence } from "./ScheduleTimePicker";
 import SidePanel from "./SidePanel";
 
 
@@ -306,7 +306,7 @@ export default function PaymentsFiltersPanel({
         <FieldLabel icon={Clock3} action={clearAction(f.scheduleTimeFilter !== null, () => a.setScheduleTime(null))}>
           Horário
         </FieldLabel>
-        <ScheduleTimeFilterDropdown value={f.scheduleTimeFilter} onChange={a.setScheduleTime} align="right" fullWidth showIcon={false} pickerLook />
+        <ScheduleTimePicker value={f.scheduleTimeFilter} onChange={a.setScheduleTime} />
       </div>
 
       {includeStatus && (
@@ -401,7 +401,7 @@ export function PaymentsFilterChips({
       {f.scheduleTimeFilter && (
         <Chip
           label="Horário"
-          value={`${SCHEDULE_TIME_RULE_LABELS[f.scheduleTimeFilter.rule].toLowerCase()} ${f.scheduleTimeFilter.time}`}
+          value={scheduleTimeSentence(f.scheduleTimeFilter)}
           onOpen={onOpen}
           onRemove={() => a.setScheduleTime(null)}
         />

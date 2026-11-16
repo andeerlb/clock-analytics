@@ -74,7 +74,10 @@ export default function SidePanel({
 
   return createPortal(
     <div className={visible ? "side-column side-column-visible" : "side-column"} style={{ width: visible ? width + COLUMN_EXTRA : 0 }}>
-      <section className="side-panel" aria-label={title} style={{ width }}>
+      {/* Keys pressed in the panel stay in it: a page's own shortcuts
+          (Conferência confirms the selected payment on Enter) must not
+          fire from a filter button. */}
+      <section className="side-panel" aria-label={title} style={{ width }} onKeyDown={(e) => e.stopPropagation()}>
         <header className="side-panel-header">
           <span className="side-panel-title">
             {title}

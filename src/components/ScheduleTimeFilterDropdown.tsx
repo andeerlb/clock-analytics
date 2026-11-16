@@ -1,4 +1,4 @@
-import { ChevronsUpDown, Clock3 } from "lucide-react";
+import { Clock3 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import TimeField from "./TimeField";
 import { SCHEDULE_TIME_RULE_LABELS, type ScheduleTimeFilter, type ScheduleTimeRule } from "../lib/types";
@@ -18,12 +18,9 @@ export default function ScheduleTimeFilterDropdown({
   align = "right",
   fullWidth = false,
   showIcon = true,
-  pickerLook = false,
 }: {
   value: ScheduleTimeFilter | null;
   onChange: (v: ScheduleTimeFilter | null) => void;
-  /** Trigger styled like the other pickers of the Filtros panel (`.emp-picker-trigger`). */
-  pickerLook?: boolean;
   /** Same idea as `MultiSelectDropdown`'s `align` — "left" keeps the popover from overflowing past a container's left edge when the trigger sits near that edge (e.g. inside a narrow Drawer). */
   align?: "left" | "right";
   /** Same idea as `MultiSelectDropdown`'s `fullWidth` — stretches the trigger to fill its container instead of sizing to its label text. */
@@ -61,24 +58,15 @@ export default function ScheduleTimeFilterDropdown({
       }
       ref={rootRef}
     >
-      {pickerLook ? (
-        <button type="button" className="emp-picker-trigger" aria-expanded={open} onClick={openPopover}>
-          <span className={value ? "emp-picker-summary" : "emp-picker-summary emp-picker-placeholder"}>
-            {value ? `${SCHEDULE_TIME_RULE_LABELS[value.rule]} ${value.time}` : "Qualquer horário"}
-          </span>
-          <ChevronsUpDown size={14} className="emp-picker-muted" />
-        </button>
-      ) : (
-        <button
-          type="button"
-          className="secondary"
-          onClick={openPopover}
-          style={fullWidth ? { width: "100%", display: "flex", alignItems: "center", textAlign: "left" } : undefined}
-        >
-          {showIcon && <Clock3 size={15} style={{ marginRight: "0.4rem" }} />}
-          {label}
-        </button>
-      )}
+      <button
+        type="button"
+        className="secondary"
+        onClick={openPopover}
+        style={fullWidth ? { width: "100%", display: "flex", alignItems: "center", textAlign: "left" } : undefined}
+      >
+        {showIcon && <Clock3 size={15} style={{ marginRight: "0.4rem" }} />}
+        {label}
+      </button>
       {open && (
         <div
           style={{
