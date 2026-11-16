@@ -5,13 +5,12 @@ import { colorForName, initials } from "../lib/avatar";
 import { addDaysIso, toIso, todayUtc } from "../lib/calendar";
 import { countImportsByStatus, getEmployeesByIds, type ClientRow, type CompanyRow } from "../lib/db";
 import { formatCnpj, formatDateSlash, formatPersonName } from "../lib/format";
-import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
+import type { PeriodStatusId } from "../lib/periodStatus";
 import PeriodPicker, { formatPeriodShort, type PeriodPreset } from "./PeriodPicker";
 import EmployeeMultiSelectDropdown from "./EmployeeMultiSelectDropdown";
 import OptionPicker, { type PickerOption } from "./OptionPicker";
 import SidePanel from "./SidePanel";
 
-const ALL_STATUSES = PERIOD_STATUS_OPTIONS.map((o) => o.id);
 
 /** "Status no período" as chips: what went wrong, then what kind of hours exist. Short labels; the field title already says "no período". */
 const STATUS_GROUPS: { label: string; chips: { id: PeriodStatusId; label: string; color: string }[] }[] = [
@@ -90,7 +89,8 @@ function useLibraryFilterActions() {
     f.setPage(0);
   }
 
-  const statusFiltered = f.selectedStatuses.size < ALL_STATUSES.length;
+  // Empty = no status filter; anything picked (all of them included) is a filter.
+  const statusFiltered = f.selectedStatuses.size > 0;
   /** Período isn't counted: it always has a value (the current month by default). */
   const activeCount = [f.selectedEmployeeIds.size > 0, f.selectedCompanyIds.size > 0, f.selectedClientIds.size > 0, statusFiltered].filter(Boolean).length;
 
@@ -115,7 +115,7 @@ function useLibraryFilterActions() {
         // Back to the page's default period: an empty period would match no import at all.
         const [currentMonth] = periodPresets();
         f.setPeriod(currentMonth.start, currentMonth.end);
-        f.setSelectedStatuses(new Set(ALL_STATUSES));
+        f.setSelectedStatuses(new Set());
       }),
   };
 }
@@ -176,10 +176,9 @@ export default function LibraryFiltersPanel({
 
   // The chips work the other way round from the stored filter: nothing
   // picked means every status (no filter), and picking one narrows to it.
-  const pickedStatuses = f.selectedStatuses.size === ALL_STATUSES.length ? new Set<PeriodStatusId>() : f.selectedStatuses;
+  const pickedStatuses = f.selectedStatuses;
   function togglePickedStatus(id: PeriodStatusId) {
-    const next = toggled(pickedStatuses, id);
-    setStatuses(next.size === 0 ? new Set(ALL_STATUSES) : next);
+    setStatuses(toggled(f.selectedStatuses, id));
   }
 
   const [statusCounts, setStatusCounts] = useState<Record<PeriodStatusId, number> | null>(null);
@@ -304,7 +303,7 @@ export default function LibraryFiltersPanel({
           icon={ListFilter}
           action={
             pickedStatuses.size > 0 && (
-              <button type="button" className="field-reset" onClick={() => setStatuses(new Set(ALL_STATUSES))}>
+              <button type="button" className="field-reset" onClick={() => setStatuses(new Set())}>
                 Limpar
               </button>
             )
@@ -439,7 +438,7 @@ export function LibraryFilterChips({ companies, clients, onOpen }: { companies: 
           label="Status"
           value={statusLabels.length <= 2 ? statusLabels.join(", ") : `${statusLabels.length} ocorrências`}
           onOpen={onOpen}
-          onRemove={() => setStatuses(new Set(ALL_STATUSES))}
+          onRemove={() => setStatuses(new Set())}
         />
       )}
     </>

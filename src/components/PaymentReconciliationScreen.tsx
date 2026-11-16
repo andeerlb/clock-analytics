@@ -1,7 +1,8 @@
 import { listen } from "@tauri-apps/api/event";
 import { ListFilter, Moon, Sun } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { usePaymentsFilters } from "../contexts/FiltersContext";
+import { PAYMENT_SHIFT_STATUSES, SHIFT_PERIODS, usePaymentsFilters } from "../contexts/FiltersContext";
+import { orAll } from "../lib/filterSets";
 import {
   countPaymentShiftsPendingAudit,
   deletePaymentAudit,
@@ -158,8 +159,8 @@ export default function PaymentReconciliationScreen({
       locals: Array.from(selectedLocals),
       periodStart: periodStart || undefined,
       periodEnd: periodEnd || undefined,
-      statuses: Array.from(selectedStatuses),
-      shiftPeriods: Array.from(selectedShiftPeriods),
+      statuses: orAll(selectedStatuses, PAYMENT_SHIFT_STATUSES),
+      shiftPeriods: orAll(selectedShiftPeriods, SHIFT_PERIODS),
       scheduleTimeFilter,
     };
   }

@@ -4161,10 +4161,13 @@ button.status-chip:hover {
   color: #ededef;
 }
 
-button.status-chip[aria-pressed="true"] {
-  background: #2c2c33;
-  border-color: #55555f;
-  color: #ededef;
+/* Picked: filled like the other "on" controls of the panel, so it reads at a glance. */
+button.status-chip[aria-pressed="true"],
+button.status-chip[aria-pressed="true"]:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
 }
 
 .status-chip i {
@@ -4175,8 +4178,15 @@ button.status-chip[aria-pressed="true"] {
   opacity: 0.55;
 }
 
+/* The colored dot keeps its color on the light fill, with a dark ring to stand out. */
 .status-chip[aria-pressed="true"] i {
   opacity: 1;
+  box-shadow: 0 0 0 1.5px var(--on-accent);
+}
+
+.status-chip[aria-pressed="true"] .status-chip-count {
+  color: var(--on-accent);
+  opacity: 0.6;
 }
 
 .status-chip-count {

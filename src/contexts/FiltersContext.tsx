@@ -1,7 +1,7 @@
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { createContext, useContext, useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { toIso, todayUtc } from "../lib/calendar";
-import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
+import type { PeriodStatusId } from "../lib/periodStatus";
 import type { PaymentShiftStatus, ScheduleTimeFilter, ShiftPeriod } from "../lib/types";
 
 /** Default period on load: the current calendar month so far — never empty. */
@@ -12,8 +12,9 @@ function defaultPeriodStart(): string {
 
 export const LIBRARY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 export const PAYMENTS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
-const PAYMENT_SHIFT_STATUSES: PaymentShiftStatus[] = ["pendente", "erro", "pago"];
-const SHIFT_PERIODS: ShiftPeriod[] = ["diurno", "noturno"];
+/** Every option of the payments status and turno filters — what `orAll` expands an empty filter to. */
+export const PAYMENT_SHIFT_STATUSES: PaymentShiftStatus[] = ["pendente", "erro", "pago"];
+export const SHIFT_PERIODS: ShiftPeriod[] = ["diurno", "noturno"];
 
 /**
  * One-time filter handshake for "Conferência" opening its detached window
@@ -149,9 +150,8 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
   const [clientIds, setClientIds] = useState<Set<string>>(new Set());
   const [periodStart, setPeriodStart] = useState(defaultPeriodStart);
   const [periodEnd, setPeriodEnd] = useState(() => toIso(todayUtc()));
-  const [selectedStatuses, setSelectedStatuses] = useState<Set<PeriodStatusId>>(
-    () => new Set(PERIOD_STATUS_OPTIONS.map((o) => o.id)),
-  );
+  // Empty = no status filter; otherwise exactly what was picked (see `orAll`).
+  const [selectedStatuses, setSelectedStatuses] = useState<Set<PeriodStatusId>>(() => new Set());
   const [mode, setMode] = useState<ReportMode>("per-employee");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(LIBRARY_PAGE_SIZE_OPTIONS[0]);
@@ -186,12 +186,9 @@ export function FiltersProvider({ children }: { children: ReactNode }) {
   const [paymentsLocals, setPaymentsLocals] = useState<Set<string>>(new Set());
   const [paymentsPeriodStart, setPaymentsPeriodStart] = useState("");
   const [paymentsPeriodEnd, setPaymentsPeriodEnd] = useState("");
-  const [paymentsSelectedStatuses, setPaymentsSelectedStatuses] = useState<Set<PaymentShiftStatus>>(
-    () => new Set(PAYMENT_SHIFT_STATUSES),
-  );
-  const [paymentsSelectedShiftPeriods, setPaymentsSelectedShiftPeriods] = useState<Set<ShiftPeriod>>(
-    () => new Set(SHIFT_PERIODS),
-  );
+  // Empty = no filter; otherwise exactly what was picked (see `orAll`).
+  const [paymentsSelectedStatuses, setPaymentsSelectedStatuses] = useState<Set<PaymentShiftStatus>>(() => new Set());
+  const [paymentsSelectedShiftPeriods, setPaymentsSelectedShiftPeriods] = useState<Set<ShiftPeriod>>(() => new Set());
   const [paymentsScheduleTimeFilter, setPaymentsScheduleTimeFilter] = useState<ScheduleTimeFilter | null>(null);
   const [paymentsGrouped, setPaymentsGrouped] = useState(false);
   const [paymentsPage, setPaymentsPage] = useState(0);

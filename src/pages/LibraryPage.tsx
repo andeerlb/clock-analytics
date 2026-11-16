@@ -19,6 +19,10 @@ import {
   sanitizeFileName,
 } from "../lib/format";
 import type { ReportZipEntry, StoredImport } from "../lib/types";
+import { orAll } from "../lib/filterSets";
+import { PERIOD_STATUS_OPTIONS } from "../lib/periodStatus";
+
+const ALL_PERIOD_STATUS_IDS = PERIOD_STATUS_OPTIONS.map((o) => o.id);
 
 /**
  * Groups the matched imports into Empresa/Cliente folders and turns them
@@ -134,7 +138,7 @@ export default function LibraryPage() {
       clientIds: Array.from(selectedClientIds, Number),
       periodStart,
       periodEnd,
-      statuses: Array.from(selectedStatuses),
+      statuses: orAll(selectedStatuses, ALL_PERIOD_STATUS_IDS),
       page,
       pageSize,
     })
@@ -175,7 +179,7 @@ export default function LibraryPage() {
         clientIds: Array.from(selectedClientIds, Number),
         periodStart,
         periodEnd,
-        statuses: Array.from(selectedStatuses),
+        statuses: orAll(selectedStatuses, ALL_PERIOD_STATUS_IDS),
       });
       const entries = buildZipEntries(allMatching, mode);
       if (entries.length === 0) return;

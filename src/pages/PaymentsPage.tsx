@@ -31,14 +31,13 @@ import ColumnPicker from "../components/ColumnPicker";
 import Pagination from "../components/Pagination";
 import PaymentExportDrawer from "../components/PaymentExportDrawer";
 import PaymentsExportMenu from "../components/PaymentsExportMenu";
-import { SHIFT_PERIOD_OPTIONS, STATUS_OPTIONS } from "../components/PaymentsFiltersDrawer";
 import PaymentsFiltersPanel, { PaymentsFilterChips, usePaymentsActiveFilterCount } from "../components/PaymentsFiltersPanel";
 import PdfViewerModal from "../components/PdfViewerModal";
 import PillButton from "../components/PillButton";
 import ShiftHistoryDrawer from "../components/ShiftHistoryDrawer";
 import TableScroll from "../components/TableScroll";
 import TimeField from "../components/TimeField";
-import { PAYMENTS_PAGE_SIZE_OPTIONS, usePaymentsFilters } from "../contexts/FiltersContext";
+import { PAYMENT_SHIFT_STATUSES, PAYMENTS_PAGE_SIZE_OPTIONS, SHIFT_PERIODS, usePaymentsFilters } from "../contexts/FiltersContext";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { openReconciliationWindow, revealInFileManager } from "../lib/api";
 import {
@@ -85,6 +84,7 @@ import {
 } from "../lib/format";
 import { generatePaymentsExportXlsx, type PaymentExportResult } from "../lib/paymentExport";
 import { withMissingValueShiftIds } from "../lib/paymentShiftValue";
+import { orAll } from "../lib/filterSets";
 import { generatePaymentsPdfExport, type PaymentPdfExportResult } from "../lib/paymentPdfExport";
 import { ALL_COLUMN_IDS, ALWAYS_VISIBLE_COLUMN_ID, FLAT_COLUMNS, PAYMENT_PICKER_COLUMNS } from "../lib/paymentColumns";
 import { generatePaymentsReportPdf, generatePaymentsShiftReportPdf, type PaymentsReportResult } from "../lib/paymentsReport";
@@ -887,8 +887,8 @@ export default function PaymentsPage() {
       locals: Array.from(selectedLocals),
       periodStart: periodStart || undefined,
       periodEnd: periodEnd || undefined,
-      statuses: Array.from(selectedStatuses),
-      shiftPeriods: Array.from(selectedShiftPeriods),
+      statuses: orAll(selectedStatuses, PAYMENT_SHIFT_STATUSES),
+      shiftPeriods: orAll(selectedShiftPeriods, SHIFT_PERIODS),
       scheduleTimeFilter,
       attention,
       analytics,
@@ -1366,18 +1366,18 @@ export default function PaymentsPage() {
       selectedLocals.size > 0 ||
       periodStart ||
       periodEnd ||
-      selectedStatuses.size < STATUS_OPTIONS.length ||
-      selectedShiftPeriods.size < SHIFT_PERIOD_OPTIONS.length ||
+      selectedStatuses.size > 0 ||
+      selectedShiftPeriods.size > 0 ||
       scheduleTimeFilter !== null ||
       attention !== undefined ||
       analytics !== undefined,
   );
   const total = grouped ? summariesTotal : flatTotal;
   /** Shifts the current filters match, status tab included — the count in the bar (in grouped mode `total` counts groups, not shifts). */
-  const shiftCount = statusCounts ? Array.from(selectedStatuses).reduce((sum, s) => sum + statusCounts[s], 0) : null;
-  const allStatuses = STATUS_OPTIONS.map((o) => o.id);
+  const shiftCount = statusCounts ? orAll(selectedStatuses, PAYMENT_SHIFT_STATUSES).reduce((sum, s) => sum + statusCounts[s], 0) : null;
   const statusTabs: { label: string; statuses: PaymentShiftStatus[]; dot?: string }[] = [
-    { label: "Todos", statuses: allStatuses },
+    // "Todos" is no status filter at all (an empty set), not the three picked.
+    { label: "Todos", statuses: [] },
     { label: "Pendentes", statuses: ["pendente"], dot: "var(--warning)" },
     { label: "Com erro", statuses: ["erro"], dot: "var(--danger)" },
     { label: "Pagos", statuses: ["pago"], dot: "var(--success)" },
@@ -1566,7 +1566,7 @@ export default function PaymentsPage() {
             >
               {tab.dot && <i style={{ background: tab.dot }} />}
               {tab.label}
-              {statusCounts && <span className="payments-tab-count">{tab.statuses.reduce((sum, st) => sum + statusCounts[st], 0)}</span>}
+              {statusCounts && <span className="payments-tab-count">{orAll(new Set(tab.statuses), PAYMENT_SHIFT_STATUSES).reduce((sum, st) => sum + statusCounts[st], 0)}</span>}
             </button>
           ))}
         </div>

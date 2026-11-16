@@ -12,7 +12,6 @@ import PeriodPicker, { type PeriodPreset } from "./PeriodPicker";
 import ScheduleTimeFilterDropdown from "./ScheduleTimeFilterDropdown";
 import SidePanel from "./SidePanel";
 
-const ALL_SHIFT_PERIODS: ShiftPeriod[] = ["diurno", "noturno"];
 
 /** Pagamentos starts with no period at all, so "Todo o período" leads the shortcuts. */
 function paymentsPeriodPresets(): PeriodPreset[] {
@@ -24,7 +23,6 @@ const STATUS_CHIPS: { id: PaymentShiftStatus; label: string; color: string }[] =
   { id: "erro", label: "Erro", color: "var(--danger)" },
   { id: "pago", label: "Pago", color: "var(--success)" },
 ];
-const ALL_STATUSES = STATUS_CHIPS.map((s) => s.id);
 
 /**
  * The Pagamentos filters, applied as soon as they change. On Pagamentos
@@ -41,8 +39,9 @@ function usePaymentsFilterActions(onChange?: () => void, includeStatus = false) 
     onChange?.();
   }
 
-  const shiftPeriodFiltered = f.selectedShiftPeriods.size < ALL_SHIFT_PERIODS.length;
-  const statusFiltered = includeStatus && f.selectedStatuses.size < ALL_STATUSES.length;
+  // Empty = no filter; anything picked (every option included) is a filter.
+  const shiftPeriodFiltered = f.selectedShiftPeriods.size > 0;
+  const statusFiltered = includeStatus && f.selectedStatuses.size > 0;
   const activeCount = [
     f.selectedEmployeeIds.size > 0,
     f.selectedCompanyIds.size > 0,
@@ -81,9 +80,9 @@ function usePaymentsFilterActions(onChange?: () => void, includeStatus = false) 
         f.setSelectedRoleIds(new Set());
         f.setSelectedLocals(new Set());
         f.setPeriod("", "");
-        f.setSelectedShiftPeriods(new Set(ALL_SHIFT_PERIODS));
+        f.setSelectedShiftPeriods(new Set());
         f.setScheduleTimeFilter(null);
-        if (includeStatus) f.setSelectedStatuses(new Set(ALL_STATUSES));
+        if (includeStatus) f.setSelectedStatuses(new Set());
       }),
   };
 }
@@ -160,16 +159,14 @@ export default function PaymentsFiltersPanel({
   const localOptions = useMemo<PickerOption[]>(() => [...locals].sort((x, y) => x.localeCompare(y)).map((l) => ({ id: l, label: l })), [locals]);
 
   // Nothing picked means every status, same as the Cartão Ponto status chips.
-  const pickedStatuses = a.statusFiltered ? f.selectedStatuses : new Set<PaymentShiftStatus>();
+  const pickedStatuses = f.selectedStatuses;
   function togglePickedStatus(id: PaymentShiftStatus) {
-    const next = toggled(pickedStatuses, id);
-    a.setStatuses(next.size === 0 ? new Set(ALL_STATUSES) : next);
+    a.setStatuses(toggled(f.selectedStatuses, id));
   }
 
-  const pickedShiftPeriods = a.shiftPeriodFiltered ? f.selectedShiftPeriods : new Set<ShiftPeriod>();
+  const pickedShiftPeriods = f.selectedShiftPeriods;
   function toggleShiftPeriod(id: ShiftPeriod) {
-    const next = toggled(pickedShiftPeriods, id);
-    a.setShiftPeriods(next.size === 0 ? new Set(ALL_SHIFT_PERIODS) : next);
+    a.setShiftPeriods(toggled(f.selectedShiftPeriods, id));
   }
 
   const nothingToClear = a.activeCount === 0 && !f.periodStart && !f.periodEnd;
@@ -287,7 +284,9 @@ export default function PaymentsFiltersPanel({
       </div>
 
       <div className="field" style={{ position: "relative", zIndex: 3 }}>
-        <FieldLabel icon={Moon}>Turno</FieldLabel>
+        <FieldLabel icon={Moon} action={clearAction(a.shiftPeriodFiltered, () => a.setShiftPeriods(new Set()))}>
+          Turno
+        </FieldLabel>
         <div className="status-chips">
           {(
             [
@@ -312,7 +311,7 @@ export default function PaymentsFiltersPanel({
 
       {includeStatus && (
         <div className="field" style={{ position: "relative", zIndex: 1 }}>
-          <FieldLabel icon={ListFilter} action={clearAction(a.statusFiltered, () => a.setStatuses(new Set(ALL_STATUSES)))}>
+          <FieldLabel icon={ListFilter} action={clearAction(a.statusFiltered, () => a.setStatuses(new Set()))}>
             Status
           </FieldLabel>
           <div className="status-chips">
@@ -391,9 +390,12 @@ export function PaymentsFilterChips({
       {a.shiftPeriodFiltered && (
         <Chip
           label="Turno"
-          value={f.selectedShiftPeriods.has("noturno") ? "Noturno" : "Diurno"}
+          value={(["diurno", "noturno"] as const)
+            .filter((p) => f.selectedShiftPeriods.has(p))
+            .map((p) => (p === "diurno" ? "Diurno" : "Noturno"))
+            .join(", ")}
           onOpen={onOpen}
-          onRemove={() => a.setShiftPeriods(new Set(ALL_SHIFT_PERIODS))}
+          onRemove={() => a.setShiftPeriods(new Set())}
         />
       )}
       {f.scheduleTimeFilter && (
@@ -411,7 +413,7 @@ export function PaymentsFilterChips({
             .map((s) => s.label)
             .join(", ")}
           onOpen={onOpen}
-          onRemove={() => a.setStatuses(new Set(ALL_STATUSES))}
+          onRemove={() => a.setStatuses(new Set())}
         />
       )}
     </>
