@@ -4428,20 +4428,6 @@ button.filter-chip-remove:hover {
   color: var(--text);
 }
 
-button.filter-chips-clear {
-  height: 32px;
-  padding: 0 6px;
-  background: none;
-  border: 0;
-  color: var(--text-muted);
-  font-weight: 500;
-}
-
-button.filter-chips-clear:hover {
-  background: none;
-  color: var(--text);
-}
-
 /* "Gerar zip" with the layout menu on its arrow. */
 .zip-split {
   position: relative;

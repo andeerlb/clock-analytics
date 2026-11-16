@@ -387,11 +387,11 @@ function useSelectedEmployeeNames(ids: Set<string>): string[] {
 
 /**
  * The applied filters, in the bar under the page title. Período is always
- * there (it always has a value), the rest only when set; with two or more
- * of those, "Limpar" removes them all at once and keeps the period.
+ * there (it always has a value), the rest only when set. Clearing them all
+ * at once lives in the panel ("Limpar filtros"), not here.
  */
 export function LibraryFilterChips({ companies, clients, onOpen }: { companies: CompanyRow[]; clients: ClientRow[]; onOpen: () => void }) {
-  const { f, statusFiltered, setEmployees, setCompanies, setClients, setStatuses, activeCount } = useLibraryFilterActions();
+  const { f, statusFiltered, setEmployees, setCompanies, setClients, setStatuses } = useLibraryFilterActions();
   const employeeNames = useSelectedEmployeeNames(f.selectedEmployeeIds);
   const presets = periodPresets();
   const preset = presets.find((p) => p.start === f.periodStart && p.end === f.periodEnd);
@@ -441,19 +441,6 @@ export function LibraryFilterChips({ companies, clients, onOpen }: { companies: 
           onOpen={onOpen}
           onRemove={() => setStatuses(new Set(ALL_STATUSES))}
         />
-      )}
-      {activeCount > 1 && (
-        <button
-          type="button"
-          className="filter-chips-clear"
-          onClick={() => {
-            setEmployees(new Set());
-            setCompanies(new Set());
-            setStatuses(new Set(ALL_STATUSES));
-          }}
-        >
-          Limpar
-        </button>
       )}
     </>
   );
