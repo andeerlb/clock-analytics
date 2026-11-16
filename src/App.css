@@ -3900,29 +3900,109 @@ button.period-preset-active:hover {
   color: var(--on-accent);
 }
 
-.status-checks {
+/* "O que aconteceu no período": toggle chips in two groups. */
+.status-group {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 6px;
 }
 
-.status-check {
+.status-group + .status-group {
+  margin-top: 4px;
+}
+
+.status-group-label {
+  color: #71717a;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.status-chips {
   display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+button.status-chip {
+  height: 30px;
+  padding: 0 11px 0 9px;
+  display: inline-flex;
   align-items: center;
-  gap: 9px;
-  padding: 5px 8px;
+  gap: 7px;
+  background: transparent;
+  border: 1px solid #3b3b44;
+  border-radius: 15px;
+  color: #a1a1aa;
+  font-size: 0.8rem;
+  font-weight: 500;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+button.status-chip:hover {
+  background: transparent;
+  border-color: #52525b;
+  color: #ededef;
+}
+
+button.status-chip[aria-pressed="true"] {
+  background: #2c2c33;
+  border-color: #55555f;
+  color: #ededef;
+}
+
+.status-chip i {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  opacity: 0.55;
+}
+
+.status-chip[aria-pressed="true"] i {
+  opacity: 1;
+}
+
+.status-chip-count {
+  color: #71717a;
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-hint {
+  color: #71717a;
+  font-size: 0.75rem;
+}
+
+/* OptionPicker (Empresa, Cliente): same box as the Colaborador picker. */
+.picker-tile {
+  border-radius: 7px;
+}
+
+.emp-picker-stack .picker-tile {
   border-radius: 6px;
-  font-size: 0.85rem;
-  cursor: pointer;
 }
 
-.status-check:hover {
-  background: #26262a;
+.emp-picker-search.picker-title {
+  justify-content: space-between;
+  font-size: 0.87rem;
+  font-weight: 500;
 }
 
-.status-check input {
-  margin: 0;
-  accent-color: var(--accent);
+.emp-picker-popover:focus {
+  outline: none;
+}
+
+.picker-footer-actions {
+  display: flex;
+  gap: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.status-chip {
+    transition: none;
+  }
 }
 
 .side-panel-footer .side-panel-summary {

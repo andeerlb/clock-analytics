@@ -1,16 +1,37 @@
 import { Building2, Calendar, ListFilter, RotateCcw, Search, Users, X } from "lucide-react";
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLibraryFilters } from "../contexts/FiltersContext";
 import { toIso, todayUtc } from "../lib/calendar";
-import type { ClientRow, CompanyRow } from "../lib/db";
-import { formatDateSlash } from "../lib/format";
+import { countImportsByStatus, type ClientRow, type CompanyRow } from "../lib/db";
+import { formatCnpj, formatDateSlash } from "../lib/format";
 import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
 import DateRangePicker from "./DateRangePicker";
 import EmployeeMultiSelectDropdown from "./EmployeeMultiSelectDropdown";
-import MultiSelectDropdown from "./MultiSelectDropdown";
+import OptionPicker, { type PickerOption } from "./OptionPicker";
 import SidePanel from "./SidePanel";
 
 const ALL_STATUSES = PERIOD_STATUS_OPTIONS.map((o) => o.id);
+
+/** "Status no período" as chips: what went wrong, then what kind of hours exist. Short labels; the field title already says "no período". */
+const STATUS_GROUPS: { label: string; chips: { id: PeriodStatusId; label: string; color: string }[] }[] = [
+  {
+    label: "Ocorrências",
+    chips: [
+      { id: "absence", label: "Faltas", color: "var(--danger)" },
+      { id: "late", label: "Atrasos", color: "var(--warning)" },
+      { id: "pending", label: "Marcação pendente", color: "var(--warning)" },
+      { id: "no-punch", label: "Sem marcação", color: "var(--danger)" },
+    ],
+  },
+  {
+    label: "Horas",
+    chips: [
+      { id: "overtime", label: "Horas extras", color: "#60a5fa" },
+      { id: "regular", label: "Horas regulares", color: "var(--success)" },
+      { id: "interval", label: "Intervalo", color: "var(--success)" },
+    ],
+  },
+];
 
 function monthStart(today: Date, monthsBack: number): string {
   return toIso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - monthsBack, 1)));
@@ -88,7 +109,9 @@ function useLibraryFilterActions() {
         f.setSelectedEmployeeIds(new Set());
         f.setSelectedCompanyIds(new Set());
         f.setSelectedClientIds(new Set());
-        f.setPeriod("", "");
+        // Back to the page's default period: an empty period would match no import at all.
+        const [currentMonth] = periodPresets();
+        f.setPeriod(currentMonth.start, currentMonth.end);
         f.setSelectedStatuses(new Set(ALL_STATUSES));
       }),
   };
@@ -124,8 +147,60 @@ export default function LibraryFiltersPanel({
     const scoped = f.selectedCompanyIds.size > 0 ? clients.filter((c) => f.selectedCompanyIds.has(String(c.companyId))) : clients;
     const seen = new Map<number, ClientRow>();
     for (const c of scoped) if (!seen.has(c.id)) seen.set(c.id, c);
-    return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
+    return Array.from(seen.values()).sort((a, b) => a.companyName.localeCompare(b.companyName) || a.name.localeCompare(b.name));
   }, [clients, f.selectedCompanyIds]);
+
+  const companyOptions = useMemo<PickerOption[]>(
+    () =>
+      [...companies]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((c) => {
+          const clientCount = new Set(clients.filter((cl) => cl.companyId === c.id).map((cl) => cl.id)).size;
+          const cnpj = c.cnpj ? formatCnpj(c.cnpj) : "";
+          const count = `${clientCount} ${clientCount === 1 ? "cliente" : "clientes"}`;
+          return { id: String(c.id), label: c.name, meta: cnpj ? `${cnpj} · ${count}` : count };
+        }),
+    [companies, clients],
+  );
+
+  // Grouped by empresa only when more than one empresa is in the list.
+  const clientPickerOptions = useMemo<PickerOption[]>(() => {
+    const grouped = new Set(clientOptions.map((c) => c.companyId)).size > 1;
+    return clientOptions.map((c) => ({
+      id: String(c.id),
+      label: c.name,
+      meta: c.cnpj ? formatCnpj(c.cnpj) : undefined,
+      group: grouped ? c.companyName : undefined,
+    }));
+  }, [clientOptions]);
+
+  // The chips work the other way round from the stored filter: nothing
+  // picked means every status (no filter), and picking one narrows to it.
+  const pickedStatuses = f.selectedStatuses.size === ALL_STATUSES.length ? new Set<PeriodStatusId>() : f.selectedStatuses;
+  function togglePickedStatus(id: PeriodStatusId) {
+    const next = toggled(pickedStatuses, id);
+    setStatuses(next.size === 0 ? new Set(ALL_STATUSES) : next);
+  }
+
+  const [statusCounts, setStatusCounts] = useState<Record<PeriodStatusId, number> | null>(null);
+  const scopeKey = JSON.stringify([[...f.selectedEmployeeIds], [...f.selectedCompanyIds], [...f.selectedClientIds], f.periodStart, f.periodEnd]);
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    countImportsByStatus({
+      employeeIds: Array.from(f.selectedEmployeeIds, Number),
+      companyIds: Array.from(f.selectedCompanyIds, Number),
+      clientIds: Array.from(f.selectedClientIds, Number),
+      periodStart: f.periodStart,
+      periodEnd: f.periodEnd,
+    })
+      .then((counts) => !cancelled && setStatusCounts(counts))
+      .catch(() => !cancelled && setStatusCounts(null));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, scopeKey]);
 
   return (
     <SidePanel
@@ -140,7 +215,7 @@ export default function LibraryFiltersPanel({
               {total} {total === 1 ? "espelho" : "espelhos"}
             </span>
           )}
-          <button type="button" className="ghost" onClick={clearAll} disabled={activeCount === 0 && !f.periodStart && !f.periodEnd}>
+          <button type="button" className="ghost" onClick={clearAll} disabled={activeCount === 0 && f.periodStart === presets[0].start && f.periodEnd === presets[0].end}>
             <RotateCcw size={13} style={{ marginRight: "0.35rem" }} />
             Limpar filtros
           </button>
@@ -190,36 +265,54 @@ export default function LibraryFiltersPanel({
       </div>
 
       <div className="field" style={{ position: "relative", zIndex: 3 }}>
-        <FieldLabel icon={Building2}>Empresa</FieldLabel>
-        <MultiSelectDropdown
-          options={companies.map((c) => ({ id: String(c.id), label: c.name }))}
+        <FieldLabel
+          icon={Building2}
+          action={
+            f.selectedCompanyIds.size > 0 && (
+              <button type="button" className="field-reset" onClick={() => setCompanies(new Set())}>
+                Limpar
+              </button>
+            )
+          }
+        >
+          Empresa
+        </FieldLabel>
+        <OptionPicker
+          options={companyOptions}
           selected={f.selectedCompanyIds}
           onToggle={(id) => setCompanies(toggled(f.selectedCompanyIds, id))}
           onSelectAll={() => setCompanies(new Set(companies.map((c) => String(c.id))))}
-          onSelectNone={() => setCompanies(new Set())}
-          allLabel="Todas as empresas"
-          noneLabel="Todas as empresas"
-          countLabel={(n, total) => `${n} de ${total} empresas`}
-          align="right"
-          fullWidth
-          showIcon={false}
+          onClear={() => setCompanies(new Set())}
+          title="Empresas"
+          allPlaceholder="Todas as empresas"
+          searchPlaceholder="Buscar empresa ou CNPJ"
+          selectAllLabel="Selecionar todas"
         />
       </div>
 
       <div className="field" style={{ position: "relative", zIndex: 2 }}>
-        <FieldLabel icon={Users}>Cliente</FieldLabel>
-        <MultiSelectDropdown
-          options={clientOptions.map((c) => ({ id: String(c.id), label: c.name }))}
+        <FieldLabel
+          icon={Users}
+          action={
+            f.selectedClientIds.size > 0 && (
+              <button type="button" className="field-reset" onClick={() => setClients(new Set())}>
+                Limpar
+              </button>
+            )
+          }
+        >
+          Cliente
+        </FieldLabel>
+        <OptionPicker
+          options={clientPickerOptions}
           selected={f.selectedClientIds}
           onToggle={(id) => setClients(toggled(f.selectedClientIds, id))}
           onSelectAll={() => setClients(new Set(clientOptions.map((c) => String(c.id))))}
-          onSelectNone={() => setClients(new Set())}
-          allLabel="Todos os clientes"
-          noneLabel="Todos os clientes"
-          countLabel={(n, total) => `${n} de ${total} clientes`}
-          align="right"
-          fullWidth
-          showIcon={false}
+          onClear={() => setClients(new Set())}
+          title="Clientes"
+          allPlaceholder="Todos os clientes"
+          searchPlaceholder="Buscar cliente ou CNPJ"
+          selectAllLabel="Selecionar todos"
         />
       </div>
 
@@ -227,23 +320,42 @@ export default function LibraryFiltersPanel({
         <FieldLabel
           icon={ListFilter}
           action={
-            f.selectedStatuses.size < ALL_STATUSES.length && (
+            pickedStatuses.size > 0 && (
               <button type="button" className="field-reset" onClick={() => setStatuses(new Set(ALL_STATUSES))}>
-                Marcar todos
+                Limpar
               </button>
             )
           }
         >
-          Status no período
+          O que aconteceu no período
         </FieldLabel>
-        <div className="status-checks">
-          {PERIOD_STATUS_OPTIONS.map((o) => (
-            <label key={o.id} className="status-check">
-              <input type="checkbox" checked={f.selectedStatuses.has(o.id)} onChange={() => setStatuses(toggled(f.selectedStatuses, o.id))} />
-              {o.label}
-            </label>
-          ))}
-        </div>
+        {STATUS_GROUPS.map((group) => (
+          <div key={group.label} className="status-group">
+            <span className="status-group-label">{group.label}</span>
+            <div className="status-chips">
+              {group.chips.map((chip) => (
+                <button
+                  key={chip.id}
+                  type="button"
+                  className="status-chip"
+                  aria-pressed={pickedStatuses.has(chip.id)}
+                  onClick={() => togglePickedStatus(chip.id)}
+                >
+                  <i style={{ background: chip.color }} />
+                  {chip.label}
+                  {statusCounts && <span className="status-chip-count">{statusCounts[chip.id]}</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+        <span className="status-hint">
+          {pickedStatuses.size === 0
+            ? "Nenhum marcado: mostra todos os espelhos."
+            : pickedStatuses.size === 1
+              ? "Mostra os espelhos com esta ocorrência."
+              : `Mostra os espelhos com qualquer uma das ${pickedStatuses.size}.`}
+        </span>
       </div>
     </SidePanel>
   );
@@ -293,7 +405,11 @@ export function LibraryFilterChips({ companies, clients }: { companies: CompanyR
       {statusFiltered && (
         <Chip
           label="Status"
-          value={`${f.selectedStatuses.size} de ${ALL_STATUSES.length}`}
+          value={
+            f.selectedStatuses.size === 1
+              ? (STATUS_GROUPS.flatMap((g) => g.chips).find((c) => f.selectedStatuses.has(c.id))?.label ?? "1")
+              : `${f.selectedStatuses.size} ocorrências`
+          }
           onRemove={() => setStatuses(new Set(ALL_STATUSES))}
         />
       )}
