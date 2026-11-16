@@ -1,11 +1,11 @@
 import { Building2, Calendar, ListFilter, RotateCcw, Search, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLibraryFilters } from "../contexts/FiltersContext";
-import { toIso, todayUtc } from "../lib/calendar";
+import { addDaysIso, toIso, todayUtc } from "../lib/calendar";
 import { countImportsByStatus, type ClientRow, type CompanyRow } from "../lib/db";
 import { formatCnpj, formatDateSlash } from "../lib/format";
 import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "../lib/periodStatus";
-import DateRangePicker from "./DateRangePicker";
+import PeriodPicker, { formatPeriodShort, type PeriodPreset } from "./PeriodPicker";
 import EmployeeMultiSelectDropdown from "./EmployeeMultiSelectDropdown";
 import OptionPicker, { type PickerOption } from "./OptionPicker";
 import SidePanel from "./SidePanel";
@@ -37,21 +37,23 @@ function monthStart(today: Date, monthsBack: number): string {
   return toIso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - monthsBack, 1)));
 }
 
-/** Shortcuts above the date picker. "Mês atual" is also the page's default period. */
-function periodPresets(): { label: string; start: string; end: string }[] {
+/** Shortcuts inside the Período box. "Mês atual" comes first: it's also the page's default period. */
+function periodPresets(): PeriodPreset[] {
   const today = todayUtc();
   const todayIso = toIso(today);
   const lastMonthEnd = toIso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0)));
   return [
     { label: "Mês atual", start: monthStart(today, 0), end: todayIso },
     { label: "Mês passado", start: monthStart(today, 1), end: lastMonthEnd },
+    { label: "Últimos 30 dias", start: addDaysIso(todayIso, -29), end: todayIso },
     { label: "Últimos 3 meses", start: monthStart(today, 2), end: todayIso },
+    { label: "Este ano", start: toIso(new Date(Date.UTC(today.getUTCFullYear(), 0, 1))), end: todayIso },
   ];
 }
 
 function periodText(start: string, end: string): string {
   if (!start && !end) return "Todo o período";
-  if (start && end) return `${formatDateSlash(start)} a ${formatDateSlash(end)}`;
+  if (start && end) return formatPeriodShort(start, end);
   return start ? `desde ${formatDateSlash(start)}` : `até ${formatDateSlash(end)}`;
 }
 
@@ -207,7 +209,7 @@ export default function LibraryFiltersPanel({
       open={open}
       onClose={onClose}
       title="Filtros"
-      badge={activeCount === 0 ? "nenhum ativo" : `${activeCount} ${activeCount === 1 ? "ativo" : "ativos"}`}
+      badge={activeCount === 0 ? undefined : `${activeCount} ${activeCount === 1 ? "ativo" : "ativos"}`}
       footer={
         <>
           {total !== null && (
@@ -224,19 +226,7 @@ export default function LibraryFiltersPanel({
     >
       <div className="field" style={{ position: "relative", zIndex: 5 }}>
         <FieldLabel icon={Calendar}>Período</FieldLabel>
-        <div className="period-presets">
-          {presets.map((p) => (
-            <button
-              key={p.label}
-              type="button"
-              className={f.periodStart === p.start && f.periodEnd === p.end ? "period-preset period-preset-active" : "period-preset"}
-              onClick={() => setPeriod(p.start, p.end)}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-        <DateRangePicker startValue={f.periodStart} endValue={f.periodEnd} onChange={setPeriod} allowClear={false} showIcon={false} fullWidth />
+        <PeriodPicker start={f.periodStart} end={f.periodEnd} onChange={setPeriod} presets={presets} />
       </div>
 
       <div className="field" style={{ position: "relative", zIndex: 4 }}>
@@ -349,13 +339,6 @@ export default function LibraryFiltersPanel({
             </div>
           </div>
         ))}
-        <span className="status-hint">
-          {pickedStatuses.size === 0
-            ? "Nenhum marcado: mostra todos os espelhos."
-            : pickedStatuses.size === 1
-              ? "Mostra os espelhos com esta ocorrência."
-              : `Mostra os espelhos com qualquer uma das ${pickedStatuses.size}.`}
-        </span>
       </div>
     </SidePanel>
   );
