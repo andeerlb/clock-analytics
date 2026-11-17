@@ -1,3 +1,4 @@
+import { History } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { getPaymentShiftHistory, type EffectivePaymentRules } from "../lib/db";
 import {
@@ -124,7 +125,7 @@ export default function ShiftHistoryDrawer({
   }, [open, shiftId]);
 
   return (
-    <Drawer open={open} onClose={onClose} title="Histórico do turno">
+    <Drawer open={open} onClose={onClose} title="Histórico do turno" icon={History}>
       {loading && <p className="muted">Carregando...</p>}
       {error && <div className="error-box">{error}</div>}
       {!loading && !error && shiftId === null && (

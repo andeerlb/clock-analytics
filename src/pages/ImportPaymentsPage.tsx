@@ -2530,7 +2530,7 @@ export default function ImportPaymentsPage() {
 
       </div>
 
-      <Drawer open={historyOpen} onClose={() => setHistoryOpen(false)} title="Histórico de importações">
+      <Drawer open={historyOpen} onClose={() => setHistoryOpen(false)} title="Histórico de importações" icon={History} subtitle={`${recentFilesTotal} ${recentFilesTotal === 1 ? "arquivo importado" : "arquivos importados"}`}>
             {!(recentFilesTotal === 0 && !historySearch.trim()) && (
               <div className="field" style={{ marginBottom: "0.8rem" }}>
                 <div style={{ position: "relative" }}>

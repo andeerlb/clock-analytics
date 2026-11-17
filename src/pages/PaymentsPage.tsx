@@ -9,6 +9,7 @@ import {
   List,
   ListFilter,
   Moon,
+  RefreshCw,
   ShieldCheck,
   Sun,
   Trash2,
@@ -1904,7 +1905,9 @@ export default function PaymentsPage() {
           setReviewingShift(null);
           setAcceptError(null);
         }}
-        title={reviewingShift ? `${reviewingShift.shift.employeeName} — ${formatDate(reviewingShift.shift.workDate)}` : ""}
+        title={reviewingShift ? reviewingShift.shift.employeeName : ""}
+        subtitle={reviewingShift ? `Alterações na planilha · ${formatDate(reviewingShift.shift.workDate)}` : undefined}
+        icon={RefreshCw}
       >
         {reviewingShift &&
           (() => {

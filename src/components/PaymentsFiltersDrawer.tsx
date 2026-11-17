@@ -1,4 +1,4 @@
-import { Briefcase, Building2, Calendar, Clock3, Layers, ListFilter, MapPin, Moon, Search, Users } from "lucide-react";
+import { Briefcase, Building2, Calendar, Clock3, Layers, ListFilter, MapPin, Moon, Search, SlidersHorizontal, Users } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ClientRow, CompanyRow, RoleRow } from "../lib/db";
 import type { PaymentShiftStatus, ScheduleTimeFilter, ShiftPeriod } from "../lib/types";
@@ -213,6 +213,8 @@ export default function PaymentsFiltersDrawer({
       open={open}
       onClose={onClose}
       title="Filtros"
+      icon={SlidersHorizontal}
+      width="min(640px, calc(100vw - 24px))"
       footer={
         <>
           <button type="button" onClick={applyFilters}>

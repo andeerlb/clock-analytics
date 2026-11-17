@@ -348,7 +348,6 @@ export default function PendingChangesTab() {
           setActionError(null);
         }}
         title="Atualizações pendentes"
-        className="rv-drawer"
         width="min(480px, calc(100vw - 24px))"
         header={
           <div className="rv-drawer-head">

@@ -1150,7 +1150,6 @@ export default function RemoteUpdatesPage() {
         onClose={() => setSheet(null)}
         title={sheetTitle}
         header={sheetHeader}
-        className="rv-drawer"
         width="min(480px, calc(100vw - 24px))"
         footer={sheetFooter ? <div className="rv-footer">{sheetFooter}</div> : undefined}
       >
