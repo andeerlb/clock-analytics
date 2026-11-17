@@ -5548,6 +5548,22 @@ button.emp-picker-trigger[aria-expanded="true"] {
   animation: emp-picker-fade 0.2s ease;
 }
 
+/* Not enough room below the field: the box opens upward, anchored to the field's bottom edge. */
+.emp-picker-popover.emp-picker-popover-up {
+  top: auto;
+  bottom: -2px;
+  animation-name: emp-picker-grow-up;
+}
+
+@keyframes emp-picker-grow-up {
+  from {
+    clip-path: inset(calc(100% - 38px) 6px 2px 6px round 7px);
+  }
+  to {
+    clip-path: inset(0 0 0 0 round 12px);
+  }
+}
+
 @keyframes emp-picker-grow {
   from {
     clip-path: inset(2px 6px calc(100% - 38px) 6px round 7px);
