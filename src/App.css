@@ -7312,6 +7312,16 @@ button.rv-history-row:hover {
   cursor: pointer;
 }
 
+.pc-group-toggle:hover,
+.pc-group-toggle:focus-visible {
+  background: none;
+}
+
+.pc-group-toggle:hover .pc-group-title {
+  text-decoration: underline;
+  text-decoration-color: var(--text-muted);
+}
+
 .pc-group-toggle .rv-tag {
   margin-left: 0;
 }

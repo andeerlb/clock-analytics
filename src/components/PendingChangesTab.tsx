@@ -251,7 +251,7 @@ export default function PendingChangesTab() {
       return (
         <section key={key} className="pc-group">
           <div className="pc-group-head">
-            <button type="button" className="pc-group-toggle" onClick={() => toggleGroup(key)} aria-expanded={!collapsed} title={collapsed ? "Expandir" : "Recolher"}>
+            <button type="button" className="pc-group-toggle" onClick={() => toggleGroup(key)} aria-expanded={!collapsed}>
               <span className={/\.xlsx?$/i.test(fileName) ? "rv-file-ico" : "rv-file-ico rv-file-ico-other"} aria-hidden="true">
                 {/\.(\w{2,4})$/.exec(fileName)?.[1].toUpperCase().slice(0, 3) ?? "URL"}
               </span>
@@ -365,7 +365,7 @@ export default function PendingChangesTab() {
         }
         footer={
           <>
-            <span className="rv-footer-note">Vistas saem do aviso, mas continuam aqui.</span>
+            <span className="rv-footer-note" />
             <button type="button" className="settings-button settings-button-primary" disabled={dismissingAll || unseenRows.length === 0} onClick={() => run("all", () => dismissCheckDiffs(unseenRows.map((row) => row.id)))}>
               <CheckCheck size={13} /> {dismissingAll ? "Marcando…" : `Marcar tudo como visto (${unseenRows.length})`}
             </button>
