@@ -318,7 +318,7 @@ export default function PendingChangesTab() {
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
-          title={`Você tem ${unseenRows.length} atualização${unseenRows.length === 1 ? "" : "ões"} pendente${unseenRows.length === 1 ? "" : "s"} — clique para revisar, ou arraste pra mover`}
+          title={`Você tem ${unseenRows.length} ${unseenRows.length === 1 ? "atualização pendente" : "atualizações pendentes"} — clique para revisar, ou arraste pra mover`}
           style={{
             position: "fixed",
             zIndex: CARD_Z_INDEX,
@@ -331,7 +331,7 @@ export default function PendingChangesTab() {
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 700, fontSize: "0.86rem" }}>
-              {unseenRows.length} atualização{unseenRows.length === 1 ? "" : "ões"} pendente{unseenRows.length === 1 ? "" : "s"}
+              {unseenRows.length} {unseenRows.length === 1 ? "atualização pendente" : "atualizações pendentes"}
             </div>
             <div className="muted" style={{ fontSize: "0.66rem", fontWeight: 700, letterSpacing: "0.05em", marginTop: "1px" }}>
               CLIQUE PARA REVISAR

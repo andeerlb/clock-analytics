@@ -583,7 +583,7 @@ export interface PaymentShiftRow {
   previousShiftId: number | null;
   /** columnLetter -> raw text value, for every non-blank column the template left unmapped ("Ignorar") on this row — kept for history/audit instead of discarded. `null` when there was nothing left unmapped (or it was all blank). */
   extraData: Record<string, string> | null;
-  /** True when this row was created by a deliberate user action on the Pagamentos detail page (editar valor, fazer pagamento, voltar para pendente) rather than an import — a reprocessed import match refuses to supersede one of these unless "Manter registros atualizados manualmente" is off (see `PaymentSettings`). */
+  /** True when this row (or one it replaced) was hand-edited via "Editar valor" (`editPaymentShift`) — "Fazer pagamento" and "Voltar para pendente" only inherit it, never set it. A reprocessed import match refuses to supersede one of these unless "Manter registros atualizados manualmente" is off; a `'pago'` row is protected regardless (see `isProtectedDuplicateMatch` in ImportPaymentsPage). */
   editedManually: boolean;
   /** This row's position in the original source file — `null` for a row that isn't from an import (a manual "Fazer pagamento"/"Editar valor" row carries its source shift's own position forward, same as `extraData`). Indexed, unlike `extraData`, so the deep-check diff's position-based fallback match can look it up (see `findPaymentShiftByPosition`). */
   sourceRowNumber: number | null;

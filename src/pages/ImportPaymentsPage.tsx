@@ -6,10 +6,13 @@ import {
   CheckCircle2,
   Eye,
   FileText,
+  FileSpreadsheet,
   FolderOpen,
   History,
   Link2,
+  Play,
   PlusCircle,
+  RefreshCw,
   Search,
   Settings2,
   Trash2,
@@ -112,6 +115,27 @@ function formatFileKindList(kinds: PaymentFileKind[]): string {
   const labels = kinds.map((k) => PAYMENT_FILE_KIND_LABELS[k]);
   if (labels.length <= 1) return labels.join("");
   return `${labels.slice(0, -1).join(", ")} ou ${labels[labels.length - 1]}`;
+}
+
+/** "https://onedrive.live.com/:x:/…" -> "onedrive.live.com" — the short origin shown under a downloaded file's name. */
+function urlHost(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
+/** "/home/me/Pagamentos/semana.xlsx" -> "/home/me/Pagamentos" — the short origin shown under a locally-picked file's name. */
+function parentDir(path: string): string {
+  const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return i > 0 ? path.slice(0, i) : "";
+}
+
+/** "Processar", "Processar 1 arquivo", "Processar 3 arquivos". */
+function processLabel(count: number): string {
+  if (count === 0) return "Processar";
+  return `Processar ${count} arquivo${count === 1 ? "" : "s"}`;
 }
 
 /**
@@ -1676,6 +1700,10 @@ export default function ImportPaymentsPage() {
     }
   }
 
+  // A URL import downloads on "Processar", so before that there's no `paths`
+  // entry yet — the typed link still counts as the one file it will become.
+  const processCount = importMode === "url" && paths.length === 0 ? (urlInput.trim() ? 1 : 0) : paths.length;
+
   return (
     <div>
       <Link to="/import" className="back-link">
@@ -1704,246 +1732,247 @@ export default function ImportPaymentsPage() {
 
       <div className="import-layout" style={{ display: "block" }}>
         <div className="import-main">
-          <div className="card">
-            <div className="field-row" style={{ marginBottom: "1.2rem" }}>
-              <div className="field" style={{ flex: "1 1 280px", maxWidth: "24rem" }}>
-                <label htmlFor="payment-template">Template</label>
-                <select
-                  id="payment-template"
-                  value={templateId}
-                  onChange={(e) => setTemplateId(e.target.value)}
-                  disabled={templates.length === 0}
-                >
-                  <option value="">Selecione um template</option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-                {templates.length === 0 ? (
-                  <p className="field-hint">
-                    Nenhum template disponível.{" "}
-                    <Link to="/import/payments/templates">Cadastre um template</Link>.
-                  </p>
-                ) : (
-                  <p className="field-hint">
-                    Como as colunas do arquivo serão lidas, e as regras que decidem a Empresa/Cliente
-                    de cada linha.
-                  </p>
-                )}
-              </div>
-
-              <div className="field" style={{ flex: "1 1 240px", maxWidth: "24rem" }}>
-                <label>Período (opcional)</label>
-                <DateRangePicker
-                  startValue={periodStart}
-                  endValue={periodEnd}
-                  onChange={(start, end) => {
-                    setPeriodStart(start);
-                    setPeriodEnd(end);
-                  }}
-                />
-                <p className="field-hint">
-                  Filtra pela coluna de data do template. Deixe em branco para processar o relatório
-                  inteiro.
-                </p>
-              </div>
-            </div>
-
-            <div className="field" style={{ maxWidth: "28rem", marginBottom: "1.2rem" }}>
-              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", fontWeight: 400 }}>
-                <input
-                  type="checkbox"
-                  checked={keepManualEdits}
-                  onChange={(e) => setKeepManualEdits(e.target.checked)}
-                  style={{ marginTop: "0.2rem" }}
-                />
-                <span>
-                  Manter registros atualizados manualmente
-                  <span className="muted" style={{ display: "block", fontSize: "0.78rem" }}>
-                    Uma linha duplicada de um turno já pago, revertido ou com valor corrigido à mão
-                    não é reprocessada — o registro manual continua sendo o vigente.
-                  </span>
-                </span>
-              </label>
-            </div>
-
-            <div className="field">
-              <label>Arquivos de pagamento</label>
-              <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.8rem" }}>
-                <button
-                  type="button"
-                  className={`badge neutral chip-filter${importMode === "local" ? " active" : ""}`}
-                  onClick={() => setImportMode("local")}
-                  disabled={importMode !== "local" && paths.length > 0}
-                  title={
-                    importMode !== "local" && paths.length > 0
-                      ? "Remova os arquivos selecionados para trocar o modo de importação."
-                      : undefined
-                  }
-                >
-                  <FolderOpen size={13} style={{ marginRight: "0.3rem" }} />
-                  Arquivo local
-                </button>
-                <button
-                  type="button"
-                  className={`badge neutral chip-filter${importMode === "url" ? " active" : ""}`}
-                  onClick={() => setImportMode("url")}
-                  disabled={importMode !== "url" && paths.length > 0}
-                  title={
-                    importMode !== "url" && paths.length > 0
-                      ? "Remova os arquivos selecionados para trocar o modo de importação."
-                      : undefined
-                  }
-                >
-                  <Link2 size={13} style={{ marginRight: "0.3rem" }} />
-                  URL
-                </button>
-              </div>
-
-              {importMode === "local" ? (
-                <div className="dropzone">
-                  <div className="dropzone-icon">
-                    <FileText size={20} />
+          <div className="card import-payments-card">
+            <section className="import-payments-section">
+              <div className="import-payments-fields">
+                <div className="field">
+                  <label htmlFor="payment-template">Template</label>
+                  <div className="select-adorned">
+                    <FileSpreadsheet size={15} className="select-adorned-start" aria-hidden="true" />
+                    <select
+                      id="payment-template"
+                      value={templateId}
+                      onChange={(e) => setTemplateId(e.target.value)}
+                      disabled={templates.length === 0}
+                    >
+                      <option value="">Selecione um template</option>
+                      {templates.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                    {selectedTemplate && (
+                      <span className="select-adorned-end">{selectedTemplate.acceptedFileKinds.join(" · ")}</span>
+                    )}
                   </div>
-                  <h4>Selecione os arquivos</h4>
-                  <p className="muted" style={{ margin: 0 }}>
-                    {selectedTemplate
-                      ? `Formatos aceitos: ${formatFileKindList(selectedTemplate.acceptedFileKinds)} — suporta múltiplos arquivos.`
-                      : "Selecione um template para saber os formatos aceitos."}
-                  </p>
-                  <PickFilesButton
-                    onPickFiles={handlePickFiles}
-                    onPickFolder={handlePickFolder}
-                    disabled={!selectedTemplate}
-                    title={selectedTemplate ? undefined : "Selecione um template primeiro"}
-                  />
-                </div>
-              ) : (
-                <>
-                  {!isAutoReimport && (
-                    <div className="warning-box">
-                      <AlertTriangle size={14} style={{ verticalAlign: "-2px", marginRight: "0.4rem" }} />
-                      Apenas arquivos do Microsoft Office (.xlsx, .xls) ou OpenDocument (.ods) são
-                      suportados por URL. O link precisa ser de download direto e anônimo — não pode
-                      exigir login.
-                    </div>
+                  {templates.length === 0 && (
+                    <p className="field-hint">
+                      Nenhum template disponível.{" "}
+                      <Link to="/import/payments/templates">Cadastre um template</Link>.
+                    </p>
                   )}
-                  <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.8rem" }}>
-                    <input
-                      type="url"
-                      placeholder="https://exemplo.com/arquivo.xlsx"
-                      value={urlInput}
-                      onChange={(e) => setUrlInput(e.target.value)}
-                      disabled={urlDownloading || isAutoReimport}
-                      title={isAutoReimport ? "Arquivo desta reimportação automática — não editável aqui." : undefined}
-                      style={{ flex: 1 }}
+                </div>
+
+                <div className="field">
+                  <label>
+                    Período <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>
+                  </label>
+                  <div className="period-clearable">
+                    <DateRangePicker
+                      startValue={periodStart}
+                      endValue={periodEnd}
+                      onChange={(start, end) => {
+                        setPeriodStart(start);
+                        setPeriodEnd(end);
+                      }}
+                      fullWidth
                     />
-                    {isAutoReimport && (
+                    {(periodStart || periodEnd) && (
                       <button
                         type="button"
-                        className="secondary"
-                        onClick={reset}
-                        title="Sai da reimportação automática e libera a tela para importar outro arquivo"
+                        className="ghost period-clear"
+                        onClick={() => {
+                          setPeriodStart("");
+                          setPeriodEnd("");
+                        }}
+                        aria-label="Limpar período"
+                        title="Limpar período"
                       >
-                        Processar outro arquivo
+                        <X size={13} />
                       </button>
                     )}
                   </div>
-                  {!isAutoReimport && (
-                    <label
-                      style={{
-                        display: "flex",
-                        alignItems: "flex-start",
-                        gap: "0.5rem",
-                        marginTop: "0.8rem",
-                        fontSize: "0.85rem",
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={trackAutoUpdates}
-                        onChange={(e) => setTrackAutoUpdates(e.target.checked)}
-                        style={{ marginTop: "0.2rem" }}
-                      />
-                      <span>
-                        Salvar em Verificação automática
-                        <span className="muted" style={{ display: "block", fontSize: "0.78rem" }}>
-                          Guarda esse link na tela "Verificação automática", pra não perder de vista —
-                          de lá dá pra acompanhar mudanças, reimportar manualmente ou deixar
-                          atualizando sozinho. Só se aplica ao salvar; sem isso, esse link não fica
-                          guardado em lugar nenhum.
-                        </span>
-                      </span>
-                    </label>
-                  )}
-                </>
-              )}
+                  <p className="field-hint">Vazio processa o arquivo inteiro.</p>
+                </div>
+              </div>
+            </section>
 
-              {paths.length > 0 && (
-                <div className="file-list">
-                  {pagedPaths.map((p) => {
-                    const info = fileHashes.get(p);
-                    const provenance = urlSourceByPath.get(p);
-                    return (
-                      <div className="file-row" key={p}>
-                        <div className="file-row-icon">
-                          <FileText size={18} />
-                        </div>
-                        <div className="file-row-info">
-                          <div className="file-name">
-                            {info?.fileName ? safeDecodeFileName(info.fileName) : p}
-                            {/* Redundant once the URL is already shown, read-only, right above
-                                (the auto-reimport case) — only worth a hover hint here when
-                                this row is the only place the source URL shows at all. */}
-                            {provenance && !isAutoReimport && (
-                              <Link2
-                                size={12}
-                                style={{ marginLeft: "0.4rem", opacity: 0.6, verticalAlign: "-1px" }}
-                                aria-label={provenance.url}
+            <section className="import-payments-section">
+              <div className="field">
+                <div className="import-source-head">
+                  <label>Arquivo</label>
+                  <div className="source-toggle" role="group" aria-label="Origem do arquivo">
+                    {(
+                      [
+                        { mode: "local", label: "Local", Icon: FolderOpen },
+                        { mode: "url", label: "URL", Icon: Link2 },
+                      ] as const
+                    ).map(({ mode, label, Icon }) => {
+                      const locked = importMode !== mode && paths.length > 0;
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          aria-pressed={importMode === mode}
+                          onClick={() => setImportMode(mode)}
+                          disabled={locked}
+                          title={locked ? "Remova os arquivos selecionados para trocar o modo de importação." : undefined}
+                        >
+                          <Icon size={13} />
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {importMode === "local" ? (
+                  <div className="dropzone import-dropzone">
+                    <div className="dropzone-icon">
+                      <FolderOpen size={18} />
+                    </div>
+                    <PickFilesButton
+                      onPickFiles={handlePickFiles}
+                      onPickFolder={handlePickFolder}
+                      disabled={!selectedTemplate}
+                      title={selectedTemplate ? undefined : "Selecione um template primeiro"}
+                    />
+                    <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
+                      {selectedTemplate
+                        ? `${formatFileKindList(selectedTemplate.acceptedFileKinds)} · suporta múltiplos arquivos`
+                        : "Selecione um template para saber os formatos aceitos."}
+                    </p>
+                  </div>
+                ) : (
+                  !isAutoReimport && (
+                    <input
+                      type="url"
+                      placeholder="https://… (.xlsx, .xls ou .ods, link de download direto, sem login)"
+                      value={urlInput}
+                      onChange={(e) => setUrlInput(e.target.value)}
+                      disabled={urlDownloading}
+                      style={{ width: "100%" }}
+                    />
+                  )
+                )}
+
+                {paths.length > 0 && (
+                  <div className="file-list import-file-list">
+                    {pagedPaths.map((p) => {
+                      const info = fileHashes.get(p);
+                      const provenance = urlSourceByPath.get(p);
+                      const name = info?.fileName ? safeDecodeFileName(info.fileName) : fileNameFromPath(p);
+                      const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+                      const origin = provenance ? urlHost(provenance.url) : parentDir(p);
+                      return (
+                        <div className="file-row" key={p}>
+                          <div className="file-row-icon import-file-icon">
+                            <FileText size={18} />
+                          </div>
+                          <div className="file-row-info">
+                            <div className="file-name">{name}</div>
+                            <div className="file-meta import-file-meta">
+                              {isAutoReimport && (
+                                <span className="import-auto-pill">
+                                  <RefreshCw size={11} />
+                                  Reimportação automática
+                                </span>
+                              )}
+                              {origin && (
+                                <span className="import-file-origin" title={provenance?.url ?? p}>
+                                  {origin}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="file-row-actions">
+                            {ext && <span className="import-file-ext">{ext}</span>}
+                            {isAutoReimport ? (
+                              <button
+                                type="button"
+                                className="ghost"
+                                style={{ fontSize: "0.8rem", padding: "0.35rem 0.6rem" }}
+                                onClick={reset}
+                                title="Sai da reimportação automática e libera a tela para importar outro arquivo"
                               >
-                                <title>{provenance.url}</title>
-                              </Link2>
+                                Trocar arquivo
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="ghost"
+                                style={{ padding: "0.3rem" }}
+                                onClick={() => removePath(p)}
+                                aria-label="Remover"
+                              >
+                                <X size={14} />
+                              </button>
                             )}
                           </div>
                         </div>
-                        <div className="file-row-actions">
-                          <button
-                            type="button"
-                            className="ghost"
-                            style={{ padding: "0.3rem" }}
-                            onClick={() => removePath(p)}
-                            aria-label="Remover"
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
+                )}
+                {paths.length > PATHS_PAGE_SIZE_OPTIONS[0] && (
+                  <Pagination
+                    page={pathsPage}
+                    pageCount={pathsPageCount}
+                    onPageChange={setPathsPage}
+                    rangeLabel={`Mostrando ${pathsPage * pathsPageSize + 1} a ${Math.min(
+                      paths.length,
+                      pathsPage * pathsPageSize + pathsPageSize,
+                    )} de ${paths.length}`}
+                    pageSize={pathsPageSize}
+                    pageSizeOptions={PATHS_PAGE_SIZE_OPTIONS}
+                    onPageSizeChange={(size) => {
+                      setPathsPageSize(size);
+                      setPathsPage(0);
+                    }}
+                  />
+                )}
+              </div>
+
+              <div className="import-option">
+                <div>
+                  <div className="import-option-title">Manter registros atualizados manualmente</div>
+                  <p className="import-option-desc">
+                    Turnos com valor corrigido à mão não são sobrescritos por esta importação. Turnos já
+                    pagos nunca são sobrescritos, com ou sem esta opção.
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  className="settings-switch"
+                  aria-label="Manter registros atualizados manualmente"
+                  checked={keepManualEdits}
+                  onChange={(e) => setKeepManualEdits(e.target.checked)}
+                />
+              </div>
+              {importMode === "url" && !isAutoReimport && (
+                <div className="import-option">
+                  <div>
+                    <div className="import-option-title">Salvar em Verificação automática</div>
+                    <p className="import-option-desc">
+                      Guarda o link para acompanhar mudanças, reimportar ou atualizar sozinho. Sem isso, o
+                      link não fica salvo.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    className="settings-switch"
+                    aria-label="Salvar em Verificação automática"
+                    checked={trackAutoUpdates}
+                    onChange={(e) => setTrackAutoUpdates(e.target.checked)}
+                  />
                 </div>
               )}
-              {paths.length > PATHS_PAGE_SIZE_OPTIONS[0] && (
-                <Pagination
-                  page={pathsPage}
-                  pageCount={pathsPageCount}
-                  onPageChange={setPathsPage}
-                  rangeLabel={`Mostrando ${pathsPage * pathsPageSize + 1} a ${Math.min(
-                    paths.length,
-                    pathsPage * pathsPageSize + pathsPageSize,
-                  )} de ${paths.length}`}
-                  pageSize={pathsPageSize}
-                  pageSizeOptions={PATHS_PAGE_SIZE_OPTIONS}
-                  onPageSizeChange={(size) => {
-                    setPathsPageSize(size);
-                    setPathsPage(0);
-                  }}
-                />
-              )}
-            </div>
+            </section>
 
-            <div className="card-footer">
+            <div className="import-payments-footer">
               <button
                 type="button"
                 disabled={
@@ -1954,7 +1983,8 @@ export default function ImportPaymentsPage() {
                 }
                 onClick={handleProcessClick}
               >
-                {urlDownloading ? "Baixando..." : busy ? "Processando..." : `Processar ${paths.length || ""} arquivo(s)`}
+                <Play size={14} style={{ marginRight: "0.45rem" }} />
+                {urlDownloading ? "Baixando..." : busy ? "Processando..." : processLabel(processCount)}
               </button>
             </div>
           </div>
