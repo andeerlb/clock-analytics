@@ -1302,40 +1302,6 @@ tr:last-child td {
   gap: 1rem 1.2rem;
 }
 
-.import-payments-fields select,
-.import-payments-fields input {
-  width: 100%;
-}
-
-.select-adorned {
-  position: relative;
-}
-
-.select-adorned select {
-  padding-left: 2.2rem;
-  padding-right: 6.5rem;
-  text-overflow: ellipsis;
-}
-
-.select-adorned-start,
-.select-adorned-end {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  pointer-events: none;
-  color: var(--text-muted);
-}
-
-.select-adorned-start {
-  left: 0.75rem;
-}
-
-.select-adorned-end {
-  right: 2.3rem;
-  font-size: 0.75rem;
-  white-space: nowrap;
-}
-
 .period-clearable {
   position: relative;
 }
@@ -4755,6 +4721,12 @@ button.emp-picker-trigger[aria-expanded="true"] {
 .emp-picker-muted {
   flex-shrink: 0;
   color: var(--text-muted);
+}
+
+.emp-picker-trigger-meta {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  white-space: nowrap;
 }
 
 .emp-picker-summary {

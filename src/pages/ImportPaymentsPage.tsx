@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   Eye,
   FileText,
-  FileSpreadsheet,
   FolderOpen,
   History,
   Link2,
@@ -25,6 +24,7 @@ import ConfirmModal from "../components/ConfirmModal";
 import DateRangePicker from "../components/DateRangePicker";
 import Drawer from "../components/Drawer";
 import EmployeePicker from "../components/EmployeePicker";
+import OptionPicker from "../components/OptionPicker";
 import Pagination from "../components/Pagination";
 import PickFilesButton from "../components/PickFilesButton";
 import RolePicker from "../components/RolePicker";
@@ -1736,26 +1736,21 @@ export default function ImportPaymentsPage() {
             <section className="import-payments-section">
               <div className="import-payments-fields">
                 <div className="field">
-                  <label htmlFor="payment-template">Template</label>
-                  <div className="select-adorned">
-                    <FileSpreadsheet size={15} className="select-adorned-start" aria-hidden="true" />
-                    <select
-                      id="payment-template"
-                      value={templateId}
-                      onChange={(e) => setTemplateId(e.target.value)}
-                      disabled={templates.length === 0}
-                    >
-                      <option value="">Selecione um template</option>
-                      {templates.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}
-                        </option>
-                      ))}
-                    </select>
-                    {selectedTemplate && (
-                      <span className="select-adorned-end">{selectedTemplate.acceptedFileKinds.join(" · ")}</span>
-                    )}
-                  </div>
+                  <label>Template</label>
+                  <OptionPicker
+                    single
+                    align="left"
+                    options={templates.map((t) => ({
+                      id: String(t.id),
+                      label: t.name,
+                      meta: t.acceptedFileKinds.join(" · "),
+                    }))}
+                    selected={templateId ? new Set([String(templateId)]) : new Set()}
+                    onToggle={(id) => setTemplateId(id)}
+                    title="Templates"
+                    allPlaceholder={templates.length === 0 ? "Nenhum template disponível" : "Selecione um template"}
+                    searchPlaceholder="Buscar template"
+                  />
                   {templates.length === 0 && (
                     <p className="field-hint">
                       Nenhum template disponível.{" "}
