@@ -352,7 +352,9 @@ button.app-nav-toggle:hover {
 .app-content {
   flex: 1;
   min-width: 0;
-  padding: 2rem 2.5rem;
+  /* Extra room at the bottom so the end of a page can scroll above the
+     floating "atualizações pendentes" card and the assistant button. */
+  padding: 2rem 2.5rem 6rem;
 }
 
 /* PageHeader — the standard top of every page (see PageHeader.tsx). */
