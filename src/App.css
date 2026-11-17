@@ -7322,7 +7322,7 @@ button.rv-history-row:hover {
 }
 
 .pc-group-head:has(.pc-group-toggle:hover) {
-  background: var(--surface-bright);
+  background: #1f1f24;
 }
 
 .pc-group-toggle .rv-tag {
