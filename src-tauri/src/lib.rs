@@ -110,10 +110,12 @@ pub fn run() {
             // A database selected for import is staged by the previous app
             // process. Swap it now, before the webview can load and before
             // the SQL plugin creates its first connection pool.
-            let data_dir = app.path().app_data_dir()?;
+            // Next to the live database (`db::db_dir`), which is where the SQL
+            // plugin opens it; on Linux that is not `app_data_dir`.
+            let db_folder = db::db_dir(app.handle())?;
             let restoring_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
-            match storage::apply_pending_database_import(&data_dir) {
-                Ok(true) => storage::write_database_import_result(&data_dir, &storage::DatabaseImportResult {
+            match storage::apply_pending_database_import(&db_folder) {
+                Ok(true) => storage::write_database_import_result(&db_folder, &storage::DatabaseImportResult {
                     success: true,
                     message: "Banco de dados restaurado com sucesso.".into(),
                     events: vec![
@@ -123,7 +125,7 @@ pub fn run() {
                     ],
                 }),
                 Ok(false) => {}
-                Err(error) => storage::write_database_import_result(&data_dir, &storage::DatabaseImportResult {
+                Err(error) => storage::write_database_import_result(&db_folder, &storage::DatabaseImportResult {
                     success: false,
                     message: format!("Não foi possível restaurar o banco. A versão anterior foi mantida. {error}"),
                     events: vec![
@@ -138,7 +140,7 @@ pub fn run() {
             // what applies pending migrations. A failed backup is logged, not
             // fatal: refusing to start would lock the user out of their data.
             let known_versions: Vec<i64> = db::migrations().iter().map(|m| m.version).collect();
-            match tauri::async_runtime::block_on(db_backup::backup_if_migrations_pending(&data_dir, &known_versions)) {
+            match tauri::async_runtime::block_on(db_backup::backup_if_migrations_pending(&db_folder, &known_versions)) {
                 Ok(Some(path)) => eprintln!("backup antes das migrations: {}", path.display()),
                 Ok(None) => {}
                 Err(error) => eprintln!("falha ao criar backup antes das migrations: {error}"),
