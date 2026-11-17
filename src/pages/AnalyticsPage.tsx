@@ -3,8 +3,6 @@ import {
   ArrowRight,
   CheckCircle2,
   Filter,
-  FileDown,
-  FileSpreadsheet,
   Bookmark,
   RefreshCw,
   ChevronDown,
@@ -26,7 +24,6 @@ import { countPaymentShiftsPendingAudit, listAllLatestShiftDiffs, listClients, l
 import { toIso, todayUtc } from "../lib/calendar";
 import { formatCurrencyBRL, scheduleDurationMinutes } from "../lib/format";
 import { buildShiftValueResolver } from "../lib/paymentShiftValue";
-import { exportAnalyticsPdf, exportAnalyticsXlsx } from "../lib/analyticsExport";
 import { openReconciliationWindow } from "../lib/api";
 
 type Tab = "overview" | "costs" | "journeys" | "audit";
@@ -152,7 +149,7 @@ function DailyBars({ rows, start, end }: { rows: PaymentShiftReportRow[]; start:
   );
 }
 
-/** A header button that opens a small menu below it (Exportar, "⋯"). */
+/** A header button that opens a small menu below it (the "⋯" menu). */
 function MenuButton({ label, icon, iconOnly, items }: { label: string; icon: ReactNode; iconOnly?: boolean; items: ({ label: string; icon: ReactNode; onClick: () => void; disabled?: boolean } | "sep")[] }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -265,7 +262,6 @@ export default function AnalyticsPage() {
   const [occurrenceRows, setOccurrenceRows] = useState<CheckDiffRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [exportError,setExportError]=useState<string|null>(null); const [exporting,setExporting]=useState(false);
   const [filtersOpen,setFiltersOpen]=useState(false); const [viewsOpen,setViewsOpen]=useState(false); const [deleteView,setDeleteView]=useState<SavedView|null>(null);
   const [views,setViews]=useState<SavedView[]>(loadViews); const [viewName,setViewName]=useState(""); const [selectedView,setSelectedView]=useState("");
   const [rankBy,setRankBy]=useState<RankBy>("company");
@@ -337,7 +333,6 @@ export default function AnalyticsPage() {
     return {total:items.length,unseen:unseen.length,field:count("field"),unresolved:count("unresolved"),newShift:count("new-shift"),removed:count("removed"),errors:count("error"),applied:items.filter(g=>g.some(r=>r.applied)).length,sources:Array.from(bySource.values()).sort((a,b)=>b.unseen-a.unseen||b.count-a.count).slice(0,8)};
   },[occurrenceRows]);
   const activeFilterCount=usePaymentsActiveFilterCount(true);
-  const filterDescription=useMemo(()=>{const parts:string[]=[];const names=(ids:Set<string>,source:{id:number;name:string}[])=>Array.from(ids).map(id=>source.find(x=>String(x.id)===id)?.name||id).join(", ");if(paymentFilters.selectedCompanyIds.size)parts.push(`Empresas: ${names(paymentFilters.selectedCompanyIds,catalogs.companies)}`);if(paymentFilters.selectedClientIds.size)parts.push(`Clientes: ${names(paymentFilters.selectedClientIds,catalogs.clients)}`);if(paymentFilters.selectedRoleIds.size)parts.push(`Funções: ${names(paymentFilters.selectedRoleIds,catalogs.roles)}`);if(paymentFilters.selectedEmployeeIds.size)parts.push(`Colaboradores selecionados: ${paymentFilters.selectedEmployeeIds.size}`);if(paymentFilters.selectedLocals.size)parts.push(`Locais: ${Array.from(paymentFilters.selectedLocals).join(", ")}`);if(paymentFilters.selectedStatuses.size>0)parts.push(`Status: ${Array.from(paymentFilters.selectedStatuses).join(", ")}`);if(paymentFilters.selectedShiftPeriods.size>0)parts.push(`Diurno/noturno: ${Array.from(paymentFilters.selectedShiftPeriods).join(", ")}`);if(paymentFilters.scheduleTimeFilter)parts.push("Horário personalizado ativo");return parts.length?parts.join("; "):"Nenhum filtro adicional";},[paymentFilters.selectedCompanyIds,paymentFilters.selectedClientIds,paymentFilters.selectedRoleIds,paymentFilters.selectedEmployeeIds,paymentFilters.selectedLocals,paymentFilters.selectedStatuses,paymentFilters.selectedShiftPeriods,paymentFilters.scheduleTimeFilter,catalogs]);
 
   function applyScopeToPaymentFilters(statuses?: ("pendente" | "erro" | "pago")[],scope?:{employeeId?:number;companyId?:number;clientId?:number;roleId?:number;local?:string}) {
     paymentFilters.setPeriod(periodStart, periodEnd);
@@ -357,7 +352,6 @@ export default function AnalyticsPage() {
   }
     function saveView(id?:string,explicitName?:string){const name=(explicitName??viewName).trim();if(!name)return;const v:SavedView={id:id||crypto.randomUUID(),name,tab,start:periodStart,end:periodEnd,filters:{...snapshotPaymentsFilters(paymentFilters),periodStart,periodEnd}};const next=id?views.map(x=>x.id===id?v:x):[...views,v];setViews(next);setSelectedView(v.id);setViewName(name);localStorage.setItem("analytics-saved-views",JSON.stringify(next));}
   function openView(v:SavedView){applyPaymentsFiltersSnapshot(paymentFilters,v.filters);setPeriod([v.start,v.end]);setTab(TABS.includes(v.tab)?v.tab:"overview");setViewsOpen(false);}
-  async function doExport(kind:"pdf"|"xlsx"){setExportError(null);setExporting(true);try{if(kind==="pdf")await exportAnalyticsPdf(rows,periodStart,periodEnd,filterDescription);else await exportAnalyticsXlsx(rows,periodStart,periodEnd,filterDescription);}catch(e){setExportError(e instanceof Error?e.message:String(e));}finally{setExporting(false);}}
 
   return (
     <div className="analytics-page">
@@ -374,14 +368,6 @@ export default function AnalyticsPage() {
               Filtros
               {activeFilterCount > 0 && <span className="analytics-count">{activeFilterCount}</span>}
             </button>
-            <MenuButton
-              label="Exportar"
-              icon={<FileDown size={15} />}
-              items={[
-                { label: "Relatório em PDF", icon: <FileDown size={15} />, onClick: () => doExport("pdf"), disabled: exporting },
-                { label: "Planilha Excel", icon: <FileSpreadsheet size={15} />, onClick: () => doExport("xlsx"), disabled: exporting },
-              ]}
-            />
             <MenuButton
               label="Mais opções"
               iconOnly
@@ -402,7 +388,6 @@ export default function AnalyticsPage() {
       </div>
 
       {error && <div className="error-box">Não foi possível carregar as análises: {error}</div>}
-      {exportError && <div className="error-box">Não foi possível exportar: {exportError}</div>}
       {loading ? <div className="card analytics-loading">Carregando indicadores...</div> : (
         <>
           {tab === "overview" && <>
