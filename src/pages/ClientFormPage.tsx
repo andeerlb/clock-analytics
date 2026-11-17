@@ -53,18 +53,33 @@ export default function ClientFormPage() {
   // while switching back and forth, and only dropped on save.
   const [valueRules, setValueRules] = useState<WizardValueRule[]>([]);
   const [ownValueRules, setOwnValueRules] = useState(false);
-  const [companyValueRules, setCompanyValueRules] = useState<{ id: number; name: string; rules: WizardValueRule[] }[]>([]);
+  const [companyValueRules, setCompanyValueRules] = useState<
+    { id: number; name: string; rules: WizardValueRule[]; nightStartTime: string; nightEndTime: string; nightShiftRule: NightShiftRule }[]
+  >([]);
   const [loading, setLoading] = useState(isEditing);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const currentCompanies = isEditing ? linkedCompanies : pendingCompanies;
+
+  // What the form held when it was loaded — anything different shows "Alterações não salvas" next to Salvar.
+  const [savedSnapshot, setSavedSnapshot] = useState<string | null>(isEditing ? null : "");
+  const snapshot = JSON.stringify([name, cnpj, overrideNightShift, nightStartTime, nightEndTime, nightShiftRule, ownValueRules, valueRules]);
+  const dirty = savedSnapshot !== null && snapshot !== savedSnapshot && (isEditing || name.trim() !== "" || cnpj.trim() !== "");
+  const canSave = !busy && (isEditing || pendingCompanies.length > 0) && (!ownValueRules || isValueRulesValid(valueRules)) && (!isEditing || dirty);
   const companyIdsKey = currentCompanies.map((c) => c.id).join(",");
 
   // The rules each linked empresa would hand down, shown read-only under "Usar os da empresa".
   useEffect(() => {
     let cancelled = false;
-    Promise.all(currentCompanies.map((c) => getCompany(c.id).then((d) => ({ id: c.id, name: c.name, rules: fromPaymentValueRules(d.valueRules) }))))
+    Promise.all(currentCompanies.map((c) => getCompany(c.id).then((d) => ({
+          id: c.id,
+          name: c.name,
+          rules: fromPaymentValueRules(d.valueRules),
+          nightStartTime: d.nightStartTime,
+          nightEndTime: d.nightEndTime,
+          nightShiftRule: d.nightShiftRule,
+        }))))
       .then((list) => {
         if (!cancelled) setCompanyValueRules(list);
       })
@@ -94,8 +109,22 @@ export default function ClientFormPage() {
           setNightEndTime(c.nightEndTime);
           setNightShiftRule(c.nightShiftRule);
         }
-        setValueRules(fromPaymentValueRules(c.valueRules));
+        const rules = fromPaymentValueRules(c.valueRules);
+        setValueRules(rules);
         setOwnValueRules(c.valueRules.length > 0);
+        const override = c.nightStartTime !== null;
+        setSavedSnapshot(
+          JSON.stringify([
+            c.name,
+            maskCnpj(c.cnpj),
+            override,
+            override ? c.nightStartTime : "22:00",
+            override ? c.nightEndTime : "05:00",
+            override ? c.nightShiftRule : "overlap",
+            c.valueRules.length > 0,
+            rules,
+          ]),
+        );
       })
       .catch((e) => setError(String(e instanceof Error ? e.message : e)))
       .finally(() => setLoading(false));
@@ -174,6 +203,21 @@ export default function ClientFormPage() {
         title={isEditing ? "Editar cliente" : "Novo cliente"}
         backFallback="/clients"
         backLabel="Voltar para Clientes"
+        actions={
+          !loading && (
+            <>
+              {dirty && (
+                <span className="form-dirty">
+                  <i />
+                  Alterações não salvas
+                </span>
+              )}
+              <button type="submit" form="client-form" disabled={!canSave}>
+                {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
+              </button>
+            </>
+          )
+        }
         subtitle={
           isEditing
             ? "Um cliente precisa continuar vinculado a pelo menos uma empresa — não é possível remover a última, nem uma empresa com colaboradores cadastrados para este cliente."
@@ -186,7 +230,7 @@ export default function ClientFormPage() {
       {loading ? (
         <p className="muted">Carregando...</p>
       ) : (
-        <form onSubmit={handleSubmit} className="details-main" style={{ maxWidth: "52rem" }}>
+        <form id="client-form" onSubmit={handleSubmit} className="details-main" style={{ maxWidth: "52rem" }}>
           <FormPanel icon={Building2} title="Empresas vinculadas">
             <div className="field">
               {companyError && <div className="error-box">{companyError}</div>}
@@ -249,8 +293,9 @@ export default function ClientFormPage() {
             </div>
           </FormPanel>
 
-          <FormPanel icon={Info} title="Informações Gerais">
-            <div className="field" style={{ marginBottom: "1rem" }}>
+          <FormPanel icon={Info} title="Dados do cliente">
+            <div className="form-row-2">
+            <div className="field">
               <label htmlFor="client-name">Nome</label>
               <input
                 id="client-name"
@@ -275,22 +320,32 @@ export default function ClientFormPage() {
                 style={{ width: "100%" }}
               />
             </div>
+            </div>
           </FormPanel>
 
           <FormPanel
             icon={Moon}
             title="Horário noturno"
-            description="Por padrão, este cliente usa o horário noturno configurado na empresa. Sobrescreva aqui só se este cliente específico tiver um horário diferente."
+            description="Por padrão este cliente usa o horário noturno da empresa. Defina um próprio só se ele for diferente."
           >
-            <label className="field-code-checkbox" style={{ marginBottom: overrideNightShift ? "1rem" : 0 }}>
-              <input
-                type="checkbox"
-                checked={overrideNightShift}
-                onChange={(e) => setOverrideNightShift(e.target.checked)}
-              />
-              Sobrescrever horário noturno da empresa
-            </label>
-            {overrideNightShift && (
+            <div className="vr-inherit">
+              <span className="vr-inherit-text">
+                {overrideNightShift
+                  ? "Horário próprio deste cliente; o da empresa não vale para ele."
+                  : currentCompanies.length
+                    ? `Usando o horário de ${currentCompanies.map((c) => c.name).join(", ")}.`
+                    : "Vincule uma empresa para ver o horário que este cliente vai usar."}
+              </span>
+              <div className="analytics-seg" role="group" aria-label="Horário noturno deste cliente">
+                <button type="button" aria-pressed={!overrideNightShift} onClick={() => setOverrideNightShift(false)}>
+                  Usar o da empresa
+                </button>
+                <button type="button" aria-pressed={overrideNightShift} onClick={() => setOverrideNightShift(true)}>
+                  Definir próprio
+                </button>
+              </div>
+            </div>
+            {overrideNightShift ? (
               <NightShiftRuleFields
                 nightStartTime={nightStartTime}
                 nightEndTime={nightEndTime}
@@ -302,6 +357,19 @@ export default function ClientFormPage() {
                 }}
                 idPrefix="client"
               />
+            ) : (
+              companyValueRules.map((c) => (
+                <div key={c.id}>
+                  {companyValueRules.length > 1 && <div className="vr-company-label">{c.name}</div>}
+                  <NightShiftRuleFields
+                    nightStartTime={c.nightStartTime}
+                    nightEndTime={c.nightEndTime}
+                    nightShiftRule={c.nightShiftRule}
+                    idPrefix={`company-${c.id}`}
+                    readOnly
+                  />
+                </div>
+              ))
             )}
           </FormPanel>
 
@@ -343,13 +411,6 @@ export default function ClientFormPage() {
             )}
           </FormPanel>
 
-          <button
-            type="submit"
-            disabled={busy || (!isEditing && pendingCompanies.length === 0) || (ownValueRules && !isValueRulesValid(valueRules))}
-            style={{ alignSelf: "flex-start" }}
-          >
-            {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
-          </button>
         </form>
       )}
     </div>
