@@ -3,10 +3,7 @@ import {
   ArrowRight,
   CheckCircle2,
   Filter,
-  Bookmark,
   RefreshCw,
-  ChevronDown,
-  MoreHorizontal,
   Search as SearchIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -14,10 +11,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { periodPresets } from "../components/LibraryFiltersPanel";
 import PeriodPicker, { formatPeriodShort } from "../components/PeriodPicker";
 import PaymentsFiltersPanel, { usePaymentsActiveFilterCount } from "../components/PaymentsFiltersPanel";
-import Modal from "../components/Modal";
 import PageHeader from "../components/PageHeader";
-import ConfirmModal from "../components/ConfirmModal";
-import { applyPaymentsFiltersSnapshot, PAYMENT_SHIFT_STATUSES, SHIFT_PERIODS, snapshotPaymentsFilters, usePaymentsFilters, type PaymentsFiltersSnapshot } from "../contexts/FiltersContext";
+import { PAYMENT_SHIFT_STATUSES, SHIFT_PERIODS, usePaymentsFilters } from "../contexts/FiltersContext";
 import { orAll } from "../lib/filterSets";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { countPaymentShiftsPendingAudit, listAllLatestShiftDiffs, listClients, listCompanies, listDistinctPaymentShiftLocals, listPaymentShiftsForReport, listRolesGlobal, type CheckDiffRow, type ClientRow, type CompanyRow, type ListPaymentShiftSummariesQuery, type PaymentShiftReportRow, type RoleRow } from "../lib/db";
@@ -27,14 +22,10 @@ import { buildShiftValueResolver } from "../lib/paymentShiftValue";
 import { openReconciliationWindow } from "../lib/api";
 
 type Tab = "overview" | "costs" | "journeys" | "audit";
-const TABS: Tab[] = ["overview", "costs", "journeys", "audit"];
-/** `cards` is a leftover from the removed "Escolher cards" — still present in older saved views, ignored. */
-type SavedView = { id: string; name: string; tab: Tab; start: string; end: string; filters: PaymentsFiltersSnapshot; cards?: unknown };
 /** "1 turno" / "15 turnos". */
 function plural(n: number, one: string, many: string): string {
   return `${n.toLocaleString("pt-BR")} ${n === 1 ? one : many}`;
 }
-function loadViews(): SavedView[] { try { const x=JSON.parse(localStorage.getItem("analytics-saved-views")||"[]"); return Array.isArray(x)?x:[]; } catch { return []; } }
 
 function currentMonth(): [string, string] {
   const today = todayUtc();
@@ -149,32 +140,6 @@ function DailyBars({ rows, start, end }: { rows: PaymentShiftReportRow[]; start:
   );
 }
 
-/** A header button that opens a small menu below it (the "⋯" menu). */
-function MenuButton({ label, icon, iconOnly, items }: { label: string; icon: ReactNode; iconOnly?: boolean; items: ({ label: string; icon: ReactNode; onClick: () => void; disabled?: boolean } | "sep")[] }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    function onDown(e: MouseEvent) { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); }
-    function onKey(e: KeyboardEvent) { if (e.key === "Escape") setOpen(false); }
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
-  }, [open]);
-  return (
-    <div className="analytics-menu-wrap" ref={ref}>
-      <button type="button" className={`outline${iconOnly ? " analytics-icon-button" : ""}`} aria-haspopup="menu" aria-expanded={open} aria-label={iconOnly ? label : undefined} title={iconOnly ? label : undefined} onClick={() => setOpen((o) => !o)}>
-        {icon}{!iconOnly && <>{label}<ChevronDown size={13} /></>}
-      </button>
-      {open && <div className="analytics-menu" role="menu">
-        {items.map((item, i) => item === "sep" ? <div key={`sep-${i}`} className="analytics-menu-sep" /> : (
-          <button key={item.label} type="button" role="menuitem" disabled={item.disabled} onClick={() => { setOpen(false); item.onClick(); }}>{item.icon}{item.label}</button>
-        ))}
-      </div>}
-    </div>
-  );
-}
-
 function EmptyChart() {
   return <div className="analytics-empty">Não há dados no período selecionado.</div>;
 }
@@ -262,8 +227,7 @@ export default function AnalyticsPage() {
   const [occurrenceRows, setOccurrenceRows] = useState<CheckDiffRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filtersOpen,setFiltersOpen]=useState(false); const [viewsOpen,setViewsOpen]=useState(false); const [deleteView,setDeleteView]=useState<SavedView|null>(null);
-  const [views,setViews]=useState<SavedView[]>(loadViews); const [viewName,setViewName]=useState(""); const [selectedView,setSelectedView]=useState("");
+  const [filtersOpen,setFiltersOpen]=useState(false);
   const [rankBy,setRankBy]=useState<RankBy>("company");
   const [catalogs,setCatalogs]=useState<{companies:CompanyRow[];clients:ClientRow[];roles:RoleRow[];locals:string[]}>({companies:[],clients:[],roles:[],locals:[]});
 
@@ -271,7 +235,6 @@ export default function AnalyticsPage() {
   // The background checker replaces `trackedFiles` after each completed
   // batch, so the dashboard refreshes while it is open without polling.
   useEffect(()=>{listAllLatestShiftDiffs().then(setOccurrenceRows).catch(()=>{});},[trackedFiles]);
-  useEffect(()=>{if(views.length||!localStorage.getItem("analytics-saved-view"))return;try{const old=JSON.parse(localStorage.getItem("analytics-saved-view")!);if(old?.start&&old?.end){const v:SavedView={id:crypto.randomUUID(),name:"Visão migrada",tab:TABS.includes(old.tab)?old.tab:"overview",start:old.start,end:old.end,filters:snapshotPaymentsFilters(paymentFilters)};setViews([v]);localStorage.setItem("analytics-saved-views",JSON.stringify([v]));}}catch{/* fallback seguro */}},[]);
 
   useEffect(() => {
     let cancelled = false;
@@ -350,8 +313,6 @@ export default function AnalyticsPage() {
     applyScopeToPaymentFilters(["pago"]);
     openReconciliationWindow().catch(() => {});
   }
-    function saveView(id?:string,explicitName?:string){const name=(explicitName??viewName).trim();if(!name)return;const v:SavedView={id:id||crypto.randomUUID(),name,tab,start:periodStart,end:periodEnd,filters:{...snapshotPaymentsFilters(paymentFilters),periodStart,periodEnd}};const next=id?views.map(x=>x.id===id?v:x):[...views,v];setViews(next);setSelectedView(v.id);setViewName(name);localStorage.setItem("analytics-saved-views",JSON.stringify(next));}
-  function openView(v:SavedView){applyPaymentsFiltersSnapshot(paymentFilters,v.filters);setPeriod([v.start,v.end]);setTab(TABS.includes(v.tab)?v.tab:"overview");setViewsOpen(false);}
 
   return (
     <div className="analytics-page">
@@ -368,14 +329,6 @@ export default function AnalyticsPage() {
               Filtros
               {activeFilterCount > 0 && <span className="analytics-count">{activeFilterCount}</span>}
             </button>
-            <MenuButton
-              label="Mais opções"
-              iconOnly
-              icon={<MoreHorizontal size={16} />}
-              items={[
-                { label: views.length ? `Visões salvas (${views.length})` : "Visões salvas", icon: <Bookmark size={15} />, onClick: () => setViewsOpen(true) },
-              ]}
-            />
           </>
         }
       />
@@ -608,8 +561,6 @@ export default function AnalyticsPage() {
         locals={catalogs.locals}
         includeStatus
       />
-      {viewsOpen&&<Modal title="Visões favoritas" onClose={()=>setViewsOpen(false)} maxHeight="80vh"><div className="analytics-view-form"><label>Nome<input value={viewName} onChange={e=>setViewName(e.target.value)} placeholder="Ex.: Fechamento mensal"/></label><button type="button" disabled={!viewName.trim()} onClick={()=>saveView()}>Criar com estado atual</button></div><div className="analytics-view-list">{!views.length&&<p className="muted">Nenhuma visão salva.</p>}{views.map(v=><div key={v.id} className={selectedView===v.id?"active":""} onClick={()=>{setSelectedView(v.id);setViewName(v.name);}}><span><strong>{v.name}</strong><small>{v.start} a {v.end}</small></span><span><button type="button" className="secondary" onClick={e=>{e.stopPropagation();openView(v);}}>Abrir</button><button type="button" className="secondary" onClick={e=>{e.stopPropagation();saveView(v.id,v.name);}}>Atualizar</button><button type="button" className="danger" aria-label={`Excluir ${v.name}`} onClick={e=>{e.stopPropagation();setDeleteView(v);}}>×</button></span></div>)}</div>{selectedView&&<button type="button" disabled={!viewName.trim()} onClick={()=>saveView(selectedView)}>Renomear / atualizar selecionada</button>}</Modal>}
-      {deleteView&&<ConfirmModal title="Excluir visão" message={`Excluir a visão “${deleteView.name}”?`} confirmLabel="Excluir" onCancel={()=>setDeleteView(null)} onConfirm={()=>{const next=views.filter(v=>v.id!==deleteView.id);setViews(next);localStorage.setItem("analytics-saved-views",JSON.stringify(next));setDeleteView(null);setSelectedView("");}}/>}
     </div>
   );
 }
