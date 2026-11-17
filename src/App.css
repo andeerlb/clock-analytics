@@ -1761,9 +1761,11 @@ tr:last-child td {
   color: var(--text-muted);
 }
 
+/* Columns follow the space the grid actually has (not the window), so the
+   cards also stack when a side panel like the Assistente narrows the page. */
 .choice-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
   gap: 1rem;
 }
 
@@ -1880,7 +1882,7 @@ tr:last-child td {
 .choice-pending {
   margin-top: 1rem;
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
@@ -1891,7 +1893,7 @@ tr:last-child td {
 }
 
 .choice-pending-main {
-  flex: 1;
+  flex: 1 1 18rem;
   display: flex;
   align-items: center;
   gap: 0.8rem;
@@ -1927,18 +1929,7 @@ tr:last-child td {
   white-space: nowrap;
 }
 
-/* Only a really narrow window drops the button under the text. */
-@media (max-width: 520px) {
-  .choice-pending {
-    flex-wrap: wrap;
-  }
-}
-
-@media (max-width: 860px) {
-  .choice-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
+@media (hover: none) {
   .choice-card-go {
     opacity: 1;
     transform: none;
