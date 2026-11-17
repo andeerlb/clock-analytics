@@ -16,14 +16,10 @@ import {
   Users,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { Fragment, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAiAssistant } from "../components/AiAssistant";
-import AnchoredPopover from "../components/AnchoredPopover";
 import Avatar from "../components/Avatar";
-import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
-import CurrencyInput from "../components/CurrencyInput";
-import DatePicker from "../components/DatePicker";
 import Drawer from "../components/Drawer";
 import ExtraColumnsDrawer from "../components/ExtraColumnsDrawer";
 import ColumnPicker from "../components/ColumnPicker";
@@ -34,9 +30,8 @@ import PaymentsExportMenu from "../components/PaymentsExportMenu";
 import PaymentsFiltersPanel, { PaymentsFilterChips, usePaymentsActiveFilterCount } from "../components/PaymentsFiltersPanel";
 import PdfViewerModal from "../components/PdfViewerModal";
 import PillButton from "../components/PillButton";
-import ShiftActionPanel, { type ShiftActionKind } from "../components/ShiftActionPanel";
+import ShiftPanel, { type LastPayment, type ShiftEditFields, type ShiftPanelTab } from "../components/ShiftPanel";
 import TableScroll from "../components/TableScroll";
-import TimeField from "../components/TimeField";
 import { PAYMENT_SHIFT_STATUSES, PAYMENTS_PAGE_SIZE_OPTIONS, SHIFT_PERIODS, usePaymentsFilters } from "../contexts/FiltersContext";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { openReconciliationWindow, revealInFileManager } from "../lib/api";
@@ -64,6 +59,7 @@ import {
   type ClientRow,
   type CompanyRow,
   type EffectivePaymentRules,
+  type EmployeePixKeyRow,
   type ListPaymentShiftSummariesQuery,
   type PaymentShiftFlatRow,
   type PaymentShiftGroupRow,
@@ -71,14 +67,12 @@ import {
   type ShiftFieldDiffRow,
 } from "../lib/db";
 import {
-  centsMaskToAmount,
   diffFieldLabel,
   formatCurrencyBRL,
   formatDate,
   formatDateAbbrevYY,
   formatDateTimeAbbrevYY,
   formatMinutesAsTime,
-  parseTimeToMinutes,
   scheduleDurationMinutes,
   shiftValue,
 } from "../lib/format";
@@ -137,268 +131,6 @@ function groupKey(employeeId: number, competencia: string): string {
 /** Where a row action came from — `null` for a flat (desagrupado) row, or the group it's nested under so a mutation can refresh exactly that group plus the summary counts. */
 type GroupRef = { employeeId: number; competencia: string } | null;
 
-/** A patch to one or more of a shift's own editable fields — whichever keys are present overwrite that field, everything else carries over from the shift's current value (see `commitField` in `PaymentsPage`). */
-type ShiftFieldPatch = Partial<{
-  workDate: string;
-  local: string;
-  role: string;
-  scheduleStartMinutes: number | null;
-  scheduleEndMinutes: number | null;
-  amount: number | null;
-}>;
-
-/**
- * A cell that's plain text until clicked (only when `editable`), then swaps
- * to a text input — commits on blur or Enter, discards on Escape. Used for
- * every single-value editable text column (Local/Função). Data, Horário,
- * and Valor each have their own variant (`EditableDateCell`,
- * `EditableSchedule`, `EditableCurrencyCell`) since none of them are a
- * plain string a native text input handles well.
- */
-function EditableCell({
-  editable,
-  value,
-  display,
-  onCommit,
-}: {
-  editable: boolean;
-  value: string;
-  display: ReactNode;
-  onCommit: (value: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
-
-  if (!editable) return <>{display}</>;
-
-  if (!editing) {
-    return (
-      <span
-        className="editable-value"
-        onClick={() => {
-          setDraft(value);
-          setEditing(true);
-        }}
-      >
-        {display}
-      </span>
-    );
-  }
-
-  function commit() {
-    setEditing(false);
-    if (draft !== value) onCommit(draft);
-  }
-
-  return (
-    <input
-      autoFocus
-      type="text"
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") commit();
-        if (e.key === "Escape") setEditing(false);
-      }}
-      style={{ width: "100%" }}
-    />
-  );
-}
-
-/** Data's own editable cell — opens the custom `DatePicker` popover instead of a native `<input type="date">`, which renders with the OS/browser's own (often English, always visually inconsistent) date control. */
-function EditableDateCell({
-  editable,
-  value,
-  display,
-  onCommit,
-}: {
-  editable: boolean;
-  /** "YYYY-MM-DD" */
-  value: string;
-  display: ReactNode;
-  onCommit: (value: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const triggerRef = useRef<HTMLSpanElement>(null);
-
-  if (!editable) return <>{display}</>;
-
-  if (!editing) {
-    return (
-      <span ref={triggerRef} className="editable-value" onClick={() => setEditing(true)}>
-        {display}
-      </span>
-    );
-  }
-
-  return (
-    <span ref={triggerRef} className="editable-value" onClick={(e) => e.stopPropagation()}>
-      {display}
-      <DatePicker
-        value={value}
-        anchorRef={triggerRef}
-        onSelect={(iso) => {
-          setEditing(false);
-          if (iso !== value) onCommit(iso);
-        }}
-        onClose={() => setEditing(false)}
-      />
-    </span>
-  );
-}
-
-/**
- * Valor's own editable cell — a live "1.234,56" mask as digits are typed
- * (cents-first, like a checkout amount field) instead of a native
- * `<input type="number">`, which shows a spinner that makes no sense for a
- * currency value and doesn't format the number at all while typing. Only
- * commits if the digits actually changed from what the field opened with
- * (`touched`) — comparing the *parsed amount* instead would wrongly freeze
- * a still-automatic value into a manual override just from opening and
- * closing the field without editing it, since the field opens pre-filled
- * with the live estimate, not literally `null`.
- */
-function EditableCurrencyCell({
-  editable,
-  value,
-  display,
-  onCommit,
-}: {
-  editable: boolean;
-  /** The live estimate or stored amount currently shown — just the initial seed for the mask, not what change-detection compares against. */
-  value: number | null;
-  display: ReactNode;
-  onCommit: (amount: number | null) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [digits, setDigits] = useState("");
-  const [touched, setTouched] = useState(false);
-
-  if (!editable) return <>{display}</>;
-
-  if (!editing) {
-    return (
-      <span
-        className="editable-value"
-        onClick={() => {
-          setDigits(value !== null ? String(Math.round(value * 100)) : "");
-          setTouched(false);
-          setEditing(true);
-        }}
-      >
-        {display}
-      </span>
-    );
-  }
-
-  function commit() {
-    setEditing(false);
-    if (!touched) return;
-    onCommit(digits === "" ? null : centsMaskToAmount(digits));
-  }
-
-  return (
-    <CurrencyInput
-      size="sm"
-      autoFocus
-      digits={digits}
-      placeholder="Automático"
-      onChange={(d) => {
-        setDigits(d);
-        setTouched(true);
-      }}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") commit();
-        if (e.key === "Escape") setEditing(false);
-      }}
-    />
-  );
-}
-
-const SCHEDULE_POPOVER_WIDTH = 230;
-
-/**
- * Horário's own editable cell — one trigger opening one popover with
- * Início and Fim together (`TimeField`, always 24h), the same "connected"
- * idea as `DateRangePicker`'s single popover with two linked months, instead
- * of two separate native `<input type="time">` fields each rendering the
- * OS's own (often 12h AM/PM) time control.
- */
-function EditableSchedule({
-  editable,
-  startTime,
-  endTime,
-  display,
-  onCommit,
-}: {
-  editable: boolean;
-  /** "HH:MM", or "" when there's no schedule. */
-  startTime: string;
-  endTime: string;
-  display: ReactNode;
-  onCommit: (startTime: string, endTime: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draftStart, setDraftStart] = useState(startTime || "00:00");
-  const [draftEnd, setDraftEnd] = useState(endTime || "00:00");
-  const triggerRef = useRef<HTMLSpanElement>(null);
-
-  if (!editable) return <>{display}</>;
-
-  if (!editing) {
-    return (
-      <span
-        ref={triggerRef}
-        className="editable-value"
-        onClick={() => {
-          setDraftStart(startTime || "00:00");
-          setDraftEnd(endTime || "00:00");
-          setEditing(true);
-        }}
-      >
-        {display}
-      </span>
-    );
-  }
-
-  function commit() {
-    setEditing(false);
-    if (draftStart !== startTime || draftEnd !== endTime) onCommit(draftStart, draftEnd);
-  }
-
-  return (
-    <span ref={triggerRef} className="editable-value" onClick={(e) => e.stopPropagation()}>
-      {display}
-      <AnchoredPopover anchorRef={triggerRef} width={SCHEDULE_POPOVER_WIDTH} onClose={() => setEditing(false)}>
-        <div style={{ display: "flex", gap: "0.6rem" }}>
-          <div>
-            <div className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.3rem" }}>
-              Início
-            </div>
-            <TimeField ariaLabel="Início" value={draftStart} onChange={setDraftStart} />
-          </div>
-          <div>
-            <div className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.3rem" }}>
-              Fim
-            </div>
-            <TimeField ariaLabel="Fim" value={draftEnd} onChange={setDraftEnd} />
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.8rem" }}>
-          <button type="button" className="outline" style={{ flex: 1, minWidth: 0, padding: "0.5em 0" }} onClick={() => setEditing(false)}>
-            Cancelar
-          </button>
-          <button type="button" style={{ flex: 1, minWidth: 0, padding: "0.5em 0", boxShadow: "none" }} onClick={commit}>
-            Confirmar
-          </button>
-        </div>
-      </AnchoredPopover>
-    </span>
-  );
-}
-
 /**
  * The "extras" badge/modal shows a turno's unmapped columns AND its import
  * provenance (arquivo/aba/linha de origem) together, same as before these
@@ -420,103 +152,46 @@ function displayExtraData(s: PaymentShiftRow): Record<string, string> | null {
  * One turno's visible-column cells — shared between the flat table (which
  * prepends Colaborador/Cliente/Empresa via `identity`) and a grouped row's
  * expanded turno table (no `identity`, since that's already the group's own
- * header). `visibleColumns` is an app-wide setting (see `PaymentsPage`), not
- * per-row state, but lives here since this is the only place it changes what
- * actually renders. Data/Local/Função/Horário/Valor are always inline-editable
- * for a `pendente`/`erro` shift — there's no separate "modo edição" toggle to
- * gate it. Row actions (pagar/reverter/excluir/histórico/revisar) aren't a
- * visible column at all — right-clicking the row opens them as a
- * `ContextMenu` instead (see `rowActions` below).
+ * header). Read-only: clicking the row opens the turno's side panel
+ * (`ShiftPanel`), where it's paid, edited, and everything else.
  */
 function ShiftRow({
   shift: s,
-  companyId,
-  groupRef,
   identity,
   rules,
   visibleColumns,
   changes,
-  onCommitField,
-  onAction,
+  onOpen,
   onViewExtra,
-  onReview,
-  onInvestigate,
-  onRowContextMenu,
-  activeShiftId,
-  onRowMouseDown,
+  active,
 }: {
   shift: PaymentShiftRow & { shiftPeriod: ShiftPeriod | null };
-  companyId: number;
-  groupRef: GroupRef;
   identity?: { employeeName: string; companyName: string; clientName: string };
   rules: EffectivePaymentRules | null;
   visibleColumns: Set<string>;
   /** What the last automatic verification found different for this shift (if anything) — see `listLatestFieldDiffsForShifts`. */
   changes: ShiftFieldDiffRow[];
-  onCommitField: (shift: PaymentShiftRow, groupRef: GroupRef, patch: ShiftFieldPatch) => void;
-  /** Opens one of the row's actions in the docked `ShiftActionPanel`. */
-  onAction: (kind: ShiftActionKind, shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) => void;
+  onOpen: () => void;
   onViewExtra: (data: Record<string, string>, sourceUrl: string | null) => void;
-  /** Opens the review Drawer — the only other thing (besides "Ver histórico") a blocked row's right-click menu offers, and an optional "ver o que mudou" for an already-auto-applied one. */
-  onReview: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
-  onInvestigate: (shift: PaymentShiftRow) => void;
-  /** Right-clicking anywhere on the row opens this row's actions (same set the old Ações column used to render as buttons) as a context menu instead — see `ContextMenu`. Also marks this row "active" (see `activeShiftId`), same as picking any of the items themselves. */
-  onRowContextMenu: (e: MouseEvent, items: ContextMenuItem[], shiftId: number) => void;
-  /** The shift id last right-clicked (or whose action is still open in a Drawer/modal) — kept highlighted so closing that Drawer/modal doesn't leave you wondering which row it was for. `null` once cleared. */
-  activeShiftId: number | null;
-  /** A left-click landing on a *different* row than `activeShiftId` clears the highlight — same row is a no-op, so editing a field on the already-active row doesn't flicker it off. */
-  onRowMouseDown: (shiftId: number) => void;
+  /** This row's turno is the one open in the panel (or was, last) — kept highlighted. */
+  active: boolean;
 }) {
   const badge = STATUS_BADGE[s.status];
   const duration = scheduleDurationMinutes(s);
   const hasSchedule = duration !== null;
   const value = shiftValue(s, rules?.valueRules ?? null);
   // A pending change (found by the automatic verification, not yet
-  // reviewed/accepted) blocks every other row action — the only thing left
-  // to do with the row is review it (see `onReview`). One already applied
-  // by auto-apply is purely informational: doesn't block anything, just
-  // offers a way to see what changed.
-  const pendingChanges = changes.filter((c) => !c.applied);
-  const appliedChanges = changes.filter((c) => c.applied);
-  const isBlocked = pendingChanges.length > 0;
-  const canEdit = !isBlocked && (s.status === "pendente" || s.status === "erro");
+  // reviewed) blocks paying/editing until it's reviewed in the panel; one
+  // already applied by auto-apply is only informational.
+  const isBlocked = changes.some((c) => !c.applied);
+  const hasApplied = changes.some((c) => c.applied);
   const col = (id: string) => visibleColumns.has(id);
-  const patch = (p: ShiftFieldPatch) => onCommitField(s, groupRef, p);
-
-  // Same actions the old Ações column rendered as buttons, now offered
-  // through a right-click menu instead (see `onRowContextMenu`) — a blocked
-  // row only offers "Revisar alteração" plus "Ver histórico", nothing else.
-  // "Ver histórico" is always present but `disabled` rather than omitted
-  // when there's no earlier state in the chain (`previousShiftId`), so the
-  // option stays discoverable instead of the menu's shape shifting row to
-  // row. "Fazer pagamento" doesn't need an horário — without one there's
-  // just no suggested valor, so the amount is typed in the modal.
-  const rowActions: ContextMenuItem[] = [
-    ...(isBlocked
-      ? [{ label: "Revisar alteração", onClick: () => onReview(s, groupRef) }]
-      : [
-          ...(appliedChanges.length > 0 ? [{ label: "Ver o que mudou", onClick: () => onReview(s, groupRef) }] : []),
-          ...(s.status === "pendente" || s.status === "erro"
-            ? [{ label: "Fazer pagamento", onClick: () => onAction("pay", s, companyId, groupRef) }]
-            : []),
-          ...(s.status === "pago" ? [{ label: "Voltar para pendente", onClick: () => onAction("revert", s, companyId, groupRef) }] : []),
-        ]),
-    { label: "Ver histórico", disabled: s.previousShiftId === null, onClick: () => onAction("history", s, companyId, groupRef) },
-    { label: "Perguntar à IA", onClick: () => onInvestigate(s) },
-    ...(isBlocked ? [] : [{ label: "Remover turno", danger: true, onClick: () => onAction("delete", s, companyId, groupRef) }]),
-  ];
 
   return (
     <tr
-      className={s.id === activeShiftId ? "row-active" : undefined}
-      onMouseDownCapture={(e) => {
-        if (e.button === 0) onRowMouseDown(s.id);
-      }}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        onRowContextMenu(e, rowActions, s.id);
-      }}
-      style={isBlocked ? { background: "var(--warning-soft)" } : appliedChanges.length > 0 ? { background: "var(--accent-soft)" } : undefined}
+      className={active ? "row-active payments-row-clickable" : "payments-row-clickable"}
+      onClick={onOpen}
+      style={isBlocked ? { background: "var(--warning-soft)" } : hasApplied ? { background: "var(--accent-soft)" } : undefined}
     >
       {identity && col("colaborador") && (
         <td>
@@ -530,27 +205,22 @@ function ShiftRow({
       {identity && col("empresa") && <td>{identity.companyName}</td>}
       {col("data") && (
         <td>
-          <EditableDateCell editable={canEdit} value={s.workDate} display={formatDateAbbrevYY(s.workDate)} onCommit={(v) => patch({ workDate: v })} />
+          {formatDateAbbrevYY(s.workDate)}
         </td>
       )}
       {col("local") && (
         <td>
-          <EditableCell editable={canEdit} value={s.local} display={s.local} onCommit={(v) => patch({ local: v })} />
+          {s.local}
         </td>
       )}
       {col("funcao") && (
         <td>
-          <EditableCell editable={canEdit} value={s.role} display={s.role} onCommit={(v) => patch({ role: v })} />
+          {s.role}
         </td>
       )}
       {col("horario") && (
         <td>
-          <EditableSchedule
-            editable={canEdit}
-            startTime={s.scheduleStartMinutes !== null ? formatMinutesAsTime(s.scheduleStartMinutes) : ""}
-            endTime={s.scheduleEndMinutes !== null ? formatMinutesAsTime(s.scheduleEndMinutes) : ""}
-            display={
-              hasSchedule ? (
+          {hasSchedule ? (
                 <span style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem" }}>
                   <span>
                     {formatMinutesAsTime(s.scheduleStartMinutes!)} – {formatMinutesAsTime(s.scheduleEndMinutes!)}
@@ -566,26 +236,13 @@ function ShiftRow({
                 </span>
               ) : (
                 "—"
-              )
-            }
-            onCommit={(start, end) =>
-              patch({
-                scheduleStartMinutes: start ? parseTimeToMinutes(start) : null,
-                scheduleEndMinutes: end ? parseTimeToMinutes(end) : null,
-              })
-            }
-          />
+              )}
         </td>
       )}
       {col("horas") && <td>{duration !== null ? formatMinutesAsTime(duration) : "—"}</td>}
       {col("valor") && (
         <td>
-          <EditableCurrencyCell
-            editable={canEdit}
-            value={value}
-            display={value !== null ? formatCurrencyBRL(value) : "—"}
-            onCommit={(amount) => patch({ amount })}
-          />
+          {value !== null ? formatCurrencyBRL(value) : "—"}
         </td>
       )}
       {col("status") && (
@@ -613,10 +270,12 @@ function ShiftRow({
             return (
               <span style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: "0.4rem" }}>
                 {extra && (
-                  <PillButton onClick={() => onViewExtra(extra, s.sourceUrl)} title="Ver colunas não mapeadas lidas do arquivo">
-                    <Info size={12} />
-                    {Object.keys(extra).length}
-                  </PillButton>
+                  <span onClick={(e) => e.stopPropagation()}>
+                    <PillButton onClick={() => onViewExtra(extra, s.sourceUrl)} title="Ver colunas não mapeadas lidas do arquivo">
+                      <Info size={12} />
+                      {Object.keys(extra).length}
+                    </PillButton>
+                  </span>
                 )}
                 {s.editedManually && (
                   <span
@@ -640,16 +299,6 @@ function ShiftRow({
 }
 
 const FILTERS_OPEN_KEY = "payments-filters-open";
-/** Whether "Fazer pagamento" moves on to the next pending turno after confirming. On by default. */
-const PAY_NEXT_KEY = "payments-pay-next";
-
-function readPayNext(): boolean {
-  try {
-    return localStorage.getItem(PAY_NEXT_KEY) !== "0";
-  } catch {
-    return true;
-  }
-}
 
 function readFiltersOpen(): boolean {
   try {
@@ -754,14 +403,13 @@ export default function PaymentsPage() {
 
   const [shiftDiffs, setShiftDiffs] = useState<Map<number, ShiftFieldDiffRow[]>>(new Map());
 
-  // The row action open in the docked `ShiftActionPanel` (pagar, voltar
-  // para pendente, histórico, remover) — one at a time; picking another
-  // action or moving with the panel's arrows replaces it.
-  const [shiftAction, setShiftAction] = useState<{ kind: ShiftActionKind; shift: PaymentShiftRow; companyId: number; groupRef: GroupRef } | null>(null);
+  // The turno open in the docked `ShiftPanel` — clicking a row opens it;
+  // the panel's arrows move it to the row above/below on the same tab.
+  const [openShift, setOpenShift] = useState<{ shift: PaymentShiftRow; companyId: number; groupRef: GroupRef } | null>(null);
+  const [panelTab, setPanelTab] = useState<ShiftPanelTab>("pay");
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [payNext, setPayNext] = useState(readPayNext);
-  const [inlineEditError, setInlineEditError] = useState<string | null>(null);
+  const [lastPayment, setLastPayment] = useState<LastPayment | null>(null);
   const [viewingExtraData, setViewingExtraData] = useState<{ data: Record<string, string>; sourceUrl: string | null } | null>(
     null,
   );
@@ -775,24 +423,12 @@ export default function PaymentsPage() {
   const [acceptError, setAcceptError] = useState<string | null>(null);
   const [markingReviewDeleted, setMarkingReviewDeleted] = useState(false);
 
-  // Right-click menu for a turno row — replaces the old always-visible
-  // Ações column (see `ShiftRow`'s `rowActions`).
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
-  // Which row's action is "in flight" — set on right-click and kept lit
-  // (`.row-active`, see `ShiftRow`) through whatever Drawer/modal the picked
-  // action opens, so closing it doesn't leave you guessing which turno it
-  // was for. Cleared only by a left-click landing on a *different* row.
+  // Which row stays highlighted — the turno open in the panel, kept lit
+  // after closing it so you don't lose track of which row it was.
   const [activeShiftId, setActiveShiftId] = useState<number | null>(null);
   const { askAboutShift } = useAiAssistant();
   function handleInvestigate(shift: PaymentShiftRow) {
     askAboutShift({ shiftId: shift.id, employeeId: shift.employeeId, employeeName: shift.employeeName, workDate: shift.workDate });
-  }
-  function handleRowContextMenu(e: MouseEvent, items: ContextMenuItem[], shiftId: number) {
-    setActiveShiftId(shiftId);
-    setContextMenu({ x: e.clientX, y: e.clientY, items });
-  }
-  function handleRowMouseDown(shiftId: number) {
-    setActiveShiftId((prev) => (prev === shiftId ? prev : null));
   }
 
   useEffect(() => {
@@ -1027,7 +663,8 @@ export default function PaymentsPage() {
         const rules = await getEffectivePaymentRules(shift.clientId, shift.companyId);
         if (cancelled) return;
         setRulesByPair((prev) => new Map(prev).set(`${shift.clientId}:${shift.companyId}`, rules));
-        openShiftAction("pay", shift, shift.companyId, grouped ? { employeeId: shift.employeeId, competencia: shift.workDate.slice(0, 7) } : null);
+        setPanelTab("pay");
+        openShiftPanel(shift, shift.companyId, grouped ? { employeeId: shift.employeeId, competencia: shift.workDate.slice(0, 7) } : null);
       } catch (e) {
         if (!cancelled) setListError(String(e));
       } finally {
@@ -1064,6 +701,9 @@ export default function PaymentsPage() {
       await acceptShiftChange(config, reviewingShift.shift.id);
       await refreshShiftDiffs([reviewingShift.shift.id]);
       await afterMutation(reviewingShift.groupRef);
+      // Accepting may replace the turno with a new row — the panel's copy
+      // would be stale, so close it if it was showing this one.
+      closePanelIfShowing(reviewingShift.shift.id);
       setReviewingShift(null);
     } catch (e) {
       setAcceptError(String(e instanceof Error ? e.message : e));
@@ -1079,6 +719,7 @@ export default function PaymentsPage() {
     try {
       await deletePaymentShift(reviewingShift.shift.id);
       await afterMutation(reviewingShift.groupRef);
+      closePanelIfShowing(reviewingShift.shift.id);
       setReviewingShift(null);
     } finally {
       setMarkingReviewDeleted(false);
@@ -1115,46 +756,29 @@ export default function PaymentsPage() {
     }
   }
 
-  function isBlockedShift(shift: PaymentShiftRow): boolean {
-    return (shiftDiffs.get(shift.id) ?? []).some((c) => !c.applied);
-  }
-
   function isPayable(shift: PaymentShiftRow): boolean {
-    return (shift.status === "pendente" || shift.status === "erro") && !isBlockedShift(shift);
+    return (shift.status === "pendente" || shift.status === "erro") && !(shiftDiffs.get(shift.id) ?? []).some((c) => !c.applied);
   }
 
-  /** The action a row gets when the panel's arrows land on it: the same one when it applies, otherwise the closest one that does. */
-  function actionFor(kind: ShiftActionKind, shift: PaymentShiftRow): ShiftActionKind {
-    if (isBlockedShift(shift) && kind !== "history") return "history";
-    if (kind === "pay" && shift.status === "pago") return "revert";
-    if (kind === "revert" && shift.status !== "pago") return "pay";
-    return kind;
-  }
-
-  function openShiftAction(kind: ShiftActionKind, shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) {
+  function openShiftPanel(shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) {
     setActionError(null);
     setActiveShiftId(shift.id);
-    setShiftAction({ kind, shift, companyId, groupRef });
+    setOpenShift({ shift, companyId, groupRef });
   }
 
-  function closeShiftAction() {
-    setShiftAction(null);
+  function closePanelIfShowing(shiftId: number) {
+    setOpenShift((prev) => (prev && prev.shift.id === shiftId ? null : prev));
+  }
+
+  function closeShiftPanel() {
+    setOpenShift(null);
     setActionError(null);
-  }
-
-  function changePayNext(value: boolean) {
-    setPayNext(value);
-    try {
-      localStorage.setItem(PAY_NEXT_KEY, value ? "1" : "0");
-    } catch {
-      /* only a convenience */
-    }
   }
 
   // Every turno row on screen, in table order — what the panel's arrows
-  // and "Abrir o próximo pendente" walk through. Grouped view: only the
-  // rows of expanded groups, since those are the ones visible.
-  const actionRows: { shift: PaymentShiftRow; companyId: number; groupRef: GroupRef }[] = grouped
+  // walk through. Grouped view: only the rows of expanded groups, since
+  // those are the ones visible.
+  const panelRows: { shift: PaymentShiftRow; companyId: number; groupRef: GroupRef }[] = grouped
     ? summaries.flatMap((s) =>
         expandedKeys.has(groupKey(s.employeeId, s.competencia))
           ? (groupRows.get(groupKey(s.employeeId, s.competencia)) ?? []).map((r) => ({
@@ -1165,37 +789,30 @@ export default function PaymentsPage() {
           : [],
       )
     : flatRows.map((r) => ({ shift: r, companyId: r.companyId, groupRef: null }));
-  const actionIndex = shiftAction ? actionRows.findIndex((r) => r.shift.id === shiftAction.shift.id) : -1;
+  const foundIndex = openShift ? panelRows.findIndex((r) => r.shift.id === openShift.shift.id) : -1;
+  // Where the open turno was last seen in the list. After paying (or any
+  // change) it may drop out of a filtered list — the arrows then continue
+  // from the spot it left instead of going dead.
+  const panelAnchor = useRef(-1);
+  if (foundIndex >= 0) panelAnchor.current = foundIndex;
+  const prevRow = openShift ? (foundIndex >= 0 ? panelRows[foundIndex - 1] : panelRows[panelAnchor.current - 1]) : undefined;
+  const nextRow = openShift ? (foundIndex >= 0 ? panelRows[foundIndex + 1] : panelRows[panelAnchor.current]) : undefined;
 
-  function moveShiftAction(step: -1 | 1) {
-    if (!shiftAction || actionIndex < 0) return;
-    const row = actionRows[actionIndex + step];
-    if (row) openShiftAction(actionFor(shiftAction.kind, row.shift), row.shift, row.companyId, row.groupRef);
+  /** After a change appends a new row for the open turno, keep the panel on that new row. */
+  async function followNewRow(newShiftId: number) {
+    if (!openShift) return;
+    const current = openShift;
+    await afterMutation(current.groupRef);
+    const fresh = await getPaymentShift(newShiftId);
+    setActiveShiftId(newShiftId);
+    setOpenShift((prev) => (prev && prev.shift.id === current.shift.id ? { ...current, shift: fresh } : prev));
   }
 
-  async function handleConfirmPayment(amount: number) {
-    if (!shiftAction) return;
-    const current = shiftAction;
-    // Picked before the list refetches — the other rows keep their ids, so
-    // this entry is still valid afterwards.
-    const after = actionIndex >= 0 ? [...actionRows.slice(actionIndex + 1), ...actionRows.slice(0, actionIndex)] : [];
-    const next = payNext ? after.find((r) => isPayable(r.shift)) : undefined;
+  async function runPanelAction(action: () => Promise<void>) {
     setActionBusy(true);
     setActionError(null);
     try {
-      // "Pagar" always appends a brand-new row instead of touching
-      // `current.shift` itself (see `markPaymentShiftPaid`'s own doc
-      // comment) — without re-pointing `activeShiftId` at it, the highlight
-      // this action was for would vanish the moment the list refetches,
-      // since no row still has the old id.
-      const newShiftId = await markPaymentShiftPaid(current.shift.id, amount);
-      await afterMutation(current.groupRef);
-      if (next) {
-        openShiftAction("pay", next.shift, next.companyId, next.groupRef);
-      } else {
-        setActiveShiftId(newShiftId);
-        setShiftAction(null);
-      }
+      await action();
     } catch (e) {
       setActionError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -1203,54 +820,46 @@ export default function PaymentsPage() {
     }
   }
 
-  async function handleConfirmRevert() {
-    if (!shiftAction) return;
-    const current = shiftAction;
-    setActionBusy(true);
-    setActionError(null);
-    try {
-      // Same append-only move as "Pagar" — re-point the highlight at the
-      // new head row (see the comment in `handleConfirmPayment`).
-      const newShiftId = await revertPaymentShiftToPending(current.shift.id);
-      await afterMutation(current.groupRef);
-      setActiveShiftId(newShiftId);
-      setShiftAction(null);
-    } catch (e) {
-      setActionError(String(e instanceof Error ? e.message : e));
-    } finally {
-      setActionBusy(false);
-    }
+  function handleConfirmPayment(amount: number, pixKey: EmployeePixKeyRow | null) {
+    if (!openShift) return;
+    const id = openShift.shift.id;
+    // "Pagar" always appends a brand-new row instead of touching the open
+    // one (see `markPaymentShiftPaid`) — the panel follows it and shows the
+    // paid state.
+    return runPanelAction(async () => {
+      const newShiftId = await markPaymentShiftPaid(id, amount);
+      setLastPayment({ shiftId: newShiftId, pixKey });
+      await followNewRow(newShiftId);
+    });
   }
 
-  async function handleConfirmDelete() {
-    if (!shiftAction) return;
-    const current = shiftAction;
-    setActionBusy(true);
-    setActionError(null);
-    try {
+  function handleConfirmRevert() {
+    if (!openShift) return;
+    const id = openShift.shift.id;
+    return runPanelAction(async () => {
+      const newShiftId = await revertPaymentShiftToPending(id);
+      setLastPayment(null);
+      await followNewRow(newShiftId);
+    });
+  }
+
+  function handleSaveShift(fields: ShiftEditFields) {
+    if (!openShift) return;
+    const id = openShift.shift.id;
+    return runPanelAction(async () => {
+      const newShiftId = await editPaymentShift(id, fields);
+      await followNewRow(newShiftId);
+    });
+  }
+
+  function handleConfirmDelete() {
+    if (!openShift) return;
+    const current = openShift;
+    return runPanelAction(async () => {
       await deletePaymentShift(current.shift.id);
       await afterMutation(current.groupRef);
-      setShiftAction(null);
-    } catch (e) {
-      setActionError(String(e instanceof Error ? e.message : e));
-    } finally {
-      setActionBusy(false);
-    }
-  }
-
-  /** Fields not in `patch` carry over from `shift`'s own current value — an inline edit only ever touches the one column the user clicked on. */
-  function commitField(shift: PaymentShiftRow, groupRef: GroupRef, patch: ShiftFieldPatch) {
-    setInlineEditError(null);
-    editPaymentShift(shift.id, {
-      workDate: patch.workDate !== undefined ? patch.workDate : shift.workDate,
-      local: patch.local !== undefined ? patch.local : shift.local,
-      role: patch.role !== undefined ? patch.role : shift.role,
-      scheduleStartMinutes: patch.scheduleStartMinutes !== undefined ? patch.scheduleStartMinutes : shift.scheduleStartMinutes,
-      scheduleEndMinutes: patch.scheduleEndMinutes !== undefined ? patch.scheduleEndMinutes : shift.scheduleEndMinutes,
-      amount: patch.amount !== undefined ? patch.amount : shift.amount,
-    })
-      .then(() => afterMutation(groupRef))
-      .catch((e) => setInlineEditError(String(e instanceof Error ? e.message : e)));
+      setOpenShift(null);
+    });
   }
 
   function shiftValueFor(s: PaymentShiftRow, companyId: number): number | null {
@@ -1493,7 +1102,6 @@ export default function PaymentsPage() {
       {pdfExportError && <div className="error-box">{pdfExportError}</div>}
       {legacyPdfError && <div className="error-box">{legacyPdfError}</div>}
       {shiftPdfError && <div className="error-box">{shiftPdfError}</div>}
-      {inlineEditError && <div className="error-box">{inlineEditError}</div>}
       {attention && (
         <div className="info-box">
           Filtro da análise: {attention === "pending-audit" ? "pagamentos aguardando conferência" : "turnos sem valor definido"}.
@@ -1769,19 +1377,12 @@ export default function PaymentsPage() {
                                           <ShiftRow
                                             key={r.id}
                                             shift={r}
-                                            companyId={s.companyId}
-                                            groupRef={{ employeeId: s.employeeId, competencia: s.competencia }}
+                                            active={r.id === activeShiftId}
+                                            onOpen={() => openShiftPanel(r, s.companyId, { employeeId: s.employeeId, competencia: s.competencia })}
                                             rules={rulesByPair.get(`${s.clientId}:${s.companyId}`) ?? null}
                                             visibleColumns={visibleColumns}
                                             changes={shiftDiffs.get(r.id) ?? []}
-                                            onCommitField={commitField}
-                                            onAction={openShiftAction}
                                             onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
-                                            onReview={(shift, groupRef) => setReviewingShift({ shift, groupRef })}
-                                            onInvestigate={handleInvestigate}
-                                            onRowContextMenu={handleRowContextMenu}
-                                            activeShiftId={activeShiftId}
-                                            onRowMouseDown={handleRowMouseDown}
                                           />
                                         ))}
                                       </tbody>
@@ -1832,20 +1433,13 @@ export default function PaymentsPage() {
                     <ShiftRow
                       key={r.id}
                       shift={r}
-                      companyId={r.companyId}
-                      groupRef={null}
+                      active={r.id === activeShiftId}
+                      onOpen={() => openShiftPanel(r, r.companyId, null)}
                       identity={{ employeeName: r.employeeName, companyName: r.companyName, clientName: r.clientName }}
                       rules={rulesByPair.get(`${r.clientId}:${r.companyId}`) ?? null}
                       visibleColumns={visibleColumns}
                       changes={shiftDiffs.get(r.id) ?? []}
-                      onCommitField={commitField}
-                      onAction={openShiftAction}
                       onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
-                      onReview={(shift, groupRef) => setReviewingShift({ shift, groupRef })}
-                      onInvestigate={handleInvestigate}
-                      onRowContextMenu={handleRowContextMenu}
-                      activeShiftId={activeShiftId}
-                      onRowMouseDown={handleRowMouseDown}
                     />
                   ))}
                 </tbody>
@@ -1870,34 +1464,38 @@ export default function PaymentsPage() {
         )}
       </div>
 
-      <ShiftActionPanel
-        target={shiftAction ? { kind: shiftAction.kind, shift: shiftAction.shift } : null}
-        rules={shiftAction ? rulesByPair.get(`${shiftAction.shift.clientId}:${shiftAction.companyId}`) ?? null : null}
-        changes={shiftAction ? shiftDiffs.get(shiftAction.shift.id) ?? [] : []}
+      <ShiftPanel
+        shift={openShift?.shift ?? null}
+        tab={panelTab}
+        onTabChange={setPanelTab}
+        rules={openShift ? rulesByPair.get(`${openShift.shift.clientId}:${openShift.companyId}`) ?? null : null}
+        changes={openShift ? shiftDiffs.get(openShift.shift.id) ?? [] : []}
         otherPending={
-          shiftAction
-            ? actionRows
-                .filter((r) => r.shift.employeeId === shiftAction.shift.employeeId && r.shift.id !== shiftAction.shift.id && isPayable(r.shift))
+          openShift
+            ? panelRows
+                .filter((r) => r.shift.employeeId === openShift.shift.employeeId && r.shift.id !== openShift.shift.id && isPayable(r.shift))
                 .map((r) => r.shift)
             : []
         }
         valueFor={(shift) => shiftValueFor(shift, shift.companyId)}
         busy={actionBusy}
         error={actionError}
-        payNext={payNext}
-        onPayNextChange={changePayNext}
-        canPrev={actionIndex > 0}
-        canNext={actionIndex >= 0 && actionIndex < actionRows.length - 1}
-        onPrev={() => moveShiftAction(-1)}
-        onNext={() => moveShiftAction(1)}
-        onOpenPay={(shift) => {
-          const row = actionRows.find((r) => r.shift.id === shift.id);
-          if (row) openShiftAction("pay", row.shift, row.companyId, row.groupRef);
+        lastPayment={lastPayment}
+        canPrev={prevRow !== undefined}
+        canNext={nextRow !== undefined}
+        onPrev={() => prevRow && openShiftPanel(prevRow.shift, prevRow.companyId, prevRow.groupRef)}
+        onNext={() => nextRow && openShiftPanel(nextRow.shift, nextRow.companyId, nextRow.groupRef)}
+        onOpenShift={(shift) => {
+          const row = panelRows.find((r) => r.shift.id === shift.id);
+          if (row) openShiftPanel(row.shift, row.companyId, row.groupRef);
         }}
+        onAskAi={() => openShift && handleInvestigate(openShift.shift)}
+        onReview={() => openShift && setReviewingShift({ shift: openShift.shift, groupRef: openShift.groupRef })}
         onConfirmPay={handleConfirmPayment}
         onConfirmRevert={handleConfirmRevert}
+        onSave={handleSaveShift}
         onConfirmDelete={handleConfirmDelete}
-        onClose={closeShiftAction}
+        onClose={closeShiftPanel}
       />
       <ExtraColumnsDrawer
         open={viewingExtraData !== null}
@@ -2061,9 +1659,6 @@ export default function PaymentsPage() {
         locals={locals}
       />
 
-      {contextMenu && (
-        <ContextMenu x={contextMenu.x} y={contextMenu.y} items={contextMenu.items} onClose={() => setContextMenu(null)} />
-      )}
     </div>
   );
 }
