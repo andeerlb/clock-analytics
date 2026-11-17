@@ -4,8 +4,8 @@ import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
-  Eye,
   FileText,
+  FileSpreadsheet,
   FolderOpen,
   History,
   Link2,
@@ -2081,37 +2081,23 @@ export default function ImportPaymentsPage() {
 
               <div className="card table-card">
                 <div className="preview-header">
-                  <div style={{ minWidth: 0 }}>
-                    <h3 className="preview-title">
-                      <Eye size={18} />
-                      Pré-visualização da importação
-                    </h3>
-                    <p className="preview-status">
-                      <span
-                        className="preview-status-dot"
-                        style={{ background: selectedRows.size > 0 ? "var(--success)" : "var(--warning)" }}
-                      />
-                      <span>
-                        {selectedRows.size === 0
-                          ? "Nenhum turno para importar ainda."
-                          : `${selectedRows.size} ${selectedRows.size === 1 ? "turno será importado" : "turnos serão importados"}.`}
-                        {previewIssues.length > 0 && (
-                          <>
-                            {" "}
-                            {previewIssues.map((issue, i) => (
-                              <span key={issue.filter}>
-                                {i > 0 && (i === previewIssues.length - 1 ? " e " : ", ")}
-                                <button type="button" className="preview-status-link" onClick={() => toggleRowFilter(issue.filter)}>
-                                  {issue.text}
-                                </button>
-                              </span>
-                            ))}
-                            {selectedRows.size === 0 ? "." : ` ${previewIssueCount === 1 ? "fica" : "ficam"} de fora.`}
-                          </>
-                        )}
-                        {duplicateCount + deletedCount > 0 && " Marque um já importado para reprocessar."}
-                      </span>
-                    </p>
+                  <div className="preview-heading">
+                    <span className="preview-file-icon" aria-hidden="true">
+                      <FileSpreadsheet size={19} />
+                    </span>
+                    <div style={{ minWidth: 0 }}>
+                      <h3 className="preview-title">Pré-visualização da importação</h3>
+                      <div className="preview-meta">
+                        {[
+                          fileResults.length === 1
+                            ? safeDecodeFileName(urlSourceByPath.get(fileResults[0].path)?.fileName ?? fileResults[0].fileName)
+                            : `${fileResults.length} arquivos`,
+                          selectedTemplate?.name,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </div>
+                    </div>
                   </div>
                   <div style={{ display: "flex", gap: "0.6rem", flexShrink: 0 }}>
                     <button type="button" className="outline" onClick={cancelPreview} disabled={busy}>
@@ -2125,6 +2111,35 @@ export default function ImportPaymentsPage() {
                           : `Salvar ${selectedRows.size} ${selectedRows.size === 1 ? "turno" : "turnos"}`}
                     </button>
                   </div>
+                </div>
+
+                <div className="preview-status-row">
+                  <p className="preview-status">
+                    <span
+                      className="preview-status-dot"
+                      style={{ background: selectedRows.size > 0 ? "var(--success)" : "var(--warning)" }}
+                    />
+                    <span>
+                      {selectedRows.size === 0
+                        ? "Nenhum turno para importar ainda."
+                        : `${selectedRows.size} ${selectedRows.size === 1 ? "turno será importado" : "turnos serão importados"}.`}
+                      {previewIssues.length > 0 && (
+                        <>
+                          {" "}
+                          {previewIssues.map((issue, i) => (
+                            <span key={issue.filter}>
+                              {i > 0 && (i === previewIssues.length - 1 ? " e " : ", ")}
+                              <button type="button" className="preview-status-link" onClick={() => toggleRowFilter(issue.filter)}>
+                                {issue.text}
+                              </button>
+                            </span>
+                          ))}
+                          {selectedRows.size === 0 ? "." : ` ${previewIssueCount === 1 ? "fica" : "ficam"} de fora.`}
+                        </>
+                      )}
+                      {duplicateCount + deletedCount > 0 && " Marque um já importado para reprocessar."}
+                    </span>
+                  </p>
                 </div>
 
                 <div className="table-toolbar preview-toolbar">
