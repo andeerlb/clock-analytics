@@ -17,7 +17,6 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import Drawer from "../components/Drawer";
 import ColumnPicker from "../components/ColumnPicker";
-import Pagination from "../components/Pagination";
 import PageHeader from "../components/PageHeader";
 import PaymentExportDrawer from "../components/PaymentExportDrawer";
 import PaymentsExportMenu from "../components/PaymentsExportMenu";
@@ -25,7 +24,7 @@ import PaymentsFiltersPanel, { PaymentsFilterChips, usePaymentsActiveFilterCount
 import PdfViewerModal from "../components/PdfViewerModal";
 import ShiftPanel, { type LastPayment, type ShiftEditFields, type ShiftPanelTab } from "../components/ShiftPanel";
 import TableScroll from "../components/TableScroll";
-import { PAYMENT_SHIFT_STATUSES, PAYMENTS_PAGE_SIZE_OPTIONS, SHIFT_PERIODS, usePaymentsFilters } from "../contexts/FiltersContext";
+import { PAYMENT_SHIFT_STATUSES, SHIFT_PERIODS, usePaymentsFilters } from "../contexts/FiltersContext";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { openReconciliationWindow, revealInFileManager } from "../lib/api";
 import {
@@ -216,6 +215,8 @@ function ShiftRow({
 }
 
 const FILTERS_OPEN_KEY = "payments-filters-open";
+/** Rows fetched per step of the infinite scroll. */
+const CHUNK = 50;
 
 function readFiltersOpen(): boolean {
   try {
@@ -249,10 +250,6 @@ export default function PaymentsPage() {
     scheduleTimeFilter,
     grouped,
     setGrouped,
-    page,
-    setPage,
-    pageSize,
-    setPageSize,
     selectedExportTemplateId,
     setSelectedExportTemplateId,
   } = usePaymentsFilters();
@@ -447,9 +444,24 @@ export default function PaymentsPage() {
     return withMissingValueShiftIds(baseQuery());
   }
 
-  async function refetchFlat() {
+  // Infinite scroll: the list grows CHUNK rows at a time as the end of the
+  // table comes into view. A reload (`keepLoaded`) after a payment/edit
+  // asks for everything already on screen in one go, so the table doesn't
+  // jump back to its first rows.
+  const flatRowsRef = useRef(flatRows);
+  flatRowsRef.current = flatRows;
+  const summariesRef = useRef(summaries);
+  summariesRef.current = summaries;
+
+  /** How many rows a reload asks for — everything loaded so far, rounded up to whole chunks (so the next "load more" offset stays aligned). */
+  function reloadSize(loaded: number, keepLoaded: boolean): number {
+    return keepLoaded ? Math.max(CHUNK, Math.ceil(loaded / CHUNK) * CHUNK) : CHUNK;
+  }
+
+  async function refetchFlat(keepLoaded = true) {
     const ticket = ++tableRequest.current;
-    const { rows, total } = await listPaymentShiftsFlat({ ...(await tableQuery()), page, pageSize });
+    const size = reloadSize(flatRowsRef.current.length, keepLoaded);
+    const { rows, total } = await listPaymentShiftsFlat({ ...(await tableQuery()), page: 0, pageSize: size });
     if (ticket !== tableRequest.current) return;
     setFlatRows(rows);
     setFlatTotal(total);
@@ -457,13 +469,67 @@ export default function PaymentsPage() {
     refreshShiftDiffs(rows.map((r) => r.id));
   }
 
-  async function refetchSummaries() {
+  async function refetchSummaries(keepLoaded = true) {
     const ticket = ++tableRequest.current;
-    const { rows, total } = await listPaymentShiftSummaries({ ...(await tableQuery()), page, pageSize });
+    const size = reloadSize(summariesRef.current.length, keepLoaded);
+    const { rows, total } = await listPaymentShiftSummaries({ ...(await tableQuery()), page: 0, pageSize: size });
     if (ticket !== tableRequest.current) return;
     setSummaries(rows);
     setSummariesTotal(total);
   }
+
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
+
+  /** The next CHUNK rows, appended. Dropped if a reload (filters, a payment…) started meanwhile — that one already brings the right rows. */
+  async function loadMore() {
+    if (loadingMoreRef.current) return;
+    const loaded = grouped ? summariesRef.current.length : flatRowsRef.current.length;
+    if (loaded >= (grouped ? summariesTotal : flatTotal)) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    const ticket = tableRequest.current;
+    try {
+      const query = { ...(await tableQuery()), page: Math.floor(loaded / CHUNK), pageSize: CHUNK };
+      if (grouped) {
+        const { rows, total } = await listPaymentShiftSummaries(query);
+        if (ticket !== tableRequest.current) return;
+        setSummaries((prev) => {
+          const seen = new Set(prev.map((r) => groupKey(r.employeeId, r.competencia)));
+          return [...prev, ...rows.filter((r) => !seen.has(groupKey(r.employeeId, r.competencia)))];
+        });
+        setSummariesTotal(total);
+      } else {
+        const { rows, total } = await listPaymentShiftsFlat(query);
+        if (ticket !== tableRequest.current) return;
+        setFlatRows((prev) => {
+          const seen = new Set(prev.map((r) => r.id));
+          return [...prev, ...rows.filter((r) => !seen.has(r.id))];
+        });
+        setFlatTotal(total);
+        ensureRulesLoaded(rows.map((r) => ({ clientId: r.clientId, companyId: r.companyId })));
+        refreshShiftDiffs(rows.map((r) => r.id));
+      }
+    } catch (e) {
+      setListError(String(e instanceof Error ? e.message : e));
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }
+  const loadMoreRef = useRef(loadMore);
+  loadMoreRef.current = loadMore;
+
+  // The sentinel under the table: when it gets near the viewport, load more.
+  const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!sentinel) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) loadMoreRef.current();
+    }, { rootMargin: "600px 0px" });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [sentinel]);
 
   async function refetchGroup(employeeId: number, competencia: string) {
     const key = groupKey(employeeId, competencia);
@@ -483,7 +549,7 @@ export default function PaymentsPage() {
     setGroupRows(new Map());
     // Any group load still in flight was for the old filters.
     groupRequests.current = new Map();
-    const run = grouped ? refetchSummaries() : refetchFlat();
+    const run = grouped ? refetchSummaries(false) : refetchFlat(false);
     run
       .catch((e) => {
         if (!cancelled) setListError(String(e instanceof Error ? e.message : e));
@@ -512,8 +578,6 @@ export default function PaymentsPage() {
     analyticsWeekday,
     analyticsTimeBucket,
     searchParams,
-    page,
-    pageSize,
   ]);
 
   // Cross-window sync: refreshes this table when a payment is
@@ -788,7 +852,6 @@ export default function PaymentsPage() {
   function selectStatusTab(statuses: PaymentShiftStatus[]) {
     clearAnalysisFilter();
     setSelectedStatuses(new Set(statuses));
-    setPage(0);
   }
 
   // Counts for the status tabs and "Conferência": same filters, any status.
@@ -961,7 +1024,13 @@ export default function PaymentsPage() {
     { label: "Pagos", statuses: ["pago"], dot: "var(--success)" },
   ];
   const isTab = (statuses: PaymentShiftStatus[]) => statuses.length === selectedStatuses.size && statuses.every((s) => selectedStatuses.has(s));
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const loadedCount = grouped ? summaries.length : flatRows.length;
+  // The observer only fires when the sentinel *enters* the margin — if it's
+  // still in view after a load (tall window, few rows), keep going.
+  useEffect(() => {
+    if (!sentinel || loading || loadingMore || loadedCount >= total) return;
+    if (sentinel.getBoundingClientRect().top < window.innerHeight + 600) loadMoreRef.current();
+  }, [sentinel, loading, loadingMore, loadedCount, total]);
 
   return (
     <div>
@@ -1154,7 +1223,6 @@ export default function PaymentsPage() {
               aria-pressed={!grouped}
               onClick={() => {
                 setGrouped(false);
-                setPage(0);
               }}
             >
               <List size={14} />
@@ -1165,7 +1233,6 @@ export default function PaymentsPage() {
               aria-pressed={grouped}
               onClick={() => {
                 setGrouped(true);
-                setPage(0);
               }}
             >
               <Users size={14} />
@@ -1300,20 +1367,13 @@ export default function PaymentsPage() {
               </table>
             </TableScroll>
 
-            {total > PAYMENTS_PAGE_SIZE_OPTIONS[0] && (
-              <Pagination
-                page={page}
-                pageCount={pageCount}
-                onPageChange={setPage}
-                rangeLabel={`Mostrando ${page * pageSize + 1} a ${Math.min(total, page * pageSize + pageSize)} de ${total}`}
-                pageSize={pageSize}
-                pageSizeOptions={PAYMENTS_PAGE_SIZE_OPTIONS}
-                onPageSizeChange={(size) => {
-                  setPageSize(size);
-                  setPage(0);
-                }}
-              />
-            )}
+            <div ref={setSentinel} className="payments-scroll-footer" aria-live="polite">
+              {loadingMore || loadedCount < total
+                ? `Carregando mais… ${loadedCount} de ${total}`
+                : total > CHUNK
+                  ? `Todos os ${total} ${grouped ? "colaboradores" : "turnos"} carregados`
+                  : null}
+            </div>
           </>
         )}
 
@@ -1345,20 +1405,13 @@ export default function PaymentsPage() {
               </table>
             </TableScroll>
 
-            {total > PAYMENTS_PAGE_SIZE_OPTIONS[0] && (
-              <Pagination
-                page={page}
-                pageCount={pageCount}
-                onPageChange={setPage}
-                rangeLabel={`Mostrando ${page * pageSize + 1} a ${Math.min(total, page * pageSize + pageSize)} de ${total}`}
-                pageSize={pageSize}
-                pageSizeOptions={PAYMENTS_PAGE_SIZE_OPTIONS}
-                onPageSizeChange={(size) => {
-                  setPageSize(size);
-                  setPage(0);
-                }}
-              />
-            )}
+            <div ref={setSentinel} className="payments-scroll-footer" aria-live="polite">
+              {loadingMore || loadedCount < total
+                ? `Carregando mais… ${loadedCount} de ${total}`
+                : total > CHUNK
+                  ? `Todos os ${total} ${grouped ? "colaboradores" : "turnos"} carregados`
+                  : null}
+            </div>
           </>
         )}
       </div>
