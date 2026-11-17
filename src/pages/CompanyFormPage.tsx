@@ -1,5 +1,5 @@
-import { Calculator, Info, Moon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Building2, Calculator, Moon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import FormPanel from "../components/FormPanel";
 import NightShiftRuleFields from "../components/NightShiftRuleFields";
@@ -28,6 +28,14 @@ export default function CompanyFormPage() {
   const [loading, setLoading] = useState(isEditing);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // What the form held when it was loaded (or empty, for a new company) —
+  // anything different shows "Alterações não salvas" next to Salvar.
+  const [savedSnapshot, setSavedSnapshot] = useState<string | null>(isEditing ? null : "");
+  const snapshot = useMemo(
+    () => JSON.stringify([name, cnpj, nightStartTime, nightEndTime, nightShiftRule, valueRules]),
+    [name, cnpj, nightStartTime, nightEndTime, nightShiftRule, valueRules],
+  );
+  const dirty = savedSnapshot !== null && snapshot !== savedSnapshot && (isEditing || name.trim() !== "" || cnpj.trim() !== "");
 
   useEffect(() => {
     if (!isEditing) return;
@@ -38,7 +46,9 @@ export default function CompanyFormPage() {
         setNightStartTime(c.nightStartTime);
         setNightEndTime(c.nightEndTime);
         setNightShiftRule(c.nightShiftRule);
-        setValueRules(fromPaymentValueRules(c.valueRules));
+        const rules = fromPaymentValueRules(c.valueRules);
+        setValueRules(rules);
+        setSavedSnapshot(JSON.stringify([c.name, maskCnpj(c.cnpj), c.nightStartTime, c.nightEndTime, c.nightShiftRule, rules]));
       })
       .catch((e) => setError(String(e instanceof Error ? e.message : e)))
       .finally(() => setLoading(false));
@@ -68,8 +78,24 @@ export default function CompanyFormPage() {
     <div>
       <PageHeader
         title={isEditing ? "Editar empresa" : "Nova empresa"}
+        subtitle="Dados da empresa, horário noturno e valor do turno."
         backFallback="/companies"
         backLabel="Voltar para Empresas"
+        actions={
+          !loading && (
+            <>
+              {dirty && (
+                <span className="form-dirty">
+                  <i />
+                  Alterações não salvas
+                </span>
+              )}
+              <button type="submit" form="company-form" disabled={busy || !isValueRulesValid(valueRules) || (isEditing && !dirty)}>
+                {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
+              </button>
+            </>
+          )
+        }
       />
 
       {error && <div className="error-box">{error}</div>}
@@ -77,9 +103,10 @@ export default function CompanyFormPage() {
       {loading ? (
         <p className="muted">Carregando...</p>
       ) : (
-        <form onSubmit={handleSubmit} className="details-main" style={{ maxWidth: "52rem" }}>
-          <FormPanel icon={Info} title="Informações Gerais">
-            <div className="field" style={{ marginBottom: "1rem" }}>
+        <form id="company-form" onSubmit={handleSubmit} className="details-main" style={{ maxWidth: "52rem" }}>
+          <FormPanel icon={Building2} title="Dados da empresa">
+            <div className="form-row-2">
+            <div className="field">
               <label htmlFor="company-name">Nome</label>
               <input
                 id="company-name"
@@ -104,12 +131,13 @@ export default function CompanyFormPage() {
                 style={{ width: "100%" }}
               />
             </div>
+            </div>
           </FormPanel>
 
           <FormPanel
             icon={Moon}
             title="Horário noturno"
-            description="O horário entre o início e o fim do noturno define quais turnos de um colaborador contam como noturnos ao calcular pagamentos — o padrão (22:00–05:00) segue a CLT."
+            description="Separa os turnos em diurnos e noturnos nos filtros de Pagamentos e em Análises. O padrão da CLT é das 22:00 às 05:00."
           >
             <NightShiftRuleFields
               nightStartTime={nightStartTime}
@@ -126,15 +154,12 @@ export default function CompanyFormPage() {
 
           <FormPanel
             icon={Calculator}
-            title="Regras de valor por hora trabalhada"
-            description="Decide o Valor de um turno a partir de condições de coluna (Data/Local/Função/Horário) e da duração (horas trabalhadas, somada do Horário) — avaliadas em ordem, a primeira que bater vence. Opcional: sem nenhuma regra, o Valor não é calculado."
+            title="Valor do turno"
+            description="Quanto vale cada turno, de acordo com a função, o local, a data ou o horário e quanto tempo a pessoa trabalhou. Sem nenhuma regra, o valor não é calculado."
           >
-            <PaymentValueRulesEditor valueRules={valueRules} onChange={setValueRules} />
+            <PaymentValueRulesEditor valueRules={valueRules} onChange={setValueRules} companyIds={isEditing ? [Number(id)] : undefined} />
           </FormPanel>
 
-          <button type="submit" disabled={busy || !isValueRulesValid(valueRules)} style={{ alignSelf: "flex-start" }}>
-            {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
-          </button>
         </form>
       )}
     </div>

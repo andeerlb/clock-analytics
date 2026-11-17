@@ -1,6 +1,7 @@
 import { Check, ChevronsUpDown, Search } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { colorForName } from "../lib/avatar";
+import { fitPickerList } from "../lib/pickerFit";
 
 export interface PickerOption {
   id: string;
@@ -59,6 +60,7 @@ export default function OptionPicker({
   selectAllLabel,
   align = "right",
   single = false,
+  showTiles = true,
 }: {
   options: PickerOption[];
   selected: Set<string>;
@@ -73,11 +75,15 @@ export default function OptionPicker({
   selectAllLabel?: string;
   align?: "left" | "right";
   single?: boolean;
+  /** The colored initials before each option — off for short fixed lists (operators, "antes/depois"). */
+  showTiles?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [cursor, setCursor] = useState(-1);
   const [listMaxHeight, setListMaxHeight] = useState<number | undefined>(undefined);
+  /** Set by `fitPickerList` when there isn't room below the field. */
+  const [openUp, setOpenUp] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -108,13 +114,19 @@ export default function OptionPicker({
     if (!open) return;
     function fit() {
       const list = listRef.current;
-      if (!list) return;
-      const footerHeight = footerRef.current?.offsetHeight ?? 0;
-      // Inside a side panel or sheet (Filtros) the box ends where its scrolling area does, not at the window's bottom.
-      const area = list.closest(".side-panel-body, .drawer-body");
-      const bottom = area ? Math.min(window.innerHeight, area.getBoundingClientRect().bottom) : window.innerHeight;
-      const room = bottom - list.getBoundingClientRect().top - footerHeight - WINDOW_MARGIN_PX;
-      setListMaxHeight(Math.max(MIN_LIST_HEIGHT_PX, Math.floor(room)));
+      const root = rootRef.current;
+      const box = boxRef.current;
+      if (!list || !root || !box) return;
+      const { openUp: up, maxHeight } = fitPickerList({
+        root,
+        box,
+        list,
+        footerHeight: footerRef.current?.offsetHeight ?? 0,
+        minListHeight: MIN_LIST_HEIGHT_PX,
+        margin: WINDOW_MARGIN_PX,
+      });
+      setOpenUp(up);
+      setListMaxHeight(maxHeight);
     }
     fit();
     window.addEventListener("resize", fit);
@@ -179,7 +191,7 @@ export default function OptionPicker({
         aria-expanded={open}
         onClick={() => (open ? setOpen(false) : openBox())}
       >
-        {chosen.length > 0 && (
+        {showTiles && chosen.length > 0 && (
           <span className="emp-picker-stack">
             {chosen.slice(0, STACK_SIZE).map((o) => (
               <Tile key={o.id} label={o.label} />
@@ -192,7 +204,7 @@ export default function OptionPicker({
       </button>
 
       {open && (
-        <div ref={boxRef} tabIndex={-1} className={`emp-picker-popover emp-picker-popover-${align}`} onKeyDown={searchable ? undefined : handleKey}>
+        <div ref={boxRef} tabIndex={-1} className={`emp-picker-popover emp-picker-popover-${align}${openUp ? " emp-picker-popover-up" : ""}`} onKeyDown={searchable ? undefined : handleKey}>
           {searchable ? (
             <div className="emp-picker-search">
               <Search size={14} className="emp-picker-muted" />
@@ -236,7 +248,7 @@ export default function OptionPicker({
                       pick(o.id);
                     }}
                   >
-                    <Tile label={o.label} />
+                    {showTiles && <Tile label={o.label} />}
                     <span className="emp-picker-who">
                       <span className="emp-picker-name">{o.label}</span>
                       {o.meta && <span className="emp-picker-meta">{o.meta}</span>}

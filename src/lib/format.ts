@@ -719,8 +719,24 @@ export function resolvePaymentValue(
   durationMinutes: number,
   shift: { workDate: string; local: string; role: string; scheduleStartMinutes: number | null; scheduleEndMinutes: number | null },
 ): number | null {
-  for (const rule of rules) {
-    if (rule.kind === "else") return rule.amount;
+  const index = matchingPaymentValueRuleIndex(rules, durationMinutes, shift);
+  return index === null ? null : rules[index].amount;
+}
+
+/**
+ * Which step of a pay-value chain decides a shift's Valor — the index into
+ * `rules`, or `null` when none matches. `resolvePaymentValue` is built on
+ * this; the rules editor's "Testar um turno" uses it directly to point at
+ * the winning rule, so the preview and the real calculation can't drift.
+ */
+export function matchingPaymentValueRuleIndex(
+  rules: Parameters<typeof resolvePaymentValue>[0],
+  durationMinutes: number,
+  shift: Parameters<typeof resolvePaymentValue>[2],
+): number | null {
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i];
+    if (rule.kind === "else") return i;
     if (!rule.conditions.every((c) => matchesValueCondition(c, shift))) continue;
     if (rule.operator === null || rule.thresholdMinutes === null) continue;
     const matches = {
@@ -731,7 +747,7 @@ export function resolvePaymentValue(
       "<": durationMinutes < rule.thresholdMinutes,
       "<=": durationMinutes <= rule.thresholdMinutes,
     }[rule.operator];
-    if (matches) return rule.amount;
+    if (matches) return i;
   }
   return null;
 }

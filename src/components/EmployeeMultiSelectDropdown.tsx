@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type 
 import { colorForName, initials } from "../lib/avatar";
 import { getEmployeesByIds, listEmployeesGlobal, type EmployeeRow } from "../lib/db";
 import { formatCpfPartial, formatPersonName } from "../lib/format";
+import { fitPickerList } from "../lib/pickerFit";
 
 const PAGE_SIZE = 20;
 /** How close (px) to the bottom of the results list triggers loading the next page. */
@@ -99,6 +100,8 @@ export default function EmployeeMultiSelectDropdown({
   const footerRef = useRef<HTMLDivElement>(null);
   /** The list grows down to the bottom of the window and only scrolls past that. */
   const [listMaxHeight, setListMaxHeight] = useState<number | undefined>(undefined);
+  /** Set by `fitPickerList` when there isn't room below the field. */
+  const [openUp, setOpenUp] = useState(false);
 
   function rememberEmployees(found: EmployeeRow[]) {
     if (found.length === 0) return;
@@ -201,13 +204,19 @@ export default function EmployeeMultiSelectDropdown({
     if (!open) return;
     function fit() {
       const list = listRef.current;
-      if (!list) return;
-      const footerHeight = footerRef.current?.offsetHeight ?? 0;
-      // Inside a side panel or sheet (Filtros) the box ends where its scrolling area does, not at the window's bottom.
-      const area = list.closest(".side-panel-body, .drawer-body");
-      const bottom = area ? Math.min(window.innerHeight, area.getBoundingClientRect().bottom) : window.innerHeight;
-      const room = bottom - list.getBoundingClientRect().top - footerHeight - WINDOW_MARGIN_PX;
-      setListMaxHeight(Math.max(MIN_LIST_HEIGHT_PX, Math.floor(room)));
+      const root = rootRef.current;
+      const box = list?.parentElement;
+      if (!list || !root || !box) return;
+      const { openUp: up, maxHeight } = fitPickerList({
+        root,
+        box,
+        list,
+        footerHeight: footerRef.current?.offsetHeight ?? 0,
+        minListHeight: MIN_LIST_HEIGHT_PX,
+        margin: WINDOW_MARGIN_PX,
+      });
+      setOpenUp(up);
+      setListMaxHeight(maxHeight);
     }
     fit();
     window.addEventListener("resize", fit);
@@ -313,7 +322,7 @@ export default function EmployeeMultiSelectDropdown({
       </button>
 
       {open && (
-        <div className={`emp-picker-popover emp-picker-popover-${align}`}>
+        <div className={`emp-picker-popover emp-picker-popover-${align}${openUp ? " emp-picker-popover-up" : ""}`}>
           <div className="emp-picker-search">
             <Search size={14} className="emp-picker-muted" />
             <input
