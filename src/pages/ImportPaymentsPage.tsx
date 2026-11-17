@@ -21,11 +21,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
-import DateRangePicker from "../components/DateRangePicker";
 import Drawer from "../components/Drawer";
 import EmployeePicker from "../components/EmployeePicker";
+import { periodPresets } from "../components/LibraryFiltersPanel";
 import OptionPicker from "../components/OptionPicker";
 import Pagination from "../components/Pagination";
+import PeriodPicker, { type PeriodPreset } from "../components/PeriodPicker";
 import PickFilesButton from "../components/PickFilesButton";
 import RolePicker from "../components/RolePicker";
 import { useRemoteFileUpdates, type RemoteUpdateFlag } from "../contexts/RemoteFileUpdatesContext";
@@ -130,6 +131,11 @@ function urlHost(url: string): string {
 function parentDir(path: string): string {
   const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return i > 0 ? path.slice(0, i) : "";
+}
+
+/** The import's Período starts empty (the whole file), so "Arquivo inteiro" leads the usual shortcuts — same idea as Pagamentos' "Todo o período". */
+function importPeriodPresets(): PeriodPreset[] {
+  return [{ label: "Arquivo inteiro", start: "", end: "" }, ...periodPresets()];
 }
 
 /** "Processar", "Processar 1 arquivo", "Processar 3 arquivos". */
@@ -1763,32 +1769,16 @@ export default function ImportPaymentsPage() {
                   <label>
                     Período <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>
                   </label>
-                  <div className="period-clearable">
-                    <DateRangePicker
-                      startValue={periodStart}
-                      endValue={periodEnd}
-                      onChange={(start, end) => {
-                        setPeriodStart(start);
-                        setPeriodEnd(end);
-                      }}
-                      fullWidth
-                    />
-                    {(periodStart || periodEnd) && (
-                      <button
-                        type="button"
-                        className="ghost period-clear"
-                        onClick={() => {
-                          setPeriodStart("");
-                          setPeriodEnd("");
-                        }}
-                        aria-label="Limpar período"
-                        title="Limpar período"
-                      >
-                        <X size={13} />
-                      </button>
-                    )}
-                  </div>
-                  <p className="field-hint">Vazio processa o arquivo inteiro.</p>
+                  <PeriodPicker
+                    start={periodStart}
+                    end={periodEnd}
+                    onChange={(start, end) => {
+                      setPeriodStart(start);
+                      setPeriodEnd(end);
+                    }}
+                    presets={importPeriodPresets()}
+                  />
+                  <p className="field-hint">Só as linhas com data nesse intervalo.</p>
                 </div>
               </div>
             </section>

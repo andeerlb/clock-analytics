@@ -1302,24 +1302,6 @@ tr:last-child td {
   gap: 1rem 1.2rem;
 }
 
-.period-clearable {
-  position: relative;
-}
-
-.period-clearable > div > button {
-  padding-right: 2.2rem;
-}
-
-button.ghost.period-clear {
-  position: absolute;
-  top: 50%;
-  right: 0.35rem;
-  transform: translateY(-50%);
-  padding: 0.3rem;
-  display: grid;
-  place-items: center;
-}
-
 .import-source-head {
   display: flex;
   align-items: center;
