@@ -8015,6 +8015,62 @@ button.rv-chip[aria-pressed="true"]:hover {
   font-weight: 600;
 }
 
+/* "Dias atrás…": "De [N] até [M] dias atrás" under the period chips. */
+.rv-days {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #141417;
+  border: 1px solid #26262a;
+  border-radius: 10px;
+}
+
+.rv-days-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+input.rv-days-input {
+  width: 64px;
+  height: 30px;
+  padding: 0 6px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.rv-days-error {
+  color: #fbbf24;
+  font-size: 0.75rem;
+}
+
+.rv-days-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+button.rv-days-preset {
+  height: 24px;
+  padding: 0 9px;
+  background: transparent;
+  border: 1px dashed #3b3b44;
+  border-radius: 12px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+button.rv-days-preset:hover {
+  background: transparent;
+  color: var(--text);
+}
+
 .rv-chip-n {
   opacity: 0.6;
   font-variant-numeric: tabular-nums;

@@ -21,7 +21,7 @@ import {
   type ReimportConfigInput,
   type UrlCheckLogEntry,
 } from "../lib/db";
-import { formatDateAbbrevYY, formatDateTimeAbbrevYY, formatPersonName, parseSqliteDateTime, resolveReimportPeriod } from "../lib/format";
+import { formatDateAbbrevYY, formatDateTimeAbbrevYY, formatPersonName, parseSqliteDateTime, resolveReimportConfigLabel, resolveReimportPeriod } from "../lib/format";
 import { acceptShiftChange } from "../lib/remoteCheckDiff";
 import type { PaymentTemplateListRow } from "../lib/types";
 
@@ -65,27 +65,74 @@ const NEW_RULE_DEFAULTS: RuleSettings = {
 
 /** Shortcuts for "Quais turnos olhar" (plus "Período fixo…", which opens the date picker). */
 const PERIOD_CHOICES: { key: string; label: string; settings: Pick<RuleSettings, "dateMode" | "periodStart" | "periodEnd" | "startOffsetDays" | "endOffsetDays"> }[] = [
+  { key: "today", label: "Hoje", settings: { dateMode: "relative", periodStart: null, periodEnd: null, startOffsetDays: 0, endOffsetDays: 0 } },
   { key: "month", label: "Mês atual", settings: { dateMode: "month", periodStart: null, periodEnd: null, startOffsetDays: null, endOffsetDays: null } },
   { key: "30", label: "Últimos 30 dias", settings: { dateMode: "relative", periodStart: null, periodEnd: null, startOffsetDays: 30, endOffsetDays: 0 } },
 ];
 
-/** Which "Quais turnos olhar" option a rule is on; "custom" for an older relative range none of the shortcuts covers. */
+/** Which "Quais turnos olhar" option a rule is on; "days" for any other relative range (edited under "Dias atrás…"). */
 function periodChoiceOf(s: RuleSettings): string {
   if (s.dateMode === "month") return "month";
   if (s.dateMode === "fixed") return "fixed";
-  return s.startOffsetDays === 30 && s.endOffsetDays === 0 ? "30" : "custom";
+  const hit = PERIOD_CHOICES.find((p) => p.settings.dateMode === "relative" && p.settings.startOffsetDays === s.startOffsetDays && p.settings.endOffsetDays === s.endOffsetDays);
+  return hit ? hit.key : "days";
 }
 
-/** "mês atual", "últimos 30 dias", "01/nov/26 a 30/nov/26", "planilha inteira" — the rule's period in a few words. */
+/** "Hoje", "Ontem", "Hoje e ontem", "Últimos 7 dias", "De 7 a 2 dias atrás" — a relative range in a few words. */
+function relativeText(s: RuleSettings): string {
+  const t = resolveReimportConfigLabel({ label: "", dateMode: "relative", startOffsetDays: s.startOffsetDays, endOffsetDays: s.endOffsetDays });
+  return /^\d/.test(t) ? `De ${t}` : t;
+}
+
+/** "hoje", "mês atual", "últimos 30 dias", "01/nov/26 a 30/nov/26", "planilha inteira" — the rule's period in a few words. */
 function periodText(s: RuleSettings): string {
-  const choice = PERIOD_CHOICES.find((p) => p.key === periodChoiceOf(s));
-  if (choice) return choice.label.toLowerCase();
-  if (s.dateMode === "relative") {
-    if (s.endOffsetDays === 0 && s.startOffsetDays !== null) return `últimos ${s.startOffsetDays} dias`;
-    return `de ${s.startOffsetDays ?? "?"} a ${s.endOffsetDays ?? "?"} dias atrás`;
-  }
+  if (s.dateMode === "month") return "mês atual";
+  if (s.dateMode === "relative") return relativeText(s).toLowerCase();
   if (!s.periodStart && !s.periodEnd) return "planilha inteira";
   return `${s.periodStart ? formatDateAbbrevYY(s.periodStart) : "início"} a ${s.periodEnd ? formatDateAbbrevYY(s.periodEnd) : "fim"}`;
+}
+
+/** "De [N] até [M] dias atrás" for "Dias atrás…": saves on every valid change (start ≥ end), keeps an invalid draft local.
+ *  Only it changes the offsets while open, so the draft isn't re-synced from props (a slow save would overwrite what's being typed);
+ *  it is keyed by rule so another rule starts fresh. */
+function RelativeDaysFields({ start, end, onChange }: { start: number; end: number; onChange: (start: number, end: number) => void }) {
+  const [draft, setDraft] = useState({ start: String(start), end: String(end) });
+  const parse = (v: string) => (/^\d{1,3}$/.test(v) ? Number(v) : null);
+  const a = parse(draft.start);
+  const b = parse(draft.end);
+  const invalid = a === null || b === null || b > a;
+  function edit(next: { start: string; end: string }) {
+    setDraft(next);
+    const na = parse(next.start);
+    const nb = parse(next.end);
+    if (na !== null && nb !== null && nb <= na && (na !== start || nb !== end)) onChange(na, nb);
+  }
+  return (
+    <div className="rv-days">
+      <div className="rv-days-row">
+        De
+        <input className="rv-days-input" type="number" inputMode="numeric" min={0} max={999} aria-label="Início, em dias atrás" value={draft.start} onChange={(e) => edit({ ...draft, start: e.target.value })} />
+        até
+        <input className="rv-days-input" type="number" inputMode="numeric" min={0} max={999} aria-label="Fim, em dias atrás" value={draft.end} onChange={(e) => edit({ ...draft, end: e.target.value })} />
+        dias atrás
+      </div>
+      {invalid && <span className="rv-days-error">O início precisa ser igual ou maior que o fim (ex.: de 7 até 0).</span>}
+      <div className="rv-days-presets">
+        <span className="rv-small">Atalhos:</span>
+        {[
+          ["Ontem", 1, 1],
+          ["Hoje e ontem", 1, 0],
+          ["7 dias", 7, 0],
+          ["60 dias", 60, 0],
+        ].map(([label, ps, pe]) => (
+          <button key={label} type="button" className="rv-days-preset" onClick={() => edit({ start: String(ps), end: String(pe) })}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <span className="rv-small">0 = hoje. “De 7 até 0” pega a última semana inteira até hoje.</span>
+    </div>
+  );
 }
 
 function todayRange(s: RuleSettings): string {
@@ -191,8 +238,11 @@ export default function RemoteUpdatesPage() {
 
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // "Dias atrás…" stays open while its fields are edited, even if they land on a shortcut (0 a 0 = Hoje).
+  const [daysEditing, setDaysEditing] = useState(false);
   function openSheet(next: Sheet) {
     setActionError(null);
+    setDaysEditing(false);
     setSheet(next);
   }
 
@@ -506,8 +556,9 @@ export default function RemoteUpdatesPage() {
   }
 
   /** The rule settings shared by "edit" and "new rule". */
-  function renderRuleFields(s: RuleSettings, onChange: (patch: Partial<RuleSettings>) => void) {
+  function renderRuleFields(s: RuleSettings, onChange: (patch: Partial<RuleSettings>) => void, ruleKey: string) {
     const periodChoice = periodChoiceOf(s);
+    const daysOpen = periodChoice === "days" || (daysEditing && s.dateMode === "relative");
     const customInterval = !INTERVAL_CHOICES.includes(s.checkIntervalMinutes);
     return (
       <>
@@ -531,24 +582,31 @@ export default function RemoteUpdatesPage() {
           <span className="rv-label">Quais turnos olhar</span>
           <div className="rv-chips">
             {PERIOD_CHOICES.map((p) => (
-              <button key={p.key} type="button" className="rv-chip" aria-pressed={periodChoice === p.key} onClick={() => onChange(p.settings)}>
+              <button key={p.key} type="button" className="rv-chip" aria-pressed={periodChoice === p.key} onClick={() => (setDaysEditing(false), onChange(p.settings))}>
                 {p.label}
               </button>
             ))}
             <button
               type="button"
               className="rv-chip"
+              aria-pressed={daysOpen}
+              onClick={() => {
+                setDaysEditing(true);
+                if (s.dateMode !== "relative") onChange({ dateMode: "relative", periodStart: null, periodEnd: null, startOffsetDays: 7, endOffsetDays: 0 });
+              }}
+            >
+              {periodChoice === "days" ? relativeText(s) : "Dias atrás…"}
+            </button>
+            <button
+              type="button"
+              className="rv-chip"
               aria-pressed={periodChoice === "fixed"}
-              onClick={() => onChange({ dateMode: "fixed", startOffsetDays: null, endOffsetDays: null, periodStart: s.periodStart, periodEnd: s.periodEnd })}
+              onClick={() => (setDaysEditing(false), onChange({ dateMode: "fixed", startOffsetDays: null, endOffsetDays: null, periodStart: s.periodStart, periodEnd: s.periodEnd }))}
             >
               Período fixo…
             </button>
-            {periodChoice === "custom" && (
-              <span className="rv-chip" aria-pressed="true">
-                {periodText(s)}
-              </span>
-            )}
           </div>
+          {daysOpen && <RelativeDaysFields key={ruleKey} start={s.startOffsetDays ?? 0} end={s.endOffsetDays ?? 0} onChange={(start, end) => onChange({ startOffsetDays: start, endOffsetDays: end })} />}
           {periodChoice === "fixed" && (
             <DateRangePicker startValue={s.periodStart ?? ""} endValue={s.periodEnd ?? ""} onChange={(start, end) => onChange({ periodStart: start || null, periodEnd: end || null })} fullWidth />
           )}
@@ -609,7 +667,7 @@ export default function RemoteUpdatesPage() {
           <input type="checkbox" role="switch" className="settings-switch" checked={!c.checkDisabled} onChange={() => toggleRule(c)} />
         </label>
 
-        {renderRuleFields(s, (patch) => saveRule(c, patch))}
+        {renderRuleFields(s, (patch) => saveRule(c, patch), `rule-${c.id}`)}
 
         <div className={moreOpen ? "rv-more rv-more-open" : "rv-more"}>
           <button type="button" className="rv-more-toggle" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>
@@ -797,7 +855,7 @@ export default function RemoteUpdatesPage() {
             ))}
           </select>
         </div>
-        {renderRuleFields(newRule, (patch) => setNewRule((r) => ({ ...r, ...patch })))}
+        {renderRuleFields(newRule, (patch) => setNewRule((r) => ({ ...r, ...patch })), "new")}
       </div>
     );
   }
