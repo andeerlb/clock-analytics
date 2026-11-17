@@ -307,8 +307,10 @@ export default function EmployeePicker({
             aria-label="Vincular colaborador"
             style={{
               position: "fixed",
-              top: coords.openUp ? undefined : coords.top,
-              bottom: coords.openUp ? window.innerHeight - coords.top : undefined,
+              // Both set explicitly: `.emp-picker-popover` has its own `top`,
+              // which would otherwise stretch an upward box to the window top.
+              top: coords.openUp ? "auto" : coords.top,
+              bottom: coords.openUp ? window.innerHeight - coords.top : "auto",
               left: coords.left,
               width: POPOVER_WIDTH,
               zIndex: 100,
