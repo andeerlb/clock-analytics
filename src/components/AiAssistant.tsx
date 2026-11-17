@@ -276,6 +276,28 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
   const [panelWidth, setPanelWidth] = useState(readSavedPanelWidth);
   // Where a page docks its own side panel: between the page and this one.
   const [sidePanelSlot, setSidePanelSlot] = useState<HTMLDivElement | null>(null);
+  // How wide the page's docked side panel is right now, so the floating
+  // launcher can sit beside it instead of covering its footer. The slot is
+  // `display: contents` (no box of its own), so its children are measured.
+  const [sidePanelWidth, setSidePanelWidth] = useState(0);
+  useEffect(() => {
+    if (!sidePanelSlot) return;
+    const measure = () =>
+      setSidePanelWidth(Array.from(sidePanelSlot.children).reduce((w, el) => w + el.getBoundingClientRect().width, 0));
+    const resize = new ResizeObserver(measure);
+    const observeChildren = () => {
+      resize.disconnect();
+      Array.from(sidePanelSlot.children).forEach((el) => resize.observe(el));
+      measure();
+    };
+    const mutation = new MutationObserver(observeChildren);
+    mutation.observe(sidePanelSlot, { childList: true });
+    observeChildren();
+    return () => {
+      mutation.disconnect();
+      resize.disconnect();
+    };
+  }, [sidePanelSlot]);
   const contextRef = useRef<HTMLDivElement>(null);
   // "Nova conversa" during a run makes its late result land nowhere.
   const currentRun = useRef(0);
@@ -698,7 +720,14 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
         )}
       </div>
       {!open && (
-        <button type="button" className="ai-launcher" aria-label="Abrir assistente" title="Assistente" onClick={() => setOpen(true)}>
+        <button
+          type="button"
+          className="ai-launcher"
+          aria-label="Abrir assistente"
+          title="Assistente"
+          onClick={() => setOpen(true)}
+          style={sidePanelWidth > 0 ? { right: `calc(1.25rem + ${Math.round(sidePanelWidth)}px)` } : undefined}
+        >
           {running ? <Loader2 size={20} className="ai-spin" /> : <MessageCircle size={20} />}
           {unseenAnswer && <span className="ai-launcher-dot" />}
         </button>
