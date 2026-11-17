@@ -12,7 +12,7 @@ import {
   Users,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import Drawer from "../components/Drawer";
@@ -134,22 +134,34 @@ type GroupRef = { employeeId: number; competencia: string } | null;
  * header). Read-only: clicking the row opens the turno's side panel
  * (`ShiftPanel`), where it's paid, edited, and everything else.
  */
-function ShiftRow({
+/** Stable "no changes" value, so a row without diffs doesn't get a fresh `[]` (and re-render) every time the page does. */
+const NO_CHANGES: ShiftFieldDiffRow[] = [];
+
+const ShiftRow = memo(function ShiftRow({
   shift: s,
-  identity,
+  showIdentity,
+  companyId,
+  groupEmployeeId,
+  groupCompetencia,
   rules,
   visibleColumns,
   changes,
   onOpen,
   active,
 }: {
-  shift: PaymentShiftRow & { shiftPeriod: ShiftPeriod | null };
-  identity?: { employeeName: string; companyName: string; clientName: string };
+  shift: PaymentShiftRow & { shiftPeriod: ShiftPeriod | null; companyName?: string; clientName?: string };
+  /** Flat table: also render Colaborador/Cliente/Empresa (a grouped row's header already says them). */
+  showIdentity: boolean;
+  companyId: number;
+  /** Set for a row inside an expanded group — which group, so a change can refresh just it. */
+  groupEmployeeId?: number;
+  groupCompetencia?: string;
   rules: EffectivePaymentRules | null;
   visibleColumns: Set<string>;
   /** What the last automatic verification found different for this shift (if anything) — see `listLatestFieldDiffsForShifts`. */
   changes: ShiftFieldDiffRow[];
-  onOpen: () => void;
+  /** Stable across renders (see `handleOpenRow`), so the memo holds. */
+  onOpen: (shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) => void;
   /** This row's turno is the one open in the panel (or was, last) — kept highlighted. */
   active: boolean;
 }) {
@@ -167,37 +179,29 @@ function ShiftRow({
   return (
     <tr
       className={active ? "row-active payments-row-clickable" : "payments-row-clickable"}
-      onClick={onOpen}
+      onClick={() =>
+        onOpen(s, companyId, groupEmployeeId !== undefined && groupCompetencia !== undefined ? { employeeId: groupEmployeeId, competencia: groupCompetencia } : null)
+      }
       style={isBlocked ? { background: "var(--warning-soft)" } : hasApplied ? { background: "var(--accent-soft)" } : undefined}
     >
-      {identity && col("colaborador") && (
+      {showIdentity && col("colaborador") && (
         <td>
           <div className="person-cell">
-            <Avatar name={identity.employeeName} />
-            {identity.employeeName}
+            <Avatar name={s.employeeName} />
+            <span className="person-cell-name">{s.employeeName}</span>
           </div>
         </td>
       )}
-      {identity && col("cliente") && <td>{identity.clientName}</td>}
-      {identity && col("empresa") && <td>{identity.companyName}</td>}
-      {col("data") && (
-        <td>{formatDateAbbrevYY(s.workDate)}</td>
-      )}
-      {col("local") && (
-        <td>{s.local}</td>
-      )}
-      {col("funcao") && (
-        <td>{s.role}</td>
-      )}
+      {showIdentity && col("cliente") && <td>{s.clientName}</td>}
+      {showIdentity && col("empresa") && <td>{s.companyName}</td>}
+      {col("data") && <td>{formatDateAbbrevYY(s.workDate)}</td>}
+      {col("local") && <td>{s.local}</td>}
+      {col("funcao") && <td>{s.role}</td>}
       {col("horario") && (
-        <td>
-          {hasSchedule ? `${formatMinutesAsTime(s.scheduleStartMinutes!)} – ${formatMinutesAsTime(s.scheduleEndMinutes!)}` : "—"}
-        </td>
+        <td>{hasSchedule ? `${formatMinutesAsTime(s.scheduleStartMinutes!)} – ${formatMinutesAsTime(s.scheduleEndMinutes!)}` : "—"}</td>
       )}
       {col("horas") && <td>{duration !== null ? formatMinutesAsTime(duration) : "—"}</td>}
-      {col("valor") && (
-        <td className="num-cell">{value !== null ? formatCurrencyBRL(value) : "—"}</td>
-      )}
+      {col("valor") && <td className="num-cell">{value !== null ? formatCurrencyBRL(value) : "—"}</td>}
       {col("status") && (
         <td>
           <span className={badge.className} title={s.status === "erro" ? s.errorMessage ?? undefined : undefined}>
@@ -212,6 +216,63 @@ function ShiftRow({
       )}
     </tr>
   );
+});
+
+/** Relative widths for the flat table's fixed layout — keeps columns from shifting as rows scroll in and out. */
+const FLAT_COLUMN_WEIGHTS: Record<string, number> = {
+  colaborador: 3,
+  cliente: 1.3,
+  empresa: 1,
+  data: 1.1,
+  local: 1.6,
+  funcao: 1.3,
+  horario: 1.4,
+  horas: 0.9,
+  valor: 1.2,
+  status: 1.3,
+};
+
+/** Rows drawn above and below the visible ones, so a fast scroll doesn't show blank space. */
+const VIRTUAL_OVERSCAN = 15;
+
+/**
+ * Which rows of a long table are near the viewport — only those get drawn,
+ * the rest is empty space of the same height (see the flat table). Rows
+ * have one fixed height there (no wrapping), measured from a drawn row.
+ */
+function useVirtualRows(count: number, bodyRef: RefObject<HTMLTableSectionElement | null>) {
+  const [rowHeight, setRowHeight] = useState(53);
+  const [range, setRange] = useState({ start: 0, end: Math.min(count, 40) });
+
+  useLayoutEffect(() => {
+    const update = () => {
+      const body = bodyRef.current;
+      if (!body) return;
+      const firstRow = body.querySelector<HTMLTableRowElement>("tr.payments-row-clickable");
+      const h = firstRow?.offsetHeight || rowHeight;
+      if (h !== rowHeight) setRowHeight(h);
+      const top = body.getBoundingClientRect().top;
+      const start = Math.max(0, Math.floor(-top / h) - VIRTUAL_OVERSCAN);
+      const end = Math.min(count, Math.max(start, Math.ceil((window.innerHeight - top) / h)) + VIRTUAL_OVERSCAN);
+      setRange((prev) => (prev.start === start && prev.end === end ? prev : { start, end }));
+    };
+    update();
+    let frame = 0;
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(update);
+    };
+    // Capture: the page scrolls inside app containers, not only the window.
+    document.addEventListener("scroll", schedule, { capture: true, passive: true });
+    window.addEventListener("resize", schedule);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("scroll", schedule, { capture: true });
+      window.removeEventListener("resize", schedule);
+    };
+  }, [count, rowHeight, bodyRef]);
+
+  return { ...range, rowHeight };
 }
 
 const FILTERS_OPEN_KEY = "payments-filters-open";
@@ -739,6 +800,14 @@ export default function PaymentsPage() {
     setOpenShift({ shift, companyId, groupRef });
   }
 
+  // One callback for every row, stable across renders, so memoized rows
+  // don't all re-render whenever the page does.
+  const openShiftPanelRef = useRef(openShiftPanel);
+  openShiftPanelRef.current = openShiftPanel;
+  const handleOpenRow = useCallback((shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) => {
+    openShiftPanelRef.current(shift, companyId, groupRef);
+  }, []);
+
   function closePanelIfShowing(shiftId: number) {
     setOpenShift((prev) => (prev && prev.shift.id === shiftId ? null : prev));
   }
@@ -1025,6 +1094,10 @@ export default function PaymentsPage() {
   ];
   const isTab = (statuses: PaymentShiftStatus[]) => statuses.length === selectedStatuses.size && statuses.every((s) => selectedStatuses.has(s));
   const loadedCount = grouped ? summaries.length : flatRows.length;
+  const flatColumns = PAGE_COLUMNS.filter((c) => visibleColumns.has(c.id));
+  const flatWeightSum = flatColumns.reduce((sum, c) => sum + (FLAT_COLUMN_WEIGHTS[c.id] ?? 1), 0);
+  const flatBodyRef = useRef<HTMLTableSectionElement>(null);
+  const virtual = useVirtualRows(grouped ? 0 : flatRows.length, flatBodyRef);
   // The observer only fires when the sentinel *enters* the margin — if it's
   // still in view after a load (tall window, few rows), keep going.
   useEffect(() => {
@@ -1345,11 +1418,15 @@ export default function PaymentsPage() {
                                           <ShiftRow
                                             key={r.id}
                                             shift={r}
+                                            showIdentity={false}
+                                            companyId={s.companyId}
+                                            groupEmployeeId={s.employeeId}
+                                            groupCompetencia={s.competencia}
                                             active={r.id === activeShiftId}
-                                            onOpen={() => openShiftPanel(r, s.companyId, { employeeId: s.employeeId, competencia: s.competencia })}
+                                            onOpen={handleOpenRow}
                                             rules={rulesByPair.get(`${s.clientId}:${s.companyId}`) ?? null}
                                             visibleColumns={visibleColumns}
-                                            changes={shiftDiffs.get(r.id) ?? []}
+                                            changes={shiftDiffs.get(r.id) ?? NO_CHANGES}
                                           />
                                         ))}
                                       </tbody>
@@ -1376,27 +1453,45 @@ export default function PaymentsPage() {
         {total > 0 && !grouped && (
           <>
             <TableScroll>
-              <table>
+              <table className="payments-flat-table">
+                <colgroup>
+                  {flatColumns.map((c) => (
+                    <col key={c.id} style={{ width: `${((FLAT_COLUMN_WEIGHTS[c.id] ?? 1) / flatWeightSum) * 100}%` }} />
+                  ))}
+                </colgroup>
                 <thead>
                   <tr>
-                    {PAGE_COLUMNS.filter((c) => visibleColumns.has(c.id)).map((c) => (
-                      <th key={c.id} className={c.id === "valor" ? "num-cell" : undefined}>{c.label}</th>
+                    {flatColumns.map((c) => (
+                      <th key={c.id} className={c.id === "valor" ? "num-cell" : undefined}>
+                        {c.label}
+                      </th>
                     ))}
                   </tr>
                 </thead>
-                <tbody>
-                  {flatRows.map((r) => (
+                <tbody ref={flatBodyRef}>
+                  {virtual.start > 0 && (
+                    <tr className="virtual-spacer" aria-hidden="true">
+                      <td colSpan={flatColumns.length} style={{ height: virtual.start * virtual.rowHeight }} />
+                    </tr>
+                  )}
+                  {flatRows.slice(virtual.start, virtual.end).map((r) => (
                     <ShiftRow
                       key={r.id}
                       shift={r}
+                      showIdentity
+                      companyId={r.companyId}
                       active={r.id === activeShiftId}
-                      onOpen={() => openShiftPanel(r, r.companyId, null)}
-                      identity={{ employeeName: r.employeeName, companyName: r.companyName, clientName: r.clientName }}
+                      onOpen={handleOpenRow}
                       rules={rulesByPair.get(`${r.clientId}:${r.companyId}`) ?? null}
                       visibleColumns={visibleColumns}
-                      changes={shiftDiffs.get(r.id) ?? []}
+                      changes={shiftDiffs.get(r.id) ?? NO_CHANGES}
                     />
                   ))}
+                  {virtual.end < flatRows.length && (
+                    <tr className="virtual-spacer" aria-hidden="true">
+                      <td colSpan={flatColumns.length} style={{ height: (flatRows.length - virtual.end) * virtual.rowHeight }} />
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </TableScroll>

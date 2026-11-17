@@ -8987,3 +8987,36 @@ td.num-cell {
 .payments-scroll-footer:empty {
   padding: 0;
 }
+
+/* Pagamentos flat table: virtualized (only rows near the viewport are
+   drawn), so every row has one fixed height — no wrapping — and the
+   columns a fixed layout, so they don't shift as rows come and go. */
+.payments-flat-table {
+  table-layout: fixed;
+}
+
+.payments-flat-table td {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.payments-flat-table .person-cell {
+  min-width: 0;
+}
+
+.payments-flat-table .person-cell-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.payments-flat-table .payments-error-reason {
+  display: inline;
+  margin: 0 0 0 6px;
+}
+
+tr.virtual-spacer td {
+  padding: 0;
+  border: 0;
+}
