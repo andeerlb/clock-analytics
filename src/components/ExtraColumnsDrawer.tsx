@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Link2 } from "lucide-react";
+import { Columns3, Link2 } from "lucide-react";
 import Drawer from "./Drawer";
 
 /**
@@ -34,7 +34,7 @@ export default function ExtraColumnsDrawer({
   }
 
   return (
-    <Drawer open={open} onClose={onClose} title="Colunas não mapeadas">
+    <Drawer open={open} onClose={onClose} title="Colunas não mapeadas" icon={Columns3}>
       <p className="muted" style={{ fontSize: "0.85rem", marginTop: 0 }}>
         Valores lidos do arquivo original em colunas que o template não usa — guardados aqui só para consulta.
       </p>

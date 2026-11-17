@@ -1,4 +1,4 @@
-import { BookOpen, LayoutTemplate } from "lucide-react";
+import { BookOpen, CircleHelp, LayoutTemplate } from "lucide-react";
 import { useMemo, useState } from "react";
 import { PAYMENT_EXPORT_TEMPLATE_EXAMPLES, type PaymentExportTemplateExample } from "../lib/paymentExportTemplateExamples";
 import Drawer from "./Drawer";
@@ -32,7 +32,7 @@ export default function PaymentExportTemplateHelpDrawer({ open, onClose, onApply
     return <button key={id} type="button" className="secondary" onClick={() => { setCategory(example.category); setTab("examples"); }} style={{ padding: "0.3rem 0.55rem", fontSize: "0.78rem" }}>Ver: {example.title}</button>;
   }
 
-  return <Drawer open={open} onClose={onClose} title="Ajuda para templates de Excel" width="min(780px, 95vw)">
+  return <Drawer open={open} onClose={onClose} title="Ajuda para templates de Excel" icon={CircleHelp} width="min(780px, calc(100vw - 24px))">
     <div style={{ display: "flex", gap: "0.4rem", marginBottom: "1rem" }}>
       <button type="button" className={tab === "topics" ? "" : "secondary"} onClick={() => setTab("topics")}><BookOpen size={14} /> Consultar tópicos</button>
       <button type="button" className={tab === "examples" ? "" : "secondary"} onClick={() => setTab("examples")}><LayoutTemplate size={14} /> Usar um exemplo</button>

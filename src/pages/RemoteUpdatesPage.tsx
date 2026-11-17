@@ -6,6 +6,7 @@ import ChangeCards, { authorKey, savedWhen, UNNAMED_AUTHOR } from "../components
 import ConfirmModal from "../components/ConfirmModal";
 import DateRangePicker from "../components/DateRangePicker";
 import Drawer from "../components/Drawer";
+import PageHeader from "../components/PageHeader";
 import { useRemoteFileUpdates, type ReimportConfig, type TrackedPaymentUrl } from "../contexts/RemoteFileUpdatesContext";
 import { colorForName, initials } from "../lib/avatar";
 import {
@@ -1089,18 +1090,18 @@ export default function RemoteUpdatesPage() {
 
   return (
     <div className="rv-page">
-      <div className="rv-head">
-        <div>
-          <h2>Verificação automática</h2>
-          <p className="page-subtitle">Planilhas importadas por link que o PontoScan confere sozinho.</p>
-        </div>
-        {files.length > 0 && (
-          <button type="button" className="settings-button" onClick={handleForceCheckAll} disabled={forcingAll}>
-            <RefreshCw size={14} className={forcingAll ? "ai-spin" : undefined} />
-            {forcingAll ? "Conferindo..." : "Verificar agora"}
-          </button>
-        )}
-      </div>
+      <PageHeader
+        title="Verificação automática"
+        subtitle="Planilhas importadas por link que o PontoScan confere sozinho."
+        actions={
+          files.length > 0 && (
+            <button type="button" className="settings-button" onClick={handleForceCheckAll} disabled={forcingAll}>
+              <RefreshCw size={14} className={forcingAll ? "ai-spin" : undefined} />
+              {forcingAll ? "Conferindo..." : "Verificar agora"}
+            </button>
+          )
+        }
+      />
 
       {tickError && <div className="error-box">Não deu pra conferir as planilhas: {tickError}</div>}
 
@@ -1149,7 +1150,6 @@ export default function RemoteUpdatesPage() {
         onClose={() => setSheet(null)}
         title={sheetTitle}
         header={sheetHeader}
-        className="rv-drawer"
         width="min(480px, calc(100vw - 24px))"
         footer={sheetFooter ? <div className="rv-footer">{sheetFooter}</div> : undefined}
       >

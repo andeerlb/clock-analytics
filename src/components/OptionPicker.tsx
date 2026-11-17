@@ -41,6 +41,11 @@ function normalize(text: string): string {
  * into the box, the list fits the room below, arrow keys move, Enter
  * toggles, Esc closes. Search only shows up once the list is long enough
  * to need it.
+ *
+ * `single` turns it into a one-of-many picker (e.g. the payment import's
+ * Template): picking a row closes the box, there's no "select all"/"clear"
+ * footer, and the closed field shows the chosen option's `meta` on its
+ * right.
  */
 export default function OptionPicker({
   options,
@@ -53,19 +58,21 @@ export default function OptionPicker({
   searchPlaceholder,
   selectAllLabel,
   align = "right",
+  single = false,
 }: {
   options: PickerOption[];
   selected: Set<string>;
   onToggle: (id: string) => void;
-  onSelectAll: () => void;
-  onClear: () => void;
+  onSelectAll?: () => void;
+  onClear?: () => void;
   /** Shown at the top of the box when there's no search. */
   title: string;
   /** Closed field text when nothing is selected, e.g. "Todas as empresas". */
   allPlaceholder: string;
   searchPlaceholder: string;
-  selectAllLabel: string;
+  selectAllLabel?: string;
   align?: "left" | "right";
+  single?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -103,8 +110,8 @@ export default function OptionPicker({
       const list = listRef.current;
       if (!list) return;
       const footerHeight = footerRef.current?.offsetHeight ?? 0;
-      // Inside the Filtros panel the box ends where its scrolling area does, not at the window's bottom.
-      const area = list.closest(".side-panel-body");
+      // Inside a side panel or sheet (Filtros) the box ends where its scrolling area does, not at the window's bottom.
+      const area = list.closest(".side-panel-body, .drawer-body");
       const bottom = area ? Math.min(window.innerHeight, area.getBoundingClientRect().bottom) : window.innerHeight;
       const room = bottom - list.getBoundingClientRect().top - footerHeight - WINDOW_MARGIN_PX;
       setListMaxHeight(Math.max(MIN_LIST_HEIGHT_PX, Math.floor(room)));
@@ -130,6 +137,11 @@ export default function OptionPicker({
     triggerRef.current?.focus();
   }
 
+  function pick(id: string) {
+    onToggle(id);
+    if (single) close();
+  }
+
   function handleKey(e: KeyboardEvent<HTMLElement>) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -141,7 +153,7 @@ export default function OptionPicker({
       const option = visible[cursor];
       if (option) {
         e.preventDefault();
-        onToggle(option.id);
+        pick(option.id);
       }
     } else if (e.key === "Escape") {
       e.preventDefault();
@@ -175,6 +187,7 @@ export default function OptionPicker({
           </span>
         )}
         <span className={chosen.length === 0 ? "emp-picker-summary emp-picker-placeholder" : "emp-picker-summary"}>{summary}</span>
+        {single && chosen[0]?.meta && <span className="emp-picker-muted emp-picker-trigger-meta">{chosen[0].meta}</span>}
         <ChevronsUpDown size={14} className="emp-picker-muted" />
       </button>
 
@@ -204,7 +217,7 @@ export default function OptionPicker({
             </div>
           )}
 
-          <div ref={listRef} className="emp-picker-list" style={{ maxHeight: listMaxHeight }} role="listbox" aria-multiselectable="true">
+          <div ref={listRef} className="emp-picker-list" style={{ maxHeight: listMaxHeight }} role="listbox" aria-multiselectable={!single}>
             {visible.map((o, index) => {
               const header = o.group !== undefined && o.group !== lastGroup ? o.group : null;
               lastGroup = o.group;
@@ -220,7 +233,7 @@ export default function OptionPicker({
                     onMouseDown={(ev) => ev.preventDefault()}
                     onClick={() => {
                       setCursor(index);
-                      onToggle(o.id);
+                      pick(o.id);
                     }}
                   >
                     <Tile label={o.label} />
@@ -238,19 +251,21 @@ export default function OptionPicker({
             {visible.length === 0 && <p className="emp-picker-empty">{search ? `Nada encontrado com “${search}”.` : "Nenhuma opção cadastrada."}</p>}
           </div>
 
-          <div ref={footerRef} className="emp-picker-footer">
-            <span className="picker-footer-actions">
-              <button type="button" className="emp-picker-clear" onClick={onSelectAll} disabled={options.length === 0 || chosen.length === options.length}>
-                {selectAllLabel}
+          {!single && (
+            <div ref={footerRef} className="emp-picker-footer">
+              <span className="picker-footer-actions">
+                <button type="button" className="emp-picker-clear" onClick={onSelectAll} disabled={options.length === 0 || chosen.length === options.length}>
+                  {selectAllLabel}
+                </button>
+                <button type="button" className="emp-picker-clear" onClick={onClear} disabled={chosen.length === 0}>
+                  Limpar seleção
+                </button>
+              </span>
+              <button type="button" className="emp-picker-done" onClick={close}>
+                Pronto
               </button>
-              <button type="button" className="emp-picker-clear" onClick={onClear} disabled={chosen.length === 0}>
-                Limpar seleção
-              </button>
-            </span>
-            <button type="button" className="emp-picker-done" onClick={close}>
-              Pronto
-            </button>
-          </div>
+            </div>
+          )}
         </div>
       )}
     </div>

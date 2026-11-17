@@ -9,6 +9,7 @@ import {
   List,
   ListFilter,
   Moon,
+  RefreshCw,
   ShieldCheck,
   Sun,
   Trash2,
@@ -29,6 +30,7 @@ import Drawer from "../components/Drawer";
 import ExtraColumnsDrawer from "../components/ExtraColumnsDrawer";
 import ColumnPicker from "../components/ColumnPicker";
 import Pagination from "../components/Pagination";
+import PageHeader from "../components/PageHeader";
 import PaymentExportDrawer from "../components/PaymentExportDrawer";
 import PaymentsExportMenu from "../components/PaymentsExportMenu";
 import PaymentsFiltersPanel, { PaymentsFilterChips, usePaymentsActiveFilterCount } from "../components/PaymentsFiltersPanel";
@@ -1387,40 +1389,40 @@ export default function PaymentsPage() {
 
   return (
     <div>
-      <div className="library-head">
-        <div className="library-head-text">
-          <h2>Pagamentos</h2>
-          <p className="page-subtitle">
-            {grouped
-              ? "Turnos importados, agrupados por colaborador e competência. Clique num colaborador para ver os turnos do mês."
-              : "Turnos importados, um turno por linha."}
-          </p>
-        </div>
-        <div className="payments-head-actions">
-          <PaymentsExportMenu
-            onTemplateExport={() => setExportDrawerOpen(true)}
-            onValueReport={handleGenerateLegacyPdf}
-            onShiftReport={handleGenerateShiftPdf}
-            generatingValueReport={generatingLegacyPdf}
-            generatingShiftReport={generatingShiftPdf}
-            shiftCount={shiftCount}
-          />
-          <button
-            type="button"
-            className="payments-reconcile"
-            onClick={() => openReconciliationWindow().catch(() => {})}
-            title="Conferência de Pagamentos — considera os filtros desta tela"
-          >
-            <ClipboardCheck size={15} />
-            Conferência
-            {statusCounts && statusCounts.pendente > 0 && (
-              <small>
-                {statusCounts.pendente} {statusCounts.pendente === 1 ? "pendente" : "pendentes"}
-              </small>
-            )}
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Pagamentos"
+        subtitle={
+          grouped
+            ? "Turnos importados, agrupados por colaborador e competência. Clique num colaborador para ver os turnos do mês."
+            : "Turnos importados, um turno por linha."
+        }
+        actions={
+          <div className="payments-head-actions">
+            <PaymentsExportMenu
+              onTemplateExport={() => setExportDrawerOpen(true)}
+              onValueReport={handleGenerateLegacyPdf}
+              onShiftReport={handleGenerateShiftPdf}
+              generatingValueReport={generatingLegacyPdf}
+              generatingShiftReport={generatingShiftPdf}
+              shiftCount={shiftCount}
+            />
+            <button
+              type="button"
+              className="payments-reconcile"
+              onClick={() => openReconciliationWindow().catch(() => {})}
+              title="Conferência de Pagamentos — considera os filtros desta tela"
+            >
+              <ClipboardCheck size={15} />
+              Conferência
+              {statusCounts && statusCounts.pendente > 0 && (
+                <small>
+                  {statusCounts.pendente} {statusCounts.pendente === 1 ? "pendente" : "pendentes"}
+                </small>
+              )}
+            </button>
+          </div>
+        }
+      />
       {exportError && <div className="error-box">{exportError}</div>}
       {pdfExportError && <div className="error-box">{pdfExportError}</div>}
       {legacyPdfError && <div className="error-box">{legacyPdfError}</div>}
@@ -1903,7 +1905,9 @@ export default function PaymentsPage() {
           setReviewingShift(null);
           setAcceptError(null);
         }}
-        title={reviewingShift ? `${reviewingShift.shift.employeeName} — ${formatDate(reviewingShift.shift.workDate)}` : ""}
+        title={reviewingShift ? reviewingShift.shift.employeeName : ""}
+        subtitle={reviewingShift ? `Alterações na planilha · ${formatDate(reviewingShift.shift.workDate)}` : undefined}
+        icon={RefreshCw}
       >
         {reviewingShift &&
           (() => {

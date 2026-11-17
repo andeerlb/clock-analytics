@@ -1,8 +1,8 @@
 import { Copy, FileSpreadsheet, FileText, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
+import PageHeader from "../components/PageHeader";
 import {
   clonePaymentExportTemplate,
   clonePaymentPdfTemplate,
@@ -131,14 +131,12 @@ export default function PaymentExportTemplatesPage() {
 
   return (
     <div>
-      <BackButton fallback="/payments" />
-      <div className="page-header">
-        <h2>Templates de exportação</h2>
-      </div>
-      <p className="page-subtitle">
-        Layouts para exportar turnos de pagamento — em Excel ou em PDF, com colunas, cores,
-        agrupamento e linha de soma, montados como numa planilha real.
-      </p>
+      <PageHeader
+        title="Templates de exportação"
+        backFallback="/payments"
+        backLabel="Voltar para Pagamentos"
+        subtitle="Layouts para exportar turnos de pagamento — em Excel ou em PDF, com colunas, cores, agrupamento e linha de soma, montados como numa planilha real."
+      />
 
       {error && <div className="error-box">{error}</div>}
 

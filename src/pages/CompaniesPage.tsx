@@ -1,6 +1,7 @@
 import { Building2, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import PageHeader from "../components/PageHeader";
 import { listCompanies, type CompanyRow } from "../lib/db";
 import { formatCnpj } from "../lib/format";
 
@@ -19,16 +20,16 @@ export default function CompaniesPage() {
 
   return (
     <div>
-      <div className="page-header">
-        <h2>Empresas</h2>
-        <button type="button" onClick={() => navigate("/companies/new")}>
-          <Plus size={15} style={{ marginRight: "0.4rem" }} />
-          Nova empresa
-        </button>
-      </div>
-      <p className="page-subtitle">
-        Cadastre as empresas que podem ser selecionadas ao importar espelhos de ponto.
-      </p>
+      <PageHeader
+        title="Empresas"
+        subtitle="Cadastre as empresas que podem ser selecionadas ao importar espelhos de ponto."
+        actions={
+          <button type="button" onClick={() => navigate("/companies/new")}>
+            <Plus size={15} />
+            Nova empresa
+          </button>
+        }
+      />
 
       {error && <div className="error-box">Não foi possível carregar as empresas: {error}</div>}
 

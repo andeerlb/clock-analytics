@@ -10,7 +10,6 @@ import Sidebar from "./components/Sidebar";
 import { FiltersProvider } from "./contexts/FiltersContext";
 import { RemoteFileUpdatesProvider } from "./contexts/RemoteFileUpdatesContext";
 import { checkPopplerStatus, clearDatabaseImportResult, takeDatabaseImportResult, type DatabaseImportResult } from "./lib/api";
-import { useWindowGlassInit } from "./lib/useWindowGlass";
 import ClientFormPage from "./pages/ClientFormPage";
 import ClientsPage from "./pages/ClientsPage";
 import CompaniesPage from "./pages/CompaniesPage";
@@ -124,11 +123,6 @@ function AppShell({ popplerMissing, importResult, clearImportResult }: { poppler
 function App() {
   const [popplerMissing, setPopplerMissing] = useState(false);
   const [importResult, setImportResult] = useState<DatabaseImportResult | null>(null);
-
-  // Reads back whether the native window blur applied at startup (see
-  // `lib.rs`'s `setup`) actually took, and stamps `<html>` accordingly —
-  // once per window, permanently, not per Modal/Drawer open.
-  useWindowGlassInit();
 
   useEffect(() => {
     checkPopplerStatus()

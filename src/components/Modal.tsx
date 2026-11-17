@@ -122,9 +122,8 @@ export default function Modal({
       // full width, not shrink to their own content width and float
       // centered in a column.
       <div
-        // `modal-overlay-fullscreen`: lets App.css's `:root.glass-css-only`
-        // rule single out fullScreen surfaces specifically — see that rule
-        // for why only they get the opaque Linux fallback.
+        // `modal-overlay-fullscreen`: lets App.css give fullScreen surfaces
+        // an opaque background instead of the small-modal dim scrim.
         className={`modal-overlay modal-overlay-fullscreen${closing ? " modal-overlay-closing" : ""}`}
         style={{ zIndex, flexDirection: "column", alignItems: "stretch", justifyContent: "flex-start" }}
         onClick={closeOnBackdrop ? requestClose : undefined}

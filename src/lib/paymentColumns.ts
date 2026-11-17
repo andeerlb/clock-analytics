@@ -1,5 +1,9 @@
 import type { PickerColumn } from "../components/ColumnPicker";
-import type { MultiSelectOption } from "../components/MultiSelectDropdown";
+/** One pickable column: its id and the label shown for it. */
+export interface MultiSelectOption<T extends string> {
+  id: T;
+  label: string;
+}
 
 /**
  * Every column a turno row can show — shared between the Pagamentos page's

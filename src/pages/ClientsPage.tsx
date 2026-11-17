@@ -1,6 +1,7 @@
 import { Plus, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import PageHeader from "../components/PageHeader";
 import { listClients, type ClientRow } from "../lib/db";
 import { formatCnpj } from "../lib/format";
 
@@ -42,18 +43,16 @@ export default function ClientsPage() {
 
   return (
     <div>
-      <div className="page-header">
-        <h2>Clientes</h2>
-        <button type="button" onClick={() => navigate("/clients/new")}>
-          <Plus size={15} style={{ marginRight: "0.4rem" }} />
-          Novo cliente
-        </button>
-      </div>
-      <p className="page-subtitle">
-        O CNPJ do cliente é único: cadastrar o mesmo CNPJ para outra empresa apenas vincula o
-        cliente já existente a ela, em vez de duplicá-lo. Ao importar, selecione o cliente e, se
-        ele estiver vinculado a mais de uma empresa, escolha qual delas.
-      </p>
+      <PageHeader
+        title="Clientes"
+        subtitle="O CNPJ do cliente é único: cadastrar o mesmo CNPJ para outra empresa apenas vincula o cliente já existente a ela, em vez de duplicá-lo. Ao importar, selecione o cliente e, se ele estiver vinculado a mais de uma empresa, escolha qual delas."
+        actions={
+          <button type="button" onClick={() => navigate("/clients/new")}>
+            <Plus size={15} />
+            Novo cliente
+          </button>
+        }
+      />
 
       {error && <div className="error-box">Não foi possível carregar os clientes: {error}</div>}
 

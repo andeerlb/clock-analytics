@@ -1,4 +1,4 @@
-import { FileSpreadsheet, FileText, Settings2 } from "lucide-react";
+import { Download, FileSpreadsheet, FileText, Settings2 } from "lucide-react";
 import { useState } from "react";
 import { formatDateTime } from "../lib/format";
 import type { PaymentExportTemplateListRow, PaymentPdfTemplateListRow } from "../lib/types";
@@ -56,7 +56,7 @@ export default function PaymentExportDrawer({
   const error = format === "excel" ? excelError : pdfError;
 
   return (
-    <Drawer open={open} onClose={onClose} title="Exportar" width="min(480px, 95vw)">
+    <Drawer open={open} onClose={onClose} title="Exportar" icon={Download} subtitle="Turnos com os filtros atuais">
       <p className="muted" style={{ marginTop: 0, lineHeight: 1.5 }}>
         Escolha o formato e o template. Os filtros aplicados na lista são considerados.
       </p>

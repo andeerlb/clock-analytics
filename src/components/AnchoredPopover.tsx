@@ -16,7 +16,7 @@ import { createPortal } from "react-dom";
  * any scrollable ancestor (usually `.table-scroll`, not the page itself),
  * since a detached popover that no longer lines up with its trigger is
  * worse than just closing. Scrolling *inside the popover's own content*
- * (e.g. `MultiSelectDropdown`'s checkbox list, once it's got enough options
+ * (e.g. a long checkbox list, once it's got enough options
  * to need its own `overflow-y: auto`) is excluded from that, or the
  * popover would slam shut the moment you tried to scroll through it.
  */

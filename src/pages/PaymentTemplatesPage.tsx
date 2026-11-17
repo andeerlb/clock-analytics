@@ -1,8 +1,8 @@
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
+import PageHeader from "../components/PageHeader";
 import PaymentTemplateWizard from "../components/PaymentTemplateWizard";
 import { deletePaymentTemplate, getPaymentTemplate, listPaymentTemplates } from "../lib/db";
 import { formatDateTime } from "../lib/format";
@@ -75,18 +75,18 @@ export default function PaymentTemplatesPage() {
 
   return (
     <div>
-      <BackButton fallback="/import/payments" />
-      <div className="page-header">
-        <h2>Templates de pagamento</h2>
-        <button type="button" onClick={() => setWizardTarget("new")}>
-          <Plus size={15} style={{ marginRight: "0.4rem" }} />
-          Novo template
-        </button>
-      </div>
-      <p className="page-subtitle">
-        Mapeamento de colunas usado ao importar arquivos de pagamento — cada template descreve
-        como ler um formato de planilha.
-      </p>
+      <PageHeader
+        title="Templates de pagamento"
+        backFallback="/import/payments"
+        backLabel="Voltar para Importar pagamentos"
+        subtitle="Mapeamento de colunas usado ao importar arquivos de pagamento — cada template descreve como ler um formato de planilha."
+        actions={
+          <button type="button" onClick={() => setWizardTarget("new")}>
+            <Plus size={15} />
+            Novo template
+          </button>
+        }
+      />
 
       {error && <div className="error-box">{error}</div>}
 

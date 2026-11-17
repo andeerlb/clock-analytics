@@ -1,8 +1,8 @@
 import { FileText, TrendingDown, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import BackButton from "../components/BackButton";
-import MultiSelectDropdown from "../components/MultiSelectDropdown";
+import OptionPicker from "../components/OptionPicker";
+import PageHeader from "../components/PageHeader";
 import PdfViewerModal from "../components/PdfViewerModal";
 import { formatMinutes, isWeekend, overtimeMinutesForDay, sumIntervalMinutes } from "../lib/analysis";
 import { getImportById, listStoredDayRecords } from "../lib/db";
@@ -123,9 +123,8 @@ export default function EmployeeDetailPage() {
   const { importId } = useParams<{ importId: string }>();
   const [days, setDays] = useState<StoredDayRecord[]>([]);
   const [importInfo, setImportInfo] = useState<StoredImport | null>(null);
-  const [selectedStatuses, setSelectedStatuses] = useState<Set<DayStatusId>>(
-    () => new Set(DAY_STATUS_OPTIONS.map((o) => o.id)),
-  );
+  // Nothing picked = every day, same as every other filter in the app.
+  const [selectedStatuses, setSelectedStatuses] = useState<Set<DayStatusId>>(() => new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewer, setViewer] = useState<{ path: string; title: string } | null>(null);
@@ -180,6 +179,7 @@ export default function EmployeeDetailPage() {
     () =>
       fullDays.filter(
         (day) =>
+          selectedStatuses.size === 0 ||
           selectedStatuses.size === DAY_STATUS_OPTIONS.length ||
           DAY_STATUS_OPTIONS.some((opt) => selectedStatuses.has(opt.id) && opt.matches(day)),
       ),
@@ -199,22 +199,20 @@ export default function EmployeeDetailPage() {
 
   return (
     <div>
-      <div className="page-header" style={{ alignItems: "flex-end" }}>
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <BackButton />
-            <h2>Cartão de Ponto - {importInfo.employeeName}</h2>
-          </div>
-          <p className="muted">
+      <PageHeader
+        title={<>Cartão de Ponto - {importInfo.employeeName}</>}
+        backFallback="/"
+        subtitle={
+          <>
             Período: <strong style={{ color: "var(--text)" }}>{formatDate(importInfo.periodStart)} a{" "}
             {formatDate(importInfo.periodEnd)}</strong>
             <span style={{ margin: "0 0.6rem", color: "var(--border)" }}>|</span>
             Empresa: <strong style={{ color: "var(--text)" }}>{importInfo.companyName}</strong>
             <span style={{ margin: "0 0.6rem", color: "var(--border)" }}>|</span>
             Cliente: <strong style={{ color: "var(--text)" }}>{importInfo.clientName}</strong>
-          </p>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       <div
         style={{
@@ -252,22 +250,24 @@ export default function EmployeeDetailPage() {
             <FileText size={15} style={{ marginRight: "0.4rem" }} />
             Ver arquivo
           </button>
-          <MultiSelectDropdown
-            options={DAY_STATUS_OPTIONS}
-            selected={selectedStatuses}
+          <OptionPicker
+            options={DAY_STATUS_OPTIONS.map((o) => ({ id: o.id, label: o.label }))}
+            selected={selectedStatuses as Set<string>}
             onToggle={(id) =>
               setSelectedStatuses((prev) => {
                 const next = new Set(prev);
-                if (next.has(id)) next.delete(id);
-                else next.add(id);
+                const key = id as DayStatusId;
+                if (next.has(key)) next.delete(key);
+                else next.add(key);
                 return next;
               })
             }
             onSelectAll={() => setSelectedStatuses(new Set(DAY_STATUS_OPTIONS.map((o) => o.id)))}
-            onSelectNone={() => setSelectedStatuses(new Set())}
-            allLabel="Todos os dias"
-            noneLabel="Nenhum filtro selecionado"
-            countLabel={(n, total) => `${n} de ${total} filtros`}
+            onClear={() => setSelectedStatuses(new Set())}
+            title="Mostrar dias"
+            allPlaceholder="Todos os dias"
+            searchPlaceholder="Buscar"
+            selectAllLabel="Selecionar todos"
           />
         </div>
 

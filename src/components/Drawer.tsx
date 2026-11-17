@@ -1,11 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { X } from "lucide-react";
+import { X, type LucideIcon } from "lucide-react";
 
 /**
- * Slide-in side panel (right or left), with a dimming overlay — the desktop
- * equivalent of a mobile bottom sheet. Stays mounted briefly after `open`
- * turns false so the slide-out transition can play before unmounting.
+ * The app's side sheet: a floating panel that slides in over the page
+ * (12px from the window's edges, rounded, same look as "Atualizações
+ * pendentes"). Its header is an icon tile, the title and an optional
+ * one-line subtitle — pass `icon`/`subtitle`, or a fully custom `header`.
+ * Stays mounted briefly after `open` turns false so the slide-out
+ * transition can play before unmounting.
  */
 export default function Drawer({
   open,
@@ -13,14 +16,23 @@ export default function Drawer({
   title,
   children,
   footer,
-  width = "min(640px, 92vw)",
+  width = "min(560px, calc(100vw - 24px))",
   side = "right",
   header,
   className,
+  icon: Icon,
+  subtitle,
+  toolbar,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
+  /** Shown in a tile left of the title. */
+  icon?: LucideIcon;
+  /** Short line under the title, e.g. how many items the sheet lists. */
+  subtitle?: ReactNode;
+  /** Pinned between the header and the scrolling body — for a search/filters row that shouldn't scroll away. */
+  toolbar?: ReactNode;
   /** Replaces the plain `title` heading (kept as the accessible name) with richer content, e.g. an icon and a subtitle. */
   header?: ReactNode;
   /** Extra class on the panel, for a screen-specific look. */
@@ -111,11 +123,24 @@ export default function Drawer({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="drawer-header">
-          {header ?? <h3>{title}</h3>}
-          <button type="button" className="ghost" onClick={onClose} aria-label="Fechar">
-            <X size={18} />
+          {header ?? (
+            <div className="drawer-head">
+              {Icon && (
+                <span className="drawer-head-icon" aria-hidden="true">
+                  <Icon size={16} />
+                </span>
+              )}
+              <div className="drawer-head-text">
+                <span className="drawer-head-title">{title}</span>
+                {subtitle && <span className="drawer-head-sub">{subtitle}</span>}
+              </div>
+            </div>
+          )}
+          <button type="button" className="ghost drawer-close" onClick={onClose} aria-label="Fechar" title="Fechar">
+            <X size={16} />
           </button>
         </div>
+        {toolbar && <div className="drawer-toolbar">{toolbar}</div>}
         <div className="drawer-body">{children}</div>
         {footer && <div className="drawer-footer">{footer}</div>}
       </div>

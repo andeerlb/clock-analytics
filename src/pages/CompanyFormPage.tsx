@@ -1,9 +1,9 @@
 import { Calculator, Info, Moon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import BackButton from "../components/BackButton";
 import FormPanel from "../components/FormPanel";
 import NightShiftRuleFields from "../components/NightShiftRuleFields";
+import PageHeader from "../components/PageHeader";
 import PaymentValueRulesEditor, {
   fromPaymentValueRules,
   isValueRulesValid,
@@ -66,10 +66,11 @@ export default function CompanyFormPage() {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-        <BackButton fallback="/companies" />
-        <h2 style={{ margin: 0 }}>{isEditing ? "Editar empresa" : "Nova empresa"}</h2>
-      </div>
+      <PageHeader
+        title={isEditing ? "Editar empresa" : "Nova empresa"}
+        backFallback="/companies"
+        backLabel="Voltar para Empresas"
+      />
 
       {error && <div className="error-box">{error}</div>}
 

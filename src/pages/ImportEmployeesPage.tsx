@@ -1,24 +1,19 @@
 import {
-  AlertCircle,
-  AlertTriangle,
-  ArrowLeft,
-  Building2,
-  CheckCircle2,
-  Eye,
+  FileSpreadsheet,
   FileText,
+  FolderOpen,
   History,
-  ListChecks,
-  PlusCircle,
+  Play,
   Search,
   Settings2,
-  Users,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Avatar from "../components/Avatar";
-import Drawer from "../components/Drawer";
-import MultiSelectDropdown from "../components/MultiSelectDropdown";
+import ImportHistoryDrawer from "../components/ImportHistoryDrawer";
+import OptionPicker from "../components/OptionPicker";
+import PageHeader from "../components/PageHeader";
 import Pagination from "../components/Pagination";
 import PickFilesButton from "../components/PickFilesButton";
 import {
@@ -35,27 +30,19 @@ import {
   getEmployeeTemplate,
   listClients,
   listEmployeeTemplates,
-  listImportFiles,
   logSourceFile,
   type ClientRow,
   type EmployeeImportRow,
   type EmployeeRow,
 } from "../lib/db";
-import { fileNameFromPath, formatCpf, formatDateTime, normalizeCpf } from "../lib/format";
+import { fileNameFromPath, formatCnpj, formatCpf, normalizeCpf } from "../lib/format";
 import { parsePixKeys } from "../lib/pix";
 import type {
   EmployeeTemplateListRow,
   EmployeeTemplateRow,
-  ImportFileRow,
-  ImportStatus,
   PaymentFileKind,
 } from "../lib/types";
 
-const STATUS_BADGE: Record<ImportStatus, { className: string; label: string; icon: typeof CheckCircle2 }> = {
-  success: { className: "badge ok", label: "Sucesso", icon: CheckCircle2 },
-  warning: { className: "badge overwrite", label: "Com alertas", icon: AlertTriangle },
-  error: { className: "badge file-error", label: "Falha", icon: AlertCircle },
-};
 
 const FILE_KIND_LABELS: Record<PaymentFileKind, string> = {
   csv: "CSV",
@@ -75,6 +62,26 @@ function formatFileKindList(kinds: PaymentFileKind[]): string {
  * "valid" creates a new CPF; "update" changes/links the employee resolved
  * by the template's ordered identification attempts.
  */
+/** For the "⌘F" vs "Ctrl F" hint on the preview's search. */
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
+/** "Processar", "Processar 1 arquivo", "Processar 3 arquivos". */
+function processLabel(count: number): string {
+  if (count === 0) return "Processar";
+  return `Processar ${count} arquivo${count === 1 ? "" : "s"}`;
+}
+
+/** "/home/me/Pessoal/lista.xlsx" -> "lista.xlsx". */
+function fileNameOf(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
+
+/** "/home/me/Pessoal/lista.xlsx" -> "/home/me/Pessoal" — the short origin under a picked file's name. */
+function parentDirOf(path: string): string {
+  const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return i > 0 ? path.slice(0, i) : "";
+}
+
 type RowCategory = "valid" | "update" | "duplicate-in-file" | "skipped";
 type RowFilter = RowCategory | "error" | "all" | "selected";
 
@@ -115,7 +122,6 @@ type DisplayRow =
   | { kind: "error"; fileName: string; message: string };
 
 const PREVIEW_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
-const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const PATHS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 export default function ImportEmployeesPage() {
@@ -142,12 +148,7 @@ export default function ImportEmployeesPage() {
   const [previewPage, setPreviewPage] = useState(0);
   const [previewPageSize, setPreviewPageSize] = useState(PREVIEW_PAGE_SIZE_OPTIONS[0]);
 
-  const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
-  const [recentFilesTotal, setRecentFilesTotal] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [historySearch, setHistorySearch] = useState("");
-  const [historyPage, setHistoryPage] = useState(0);
-  const [historyPageSize, setHistoryPageSize] = useState(HISTORY_PAGE_SIZE_OPTIONS[0]);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -157,20 +158,6 @@ export default function ImportEmployeesPage() {
     listEmployeeTemplates().then(setTemplates);
     listClients().then(setClients);
   }, []);
-
-  // History panel — filtered and paginated in SQL, not in memory.
-  useEffect(() => {
-    refreshRecentFiles();
-  }, [historySearch, historyPage, historyPageSize]);
-
-  function refreshRecentFiles() {
-    listImportFiles({ importType: "employee", search: historySearch, page: historyPage, pageSize: historyPageSize }).then(
-      ({ rows, total }) => {
-        setRecentFiles(rows);
-        setRecentFilesTotal(total);
-      },
-    );
-  }
 
   useEffect(() => {
     if (paths.length === 0) {
@@ -329,7 +316,11 @@ export default function ImportEmployeesPage() {
       }
       for (const row of result.rows) {
         const matchesFilter =
-          rowFilter === "all" || (rowFilter === "selected" ? selectedRows.has(idx) : rowFilter === row.category);
+          rowFilter === "all"
+            ? row.category !== "skipped"
+            : rowFilter === "selected"
+              ? selectedRows.has(idx)
+              : rowFilter === row.category;
         const matchesName = !query || row.nameRaw.toLowerCase().includes(query);
         if (matchesFilter && matchesName) out.push({ kind: "row", index: idx, row });
         idx++;
@@ -348,6 +339,38 @@ export default function ImportEmployeesPage() {
   const updateCount = categoryCounts.update;
   const duplicateInFileCount = categoryCounts["duplicate-in-file"];
   const skippedCount = categoryCounts.skipped;
+
+  const previewChips: { filter: RowFilter; label: string; count: number; color?: string; title?: string; separate?: boolean }[] = [
+    { filter: "all", label: "Todas", count: employeeRows.length - skippedCount + errorCount },
+    { filter: "selected", label: "A importar", count: selectedRows.size, color: "var(--text)", title: "Linhas marcadas — vão ser importadas ao salvar." },
+    { filter: "valid", label: "Novos", count: categoryCounts.valid, color: "var(--success)", title: "Colaborador novo, ainda não cadastrado." },
+    ...(updateCount > 0
+      ? [{ filter: "update" as RowFilter, label: "A atualizar", count: updateCount, color: "#93c5fd", title: "Colaborador já cadastrado; só os campos mapeados serão atualizados." }]
+      : []),
+    ...(duplicateInFileCount > 0
+      ? [{ filter: "duplicate-in-file" as RowFilter, label: "Duplicados no arquivo", count: duplicateInFileCount, color: "var(--text-muted)", title: "Mesmo CPF de outra linha deste mesmo arquivo." }]
+      : []),
+    ...(errorCount > 0 ? [{ filter: "error" as RowFilter, label: "Erros", count: errorCount, color: "var(--danger)" }] : []),
+    ...(skippedCount > 0
+      ? [{ filter: "skipped" as RowFilter, label: "Ignoradas", count: skippedCount, separate: true, title: "Linhas sem CPF válido ou sem nome — presumidas título, cabeçalho ou rodapé." }]
+      : []),
+  ];
+
+  // Ctrl/⌘+F jumps to the preview's search while a preview is open.
+  const previewSearchRef = useRef<HTMLInputElement>(null);
+  const hasPreview = fileResults.length > 0;
+  useEffect(() => {
+    if (!hasPreview) return;
+    function onKeyDown(e: globalThis.KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        previewSearchRef.current?.focus();
+        previewSearchRef.current?.scrollIntoView({ block: "nearest" });
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [hasPreview]);
 
   const previewPageCount = Math.max(1, Math.ceil(previewRows.length / previewPageSize));
   const previewPageItems = useMemo(
@@ -393,7 +416,6 @@ export default function ImportEmployeesPage() {
     });
   }
 
-  const historyPageCount = Math.max(1, Math.ceil(recentFilesTotal / historyPageSize));
 
   async function handleProcess() {
     if (!selectedTemplate || validPairs.length === 0) return;
@@ -576,7 +598,6 @@ export default function ImportEmployeesPage() {
       }
       await createEmployeesFromImport(importRows, savedFileHashes);
 
-      refreshRecentFiles();
       reset();
       setSuccessMessage(
         importRows.length === 1
@@ -592,288 +613,305 @@ export default function ImportEmployeesPage() {
 
   return (
     <div>
-      <Link to="/import" className="back-link">
-        <ArrowLeft size={14} />
-        Importar
-      </Link>
-      <div className="page-header">
-        <h2>Importar colaboradores</h2>
-        <div style={{ display: "flex", gap: "0.6rem" }}>
-          <button type="button" className="outline" onClick={() => setHistoryOpen(true)}>
-            <History size={15} style={{ marginRight: "0.4rem" }} />
-            Histórico
-          </button>
-          <button type="button" className="secondary" onClick={() => navigate("/import/employees/templates")}>
-            <Settings2 size={15} style={{ marginRight: "0.4rem" }} />
-            Gerenciar templates
-          </button>
-        </div>
-      </div>
-      <p className="page-subtitle">
-        Aplique um template já cadastrado a um arquivo de colaboradores (CSV, Excel ou ODS) e
-        cadastre cada linha nos clientes/empresas selecionados.
-      </p>
+      <PageHeader
+        title="Importar colaboradores"
+        backTo="/import"
+        backLabel="Voltar para Importar"
+        subtitle="Aplique um template já cadastrado a um arquivo de colaboradores e cadastre cada linha nos clientes/empresas selecionados."
+        tags={["CSV", "XLSX", "XLS", "ODS"]}
+        actions={
+          <>
+            <button type="button" className="ghost" onClick={() => setHistoryOpen(true)}>
+              <History size={15} />
+              Histórico
+            </button>
+            <button type="button" className="outline" onClick={() => navigate("/import/employees/templates")}>
+              <Settings2 size={15} />
+              Gerenciar templates
+            </button>
+          </>
+        }
+      />
 
       {error && <div className="error-box">{error}</div>}
       {successMessage && <div className="success-box">{successMessage}</div>}
 
       <div className="import-layout" style={{ display: "block" }}>
         <div className="import-main">
-          <div className="card">
-            <div className="field-row" style={{ marginBottom: "1.2rem" }}>
-              <div className="field" style={{ minWidth: "220px", maxWidth: "320px" }}>
-                <label htmlFor="employee-template">Template</label>
-                <select
-                  id="employee-template"
-                  value={templateId}
-                  onChange={(e) => setTemplateId(e.target.value)}
-                  disabled={templates.length === 0}
-                >
-                  <option value="">Selecione um template</option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-                {templates.length === 0 && (
-                  <p className="field-hint">
-                    Nenhum template disponível.{" "}
-                    <Link to="/import/employees/templates">Cadastre um template</Link>.
-                  </p>
-                )}
-              </div>
-              <div className="field">
-                <label>Cliente</label>
-                <MultiSelectDropdown
-                  options={clientOptions.map((c) => ({ id: String(c.id), label: c.name }))}
-                  selected={selectedClientIds}
-                  onToggle={toggleClient}
-                  onSelectAll={() => setSelectedClientIds(new Set(clientOptions.map((c) => String(c.id))))}
-                  onSelectNone={() => setSelectedClientIds(new Set())}
-                  icon={Users}
-                  allLabel="Todos os clientes"
-                  noneLabel="Nenhum cliente"
-                />
-                {clients.length === 0 && (
-                  <p className="field-hint">
-                    Nenhum cliente cadastrado. <Link to="/clients">Cadastre um cliente</Link> antes de
-                    importar.
-                  </p>
-                )}
-              </div>
-              <div className="field">
-                <label>Empresa</label>
-                <MultiSelectDropdown
-                  options={companyOptions.map((c) => ({ id: String(c.id), label: c.name }))}
-                  selected={selectedCompanyIds}
-                  onToggle={toggleCompany}
-                  onSelectAll={() => setSelectedCompanyIds(new Set(companyOptions.map((c) => String(c.id))))}
-                  onSelectNone={() => setSelectedCompanyIds(new Set())}
-                  icon={Building2}
-                  allLabel="Todas as empresas"
-                  noneLabel="Nenhuma empresa"
-                />
-                {selectedClientIds.size > 0 && selectedCompanyIds.size > 0 && validPairs.length === 0 && (
-                  <p className="field-hint">
-                    Nenhum dos clientes selecionados está vinculado a nenhuma das empresas selecionadas.
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <div className="field">
-              <label>Arquivos de colaboradores</label>
-              <div className="dropzone">
-                <div className="dropzone-icon">
-                  <FileText size={20} />
+          <div className="card import-payments-card">
+            <section className="import-payments-section">
+              <div className="import-payments-fields import-payments-fields-3">
+                <div className="field">
+                  <label>Template</label>
+                  <OptionPicker
+                    single
+                    align="left"
+                    options={templates.map((t) => ({ id: String(t.id), label: t.name, meta: t.acceptedFileKinds.join(" · ") }))}
+                    selected={templateId ? new Set([String(templateId)]) : new Set()}
+                    onToggle={(id) => setTemplateId(id)}
+                    title="Templates"
+                    allPlaceholder={templates.length === 0 ? "Nenhum template disponível" : "Selecione um template"}
+                    searchPlaceholder="Buscar template"
+                  />
+                  {templates.length === 0 && (
+                    <p className="field-hint">
+                      <Link to="/import/employees/templates">Cadastre um template</Link>.
+                    </p>
+                  )}
                 </div>
-                <h4>Selecione os arquivos</h4>
-                <p className="muted" style={{ margin: 0 }}>
-                  {selectedTemplate
-                    ? `Formatos aceitos: ${formatFileKindList(selectedTemplate.acceptedFileKinds)} — suporta múltiplos arquivos.`
-                    : "Selecione um template para saber os formatos aceitos."}
-                </p>
-                <PickFilesButton
-                  onPickFiles={handlePickFiles}
-                  onPickFolder={handlePickFolder}
-                  disabled={!selectedTemplate}
-                  title={selectedTemplate ? undefined : "Selecione um template primeiro"}
-                />
-              </div>
-
-              {paths.length > 0 && (
-                <div className="file-list">
-                  {pagedPaths.map((p) => {
-                    const info = fileHashes.get(p);
-                    return (
-                      <div className="file-row" key={p}>
-                        <div className="file-row-icon">
-                          <FileText size={18} />
-                        </div>
-                        <div className="file-row-info">
-                          <div className="file-name">{info?.fileName ?? p}</div>
-                        </div>
-                        <div className="file-row-actions">
-                          <button
-                            type="button"
-                            className="ghost"
-                            style={{ padding: "0.3rem" }}
-                            onClick={() => removePath(p)}
-                            aria-label="Remover"
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                <div className="field">
+                  <label>Clientes</label>
+                  <OptionPicker
+                    align="left"
+                    options={clientOptions.map((c) => ({ id: String(c.id), label: c.name, meta: c.cnpj ? formatCnpj(c.cnpj) : undefined }))}
+                    selected={selectedClientIds}
+                    onToggle={toggleClient}
+                    onSelectAll={() => setSelectedClientIds(new Set(clientOptions.map((c) => String(c.id))))}
+                    onClear={() => setSelectedClientIds(new Set())}
+                    title="Clientes"
+                    allPlaceholder={clients.length === 0 ? "Nenhum cliente cadastrado" : "Selecione os clientes"}
+                    searchPlaceholder="Buscar cliente ou CNPJ"
+                    selectAllLabel="Selecionar todos"
+                  />
+                  {clients.length === 0 ? (
+                    <p className="field-hint">
+                      <Link to="/clients">Cadastre um cliente</Link> antes de importar.
+                    </p>
+                  ) : (
+                    <p className="field-hint">Cada linha é cadastrada em todos os selecionados.</p>
+                  )}
                 </div>
-              )}
-              {paths.length > PATHS_PAGE_SIZE_OPTIONS[0] && (
-                <Pagination
-                  page={pathsPage}
-                  pageCount={pathsPageCount}
-                  onPageChange={setPathsPage}
-                  rangeLabel={`Mostrando ${pathsPage * pathsPageSize + 1} a ${Math.min(
-                    paths.length,
-                    pathsPage * pathsPageSize + pathsPageSize,
-                  )} de ${paths.length}`}
-                  pageSize={pathsPageSize}
-                  pageSizeOptions={PATHS_PAGE_SIZE_OPTIONS}
-                  onPageSizeChange={(size) => {
-                    setPathsPageSize(size);
-                    setPathsPage(0);
-                  }}
-                />
-              )}
-            </div>
+                <div className="field">
+                  <label>Empresas</label>
+                  <OptionPicker
+                    options={companyOptions.map((c) => ({ id: String(c.id), label: c.name }))}
+                    selected={selectedCompanyIds}
+                    onToggle={toggleCompany}
+                    onSelectAll={() => setSelectedCompanyIds(new Set(companyOptions.map((c) => String(c.id))))}
+                    onClear={() => setSelectedCompanyIds(new Set())}
+                    title="Empresas"
+                    allPlaceholder="Selecione as empresas"
+                    searchPlaceholder="Buscar empresa"
+                    selectAllLabel="Selecionar todas"
+                  />
+                  {selectedClientIds.size > 0 && selectedCompanyIds.size > 0 && validPairs.length === 0 ? (
+                    <p className="field-hint">
+                      Nenhum dos clientes selecionados está vinculado a nenhuma das empresas selecionadas.
+                    </p>
+                  ) : (
+                    <p className="field-hint">Só vale para os clientes vinculados a elas.</p>
+                  )}
+                </div>
+              </div>
+            </section>
 
-            <div className="card-footer">
+            <section className="import-payments-section">
+              <div className="field">
+                <div className="import-source-head">
+                  <label>Arquivos</label>
+                  {paths.length > 0 && (
+                    <span className="muted" style={{ fontSize: "0.78rem" }}>
+                      {paths.length} {paths.length === 1 ? "arquivo" : "arquivos"}
+                    </span>
+                  )}
+                </div>
+                <div className="dropzone import-dropzone">
+                  <div className="dropzone-icon">
+                    <FolderOpen size={18} />
+                  </div>
+                  <PickFilesButton
+                    onPickFiles={handlePickFiles}
+                    onPickFolder={handlePickFolder}
+                    disabled={!selectedTemplate}
+                    title={selectedTemplate ? undefined : "Selecione um template primeiro"}
+                  />
+                  <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
+                    {selectedTemplate
+                      ? `${formatFileKindList(selectedTemplate.acceptedFileKinds)} · suporta múltiplos arquivos`
+                      : "Selecione um template para saber os formatos aceitos."}
+                  </p>
+                </div>
+
+                {paths.length > 0 && (
+                  <div className="file-list import-file-list">
+                    {pagedPaths.map((p) => {
+                      const info = fileHashes.get(p);
+                      const name = info?.fileName ?? fileNameOf(p);
+                      const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+                      return (
+                        <div className="file-row" key={p}>
+                          <div className="file-row-icon import-file-icon">
+                            <FileText size={18} />
+                          </div>
+                          <div className="file-row-info">
+                            <div className="file-name">{name}</div>
+                            <div className="file-meta import-file-meta">
+                              <span className="import-file-origin" title={p}>
+                                {parentDirOf(p)}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="file-row-actions">
+                            {ext && <span className="import-file-ext">{ext}</span>}
+                            <button
+                              type="button"
+                              className="ghost"
+                              style={{ padding: "0.3rem" }}
+                              onClick={() => removePath(p)}
+                              aria-label="Remover"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {paths.length > PATHS_PAGE_SIZE_OPTIONS[0] && (
+                  <Pagination
+                    page={pathsPage}
+                    pageCount={pathsPageCount}
+                    onPageChange={setPathsPage}
+                    rangeLabel={`Mostrando ${pathsPage * pathsPageSize + 1} a ${Math.min(
+                      paths.length,
+                      pathsPage * pathsPageSize + pathsPageSize,
+                    )} de ${paths.length}`}
+                    pageSize={pathsPageSize}
+                    pageSizeOptions={PATHS_PAGE_SIZE_OPTIONS}
+                    onPageSizeChange={(size) => {
+                      setPathsPageSize(size);
+                      setPathsPage(0);
+                    }}
+                  />
+                )}
+              </div>
+            </section>
+
+            <div className="import-payments-footer">
               <button
                 type="button"
                 disabled={paths.length === 0 || !templateId || validPairs.length === 0 || busy}
                 onClick={handleProcess}
               >
-                {busy ? "Processando..." : `Processar ${paths.length || ""} arquivo(s)`}
+                <Play size={14} style={{ marginRight: "0.45rem" }} />
+                {busy && fileResults.length === 0 ? "Processando..." : processLabel(paths.length)}
               </button>
             </div>
           </div>
 
           {fileResults.length > 0 && (
             <>
-              <div className="card card-flush">
-                <div className="page-header" style={{ marginBottom: 0, alignItems: "flex-end" }}>
-                  <div>
-                    <h3 style={{ margin: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                      <Eye size={18} />
-                      Pré-visualização da Importação
-                    </h3>
-                    {updateCount > 0 ? (
-                      <p className="muted" style={{ maxWidth: "42rem" }}>
-                        Algumas linhas correspondem a colaboradores cadastrados e atualizarão somente os campos mapeados.
-                      </p>
-                    ) : (
-                      <p className="muted">Revise os dados antes de confirmar.</p>
-                    )}
+              <div className="card table-card">
+                <div className="preview-header">
+                  <div className="preview-heading">
+                    <span className="preview-file-icon" aria-hidden="true">
+                      <FileSpreadsheet size={19} />
+                    </span>
+                    <div style={{ minWidth: 0 }}>
+                      <h3 className="preview-title">Pré-visualização da importação</h3>
+                      <div className="preview-meta">
+                        {[
+                          fileResults.length === 1 ? fileResults[0].fileName : `${fileResults.length} arquivos`,
+                          selectedTemplate?.name,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </div>
+                    </div>
                   </div>
                   <div style={{ display: "flex", gap: "0.6rem", flexShrink: 0 }}>
                     <button type="button" className="outline" onClick={cancelPreview} disabled={busy}>
                       Cancelar
                     </button>
                     <button type="button" onClick={handleSave} disabled={busy || selectedRows.size === 0}>
-                      {busy ? "Salvando..." : `Salvar (${selectedRows.size})`}
+                      {busy
+                        ? "Salvando..."
+                        : selectedRows.size === 0
+                          ? "Salvar"
+                          : `Salvar ${selectedRows.size} ${selectedRows.size === 1 ? "colaborador" : "colaboradores"}`}
                     </button>
                   </div>
                 </div>
-              </div>
 
-              <div className="card table-card">
-                <div className="table-toolbar">
-                  <div className="counts">
-                    <span>{employeeRows.length} registro(s) encontrado(s)</span>
-                    <button
-                      type="button"
-                      className={`badge ok chip-filter${rowFilter === "selected" ? " active" : ""}`}
-                      onClick={() => toggleRowFilter("selected")}
-                      title="Linhas marcadas — vão ser importadas ao salvar. Clique para filtrar."
-                    >
-                      <ListChecks size={13} />
-                      {selectedRows.size} a importar
-                    </button>
-                    <button
-                      type="button"
-                      className={`badge info chip-filter${rowFilter === "valid" ? " active" : ""}`}
-                      onClick={() => toggleRowFilter("valid")}
-                      title="Colaborador novo, ainda não cadastrado. Clique para filtrar."
-                    >
-                      <CheckCircle2 size={13} />
-                      {categoryCounts.valid} novo(s)
-                    </button>
-                    {updateCount > 0 && (
-                      <button
-                        type="button"
-                        className={`badge warn chip-filter${rowFilter === "update" ? " active" : ""}`}
-                        onClick={() => toggleRowFilter("update")}
-                        title="Colaborador encontrado pelas tentativas de identificação do template; os campos mapeados serão atualizados."
-                      >
-                        <AlertTriangle size={13} />
-                        {updateCount} a atualizar
-                      </button>
-                    )}
-                    {duplicateInFileCount > 0 && (
-                      <button
-                        type="button"
-                        className={`count-chip chip-filter${rowFilter === "duplicate-in-file" ? " active" : ""}`}
-                        onClick={() => toggleRowFilter("duplicate-in-file")}
-                        title="Mesmo CPF de outra linha já importável deste mesmo arquivo. Clique para filtrar."
-                      >
-                        {duplicateInFileCount} duplicado(s) no arquivo
-                      </button>
-                    )}
-                    {skippedCount > 0 && (
-                      <button
-                        type="button"
-                        className={`count-chip chip-filter${rowFilter === "skipped" ? " active" : ""}`}
-                        onClick={() => toggleRowFilter("skipped")}
-                        title="Linhas sem CPF válido ou sem nome — presumidas título, cabeçalho ou rodapé. Clique para filtrar."
-                      >
-                        {skippedCount} linha(s) ignorada(s)
-                      </button>
-                    )}
-                    {errorCount > 0 && (
-                      <button
-                        type="button"
-                        className={`badge file-error chip-filter${rowFilter === "error" ? " active" : ""}`}
-                        onClick={() => toggleRowFilter("error")}
-                        title="Clique para filtrar"
-                      >
-                        <AlertCircle size={13} />
-                        {errorCount} erro(s)
-                      </button>
-                    )}
-                  </div>
-                  <div style={{ position: "relative", flexShrink: 0 }}>
-                    <Search
-                      size={14}
-                      style={{
-                        position: "absolute",
-                        left: "0.65rem",
-                        top: "50%",
-                        transform: "translateY(-50%)",
-                        color: "var(--text-muted)",
-                      }}
+                <div className="preview-status-row">
+                  <p className="preview-status">
+                    <span
+                      className="preview-status-dot"
+                      style={{ background: selectedRows.size > 0 ? "var(--success)" : "var(--warning)" }}
                     />
+                    <span>
+                      {selectedRows.size === 0
+                        ? "Nenhum colaborador para importar ainda."
+                        : `${selectedRows.size} ${selectedRows.size === 1 ? "colaborador será importado" : "colaboradores serão importados"}.`}
+                      {updateCount > 0 && (
+                        <>
+                          {" "}
+                          <button type="button" className="preview-status-link" onClick={() => toggleRowFilter("update")}>
+                            {updateCount} {updateCount === 1 ? "já cadastrado" : "já cadastrados"}
+                          </button>
+                          {updateCount === 1 ? " vai ter" : " vão ter"} só os campos mapeados atualizados.
+                        </>
+                      )}
+                    </span>
+                  </p>
+                </div>
+
+                <div className="table-toolbar preview-toolbar">
+                  <label className={`preview-search${nameSearch ? " preview-search-has-value" : ""}`}>
+                    <Search size={14} aria-hidden="true" />
                     <input
+                      ref={previewSearchRef}
                       type="text"
                       value={nameSearch}
                       onChange={(e) => {
                         setNameSearch(e.target.value);
                         setPreviewPage(0);
                       }}
-                      placeholder="Buscar por nome..."
-                      style={{ paddingLeft: "2rem", width: "13rem" }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          setNameSearch("");
+                          setPreviewPage(0);
+                          e.currentTarget.blur();
+                        }
+                      }}
+                      placeholder="Buscar por nome"
+                      aria-label="Buscar por nome"
                     />
+                    {nameSearch ? (
+                      <button
+                        type="button"
+                        className="preview-search-clear"
+                        aria-label="Limpar busca"
+                        onClick={() => {
+                          setNameSearch("");
+                          setPreviewPage(0);
+                          previewSearchRef.current?.focus();
+                        }}
+                      >
+                        <X size={13} />
+                      </button>
+                    ) : (
+                      <kbd>{IS_MAC ? "⌘F" : "Ctrl F"}</kbd>
+                    )}
+                  </label>
+                  <span className="preview-toolbar-sep" aria-hidden="true" />
+                  <div className="preview-chips">
+                    {previewChips.map((chip) => (
+                      <button
+                        key={chip.filter}
+                        type="button"
+                        className={`preview-chip${chip.separate ? " preview-chip-separate" : ""}`}
+                        aria-pressed={rowFilter === chip.filter}
+                        onClick={() => (chip.filter === "all" ? (setRowFilter("all"), setPreviewPage(0)) : toggleRowFilter(chip.filter))}
+                        title={chip.title}
+                      >
+                        {chip.color && <span className="preview-chip-dot" style={{ background: chip.color }} />}
+                        {chip.label}
+                        <b>{chip.count}</b>
+                      </button>
+                    ))}
                   </div>
                 </div>
 
@@ -897,14 +935,14 @@ export default function ImportEmployeesPage() {
                         <th>PIX</th>
                         <th>Cliente</th>
                         <th>Empresa</th>
-                        <th>Status</th>
+                        <th>Situação</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {previewRows.length === 0 && rowFilter !== "all" && (
+                      {previewRows.length === 0 && (
                         <tr>
                           <td colSpan={9} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
-                            Nenhuma linha nesta categoria.
+                            {nameSearch.trim() ? "Nenhuma linha com esse nome." : "Nenhuma linha neste filtro."}
                           </td>
                         </tr>
                       )}
@@ -920,10 +958,7 @@ export default function ImportEmployeesPage() {
                                 <div className="muted">{item.message}</div>
                               </td>
                               <td>
-                                <span className="badge file-error">
-                                  <AlertCircle size={13} />
-                                  Erro no arquivo
-                                </span>
+                                <span className="row-state row-state-error">Erro no arquivo</span>
                               </td>
                             </tr>
                           );
@@ -965,17 +1000,11 @@ export default function ImportEmployeesPage() {
                             <td>{row.pairCompanyName ?? <span className="muted">—</span>}</td>
                             <td>
                               {row.category === "valid" && (
-                                <span className="badge ok">
-                                  <PlusCircle size={13} />
-                                  Novo
-                                </span>
+                                <span className="row-state row-state-ok">Novo</span>
                               )}
                               {row.category === "update" && (
                                 <div style={{ marginBottom: "0.3rem" }}>
-                                  <span className="badge warn">
-                                    <AlertTriangle size={13} />
-                                    Atualizar
-                                  </span>
+                                  <span className="row-state row-state-info">Atualizar</span>
                                   {row.match && (
                                     <div style={{ marginTop: "0.25rem" }}>
                                       <Link to={`/employees/${row.match.id}`} style={{ fontSize: "0.78rem" }}>
@@ -987,14 +1016,14 @@ export default function ImportEmployeesPage() {
                               )}
                               {row.category === "duplicate-in-file" && (
                                 <span
-                                  className="badge neutral"
+                                  className="row-state row-state-muted"
                                   title="Mesmo CPF de outra linha deste mesmo arquivo — só a primeira ocorrência é importável."
                                 >
                                   Duplicado no arquivo
                                 </span>
                               )}
                               {row.category === "skipped" && (
-                                <span className="badge neutral" title="Nenhuma tentativa do template encontrou um colaborador e a linha não possui CPF e Nome válidos para criar um novo cadastro.">
+                                <span className="row-state row-state-muted" title="Nenhuma tentativa do template encontrou um colaborador e a linha não possui CPF e Nome válidos para criar um novo cadastro.">
                                   Não importável
                                 </span>
                               )}
@@ -1030,93 +1059,11 @@ export default function ImportEmployeesPage() {
 
       </div>
 
-      <Drawer open={historyOpen} onClose={() => setHistoryOpen(false)} title="Histórico de importações">
-            {!(recentFilesTotal === 0 && !historySearch.trim()) && (
-              <div className="field" style={{ marginBottom: "0.8rem" }}>
-                <div style={{ position: "relative" }}>
-                  <Search
-                    size={14}
-                    style={{
-                      position: "absolute",
-                      left: "0.65rem",
-                      top: "50%",
-                      transform: "translateY(-50%)",
-                      color: "var(--text-muted)",
-                    }}
-                  />
-                  <input
-                    type="text"
-                    value={historySearch}
-                    onChange={(e) => {
-                      setHistorySearch(e.target.value);
-                      setHistoryPage(0);
-                    }}
-                    placeholder="Buscar por nome do arquivo..."
-                    style={{ width: "100%", paddingLeft: "2rem" }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {recentFilesTotal === 0 && !historySearch.trim() && (
-              <p className="muted">Nenhum arquivo importado ainda.</p>
-            )}
-            {recentFilesTotal === 0 && historySearch.trim() && <p className="muted">Nenhum arquivo encontrado.</p>}
-
-            {recentFilesTotal > 0 && (
-              <div className="file-list">
-                {recentFiles.map((f) => {
-                  const badge = STATUS_BADGE[f.status];
-                  const BadgeIcon = badge.icon;
-                  return (
-                    <div className="file-row" key={f.id}>
-                      <div className="file-row-icon">
-                        <FileText size={18} />
-                      </div>
-                      <div className="file-row-info">
-                        <div className="file-name" title={f.fileName}>
-                          {f.fileName}
-                        </div>
-                        <div className="file-meta">
-                          {f.provider || "—"} · {formatDateTime(f.importedAt)}
-                        </div>
-                        {f.status !== "success" && f.errorMessage && (
-                          <div className="muted" style={{ fontSize: "0.75rem", marginTop: "0.15rem" }}>
-                            {f.errorMessage}
-                          </div>
-                        )}
-                      </div>
-                      <div className="file-row-actions">
-                        <span className={badge.className}>
-                          <BadgeIcon size={13} />
-                          {badge.label}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {recentFilesTotal > HISTORY_PAGE_SIZE_OPTIONS[0] && (
-              <Pagination
-                page={historyPage}
-                pageCount={historyPageCount}
-                onPageChange={setHistoryPage}
-                rangeLabel={`Mostrando ${historyPage * historyPageSize + 1} a ${Math.min(
-                  recentFilesTotal,
-                  historyPage * historyPageSize + historyPageSize,
-                )} de ${recentFilesTotal}`}
-                pageSize={historyPageSize}
-                pageSizeOptions={HISTORY_PAGE_SIZE_OPTIONS}
-                onPageSizeChange={(size) => {
-                  setHistoryPageSize(size);
-                  setHistoryPage(0);
-                }}
-                maxPageButtons={3}
-              />
-            )}
-      </Drawer>
+      <ImportHistoryDrawer
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        importType="employee"
+      />
     </div>
   );
 }
