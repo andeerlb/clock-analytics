@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ChevronRight, ExternalLink, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, ExternalLink, FileSpreadsheet, Plus, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import ConfirmModal from "../components/ConfirmModal";
@@ -630,93 +630,142 @@ export default function RemoteUpdatesPage() {
 
         {renderRuleFields(s, (patch) => saveRule(c, patch))}
 
-        <details className="rv-details">
-          <summary>Mais detalhes</summary>
-          <div className="rv-details-body">
-            <label className="rv-toggle rv-toggle-sub">
-              <span className="rv-text">
-                <span className="rv-toggle-title">Também alterar turnos editados à mão</span>
-                <span className="rv-toggle-desc">Quando aplica sozinho. Pagos, voltados para pendente ou com valor corrigido.</span>
-              </span>
-              <input
-                type="checkbox"
-                role="switch"
-                className="settings-switch"
-                checked={c.autoApplyOverwriteManualEdits}
-                disabled={!c.autoApplyEnabled}
-                onChange={(e) => saveRule(c, { autoApplyOverwriteManualEdits: e.target.checked })}
-              />
-            </label>
-            <label className="rv-toggle rv-toggle-sub">
-              <span className="rv-text">
-                <span className="rv-toggle-title">Também alterar turnos já pagos</span>
-                <span className="rv-toggle-desc">Quando aplica sozinho.</span>
-              </span>
-              <input
-                type="checkbox"
-                role="switch"
-                className="settings-switch"
-                checked={c.autoApplyOverwritePaid}
-                disabled={!c.autoApplyEnabled}
-                onChange={(e) => saveRule(c, { autoApplyOverwritePaid: e.target.checked })}
-              />
-            </label>
-            <label className="rv-toggle rv-toggle-sub">
-              <span className="rv-text">
-                <span className="rv-toggle-title">Ao reimportar, manter turnos editados à mão</span>
-                <span className="rv-toggle-desc">Vale quando você usa “Reimportar agora”, abaixo.</span>
-              </span>
-              <input type="checkbox" role="switch" className="settings-switch" checked={c.keepManualEdits} onChange={(e) => saveRule(c, { keepManualEdits: e.target.checked })} />
-            </label>
+        <div className={moreOpen ? "rv-more rv-more-open" : "rv-more"}>
+          <button type="button" className="rv-more-toggle" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>
+            <span className="rv-more-icon" aria-hidden="true">
+              <SlidersHorizontal size={15} />
+            </span>
+            <span className="rv-text">
+              <span className="rv-more-title">Mais detalhes</span>
+              <span className="rv-more-desc">Turnos editados à mão, modelo, histórico e ações</span>
+            </span>
+            <ChevronDown size={16} className="rv-more-chevron" aria-hidden="true" />
+          </button>
 
-            <div className="rv-field">
-              <span className="rv-label">Modelo da planilha</span>
-              <span>{c.templateName ?? "Modelo removido"}</span>
-              <span className="rv-small">Para usar outro modelo, crie uma nova regra.</span>
-            </div>
-
-            <div className="rv-field">
-              <span className="rv-label">Últimas verificações</span>
-              {history === null && <span className="rv-small">Carregando...</span>}
-              {history?.length === 0 && <span className="rv-small">Ainda não foi conferida.</span>}
-              <div className="rv-history">
-                {history?.map((entry) => {
-                  const tone: Tone = entry.result === "error" || entry.hasOwnError ? "bad" : entry.diffCount > 0 ? "warn" : entry.result === "unknown" ? "off" : "ok";
-                  const text =
-                    tone === "bad" ? "erro" : entry.diffCount > 0 ? `${entry.diffCount} ${entry.diffCount === 1 ? "mudança" : "mudanças"}` : entry.result === "unknown" ? "não deu pra saber" : "sem mudanças";
-                  return (
-                    <button key={entry.id} type="button" onClick={() => openSheet({ kind: "check", configId: c.id, entry })}>
-                      <i className={`rv-dot rv-dot-${tone}`} aria-hidden="true" />
-                      <span className="rv-history-text">
-                        {formatDateTimeAbbrevYY(entry.checkedAt)} · {text}
-                        {entry.diffCount > 0 && entry.savedAt && (
-                          <>
-                            {" "}
-                            · salva por <b>{entry.savedBy?.trim() || "alguém sem nome no arquivo"}</b> {savedWhen(entry.savedAt)}
-                          </>
-                        )}
+          {moreOpen && (
+            <div className="rv-more-body">
+              <section className="rv-more-section">
+                <span className="rv-section-label">Turnos editados à mão</span>
+                <div className="rv-group">
+                  <label className={c.autoApplyEnabled ? "rv-group-row" : "rv-group-row rv-group-row-off"}>
+                    <span className="rv-text">
+                      <span className="rv-group-title">Alterar quando aplicar sozinho</span>
+                      <span className="rv-group-desc">
+                        Turnos pagos, voltados para pendente ou com valor corrigido.
+                        {!c.autoApplyEnabled && " Ligue “Aplicar mudanças sozinho” para usar."}
                       </span>
-                      <span className="rv-history-go">Ver ›</span>
-                    </button>
-                  );
-                })}
+                    </span>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      className="settings-switch"
+                      checked={c.autoApplyOverwriteManualEdits}
+                      disabled={!c.autoApplyEnabled}
+                      onChange={(e) => saveRule(c, { autoApplyOverwriteManualEdits: e.target.checked })}
+                    />
+                  </label>
+                  <label className={c.autoApplyEnabled ? "rv-group-row" : "rv-group-row rv-group-row-off"}>
+                    <span className="rv-text">
+                      <span className="rv-group-title">Alterar também os já pagos</span>
+                      <span className="rv-group-desc">Quando aplicar sozinho.</span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      className="settings-switch"
+                      checked={c.autoApplyOverwritePaid}
+                      disabled={!c.autoApplyEnabled}
+                      onChange={(e) => saveRule(c, { autoApplyOverwritePaid: e.target.checked })}
+                    />
+                  </label>
+                  <label className="rv-group-row">
+                    <span className="rv-text">
+                      <span className="rv-group-title">Manter ao reimportar</span>
+                      <span className="rv-group-desc">Vale para “Reimportar agora”, abaixo.</span>
+                    </span>
+                    <input type="checkbox" role="switch" className="settings-switch" checked={c.keepManualEdits} onChange={(e) => saveRule(c, { keepManualEdits: e.target.checked })} />
+                  </label>
+                </div>
+              </section>
+
+              <section className="rv-more-section">
+                <span className="rv-section-label">Modelo da planilha</span>
+                <div className="rv-group">
+                  <div className="rv-group-row">
+                    <span className="rv-more-icon" aria-hidden="true">
+                      <FileSpreadsheet size={15} />
+                    </span>
+                    <span className="rv-text">
+                      <span className="rv-group-title">{c.templateName ?? "Modelo removido"}</span>
+                      <span className="rv-group-desc">Para usar outro modelo, crie uma nova regra.</span>
+                    </span>
+                  </div>
+                </div>
+              </section>
+
+              <section className="rv-more-section">
+                <span className="rv-section-label">
+                  Últimas verificações
+                  {history && history.length > 0 && <span className="rv-section-count">{history.length} mais recentes</span>}
+                </span>
+                {history === null && <span className="rv-small">Carregando...</span>}
+                {history?.length === 0 && <span className="rv-small">Ainda não foi conferida.</span>}
+                {history && history.length > 0 && (
+                  <div className="rv-group">
+                    {history.map((entry) => {
+                      const tone: Tone = entry.result === "error" || entry.hasOwnError ? "bad" : entry.diffCount > 0 ? "warn" : entry.result === "unknown" ? "off" : "ok";
+                      const text =
+                        tone === "bad"
+                          ? "Erro"
+                          : entry.diffCount > 0
+                            ? `${entry.diffCount} ${entry.diffCount === 1 ? "mudança" : "mudanças"}`
+                            : entry.result === "unknown"
+                              ? "Não deu pra saber"
+                              : "Sem mudanças";
+                      const author = entry.diffCount > 0 && entry.savedAt ? entry.savedBy?.trim() || "Sem nome no arquivo" : null;
+                      return (
+                        <button key={entry.id} type="button" className="rv-group-row rv-history-row" onClick={() => openSheet({ kind: "check", configId: c.id, entry })}>
+                          <i className={`rv-dot rv-dot-${tone}`} aria-hidden="true" />
+                          <span className="rv-text">
+                            <span className="rv-history-line">
+                              <span className="rv-history-when">{formatDateTimeAbbrevYY(entry.checkedAt)}</span>
+                              <span className={`rv-history-result rv-history-result-${tone}`}>{text}</span>
+                            </span>
+                            {author && (
+                              <span className="rv-history-author">
+                                <span className="rv-avatar rv-avatar-xs" style={{ background: entry.savedBy ? colorForName(author) : "#3a3a42" }} aria-hidden="true">
+                                  {entry.savedBy ? initials(author) : "?"}
+                                </span>
+                                <span className="rv-history-author-text">
+                                  salva por {author} {savedWhen(entry.savedAt)}
+                                </span>
+                              </span>
+                            )}
+                          </span>
+                          <ChevronRight size={15} className="rv-chevron" aria-hidden="true" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <div className="rv-more-actions">
+                <button type="button" className="settings-button" onClick={() => forceCheckConfig(c.id)} disabled={checkingConfigIds.has(c.id)}>
+                  <RefreshCw size={13} />
+                  {checkingConfigIds.has(c.id) ? "Conferindo..." : "Conferir agora"}
+                </button>
+                <button type="button" className="settings-button" onClick={() => reprocess(c.id, resolveReimportPeriod(s).start, resolveReimportPeriod(s).end)}>
+                  Reimportar agora
+                </button>
+                <button type="button" className="settings-button settings-button-ghost" onClick={() => openNewRule(c.sourceUrl)}>
+                  <Plus size={13} />
+                  Outra regra para esta planilha
+                </button>
               </div>
             </div>
-
-            <div className="rv-actions">
-              <button type="button" className="settings-button" onClick={() => forceCheckConfig(c.id)} disabled={checkingConfigIds.has(c.id)}>
-                <RefreshCw size={13} />
-                {checkingConfigIds.has(c.id) ? "Conferindo..." : "Conferir agora"}
-              </button>
-              <button type="button" className="settings-button" onClick={() => reprocess(c.id, resolveReimportPeriod(s).start, resolveReimportPeriod(s).end)}>
-                Reimportar agora
-              </button>
-              <button type="button" className="settings-button settings-button-ghost" onClick={() => openNewRule(c.sourceUrl)}>
-                + Outra regra para esta planilha
-              </button>
-            </div>
-          </div>
-        </details>
+          )}
+        </div>
       </div>
     );
   }
@@ -902,10 +951,12 @@ export default function RemoteUpdatesPage() {
   const [reviewFilter, setReviewFilter] = useState<string>("all");
   const [authorFilter, setAuthorFilter] = useState<string | null>(null);
   const [authorInfoOpen, setAuthorInfoOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   useEffect(() => {
     setReviewFilter("all");
     setAuthorFilter(null);
     setAuthorInfoOpen(false);
+    setMoreOpen(false);
   }, [sheet?.kind, sheetConfigId]);
 
   /** "Quem alterou a planilha": each person who saved a version with these changes; a click filters to theirs. */

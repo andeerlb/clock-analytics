@@ -6994,9 +6994,17 @@ button.rv-author[aria-pressed="true"]:hover {
 
 /* ---------- Verificação automática: floating sheet, like the mockup ---------- */
 
+/* Pinned 12px from the top, right and bottom edges instead of a margin
+   inside the overlay's flex row: with a margin, a narrow window pushed the
+   panel past its right edge and cut the footer off. */
 .drawer-panel.rv-drawer {
-  height: calc(100% - 24px);
-  margin: 12px;
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  height: auto;
+  max-width: calc(100vw - 24px);
+  box-sizing: border-box;
   overflow: hidden;
   background: #18181b;
   border: 1px solid #2e2e33;
@@ -7053,4 +7061,210 @@ button.rv-author[aria-pressed="true"]:hover {
 .rv-check-author b {
   color: var(--text);
   font-weight: 600;
+}
+
+.rv-drawer .drawer-footer {
+  min-width: 0;
+}
+
+.rv-footer-note {
+  min-width: 0;
+}
+
+/* "Mais detalhes": a real disclosure row, then grouped cards. */
+.rv-more {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+button.rv-more-toggle {
+  width: 100%;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--text);
+  font-weight: 400;
+  text-align: left;
+}
+
+button.rv-more-toggle:hover {
+  background: #1f1f24;
+}
+
+.rv-more-open button.rv-more-toggle {
+  border-bottom: 1px solid #26262a;
+}
+
+.rv-more-icon {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #26262c;
+  border: 1px solid #2f2f37;
+  border-radius: 8px;
+  color: var(--text-muted);
+}
+
+.rv-more-title {
+  font-weight: 600;
+}
+
+.rv-more-desc {
+  color: #71717a;
+  font-size: 0.75rem;
+}
+
+.rv-more-chevron {
+  flex-shrink: 0;
+  color: #71717a;
+  transition: transform 0.15s ease;
+}
+
+.rv-more-open .rv-more-chevron {
+  transform: rotate(180deg);
+}
+
+.rv-more-body {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: #1b1b1f;
+}
+
+.rv-more-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rv-more-section > .rv-section-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.rv-section-count {
+  color: #55555e;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.rv-group {
+  overflow: hidden;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.rv-group-row {
+  width: 100%;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.rv-group-row + .rv-group-row {
+  border-top: 1px solid #26262a;
+}
+
+div.rv-group-row {
+  cursor: default;
+}
+
+.rv-group-row-off .rv-group-title {
+  color: var(--text-muted);
+}
+
+.rv-group-title {
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.rv-group-desc {
+  margin-top: 1px;
+  color: #71717a;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+button.rv-history-row {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--text);
+  font-weight: 400;
+  text-align: left;
+}
+
+button.rv-history-row:hover {
+  background: #222227;
+}
+
+.rv-history-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rv-history-when {
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.rv-history-result {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.rv-history-result-warn {
+  color: var(--warning);
+}
+
+.rv-history-result-bad {
+  color: var(--danger);
+}
+
+.rv-history-author {
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.rv-history-author-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: #71717a;
+  font-size: 0.74rem;
+}
+
+.rv-more-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rv-more-chevron {
+    transition: none;
+  }
 }
