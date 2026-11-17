@@ -2391,14 +2391,16 @@ export default function ImportPaymentsPage() {
                                         {row.resolvedCompanyName})
                                       </button>
                                     )}
-                                    <button
-                                      type="button"
-                                      className="link-button"
-                                      style={{ fontSize: "0.78rem" }}
-                                      onClick={() => handleRegisterEmployee(row)}
-                                    >
-                                      Cadastrar colaborador
-                                    </button>
+                                    {(row.resolvedClientId === null || row.resolvedCompanyId === null) && (
+                                      <button
+                                        type="button"
+                                        className="link-button"
+                                        style={{ fontSize: "0.78rem" }}
+                                        onClick={() => handleRegisterEmployee(row)}
+                                      >
+                                        Cadastrar colaborador
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
                               )}
@@ -2434,6 +2436,9 @@ export default function ImportPaymentsPage() {
                                     companyId={row.resolvedCompanyId}
                                     onSelect={(employee) => handleLinkEmployee(index, employee)}
                                     placeholder="Vincular"
+                                    rawName={row.nameRaw || undefined}
+                                    contextLabel={[row.resolvedClientName, row.resolvedCompanyName].filter(Boolean).join(" · ") || undefined}
+                                    onRegister={() => handleRegisterEmployee(row)}
                                   />
                                 )}
                               {row.category === "role-not-found" && row.resolvedCompanyId !== null && (

@@ -5082,6 +5082,36 @@ button.emp-picker-more:hover {
   color: var(--on-accent);
 }
 
+/* EmployeePicker ("Vincular" on the import preview) — the emp-picker box,
+   portaled with fixed coordinates, plus a context line on top. */
+.employee-picker-box .emp-picker-list {
+  max-height: 300px;
+}
+
+.employee-picker-context {
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid #26262a;
+  color: #71717a;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.employee-picker-context b {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.employee-picker-box .avatar {
+  flex-shrink: 0;
+}
+
+button.emp-picker-clear.employee-picker-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text);
+}
+
 .emp-picker-empty {
   margin: 0;
   padding: 16px 8px;
