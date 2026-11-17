@@ -4412,7 +4412,8 @@ function buildPaymentShiftRowConditions(
     else {
       params.push(String(query.analyticsWeekday));
       conditions.push(`strftime('%w', ps.work_date) = $${params.length}`);
-      params.push(query.analyticsTimeBucket * 360, query.analyticsTimeBucket * 360 + 359);
+      // Análises' heatmap uses 2-hour start buckets (0 = 00:00–01:59 … 11 = 22:00–23:59).
+      params.push(query.analyticsTimeBucket * 120, query.analyticsTimeBucket * 120 + 119);
       conditions.push(`ps.schedule_start_minutes BETWEEN $${params.length - 1} AND $${params.length}`);
     }
   }
