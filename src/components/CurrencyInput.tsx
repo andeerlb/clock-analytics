@@ -22,7 +22,7 @@ export default function CurrencyInput({
   autoFocus,
   onBlur,
   onKeyDown,
-  /** "sm" — compact, label-beside-input, for a dense table cell (`EditableCurrencyCell`). "md" — full-width boxed field with the "R$" prefix inset into the input itself, for a form/modal. "lg" — same but with large, bold, right-aligned digits, like a cash-machine/checkout display, for when the amount is the one thing being entered (`ConfirmPaymentModal`). */
+  /** "sm" — compact, label-beside-input, for a dense table cell (`EditableCurrencyCell`). "md" — full-width boxed field with the "R$" prefix inset into the input itself, for a form/modal. "lg" — same but with large, bold, right-aligned digits, like a cash-machine/checkout display, for when the amount is the one thing being entered (`ShiftActionPanel`). */
   size = "md",
 }: {
   digits: string;

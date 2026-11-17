@@ -237,6 +237,14 @@ function toIds(ids: number[]): Set<string> {
   return new Set(ids.map(String));
 }
 
+/** Ready-made questions shown when the assistant is opened from a turno ("Perguntar à IA"). */
+const SHIFT_SUGGESTIONS = [
+  "Por que este turno tem este valor?",
+  "Por que este turno está com este status?",
+  "O que mudou neste turno desde a importação?",
+  "Por que existe mais de um turno para este colaborador neste dia?",
+];
+
 const AiAssistantContext = createContext<{ askAboutShift: (target: AiShiftTarget) => void } | null>(null);
 
 export function useAiAssistant() {
@@ -390,7 +398,7 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
 
   const askAboutShift = useCallback((target: AiShiftTarget) => {
     setShift(target);
-    setDraft("Por que existe mais de um turno para este colaborador neste dia?");
+    setDraft("");
     setOpen(true);
   }, []);
   const contextValue = useMemo(() => ({ askAboutShift }), [askAboutShift]);
@@ -550,6 +558,19 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
               <div className="ai-panel-messages" aria-live="polite">
                 {messages.length === 0 && !pending && ready !== false && (
                   <p className="ai-muted">Pergunte sobre qualquer tela, configuração ou dado do aplicativo. O assistente só responde: ele não altera nada.</p>
+                )}
+                {messages.length === 0 && !pending && ready !== false && shift && (
+                  <div className="ai-tips">
+                    <span className="ai-tips-title">Perguntas sobre este turno</span>
+                    {SHIFT_SUGGESTIONS.map((question) => (
+                      <div key={question} className="ai-tip">
+                        <span className="ai-tip-note">{question}</span>
+                        <button type="button" className="ai-tip-ask" onClick={() => applySuggestion(question)}>
+                          Perguntar
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 )}
                 {ready === false && (
                   <p className="ai-muted">

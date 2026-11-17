@@ -753,6 +753,40 @@ export function matchingPaymentValueRuleIndex(
 }
 
 /**
+ * One pay-value step as a short line of text, e.g. "em caixa · 6h ou mais →
+ * R$ 110,00" — for showing *why* a shift got its Valor (Fazer pagamento),
+ * where the rules editor's richer chip sentence would be too much.
+ */
+export function describePaymentValueRule(rule: Parameters<typeof resolvePaymentValue>[0][number]): string {
+  if (rule.kind === "else") return `Demais turnos → ${formatCurrencyBRL(rule.amount)}`;
+  const parts = rule.conditions.map((c) => {
+    if (c.field === "horario") {
+      const verb = c.scheduleRule.startsWith("start") ? "começando" : "terminando";
+      const when = c.scheduleRule.endsWith("after") ? "depois das" : "antes das";
+      return `${verb} ${when} ${formatMinutesAsTime(c.scheduleMinutes)}`;
+    }
+    const values = c.field === "data" ? c.values.map((v) => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? formatDateSlash(v) : v)) : c.values;
+    return c.field === "funcao" ? values.join(" ou ") : `em ${values.join(c.field === "data" ? ", " : " ou ")}`;
+  });
+  if (rule.operator !== null && rule.thresholdMinutes !== null && rule.thresholdMinutes > 0) {
+    const h = Math.floor(rule.thresholdMinutes / 60);
+    const m = rule.thresholdMinutes % 60;
+    const hhmm = `${h}h${m ? String(m).padStart(2, "0") : ""}`;
+    parts.push(
+      {
+        "=": `${hhmm} exatas`,
+        ">=": `${hhmm} ou mais`,
+        "<=": `${hhmm} ou menos`,
+        ">": `mais de ${hhmm}`,
+        "<": `menos de ${hhmm}`,
+        "!=": `diferente de ${hhmm}`,
+      }[rule.operator],
+    );
+  }
+  return `${parts.length ? parts.join(" · ") : "Todo turno"} → ${formatCurrencyBRL(rule.amount)}`;
+}
+
+/**
  * A shift's Valor, the one rule every screen and export uses: its own
  * recorded `amount` when it has one (a `pago` row's frozen amount, or a
  * hand-typed one); otherwise the estimate from `valueRules` — the effective

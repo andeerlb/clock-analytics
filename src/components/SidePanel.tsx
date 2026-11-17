@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { X, type LucideIcon } from "lucide-react";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
@@ -24,8 +24,11 @@ export default function SidePanel({
   open,
   onClose,
   title,
+  icon: Icon,
+  iconTone,
   badge,
   actions,
+  subheader,
   footer,
   children,
   width = 340,
@@ -33,6 +36,12 @@ export default function SidePanel({
   open: boolean;
   onClose: () => void;
   title: string;
+  /** Shown in a tile left of the title, same as the Drawer's header. */
+  icon?: LucideIcon;
+  /** Tints the icon tile — "danger" for a destructive action. */
+  iconTone?: "danger";
+  /** Pinned under the header, full width, outside the scrolling body — e.g. which record the panel is about. */
+  subheader?: ReactNode;
   /** Short text next to the title, e.g. how many filters are active. */
   badge?: ReactNode;
   /** Extra icon buttons, shown before "Fechar". */
@@ -80,6 +89,11 @@ export default function SidePanel({
       <section className="side-panel" aria-label={title} style={{ width }} onKeyDown={(e) => e.stopPropagation()}>
         <header className="side-panel-header">
           <span className="side-panel-title">
+            {Icon && (
+              <span className={iconTone === "danger" ? "side-panel-icon side-panel-icon-danger" : "side-panel-icon"} aria-hidden="true">
+                <Icon size={15} />
+              </span>
+            )}
             {title}
             {badge !== undefined && <span className="side-panel-badge">{badge}</span>}
           </span>
@@ -90,6 +104,7 @@ export default function SidePanel({
             </button>
           </div>
         </header>
+        {subheader}
         <div className="side-panel-body">{children}</div>
         {footer && <footer className="side-panel-footer">{footer}</footer>}
       </section>

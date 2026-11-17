@@ -21,8 +21,6 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAiAssistant } from "../components/AiAssistant";
 import AnchoredPopover from "../components/AnchoredPopover";
 import Avatar from "../components/Avatar";
-import ConfirmModal from "../components/ConfirmModal";
-import ConfirmPaymentModal from "../components/ConfirmPaymentModal";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import CurrencyInput from "../components/CurrencyInput";
 import DatePicker from "../components/DatePicker";
@@ -36,7 +34,7 @@ import PaymentsExportMenu from "../components/PaymentsExportMenu";
 import PaymentsFiltersPanel, { PaymentsFilterChips, usePaymentsActiveFilterCount } from "../components/PaymentsFiltersPanel";
 import PdfViewerModal from "../components/PdfViewerModal";
 import PillButton from "../components/PillButton";
-import ShiftHistoryDrawer from "../components/ShiftHistoryDrawer";
+import ShiftActionPanel, { type ShiftActionKind } from "../components/ShiftActionPanel";
 import TableScroll from "../components/TableScroll";
 import TimeField from "../components/TimeField";
 import { PAYMENT_SHIFT_STATUSES, PAYMENTS_PAGE_SIZE_OPTIONS, SHIFT_PERIODS, usePaymentsFilters } from "../contexts/FiltersContext";
@@ -439,10 +437,7 @@ function ShiftRow({
   visibleColumns,
   changes,
   onCommitField,
-  onPay,
-  onRevert,
-  onDelete,
-  onViewHistory,
+  onAction,
   onViewExtra,
   onReview,
   onInvestigate,
@@ -459,11 +454,8 @@ function ShiftRow({
   /** What the last automatic verification found different for this shift (if anything) — see `listLatestFieldDiffsForShifts`. */
   changes: ShiftFieldDiffRow[];
   onCommitField: (shift: PaymentShiftRow, groupRef: GroupRef, patch: ShiftFieldPatch) => void;
-  onPay: (shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) => void;
-  onRevert: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
-  onDelete: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
-  /** `shiftId` is the row's own `previousShiftId` — `null` when it genuinely has no earlier history, still opens the Drawer, just shows that instead of a list. */
-  onViewHistory: (shiftId: number | null, companyId: number, clientId: number) => void;
+  /** Opens one of the row's actions in the docked `ShiftActionPanel`. */
+  onAction: (kind: ShiftActionKind, shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) => void;
   onViewExtra: (data: Record<string, string>, sourceUrl: string | null) => void;
   /** Opens the review Drawer — the only other thing (besides "Ver histórico") a blocked row's right-click menu offers, and an optional "ver o que mudou" for an already-auto-applied one. */
   onReview: (shift: PaymentShiftRow, groupRef: GroupRef) => void;
@@ -505,13 +497,13 @@ function ShiftRow({
       : [
           ...(appliedChanges.length > 0 ? [{ label: "Ver o que mudou", onClick: () => onReview(s, groupRef) }] : []),
           ...(s.status === "pendente" || s.status === "erro"
-            ? [{ label: "Fazer pagamento", onClick: () => onPay(s, companyId, groupRef) }]
+            ? [{ label: "Fazer pagamento", onClick: () => onAction("pay", s, companyId, groupRef) }]
             : []),
-          ...(s.status === "pago" ? [{ label: "Voltar para pendente", onClick: () => onRevert(s, groupRef) }] : []),
+          ...(s.status === "pago" ? [{ label: "Voltar para pendente", onClick: () => onAction("revert", s, companyId, groupRef) }] : []),
         ]),
-    { label: "Ver histórico", disabled: s.previousShiftId === null, onClick: () => onViewHistory(s.previousShiftId, companyId, s.clientId) },
+    { label: "Ver histórico", disabled: s.previousShiftId === null, onClick: () => onAction("history", s, companyId, groupRef) },
     { label: "Perguntar à IA", onClick: () => onInvestigate(s) },
-    ...(isBlocked ? [] : [{ label: "Remover turno", danger: true, onClick: () => onDelete(s, groupRef) }]),
+    ...(isBlocked ? [] : [{ label: "Remover turno", danger: true, onClick: () => onAction("delete", s, companyId, groupRef) }]),
   ];
 
   return (
@@ -648,6 +640,16 @@ function ShiftRow({
 }
 
 const FILTERS_OPEN_KEY = "payments-filters-open";
+/** Whether "Fazer pagamento" moves on to the next pending turno after confirming. On by default. */
+const PAY_NEXT_KEY = "payments-pay-next";
+
+function readPayNext(): boolean {
+  try {
+    return localStorage.getItem(PAY_NEXT_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
 
 function readFiltersOpen(): boolean {
   try {
@@ -752,19 +754,14 @@ export default function PaymentsPage() {
 
   const [shiftDiffs, setShiftDiffs] = useState<Map<number, ShiftFieldDiffRow[]>>(new Map());
 
-  const [payingShift, setPayingShift] = useState<{ shift: PaymentShiftRow; companyId: number; groupRef: GroupRef } | null>(null);
-  const [paying, setPaying] = useState(false);
-  const [payError, setPayError] = useState<string | null>(null);
-  const [revertingShift, setRevertingShift] = useState<{ shift: PaymentShiftRow; groupRef: GroupRef } | null>(null);
-  const [reverting, setReverting] = useState(false);
-  const [revertError, setRevertError] = useState<string | null>(null);
-  const [deletingShift, setDeletingShift] = useState<{ shift: PaymentShiftRow; groupRef: GroupRef } | null>(null);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  // The row action open in the docked `ShiftActionPanel` (pagar, voltar
+  // para pendente, histórico, remover) — one at a time; picking another
+  // action or moving with the panel's arrows replaces it.
+  const [shiftAction, setShiftAction] = useState<{ kind: ShiftActionKind; shift: PaymentShiftRow; companyId: number; groupRef: GroupRef } | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [payNext, setPayNext] = useState(readPayNext);
   const [inlineEditError, setInlineEditError] = useState<string | null>(null);
-  const [viewingHistory, setViewingHistory] = useState<{ shiftId: number | null; companyId: number; clientId: number } | null>(
-    null,
-  );
   const [viewingExtraData, setViewingExtraData] = useState<{ data: Record<string, string>; sourceUrl: string | null } | null>(
     null,
   );
@@ -1030,7 +1027,7 @@ export default function PaymentsPage() {
         const rules = await getEffectivePaymentRules(shift.clientId, shift.companyId);
         if (cancelled) return;
         setRulesByPair((prev) => new Map(prev).set(`${shift.clientId}:${shift.companyId}`, rules));
-        setPayingShift({ shift, companyId: shift.companyId, groupRef: grouped ? { employeeId: shift.employeeId, competencia: shift.workDate.slice(0, 7) } : null });
+        openShiftAction("pay", shift, shift.companyId, grouped ? { employeeId: shift.employeeId, competencia: shift.workDate.slice(0, 7) } : null);
       } catch (e) {
         if (!cancelled) setListError(String(e));
       } finally {
@@ -1118,57 +1115,126 @@ export default function PaymentsPage() {
     }
   }
 
+  function isBlockedShift(shift: PaymentShiftRow): boolean {
+    return (shiftDiffs.get(shift.id) ?? []).some((c) => !c.applied);
+  }
+
+  function isPayable(shift: PaymentShiftRow): boolean {
+    return (shift.status === "pendente" || shift.status === "erro") && !isBlockedShift(shift);
+  }
+
+  /** The action a row gets when the panel's arrows land on it: the same one when it applies, otherwise the closest one that does. */
+  function actionFor(kind: ShiftActionKind, shift: PaymentShiftRow): ShiftActionKind {
+    if (isBlockedShift(shift) && kind !== "history") return "history";
+    if (kind === "pay" && shift.status === "pago") return "revert";
+    if (kind === "revert" && shift.status !== "pago") return "pay";
+    return kind;
+  }
+
+  function openShiftAction(kind: ShiftActionKind, shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) {
+    setActionError(null);
+    setActiveShiftId(shift.id);
+    setShiftAction({ kind, shift, companyId, groupRef });
+  }
+
+  function closeShiftAction() {
+    setShiftAction(null);
+    setActionError(null);
+  }
+
+  function changePayNext(value: boolean) {
+    setPayNext(value);
+    try {
+      localStorage.setItem(PAY_NEXT_KEY, value ? "1" : "0");
+    } catch {
+      /* only a convenience */
+    }
+  }
+
+  // Every turno row on screen, in table order — what the panel's arrows
+  // and "Abrir o próximo pendente" walk through. Grouped view: only the
+  // rows of expanded groups, since those are the ones visible.
+  const actionRows: { shift: PaymentShiftRow; companyId: number; groupRef: GroupRef }[] = grouped
+    ? summaries.flatMap((s) =>
+        expandedKeys.has(groupKey(s.employeeId, s.competencia))
+          ? (groupRows.get(groupKey(s.employeeId, s.competencia)) ?? []).map((r) => ({
+              shift: r,
+              companyId: s.companyId,
+              groupRef: { employeeId: s.employeeId, competencia: s.competencia },
+            }))
+          : [],
+      )
+    : flatRows.map((r) => ({ shift: r, companyId: r.companyId, groupRef: null }));
+  const actionIndex = shiftAction ? actionRows.findIndex((r) => r.shift.id === shiftAction.shift.id) : -1;
+
+  function moveShiftAction(step: -1 | 1) {
+    if (!shiftAction || actionIndex < 0) return;
+    const row = actionRows[actionIndex + step];
+    if (row) openShiftAction(actionFor(shiftAction.kind, row.shift), row.shift, row.companyId, row.groupRef);
+  }
+
   async function handleConfirmPayment(amount: number) {
-    if (!payingShift) return;
-    setPaying(true);
-    setPayError(null);
+    if (!shiftAction) return;
+    const current = shiftAction;
+    // Picked before the list refetches — the other rows keep their ids, so
+    // this entry is still valid afterwards.
+    const after = actionIndex >= 0 ? [...actionRows.slice(actionIndex + 1), ...actionRows.slice(0, actionIndex)] : [];
+    const next = payNext ? after.find((r) => isPayable(r.shift)) : undefined;
+    setActionBusy(true);
+    setActionError(null);
     try {
       // "Pagar" always appends a brand-new row instead of touching
-      // `payingShift.shift` itself (see `markPaymentShiftPaid`'s own doc
+      // `current.shift` itself (see `markPaymentShiftPaid`'s own doc
       // comment) — without re-pointing `activeShiftId` at it, the highlight
       // this action was for would vanish the moment the list refetches,
       // since no row still has the old id.
-      const newShiftId = await markPaymentShiftPaid(payingShift.shift.id, amount);
-      await afterMutation(payingShift.groupRef);
-      setActiveShiftId(newShiftId);
-      setPayingShift(null);
+      const newShiftId = await markPaymentShiftPaid(current.shift.id, amount);
+      await afterMutation(current.groupRef);
+      if (next) {
+        openShiftAction("pay", next.shift, next.companyId, next.groupRef);
+      } else {
+        setActiveShiftId(newShiftId);
+        setShiftAction(null);
+      }
     } catch (e) {
-      setPayError(String(e instanceof Error ? e.message : e));
+      setActionError(String(e instanceof Error ? e.message : e));
     } finally {
-      setPaying(false);
+      setActionBusy(false);
     }
   }
 
   async function handleConfirmRevert() {
-    if (!revertingShift) return;
-    setReverting(true);
-    setRevertError(null);
+    if (!shiftAction) return;
+    const current = shiftAction;
+    setActionBusy(true);
+    setActionError(null);
     try {
       // Same append-only move as "Pagar" — re-point the highlight at the
       // new head row (see the comment in `handleConfirmPayment`).
-      const newShiftId = await revertPaymentShiftToPending(revertingShift.shift.id);
-      await afterMutation(revertingShift.groupRef);
+      const newShiftId = await revertPaymentShiftToPending(current.shift.id);
+      await afterMutation(current.groupRef);
       setActiveShiftId(newShiftId);
-      setRevertingShift(null);
+      setShiftAction(null);
     } catch (e) {
-      setRevertError(String(e instanceof Error ? e.message : e));
+      setActionError(String(e instanceof Error ? e.message : e));
     } finally {
-      setReverting(false);
+      setActionBusy(false);
     }
   }
 
   async function handleConfirmDelete() {
-    if (!deletingShift) return;
-    setDeleting(true);
-    setDeleteError(null);
+    if (!shiftAction) return;
+    const current = shiftAction;
+    setActionBusy(true);
+    setActionError(null);
     try {
-      await deletePaymentShift(deletingShift.shift.id);
-      await afterMutation(deletingShift.groupRef);
-      setDeletingShift(null);
+      await deletePaymentShift(current.shift.id);
+      await afterMutation(current.groupRef);
+      setShiftAction(null);
     } catch (e) {
-      setDeleteError(String(e instanceof Error ? e.message : e));
+      setActionError(String(e instanceof Error ? e.message : e));
     } finally {
-      setDeleting(false);
+      setActionBusy(false);
     }
   }
 
@@ -1709,10 +1775,7 @@ export default function PaymentsPage() {
                                             visibleColumns={visibleColumns}
                                             changes={shiftDiffs.get(r.id) ?? []}
                                             onCommitField={commitField}
-                                            onPay={(shift, companyId, groupRef) => setPayingShift({ shift, companyId, groupRef })}
-                                            onRevert={(shift, groupRef) => setRevertingShift({ shift, groupRef })}
-                                            onDelete={(shift, groupRef) => setDeletingShift({ shift, groupRef })}
-                                            onViewHistory={(shiftId, companyId, clientId) => setViewingHistory({ shiftId, companyId, clientId })}
+                                            onAction={openShiftAction}
                                             onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
                                             onReview={(shift, groupRef) => setReviewingShift({ shift, groupRef })}
                                             onInvestigate={handleInvestigate}
@@ -1776,10 +1839,7 @@ export default function PaymentsPage() {
                       visibleColumns={visibleColumns}
                       changes={shiftDiffs.get(r.id) ?? []}
                       onCommitField={commitField}
-                      onPay={(shift, companyId, groupRef) => setPayingShift({ shift, companyId, groupRef })}
-                      onRevert={(shift, groupRef) => setRevertingShift({ shift, groupRef })}
-                      onDelete={(shift, groupRef) => setDeletingShift({ shift, groupRef })}
-                      onViewHistory={(shiftId, companyId, clientId) => setViewingHistory({ shiftId, companyId, clientId })}
+                      onAction={openShiftAction}
                       onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
                       onReview={(shift, groupRef) => setReviewingShift({ shift, groupRef })}
                       onInvestigate={handleInvestigate}
@@ -1810,57 +1870,34 @@ export default function PaymentsPage() {
         )}
       </div>
 
-      {payingShift && (
-        <ConfirmPaymentModal
-          shift={payingShift.shift}
-          suggestedAmount={shiftValueFor(payingShift.shift, payingShift.companyId)}
-          changes={shiftDiffs.get(payingShift.shift.id) ?? []}
-          busy={paying}
-          error={payError}
-          onConfirm={handleConfirmPayment}
-          onCancel={() => {
-            setPayingShift(null);
-            setPayError(null);
-          }}
-        />
-      )}
-
-      {revertingShift && (
-        <ConfirmModal
-          title="Voltar para pendente"
-          message={`Isso cria um novo registro com status "Pendente" para ${formatDate(revertingShift.shift.workDate)} · ${revertingShift.shift.local}. O registro pago atual não será alterado, ficando disponível no histórico.`}
-          confirmLabel={reverting ? "Revertendo..." : "Voltar para pendente"}
-          confirmDisabled={reverting}
-          danger={false}
-          error={revertError}
-          onConfirm={handleConfirmRevert}
-          onCancel={() => {
-            setRevertingShift(null);
-            setRevertError(null);
-          }}
-        />
-      )}
-
-      {deletingShift && (
-        <ConfirmModal
-          title="Remover turno"
-          message={`Isso remove o registro de ${formatDate(deletingShift.shift.workDate)} · ${deletingShift.shift.local} e todo o seu histórico (pagamentos, reversões e edições anteriores) — não aparece mais em nenhuma lista, relatório ou exportação. Se esse turno for reimportado depois, a pré-visualização vai avisar que ele já foi removido, para você decidir se quer trazê-lo de volta.`}
-          confirmLabel={deleting ? "Removendo..." : "Remover"}
-          confirmDisabled={deleting}
-          error={deleteError}
-          onConfirm={handleConfirmDelete}
-          onCancel={() => {
-            setDeletingShift(null);
-            setDeleteError(null);
-          }}
-        />
-      )}
-
-      <ShiftHistoryDrawer
-        open={viewingHistory !== null}
-        shiftId={viewingHistory?.shiftId ?? null}
-        rules={viewingHistory ? rulesByPair.get(`${viewingHistory.clientId}:${viewingHistory.companyId}`) ?? null : null}
-        onClose={() => setViewingHistory(null)}
+      <ShiftActionPanel
+        target={shiftAction ? { kind: shiftAction.kind, shift: shiftAction.shift } : null}
+        rules={shiftAction ? rulesByPair.get(`${shiftAction.shift.clientId}:${shiftAction.companyId}`) ?? null : null}
+        changes={shiftAction ? shiftDiffs.get(shiftAction.shift.id) ?? [] : []}
+        otherPending={
+          shiftAction
+            ? actionRows
+                .filter((r) => r.shift.employeeId === shiftAction.shift.employeeId && r.shift.id !== shiftAction.shift.id && isPayable(r.shift))
+                .map((r) => r.shift)
+            : []
+        }
+        valueFor={(shift) => shiftValueFor(shift, shift.companyId)}
+        busy={actionBusy}
+        error={actionError}
+        payNext={payNext}
+        onPayNextChange={changePayNext}
+        canPrev={actionIndex > 0}
+        canNext={actionIndex >= 0 && actionIndex < actionRows.length - 1}
+        onPrev={() => moveShiftAction(-1)}
+        onNext={() => moveShiftAction(1)}
+        onOpenPay={(shift) => {
+          const row = actionRows.find((r) => r.shift.id === shift.id);
+          if (row) openShiftAction("pay", row.shift, row.companyId, row.groupRef);
+        }}
+        onConfirmPay={handleConfirmPayment}
+        onConfirmRevert={handleConfirmRevert}
+        onConfirmDelete={handleConfirmDelete}
+        onClose={closeShiftAction}
       />
       <ExtraColumnsDrawer
         open={viewingExtraData !== null}

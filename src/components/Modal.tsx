@@ -32,7 +32,7 @@ export function ModalClose({ children }: { children: (requestClose: () => void) 
 
 /**
  * Shared full-screen overlay recipe — every modal/overlay in the app
- * (`ConfirmModal`, `UpdateModal`, `ConfirmPaymentModal`, and — via
+ * (`ConfirmModal`, `UpdateModal`, and — via
  * `fullScreen` — `PdfViewerModal`/`PaymentTemplateWizard`/
  * `EmployeeTemplateWizard`) renders through this instead of hand-rolling its
  * own overlay `<div>`, so the backdrop look and the close/scroll-lock
