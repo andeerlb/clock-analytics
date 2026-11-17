@@ -90,6 +90,15 @@ const MONTH_SHORT = ["jan.", "fev.", "mar.", "abr.", "maio", "jun.", "jul.", "ag
  */
 function DailyBars({ rows, start, end }: { rows: PaymentShiftReportRow[]; start: string; end: string }) {
   const [hover, setHover] = useState<number | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(640);
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => setWidth(Math.max(280, Math.round(entry.contentRect.width))));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   const buckets = useMemo(() => {
     const startMs = Date.parse(`${start}T00:00:00Z`), endMs = Date.parse(`${end}T00:00:00Z`);
     const dayCount = Math.max(1, Math.round((endMs - startMs) / 86400000) + 1);
@@ -106,21 +115,21 @@ function DailyBars({ rows, start, end }: { rows: PaymentShiftReportRow[]; start:
     return { list, step };
   }, [rows, start, end]);
   if (!rows.length) return <EmptyChart />;
-  const W = 640, H = 220, padL = 52, padB = 22, padT = 8;
+  const W = width, H = 240, padL = 64, padB = 24, padT = 10;
   const rawMax = Math.max(...buckets.list.map((b) => b.paid + b.pending), 1);
   const magnitude = 10 ** Math.floor(Math.log10(rawMax));
   const niceMax = Math.ceil(rawMax / magnitude) * magnitude;
   const ticks = [0, niceMax / 2, niceMax];
   const bw = (W - padL) / buckets.list.length;
   const y = (v: number) => padT + (H - padT - padB) * (1 - v / niceMax);
-  const labelEvery = Math.ceil(buckets.list.length / 9);
+  const labelEvery = Math.max(1, Math.ceil(buckets.list.length / Math.max(2, Math.floor((W - padL) / 56))));
   const fmtDay = (ms: number) => { const d = new Date(ms); return `${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}`; };
   const fmtTick = (v: number) => v === 0 ? "0" : v >= 1000 ? `R$ ${new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 }).format(v / 1000)} mil` : `R$ ${Math.round(v)}`;
   const hovered = hover !== null ? buckets.list[hover] : null;
   return (
-    <div className="analytics-daily">
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Custo por dia no período">
-        {ticks.map((t) => <g key={t}><line x1={padL} x2={W} y1={y(t)} y2={y(t)} stroke="var(--border-soft)" /><text x={padL - 8} y={y(t) + 4} textAnchor="end" fontSize="10" fill="var(--text-muted)">{fmtTick(t)}</text></g>)}
+    <div className="analytics-daily" ref={boxRef}>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Custo por dia no período">
+        {ticks.map((t) => <g key={t}><line x1={padL} x2={W} y1={y(t)} y2={y(t)} stroke="var(--border-soft)" /><text x={padL - 10} y={y(t) + 4} textAnchor="end" fontSize="11" fill="var(--text-muted)">{fmtTick(t)}</text></g>)}
         {buckets.list.map((b, i) => {
           const x = padL + i * bw + bw * 0.18, w = Math.max(1, bw * 0.64), total = b.paid + b.pending;
           const d = new Date(b.from);
@@ -129,12 +138,12 @@ function DailyBars({ rows, start, end }: { rows: PaymentShiftReportRow[]; start:
               ? <rect x={x} y={y(0) - 2} width={w} height={2} rx={1} fill="var(--border-soft)" />
               : <><rect x={x} y={y(b.paid)} width={w} height={y(0) - y(b.paid)} rx={2} fill="var(--success)" /><rect x={x} y={y(total)} width={w} height={y(b.paid) - y(total)} rx={2} fill="#6b6b75" /></>}
             <rect x={padL + i * bw} y={padT} width={bw} height={H - padT - padB} fill="transparent" onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)} />
-            {i % labelEvery === 0 && <text x={x + w / 2} y={H - 6} textAnchor="middle" fontSize="10" fill="var(--text-muted)">{buckets.step === 1 ? fmtDay(b.from) : `${d.getUTCDate()} ${MONTH_SHORT[d.getUTCMonth()]}`}</text>}
+            {i % labelEvery === 0 && <text x={x + w / 2} y={H - 6} textAnchor="middle" fontSize="11" fill="var(--text-muted)">{buckets.step === 1 ? fmtDay(b.from) : `${d.getUTCDate()} ${MONTH_SHORT[d.getUTCMonth()]}`}</text>}
           </g>;
         })}
       </svg>
       {hovered && hover !== null && (
-        <div className="analytics-daily-tip" style={{ left: `${((padL + (hover + 0.5) * bw) / W) * 100}%` }}>
+        <div className="analytics-daily-tip" style={{ left: Math.min(W - 90, Math.max(padL + 90, padL + (hover + 0.5) * bw)) }}>
           <b>{buckets.step === 1 ? fmtDay(hovered.from) : `Semana de ${fmtDay(hovered.from)}`}</b>
           {hovered.shifts === 0 ? <span>Nenhum turno</span> : <><span>Pago {formatCurrencyBRL(hovered.paid)}</span><span>A pagar {formatCurrencyBRL(hovered.pending)}</span><span>{plural(hovered.shifts, "turno", "turnos")}</span></>}
         </div>
