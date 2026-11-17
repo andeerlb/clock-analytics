@@ -11,6 +11,7 @@ import PaymentValueRulesEditor, {
   type WizardValueRule,
 } from "../components/PaymentValueRulesEditor";
 import {
+  getCompany,
   addClientCompany,
   createClient,
   getClient,
@@ -46,15 +47,33 @@ export default function ClientFormPage() {
   const [nightStartTime, setNightStartTime] = useState("22:00");
   const [nightEndTime, setNightEndTime] = useState("05:00");
   const [nightShiftRule, setNightShiftRule] = useState<NightShiftRule>("overlap");
-  // No separate toggle for value rules — an empty list already means "no
-  // override, inherit the company's chain entirely" (same convention as
-  // every other optional rule chain in this project).
+  // "Usar os da empresa" vs "Definir próprios". Saved the same way as
+  // before — an empty list means "inherit the company's chain entirely" —
+  // the switch only makes that choice visible. The draft rules are kept
+  // while switching back and forth, and only dropped on save.
   const [valueRules, setValueRules] = useState<WizardValueRule[]>([]);
+  const [ownValueRules, setOwnValueRules] = useState(false);
+  const [companyValueRules, setCompanyValueRules] = useState<{ id: number; name: string; rules: WizardValueRule[] }[]>([]);
   const [loading, setLoading] = useState(isEditing);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const currentCompanies = isEditing ? linkedCompanies : pendingCompanies;
+  const companyIdsKey = currentCompanies.map((c) => c.id).join(",");
+
+  // The rules each linked empresa would hand down, shown read-only under "Usar os da empresa".
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(currentCompanies.map((c) => getCompany(c.id).then((d) => ({ id: c.id, name: c.name, rules: fromPaymentValueRules(d.valueRules) }))))
+      .then((list) => {
+        if (!cancelled) setCompanyValueRules(list);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyIdsKey]);
 
   useEffect(() => {
     listCompanies().then(setCompanies);
@@ -76,6 +95,7 @@ export default function ClientFormPage() {
           setNightShiftRule(c.nightShiftRule);
         }
         setValueRules(fromPaymentValueRules(c.valueRules));
+        setOwnValueRules(c.valueRules.length > 0);
       })
       .catch((e) => setError(String(e instanceof Error ? e.message : e)))
       .finally(() => setLoading(false));
@@ -130,7 +150,7 @@ export default function ClientFormPage() {
     setError(null);
     setBusy(true);
     try {
-      const valueRuleInputs = toPaymentValueRules(valueRules);
+      const valueRuleInputs = ownValueRules ? toPaymentValueRules(valueRules) : [];
       const nightArgs: [string | null, string | null, NightShiftRule | null] = overrideNightShift
         ? [nightStartTime, nightEndTime, nightShiftRule]
         : [null, null, null];
@@ -287,15 +307,45 @@ export default function ClientFormPage() {
 
           <FormPanel
             icon={Calculator}
-            title="Regras de valor por hora trabalhada"
-            description="Por padrão, este cliente usa as regras de valor configuradas na empresa. Cadastre regras aqui só se este cliente específico tiver valores diferentes — sem nenhuma regra, o Valor continua vindo da empresa."
+            title="Valor do turno"
+            description="Por padrão este cliente usa os valores da empresa. Defina valores próprios só se ele pagar diferente."
           >
-            <PaymentValueRulesEditor valueRules={valueRules} onChange={setValueRules} />
+            <div className="vr-inherit">
+              <span className="vr-inherit-text">
+                {ownValueRules
+                  ? "Regras próprias deste cliente; as da empresa não valem para ele."
+                  : currentCompanies.length
+                    ? `Usando as regras de ${currentCompanies.map((c) => c.name).join(", ")}.`
+                    : "Vincule uma empresa para ver as regras que este cliente vai usar."}
+              </span>
+              <div className="analytics-seg" role="group" aria-label="Valores deste cliente">
+                <button type="button" aria-pressed={!ownValueRules} onClick={() => setOwnValueRules(false)}>
+                  Usar os da empresa
+                </button>
+                <button type="button" aria-pressed={ownValueRules} onClick={() => setOwnValueRules(true)}>
+                  Definir próprios
+                </button>
+              </div>
+            </div>
+            {ownValueRules ? (
+              <PaymentValueRulesEditor valueRules={valueRules} onChange={setValueRules} companyIds={currentCompanies.map((c) => c.id)} />
+            ) : (
+              companyValueRules.map((c) => (
+                <div key={c.id}>
+                  {companyValueRules.length > 1 && <div className="vr-company-label">{c.name}</div>}
+                  {c.rules.length ? (
+                    <PaymentValueRulesEditor valueRules={c.rules} readOnly />
+                  ) : (
+                    <p className="vr-hint">{c.name} não tem regras de valor: o valor dos turnos não é calculado.</p>
+                  )}
+                </div>
+              ))
+            )}
           </FormPanel>
 
           <button
             type="submit"
-            disabled={busy || (!isEditing && pendingCompanies.length === 0) || !isValueRulesValid(valueRules)}
+            disabled={busy || (!isEditing && pendingCompanies.length === 0) || (ownValueRules && !isValueRulesValid(valueRules))}
             style={{ alignSelf: "flex-start" }}
           >
             {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}

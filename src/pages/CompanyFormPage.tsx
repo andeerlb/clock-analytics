@@ -126,10 +126,10 @@ export default function CompanyFormPage() {
 
           <FormPanel
             icon={Calculator}
-            title="Regras de valor por hora trabalhada"
-            description="Decide o Valor de um turno a partir de condições de coluna (Data/Local/Função/Horário) e da duração (horas trabalhadas, somada do Horário) — avaliadas em ordem, a primeira que bater vence. Opcional: sem nenhuma regra, o Valor não é calculado."
+            title="Valor do turno"
+            description="Quanto vale cada turno, de acordo com a função, o local, a data ou o horário e quanto tempo a pessoa trabalhou. Sem nenhuma regra, o valor não é calculado."
           >
-            <PaymentValueRulesEditor valueRules={valueRules} onChange={setValueRules} />
+            <PaymentValueRulesEditor valueRules={valueRules} onChange={setValueRules} companyIds={isEditing ? [Number(id)] : undefined} />
           </FormPanel>
 
           <button type="submit" disabled={busy || !isValueRulesValid(valueRules)} style={{ alignSelf: "flex-start" }}>
