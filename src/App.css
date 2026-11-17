@@ -1880,7 +1880,7 @@ tr:last-child td {
 .choice-pending {
   margin-top: 1rem;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
@@ -1891,6 +1891,7 @@ tr:last-child td {
 }
 
 .choice-pending-main {
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 0.8rem;
@@ -1919,9 +1920,18 @@ tr:last-child td {
 }
 
 .choice-pending button {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
+  white-space: nowrap;
+}
+
+/* Only a really narrow window drops the button under the text. */
+@media (max-width: 520px) {
+  .choice-pending {
+    flex-wrap: wrap;
+  }
 }
 
 @media (max-width: 860px) {
