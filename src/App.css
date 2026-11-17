@@ -1459,20 +1459,12 @@ tr:last-child td {
   transition: background 0.22s ease, backdrop-filter 0.22s ease, -webkit-backdrop-filter 0.22s ease;
 }
 
-.drawer-overlay-visible {
-  background: rgba(8, 8, 10, 0.45);
-  backdrop-filter: blur(28px) saturate(1.4);
-  -webkit-backdrop-filter: blur(28px) saturate(1.4);
-}
-
-/* Same reasoning as `.modal-overlay`'s counterpart above: WebView2's
-   transparent-window mode (needed for the always-on Acrylic) breaks
-   `backdrop-filter` compositing outright, so it's dropped rather than left
-   declared-but-inert, and the tint darkened (see `.modal-overlay`'s own
-   counterpart above) since there's no blur left to help sell "a layer is
-   here". */
+/* No dim and no blur behind a side panel, on every screen and platform:
+   the page stays as it is, and the panel's own border and shadow mark it.
+   The overlay is still there, invisible, so a click outside closes it. */
+.drawer-overlay-visible,
 :root.glass-native .drawer-overlay-visible {
-  background: rgba(8, 8, 10, 0.68);
+  background: transparent;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -7267,4 +7259,115 @@ button.rv-history-row:hover {
   .rv-more-chevron {
     transition: none;
   }
+}
+
+/* ---- Atualizações pendentes (same look as Verificação automática) ---- */
+.pc-head-icon {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--warning-soft);
+  border-radius: 10px;
+  color: var(--warning);
+}
+
+.pc-body {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.pc-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pc-group {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.pc-group-head {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pc-group-toggle {
+  width: 100%;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: none;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pc-group-toggle:hover,
+.pc-group-toggle:focus-visible {
+  background: none;
+}
+
+.pc-group-head {
+  transition: background 120ms ease;
+}
+
+.pc-group-head:has(.pc-group-toggle:hover) {
+  background: #1f1f24;
+}
+
+.pc-group-toggle .rv-tag {
+  margin-left: 0;
+}
+
+.pc-group-title {
+  overflow: hidden;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pc-group-chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+
+.pc-group-meta {
+  padding-left: 50px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pc-next {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.pc-next-off {
+  color: var(--text-muted);
+}
+
+.pc-seen {
+  margin-left: auto;
+}
+
+.pc-group-body {
+  padding: 0 14px 4px;
+  border-top: 1px solid var(--border);
 }
