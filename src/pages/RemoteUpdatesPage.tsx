@@ -1061,27 +1061,43 @@ export default function RemoteUpdatesPage() {
 
   return (
     <div className="rv-page">
+      <div className="rv-back">
+        <BackButton fallback="/payments" />
+      </div>
       <div className="rv-head">
-        <div className="rv-head-title">
-          <BackButton fallback="/payments" />
-          <div>
-            <h2>Verificação automática</h2>
-            <p className="page-subtitle">Planilhas importadas por link que o PontoScan confere sozinho.</p>
-          </div>
+        <div>
+          <h2>Verificação automática</h2>
+          <p className="page-subtitle">Planilhas importadas por link que o PontoScan confere sozinho.</p>
         </div>
-        <button type="button" className="settings-button" onClick={handleForceCheckAll} disabled={forcingAll || files.length === 0}>
-          <RefreshCw size={14} className={forcingAll ? "ai-spin" : undefined} />
-          {forcingAll ? "Conferindo..." : "Verificar agora"}
-        </button>
+        {files.length > 0 && (
+          <button type="button" className="settings-button" onClick={handleForceCheckAll} disabled={forcingAll}>
+            <RefreshCw size={14} className={forcingAll ? "ai-spin" : undefined} />
+            {forcingAll ? "Conferindo..." : "Verificar agora"}
+          </button>
+        )}
       </div>
 
       {tickError && <div className="error-box">Não deu pra conferir as planilhas: {tickError}</div>}
 
       {files.length === 0 ? (
         <div className="rv-empty">
+          <span className="rv-empty-icon" aria-hidden="true">
+            <RefreshCw size={20} />
+          </span>
           <strong>Nenhuma planilha acompanhada ainda</strong>
-          <span>Importe uma planilha por link em Importar Pagamentos e marque “Rastrear atualizações automaticamente”.</span>
-          <button type="button" className="settings-button" onClick={() => navigate("/import/payments")}>
+          <span className="rv-empty-lead">Quando uma planilha de pagamento vem de um link (OneDrive, SharePoint ou link direto), o PontoScan pode conferir sozinho se ela mudou.</span>
+          <ol className="rv-empty-steps">
+            <li>
+              <b>1</b>Em Importar Pagamentos, importe a planilha pelo link.
+            </li>
+            <li>
+              <b>2</b>Marque “Rastrear atualizações automaticamente”.
+            </li>
+            <li>
+              <b>3</b>Ela aparece aqui, e você é avisado quando algo mudar.
+            </li>
+          </ol>
+          <button type="button" className="settings-button settings-button-primary" onClick={() => navigate("/import/payments")}>
             Ir para Importar Pagamentos
           </button>
         </div>

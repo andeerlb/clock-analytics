@@ -6135,6 +6135,10 @@ button.settings-button:disabled {
   max-width: 820px;
 }
 
+.rv-back {
+  margin: 0 0 0.6rem -0.4rem;
+}
+
 .rv-head {
   margin-bottom: 1.2rem;
   display: flex;
@@ -6142,12 +6146,6 @@ button.settings-button:disabled {
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
-}
-
-.rv-head-title {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
 }
 
 .rv-head h2 {
@@ -6367,11 +6365,11 @@ button.settings-button:disabled {
 }
 
 .rv-empty {
-  padding: 2.5rem 1.5rem;
+  padding: 2.6rem 1.5rem;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -6381,6 +6379,55 @@ button.settings-button:disabled {
 
 .rv-empty strong {
   color: var(--text);
+  font-size: 1rem;
+}
+
+.rv-empty-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #26262c;
+  border: 1px solid #33333a;
+  border-radius: 14px;
+  color: var(--text-muted);
+}
+
+.rv-empty-lead {
+  max-width: 46ch;
+  font-size: 0.85rem;
+}
+
+.rv-empty-steps {
+  margin: 6px 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+  text-align: left;
+  font-size: 0.85rem;
+}
+
+.rv-empty-steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+}
+
+.rv-empty-steps b {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #2a2a31;
+  border-radius: 50%;
+  color: var(--text-muted);
+  font-size: 0.72rem;
 }
 
 button.rv-link {
