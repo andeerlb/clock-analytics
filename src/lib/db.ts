@@ -5449,87 +5449,98 @@ export async function clearAllData(options: ClearDataOptions = {}): Promise<void
   const keepEmployeeTemplates = Boolean(options.keepEmployeeTemplates);
   const keepManuallyEditedShifts = Boolean(options.keepManuallyEditedShifts) && keepEmployees;
 
-  await db.execute("DELETE FROM punches");
-  await db.execute("DELETE FROM day_records");
-  await db.execute("DELETE FROM imports");
-  await db.execute("DELETE FROM import_files");
-  // Payment shifts are import history too (one row per imported work
-  // shift), same category as day_records/punches — always cleared, and
-  // before source_files/employees since it references both. The table is
-  // self-referencing (previous_shift_id, for "Fazer pagamento" history),
-  // so null those out first — otherwise the bulk delete can violate that
-  // FK mid-way through, depending on delete order.
-  await db.execute("UPDATE payment_shifts SET previous_shift_id = NULL WHERE previous_shift_id IS NOT NULL");
+  // One transaction (`runWriteBatch`): either everything below is wiped or
+  // nothing is. Separate `db.execute` calls used to leave the data half
+  // deleted when a foreign key failed part-way. Order matters: this
+  // connection enforces foreign keys and none of them cascade, so every
+  // child goes before its parent.
+  const statements: string[] = [
+    "DELETE FROM punches",
+    "DELETE FROM day_records",
+    "DELETE FROM imports",
+    "DELETE FROM import_files",
+    // Self-referencing (previous_shift_id, "Fazer pagamento" history): null
+    // those first, or the bulk delete can trip on its own rows.
+    "UPDATE payment_shifts SET previous_shift_id = NULL WHERE previous_shift_id IS NOT NULL",
+  ];
+
+  // Payment shifts are import history too: always cleared, except, when
+  // asked, the ones edited by hand. What points at a shift that's going
+  // goes first: its audit (NOT NULL) and the check diffs that matched it.
+  const goingShifts = keepManuallyEditedShifts ? "SELECT id FROM payment_shifts WHERE edited_manually = 0" : "SELECT id FROM payment_shifts";
+  statements.push(
+    `DELETE FROM payment_audits WHERE payment_shift_id IN (${goingShifts})`,
+    `UPDATE source_url_check_diffs SET matched_shift_id = NULL WHERE matched_shift_id IN (${goingShifts})`,
+  );
   if (keepManuallyEditedShifts) {
-    // A kept row still loses its own links into what's actually being wiped
-    // right here — source_files always goes, and template_id only survives
-    // when keepPaymentTemplates is also on — otherwise it'd be a FK
-    // pointing at nothing. employee_id is left alone: it's NOT NULL, so a
-    // kept row requires keepEmployees, which the caller already guarantees.
-    await db.execute(
-      `UPDATE payment_shifts SET source_file_id = NULL${keepPaymentTemplates ? "" : ", template_id = NULL"}
-       WHERE edited_manually = 1`,
+    // A kept row loses its links into what's being wiped: source_files always
+    // goes, template_id only survives with keepPaymentTemplates. employee_id
+    // is NOT NULL, which is why keeping these requires keeping employees.
+    statements.push(
+      `UPDATE payment_shifts SET source_file_id = NULL${keepPaymentTemplates ? "" : ", template_id = NULL"} WHERE edited_manually = 1`,
+      "DELETE FROM payment_shifts WHERE edited_manually = 0",
     );
-    await db.execute("DELETE FROM payment_shifts WHERE edited_manually = 0");
   } else {
-    await db.execute("DELETE FROM payment_shifts");
+    statements.push("DELETE FROM payment_shifts");
   }
-  await db.execute("DELETE FROM source_files");
+  statements.push("DELETE FROM source_files");
 
   const clearedTables = ["punches", "day_records", "imports", "import_files", "payment_shifts", "source_files"];
 
-  // Templates are master/config data, not import history — optional to
-  // keep, like companies/clients/employees, but independent of that chain:
-  // neither template kind has an FK into companies/clients/employees
-  // (routing/identification is resolved per row at import execution time).
+  // Templates are configuration, not history: optional to keep, and
+  // independent of the companies/clients/employees chain.
   if (!keepPaymentTemplates) {
-    await db.execute("DELETE FROM payment_template_rules");
-    await db.execute("DELETE FROM payment_template_status_rules");
-    await db.execute("DELETE FROM payment_template_fields");
-    await db.execute("DELETE FROM payment_template_sheets");
-    await db.execute("DELETE FROM payment_template_groups");
-    await db.execute("DELETE FROM payment_templates");
+    statements.push(
+      "DELETE FROM payment_template_rules",
+      "DELETE FROM payment_template_status_rules",
+      "DELETE FROM payment_template_fields",
+      "DELETE FROM payment_template_sheets",
+      "DELETE FROM payment_template_groups",
+      "DELETE FROM payment_templates",
+    );
     clearedTables.push("payment_templates");
   }
   if (!keepEmployeeTemplates) {
-    await db.execute("DELETE FROM employee_template_fields");
-    await db.execute("DELETE FROM employee_template_sheets");
-    await db.execute("DELETE FROM employee_template_groups");
-    await db.execute("DELETE FROM employee_templates");
+    statements.push(
+      "DELETE FROM employee_template_fields",
+      "DELETE FROM employee_template_sheets",
+      "DELETE FROM employee_template_groups",
+      "DELETE FROM employee_templates",
+    );
     clearedTables.push("employee_templates");
   }
 
   if (!keepEmployees) {
-    // Employee-owned auxiliary rows have NOT NULL foreign keys and must go
-    // before their employees when FK enforcement is enabled.
-    await db.execute("DELETE FROM employee_pix_keys");
-    // with FK enforcement on for this connection (confirmed by a real
-    // SQLITE_CONSTRAINT_FOREIGNKEY here) — has to go first.
-    await db.execute("DELETE FROM employee_aliases");
-    await db.execute("DELETE FROM employees");
-    clearedTables.push("employee_pix_keys", "employee_aliases", "employees");
+    // Everything with a NOT NULL employee_id goes before the employees,
+    // including their client/empresa links (employee_client_companies).
+    statements.push(
+      "DELETE FROM employee_pix_keys",
+      "DELETE FROM employee_aliases",
+      "DELETE FROM employee_client_companies",
+      "DELETE FROM employees",
+    );
+    clearedTables.push("employee_pix_keys", "employee_aliases", "employee_client_companies", "employees");
   }
   if (!keepClients) {
-    // A surviving payment template's routing rule still requires a real
-    // client_id, and this connection does enforce foreign keys — wiping
-    // clients out from under a kept template's rules would fail the same
-    // way the missing `employee_aliases` delete above did, so drop rules
-    // here too even when the template itself is kept. Redundant (and
-    // harmless) when `!keepPaymentTemplates` already cleared them above.
-    // (keepCompanies can only be false when keepClients is too, so this
-    // single spot covers a company wipe as well.)
-    await db.execute("DELETE FROM payment_template_rules");
-    await db.execute("DELETE FROM client_companies");
-    await db.execute("DELETE FROM clients");
-    clearedTables.push("clients");
+    // A kept payment template can still point at a client through its
+    // routing rules: drop the rules, keep the template. Clients also own
+    // their value rules. (keepCompanies can only be false when keepClients
+    // is too, so this also covers a company wipe.)
+    statements.push(
+      "DELETE FROM payment_template_rules",
+      "DELETE FROM client_payment_value_rules",
+      "DELETE FROM client_companies",
+      "DELETE FROM clients",
+    );
+    clearedTables.push("client_payment_value_rules", "clients");
   }
   if (!keepCompanies) {
-    // Same FK-dangling concern as payment_template_rules above: every
-    // value rule requires a real company_id.
-    await db.execute("DELETE FROM payment_value_rules");
-    await db.execute("DELETE FROM companies");
-    clearedTables.push("companies");
+    // Value rules and funções (with their aliases) belong to a company.
+    statements.push("DELETE FROM payment_value_rules", "DELETE FROM role_aliases", "DELETE FROM roles", "DELETE FROM companies");
+    clearedTables.push("payment_value_rules", "role_aliases", "roles", "companies");
   }
+
+  await runWriteBatch(statements.map((statement) => ({ sql: statement })));
 
   try {
     const placeholders = clearedTables.map((_, i) => `$${i + 1}`).join(", ");
