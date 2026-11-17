@@ -685,11 +685,11 @@ export default function RemoteUpdatesPage() {
             <div className="rv-more-body">
               <section className="rv-more-section">
                 <span className="rv-section-label">Turnos editados à mão</span>
-                <div className="rv-group">
-                  <label className={c.autoApplyEnabled ? "rv-group-row" : "rv-group-row rv-group-row-off"}>
+                <div className="rv-opts">
+                  <label className={c.autoApplyEnabled ? "rv-opts-row" : "rv-opts-row rv-opts-row-off"}>
                     <span className="rv-text">
-                      <span className="rv-group-title">Alterar quando aplicar sozinho</span>
-                      <span className="rv-group-desc">
+                      <span className="rv-opts-title">Alterar quando aplicar sozinho</span>
+                      <span className="rv-opts-desc">
                         Turnos pagos, voltados para pendente ou com valor corrigido.
                         {!c.autoApplyEnabled && " Ligue “Aplicar mudanças sozinho” para usar."}
                       </span>
@@ -703,10 +703,10 @@ export default function RemoteUpdatesPage() {
                       onChange={(e) => saveRule(c, { autoApplyOverwriteManualEdits: e.target.checked })}
                     />
                   </label>
-                  <label className={c.autoApplyEnabled ? "rv-group-row" : "rv-group-row rv-group-row-off"}>
+                  <label className={c.autoApplyEnabled ? "rv-opts-row" : "rv-opts-row rv-opts-row-off"}>
                     <span className="rv-text">
-                      <span className="rv-group-title">Alterar também os já pagos</span>
-                      <span className="rv-group-desc">Quando aplicar sozinho.</span>
+                      <span className="rv-opts-title">Alterar também os já pagos</span>
+                      <span className="rv-opts-desc">Quando aplicar sozinho.</span>
                     </span>
                     <input
                       type="checkbox"
@@ -717,10 +717,10 @@ export default function RemoteUpdatesPage() {
                       onChange={(e) => saveRule(c, { autoApplyOverwritePaid: e.target.checked })}
                     />
                   </label>
-                  <label className="rv-group-row">
+                  <label className="rv-opts-row">
                     <span className="rv-text">
-                      <span className="rv-group-title">Manter ao reimportar</span>
-                      <span className="rv-group-desc">Vale para “Reimportar agora”, abaixo.</span>
+                      <span className="rv-opts-title">Manter ao reimportar</span>
+                      <span className="rv-opts-desc">Vale para “Reimportar agora”, abaixo.</span>
                     </span>
                     <input type="checkbox" role="switch" className="settings-switch" checked={c.keepManualEdits} onChange={(e) => saveRule(c, { keepManualEdits: e.target.checked })} />
                   </label>
@@ -729,14 +729,14 @@ export default function RemoteUpdatesPage() {
 
               <section className="rv-more-section">
                 <span className="rv-section-label">Modelo da planilha</span>
-                <div className="rv-group">
-                  <div className="rv-group-row">
+                <div className="rv-opts">
+                  <div className="rv-opts-row">
                     <span className="rv-more-icon" aria-hidden="true">
                       <FileSpreadsheet size={15} />
                     </span>
                     <span className="rv-text">
-                      <span className="rv-group-title">{c.templateName ?? "Modelo removido"}</span>
-                      <span className="rv-group-desc">Para usar outro modelo, crie uma nova regra.</span>
+                      <span className="rv-opts-title">{c.templateName ?? "Modelo removido"}</span>
+                      <span className="rv-opts-desc">Para usar outro modelo, crie uma nova regra.</span>
                     </span>
                   </div>
                 </div>
@@ -750,7 +750,7 @@ export default function RemoteUpdatesPage() {
                 {history === null && <span className="rv-small">Carregando...</span>}
                 {history?.length === 0 && <span className="rv-small">Ainda não foi conferida.</span>}
                 {history && history.length > 0 && (
-                  <div className="rv-group">
+                  <div className="rv-opts">
                     {history.map((entry) => {
                       const tone: Tone = entry.result === "error" || entry.hasOwnError ? "bad" : entry.diffCount > 0 ? "warn" : entry.result === "unknown" ? "off" : "ok";
                       const text =
@@ -763,7 +763,7 @@ export default function RemoteUpdatesPage() {
                               : "Sem mudanças";
                       const author = entry.diffCount > 0 && entry.savedAt ? entry.savedBy?.trim() || "Sem nome no arquivo" : null;
                       return (
-                        <button key={entry.id} type="button" className="rv-group-row rv-history-row" onClick={() => openSheet({ kind: "check", configId: c.id, entry })}>
+                        <button key={entry.id} type="button" className="rv-opts-row rv-history-row" onClick={() => openSheet({ kind: "check", configId: c.id, entry })}>
                           <i className={`rv-dot rv-dot-${tone}`} aria-hidden="true" />
                           <span className="rv-text">
                             <span className="rv-history-line">

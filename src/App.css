@@ -8666,14 +8666,14 @@ button.rv-more-toggle:hover {
   text-transform: none;
 }
 
-.rv-group {
+.rv-opts {
   overflow: hidden;
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 10px;
 }
 
-.rv-group-row {
+.rv-opts-row {
   width: 100%;
   padding: 10px 12px;
   display: flex;
@@ -8683,24 +8683,24 @@ button.rv-more-toggle:hover {
   cursor: pointer;
 }
 
-.rv-group-row + .rv-group-row {
+.rv-opts-row + .rv-opts-row {
   border-top: 1px solid #26262a;
 }
 
-div.rv-group-row {
+div.rv-opts-row {
   cursor: default;
 }
 
-.rv-group-row-off .rv-group-title {
+.rv-opts-row-off .rv-opts-title {
   color: var(--text-muted);
 }
 
-.rv-group-title {
+.rv-opts-title {
   font-size: 0.85rem;
   font-weight: 500;
 }
 
-.rv-group-desc {
+.rv-opts-desc {
   margin-top: 1px;
   color: #71717a;
   font-size: 0.75rem;
