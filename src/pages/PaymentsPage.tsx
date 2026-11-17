@@ -197,7 +197,7 @@ function ShiftRow({
       )}
       {col("horas") && <td>{duration !== null ? formatMinutesAsTime(duration) : "—"}</td>}
       {col("valor") && (
-        <td>{value !== null ? formatCurrencyBRL(value) : "—"}</td>
+        <td className="num-cell">{value !== null ? formatCurrencyBRL(value) : "—"}</td>
       )}
       {col("status") && (
         <td>
@@ -1269,7 +1269,7 @@ export default function PaymentsPage() {
                                       <thead>
                                         <tr>
                                           {TURNO_COLUMNS.filter((c) => visibleColumns.has(c.id)).map((c) => (
-                                            <th key={c.id}>{c.label}</th>
+                                            <th key={c.id} className={c.id === "valor" ? "num-cell" : undefined}>{c.label}</th>
                                           ))}
                                         </tr>
                                       </thead>
@@ -1324,7 +1324,7 @@ export default function PaymentsPage() {
                 <thead>
                   <tr>
                     {PAGE_COLUMNS.filter((c) => visibleColumns.has(c.id)).map((c) => (
-                      <th key={c.id}>{c.label}</th>
+                      <th key={c.id} className={c.id === "valor" ? "num-cell" : undefined}>{c.label}</th>
                     ))}
                   </tr>
                 </thead>

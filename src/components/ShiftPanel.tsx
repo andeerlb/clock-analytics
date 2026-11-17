@@ -1,13 +1,16 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   AlertTriangle,
+  BriefcaseBusiness,
   CalendarDays,
   Check,
   ChevronLeft,
+  Clock,
   Copy,
   CreditCard,
   History,
   Link2,
+  MapPin,
   Moon,
   Info,
   Pencil,
@@ -31,6 +34,7 @@ import {
   diffFieldLabel,
   formatCurrencyBRL,
   formatDate,
+  formatDateSlash,
   formatDateTime,
   formatDateTimeAbbrevYY,
   formatMinutesAsTime,
@@ -90,32 +94,58 @@ function shiftPeriodOf(shift: PaymentShiftRow, rules: EffectivePaymentRules | nu
   return classifyShiftPeriod(rules.nightShiftRule, nightStart, nightEnd, shift.scheduleStartMinutes, shift.scheduleEndMinutes);
 }
 
+/** "6h", "7h30" — a duration, so it doesn't read as a clock time like "06:00" does. */
+function durationText(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${h}h${m ? String(m).padStart(2, "0") : ""}`;
+}
+
+function StripItem({ icon: Icon, label, children }: { icon: LucideIcon; label: string; children: ReactNode }) {
+  return (
+    <div className="sa-strip-item" title={label}>
+      <Icon size={13} aria-hidden="true" />
+      <span className="sr-only">{label}: </span>
+      <span>{children}</span>
+    </div>
+  );
+}
+
 /** Which turno the panel is about — the same strip on every tab. */
 function ShiftStrip({ shift, period }: { shift: PaymentShiftRow; period: ShiftPeriod | null }) {
   const badge = STATUS_BADGE[shift.status];
   const duration = scheduleDurationMinutes(shift);
   const schedule = scheduleText(shift);
-  const meta = [
-    `${weekday(shift.workDate)}, ${formatDate(shift.workDate)}`,
-    shift.local,
-    shift.role,
-    schedule ? `${schedule}${duration !== null ? ` (${formatMinutesAsTime(duration)})` : ""}` : null,
-  ].filter(Boolean);
   return (
     <div className="sa-strip">
-      <Avatar name={shift.employeeName} />
-      <div className="sa-strip-text">
-        <div className="sa-strip-name">
-          <span>{shift.employeeName}</span>
-          <span className={badge.className}>{badge.label}</span>
-          {period && (
-            <span className={period === "noturno" ? "badge info" : "badge neutral"}>
-              {period === "noturno" ? <Moon size={12} /> : <Sun size={12} />}
-              {period === "noturno" ? "Noturno" : "Diurno"}
-            </span>
+      <div className="sa-strip-head">
+        <Avatar name={shift.employeeName} />
+        <span className="sa-strip-name">{shift.employeeName}</span>
+        <span className={badge.className}>{badge.label}</span>
+      </div>
+      <div className="sa-strip-grid">
+        <StripItem icon={CalendarDays} label="Data">
+          {weekday(shift.workDate)}, {formatDateSlash(shift.workDate)}
+        </StripItem>
+        <StripItem icon={period === "noturno" ? Moon : period === "diurno" ? Sun : Clock} label="Horário">
+          {schedule ? (
+            <>
+              {schedule}
+              <span className="muted">
+                {duration !== null ? ` · ${durationText(duration)}` : ""}
+                {period ? ` · ${period === "noturno" ? "Noturno" : "Diurno"}` : ""}
+              </span>
+            </>
+          ) : (
+            <span className="muted">Sem horário</span>
           )}
-        </div>
-        <div className="sa-strip-meta">{meta.join(" · ")}</div>
+        </StripItem>
+        <StripItem icon={MapPin} label="Local">
+          {shift.local || <span className="muted">Sem local</span>}
+        </StripItem>
+        <StripItem icon={BriefcaseBusiness} label="Função">
+          {shift.role || <span className="muted">Sem função</span>}
+        </StripItem>
       </div>
     </div>
   );
@@ -392,10 +422,27 @@ function DataTab({
       {!canEdit && (
         <Notice tone="info" icon={Info}>
           {blocked
-            ? "Revise a alteração encontrada na fonte (aba Pagar) antes de editar este turno."
+            ? "Revise a alteração encontrada na fonte (aba Pagamento) antes de editar este turno."
             : "Um turno pago não pode ser editado. Volte para pendente na aba Pagamento para editar."}
         </Notice>
       )}
+      {!canEdit && (
+        <div className="sa-details">
+          {[
+            { label: "Data", value: formatDate(shift.workDate) },
+            { label: "Local", value: shift.local || "—" },
+            { label: "Função", value: shift.role || "—" },
+            { label: "Horário", value: scheduleText(shift) ?? "—" },
+            ...(shift.amount !== null ? [{ label: shift.status === "pago" ? "Valor pago" : "Valor fixo", value: formatCurrencyBRL(shift.amount) }] : []),
+          ].map((r) => (
+            <div key={r.label} className="sa-detail-row">
+              <span className="muted">{r.label}</span>
+              <span>{r.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {canEdit && (
       <div className="sa-form">
         <div className="field">
           <label htmlFor="shift-data-date">Data</label>
@@ -458,6 +505,7 @@ function DataTab({
           </div>
         )}
       </div>
+      )}
       {canEdit && <p className="muted sa-small">Salvar cria um novo registro marcado como editado manualmente. O registro atual fica no histórico.</p>}
       <OriginSection shift={shift} importedAt={importedAt} />
     </>
@@ -700,6 +748,8 @@ export default function ShiftPanel({
   } else if (tab === "pay") {
     const pix = pixKeys && pixKeys.length > 0 ? pixKeys[Math.min(pixIndex, pixKeys.length - 1)] : null;
     const edited = digits !== suggestedDigits && suggested !== null;
+    // No rule gave a Valor: the field must be typed — make that obvious.
+    const needsValue = suggested === null && !amountValid;
     const otherTotal = otherPending.reduce((sum, s) => sum + (valueFor(s) ?? 0), 0);
     body = (
       <>
@@ -715,7 +765,7 @@ export default function ShiftPanel({
           </Notice>
         )}
         <div className="sa-slip">
-          <div className="sa-slip-row">
+          <div className={needsValue ? "sa-slip-row sa-slip-row-needs" : "sa-slip-row"}>
             <div className="sa-slip-main">
               <label className="sa-slip-label" htmlFor="shift-pay-amount">
                 Valor
@@ -741,6 +791,8 @@ export default function ShiftPanel({
                       Restaurar
                     </button>
                   </>
+                ) : needsValue ? (
+                  <span className="sa-origin-needs">{valueOrigin(shift, rules)}</span>
                 ) : (
                   valueOrigin(shift, rules)
                 )}
@@ -860,7 +912,7 @@ export default function ShiftPanel({
   }
 
   const tabs: { id: ShiftPanelTab; label: string; icon: LucideIcon; count?: number | null }[] = [
-    { id: "pay", label: paid ? "Pagamento" : "Pagar", icon: CreditCard },
+    { id: "pay", label: "Pagamento", icon: CreditCard },
     { id: "data", label: "Dados", icon: Pencil },
     { id: "history", label: "Histórico", icon: History, count: historyCount },
   ];
