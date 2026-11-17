@@ -15,7 +15,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { periodPresets } from "../components/LibraryFiltersPanel";
 import PeriodPicker, { formatPeriodShort } from "../components/PeriodPicker";
-import PaymentsFiltersDrawer, { type PaymentsFiltersValue } from "../components/PaymentsFiltersDrawer";
+import PaymentsFiltersPanel, { usePaymentsActiveFilterCount } from "../components/PaymentsFiltersPanel";
 import Modal from "../components/Modal";
 import PageHeader from "../components/PageHeader";
 import ConfirmModal from "../components/ConfirmModal";
@@ -245,7 +245,19 @@ export default function AnalyticsPage() {
   const navigate = useNavigate();
   const paymentFilters = usePaymentsFilters();
   const { trackedFiles } = useRemoteFileUpdates();
-  const [[periodStart, periodEnd], setPeriod] = useState<[string,string]>(()=>paymentFilters.periodStart&&paymentFilters.periodEnd?[paymentFilters.periodStart,paymentFilters.periodEnd]:currentMonth());
+  // Período lives in the shared Pagamentos filters (same as the Filtros panel
+  // edits), so the header picker, the panel and "Ver em Pagamentos" always
+  // agree. Análises needs a concrete range: an empty one falls back to the
+  // current month.
+  const fallbackPeriod = useMemo(currentMonth, []);
+  const hasPeriod = Boolean(paymentFilters.periodStart && paymentFilters.periodEnd);
+  const periodStart = hasPeriod ? paymentFilters.periodStart : fallbackPeriod[0];
+  const periodEnd = hasPeriod ? paymentFilters.periodEnd : fallbackPeriod[1];
+  const setPeriod = ([start, end]: [string, string]) => paymentFilters.setPeriod(start, end);
+  useEffect(() => {
+    if (!hasPeriod) paymentFilters.setPeriod(fallbackPeriod[0], fallbackPeriod[1]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasPeriod]);
   const [tab, setTab] = useState<Tab>("overview");
   const [rows, setRows] = useState<PaymentShiftReportRow[]>([]);
   const [previousRows, setPreviousRows] = useState<PaymentShiftReportRow[]>([]);
@@ -324,7 +336,7 @@ export default function AnalyticsPage() {
     items.forEach(g=>{const first=g[0],key=first.configId===null?first.sourceUrl:`${first.sourceUrl}:${first.configId}`,current=bySource.get(key)??{label:first.configLabel||first.sourceUrl,count:0,unseen:0};current.count++;if(g.some(r=>r.dismissedAt===null))current.unseen++;bySource.set(key,current);});
     return {total:items.length,unseen:unseen.length,field:count("field"),unresolved:count("unresolved"),newShift:count("new-shift"),removed:count("removed"),errors:count("error"),applied:items.filter(g=>g.some(r=>r.applied)).length,sources:Array.from(bySource.values()).sort((a,b)=>b.unseen-a.unseen||b.count-a.count).slice(0,8)};
   },[occurrenceRows]);
-  const activeFilterCount=[paymentFilters.selectedEmployeeIds.size,paymentFilters.selectedCompanyIds.size,paymentFilters.selectedClientIds.size,paymentFilters.selectedRoleIds.size,paymentFilters.selectedLocals.size,paymentFilters.selectedStatuses.size>0,paymentFilters.selectedShiftPeriods.size>0,paymentFilters.scheduleTimeFilter!==null].filter(Boolean).length;
+  const activeFilterCount=usePaymentsActiveFilterCount(true);
   const filterDescription=useMemo(()=>{const parts:string[]=[];const names=(ids:Set<string>,source:{id:number;name:string}[])=>Array.from(ids).map(id=>source.find(x=>String(x.id)===id)?.name||id).join(", ");if(paymentFilters.selectedCompanyIds.size)parts.push(`Empresas: ${names(paymentFilters.selectedCompanyIds,catalogs.companies)}`);if(paymentFilters.selectedClientIds.size)parts.push(`Clientes: ${names(paymentFilters.selectedClientIds,catalogs.clients)}`);if(paymentFilters.selectedRoleIds.size)parts.push(`Funções: ${names(paymentFilters.selectedRoleIds,catalogs.roles)}`);if(paymentFilters.selectedEmployeeIds.size)parts.push(`Colaboradores selecionados: ${paymentFilters.selectedEmployeeIds.size}`);if(paymentFilters.selectedLocals.size)parts.push(`Locais: ${Array.from(paymentFilters.selectedLocals).join(", ")}`);if(paymentFilters.selectedStatuses.size>0)parts.push(`Status: ${Array.from(paymentFilters.selectedStatuses).join(", ")}`);if(paymentFilters.selectedShiftPeriods.size>0)parts.push(`Diurno/noturno: ${Array.from(paymentFilters.selectedShiftPeriods).join(", ")}`);if(paymentFilters.scheduleTimeFilter)parts.push("Horário personalizado ativo");return parts.length?parts.join("; "):"Nenhum filtro adicional";},[paymentFilters.selectedCompanyIds,paymentFilters.selectedClientIds,paymentFilters.selectedRoleIds,paymentFilters.selectedEmployeeIds,paymentFilters.selectedLocals,paymentFilters.selectedStatuses,paymentFilters.selectedShiftPeriods,paymentFilters.scheduleTimeFilter,catalogs]);
 
   function applyScopeToPaymentFilters(statuses?: ("pendente" | "erro" | "pago")[],scope?:{employeeId?:number;companyId?:number;clientId?:number;roleId?:number;local?:string}) {
@@ -343,7 +355,6 @@ export default function AnalyticsPage() {
     applyScopeToPaymentFilters(["pago"]);
     openReconciliationWindow().catch(() => {});
   }
-  function applyFilters(v:PaymentsFiltersValue){paymentFilters.setSelectedEmployeeIds(v.employeeIds);paymentFilters.setSelectedCompanyIds(v.companyIds);paymentFilters.setSelectedClientIds(v.clientIds);paymentFilters.setSelectedRoleIds(v.roleIds);paymentFilters.setSelectedLocals(v.locals);paymentFilters.setSelectedStatuses(v.statuses.size===PAYMENT_SHIFT_STATUSES.length?new Set():v.statuses);paymentFilters.setSelectedShiftPeriods(v.shiftPeriods.size===SHIFT_PERIODS.length?new Set():v.shiftPeriods);paymentFilters.setScheduleTimeFilter(v.scheduleTimeFilter);if(v.periodStart&&v.periodEnd)setPeriod([v.periodStart,v.periodEnd]);paymentFilters.setPage(0);setFiltersOpen(false);}
     function saveView(id?:string,explicitName?:string){const name=(explicitName??viewName).trim();if(!name)return;const v:SavedView={id:id||crypto.randomUUID(),name,tab,start:periodStart,end:periodEnd,filters:{...snapshotPaymentsFilters(paymentFilters),periodStart,periodEnd}};const next=id?views.map(x=>x.id===id?v:x):[...views,v];setViews(next);setSelectedView(v.id);setViewName(name);localStorage.setItem("analytics-saved-views",JSON.stringify(next));}
   function openView(v:SavedView){applyPaymentsFiltersSnapshot(paymentFilters,v.filters);setPeriod([v.start,v.end]);setTab(TABS.includes(v.tab)?v.tab:"overview");setViewsOpen(false);}
   async function doExport(kind:"pdf"|"xlsx"){setExportError(null);setExporting(true);try{if(kind==="pdf")await exportAnalyticsPdf(rows,periodStart,periodEnd,filterDescription);else await exportAnalyticsXlsx(rows,periodStart,periodEnd,filterDescription);}catch(e){setExportError(e instanceof Error?e.message:String(e));}finally{setExporting(false);}}
@@ -358,7 +369,7 @@ export default function AnalyticsPage() {
             <div className="analytics-period-picker">
               <PeriodPicker start={periodStart} end={periodEnd} onChange={(start, end) => { if (start && end) setPeriod([start, end]); }} presets={presets} />
             </div>
-            <button type="button" className="outline" onClick={() => setFiltersOpen(true)}>
+            <button type="button" className="outline" onClick={() => setFiltersOpen((o) => !o)} aria-pressed={filtersOpen}>
               <Filter size={15} />
               Filtros
               {activeFilterCount > 0 && <span className="analytics-count">{activeFilterCount}</span>}
@@ -603,7 +614,15 @@ export default function AnalyticsPage() {
           <div className="analytics-footer-link"><Link to="/payments">Ver todos os turnos em Pagamentos <ArrowRight size={15}/></Link></div>
         </>
       )}
-      <PaymentsFiltersDrawer open={filtersOpen} onClose={()=>setFiltersOpen(false)} value={{employeeIds:paymentFilters.selectedEmployeeIds,companyIds:paymentFilters.selectedCompanyIds,clientIds:paymentFilters.selectedClientIds,roleIds:paymentFilters.selectedRoleIds,locals:paymentFilters.selectedLocals,periodStart,periodEnd,statuses:new Set(orAll(paymentFilters.selectedStatuses,PAYMENT_SHIFT_STATUSES)),shiftPeriods:new Set(orAll(paymentFilters.selectedShiftPeriods,SHIFT_PERIODS)),scheduleTimeFilter:paymentFilters.scheduleTimeFilter,grouped:false}} onApply={applyFilters} companies={catalogs.companies} clients={catalogs.clients} roles={catalogs.roles} locals={catalogs.locals} showGroupedToggle={false}/>
+      <PaymentsFiltersPanel
+        open={filtersOpen}
+        onClose={() => setFiltersOpen(false)}
+        companies={catalogs.companies}
+        clients={catalogs.clients}
+        roles={catalogs.roles}
+        locals={catalogs.locals}
+        includeStatus
+      />
       {viewsOpen&&<Modal title="Visões favoritas" onClose={()=>setViewsOpen(false)} maxHeight="80vh"><div className="analytics-view-form"><label>Nome<input value={viewName} onChange={e=>setViewName(e.target.value)} placeholder="Ex.: Fechamento mensal"/></label><button type="button" disabled={!viewName.trim()} onClick={()=>saveView()}>Criar com estado atual</button></div><div className="analytics-view-list">{!views.length&&<p className="muted">Nenhuma visão salva.</p>}{views.map(v=><div key={v.id} className={selectedView===v.id?"active":""} onClick={()=>{setSelectedView(v.id);setViewName(v.name);}}><span><strong>{v.name}</strong><small>{v.start} a {v.end}</small></span><span><button type="button" className="secondary" onClick={e=>{e.stopPropagation();openView(v);}}>Abrir</button><button type="button" className="secondary" onClick={e=>{e.stopPropagation();saveView(v.id,v.name);}}>Atualizar</button><button type="button" className="danger" aria-label={`Excluir ${v.name}`} onClick={e=>{e.stopPropagation();setDeleteView(v);}}>×</button></span></div>)}</div>{selectedView&&<button type="button" disabled={!viewName.trim()} onClick={()=>saveView(selectedView)}>Renomear / atualizar selecionada</button>}</Modal>}
       {deleteView&&<ConfirmModal title="Excluir visão" message={`Excluir a visão “${deleteView.name}”?`} confirmLabel="Excluir" onCancel={()=>setDeleteView(null)} onConfirm={()=>{const next=views.filter(v=>v.id!==deleteView.id);setViews(next);localStorage.setItem("analytics-saved-views",JSON.stringify(next));setDeleteView(null);setSelectedView("");}}/>}
     </div>

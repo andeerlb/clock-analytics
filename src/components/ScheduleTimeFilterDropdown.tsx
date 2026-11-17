@@ -7,7 +7,7 @@ const SCHEDULE_TIME_RULES: ScheduleTimeRule[] = ["start-before", "start-after", 
 
 /**
  * The Pagamentos list's "Horário" filter — same popover recipe as
- * `MultiSelectDropdown`, but its two inputs (rule + reference time) are
+ * the other pickers, but its two inputs (rule + reference time) are
  * edited as a draft and only applied on confirm, since re-querying on every
  * keystroke of a still-incomplete "HH:MM" would be noisy and often invalid
  * mid-edit.
@@ -21,9 +21,9 @@ export default function ScheduleTimeFilterDropdown({
 }: {
   value: ScheduleTimeFilter | null;
   onChange: (v: ScheduleTimeFilter | null) => void;
-  /** Same idea as `MultiSelectDropdown`'s `align` — "left" keeps the popover from overflowing past a container's left edge when the trigger sits near that edge (e.g. inside a narrow Drawer). */
+  /** Same idea as the other pickers' `align` — "left" keeps the popover from overflowing past a container's left edge when the trigger sits near that edge (e.g. inside a narrow Drawer). */
   align?: "left" | "right";
-  /** Same idea as `MultiSelectDropdown`'s `fullWidth` — stretches the trigger to fill its container instead of sizing to its label text. */
+  /** Same idea as the other pickers' `fullWidth` — stretches the trigger to fill its container instead of sizing to its label text. */
   fullWidth?: boolean;
   /** Hides the clock icon inside the trigger — for callers that show it next to the field's own label instead. */
   showIcon?: boolean;

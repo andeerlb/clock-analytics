@@ -1,12 +1,12 @@
-import { Building2, Plus, Search, Users } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Avatar from "../components/Avatar";
-import MultiSelectDropdown from "../components/MultiSelectDropdown";
+import OptionPicker from "../components/OptionPicker";
 import Pagination from "../components/Pagination";
 import PageHeader from "../components/PageHeader";
 import { listClients, listCompanies, listEmployeesGlobal, type ClientRow, type CompanyRow, type EmployeeRow } from "../lib/db";
-import { formatCpf } from "../lib/format";
+import { formatCnpj, formatCpf } from "../lib/format";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
@@ -131,40 +131,43 @@ export default function EmployeesPage() {
           </div>
           <div className="field">
             <label>Empresa</label>
-            <MultiSelectDropdown
-              options={companies.map((c) => ({ id: String(c.id), label: c.name }))}
+            <OptionPicker
+              align="left"
+              options={companies.map((c) => ({ id: String(c.id), label: c.name, meta: c.cnpj ? formatCnpj(c.cnpj) : undefined }))}
               selected={selectedCompanyIds}
               onToggle={toggleCompany}
               onSelectAll={() => {
                 setSelectedCompanyIds(new Set(companies.map((c) => String(c.id))));
                 setPage(0);
               }}
-              onSelectNone={() => {
+              onClear={() => {
                 setSelectedCompanyIds(new Set());
                 setPage(0);
               }}
-              icon={Building2}
-              allLabel="Todas as empresas"
-              noneLabel="Nenhuma empresa"
+              title="Empresas"
+              allPlaceholder="Todas as empresas"
+              searchPlaceholder="Buscar empresa ou CNPJ"
+              selectAllLabel="Selecionar todas"
             />
           </div>
           <div className="field">
             <label>Cliente</label>
-            <MultiSelectDropdown
-              options={clientOptions.map((c) => ({ id: String(c.id), label: c.name }))}
+            <OptionPicker
+              options={clientOptions.map((c) => ({ id: String(c.id), label: c.name, meta: c.cnpj ? formatCnpj(c.cnpj) : undefined }))}
               selected={selectedClientIds}
               onToggle={toggleClient}
               onSelectAll={() => {
                 setSelectedClientIds(new Set(clientOptions.map((c) => String(c.id))));
                 setPage(0);
               }}
-              onSelectNone={() => {
+              onClear={() => {
                 setSelectedClientIds(new Set());
                 setPage(0);
               }}
-              icon={Users}
-              allLabel="Todos os clientes"
-              noneLabel="Nenhum cliente"
+              title="Clientes"
+              allPlaceholder="Todos os clientes"
+              searchPlaceholder="Buscar cliente ou CNPJ"
+              selectAllLabel="Selecionar todos"
             />
           </div>
         </div>

@@ -1,7 +1,8 @@
-import { Building2, Plus, Search } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import MultiSelectDropdown from "../components/MultiSelectDropdown";
+import OptionPicker from "../components/OptionPicker";
+import { formatCnpj } from "../lib/format";
 import Pagination from "../components/Pagination";
 import PageHeader from "../components/PageHeader";
 import { listCompanies, listRolesGlobal, type CompanyRow, type RoleRow } from "../lib/db";
@@ -99,21 +100,23 @@ export default function RolesPage() {
           </div>
           <div className="field">
             <label>Empresa</label>
-            <MultiSelectDropdown
-              options={companies.map((c) => ({ id: String(c.id), label: c.name }))}
+            <OptionPicker
+              align="left"
+              options={companies.map((c) => ({ id: String(c.id), label: c.name, meta: c.cnpj ? formatCnpj(c.cnpj) : undefined }))}
               selected={selectedCompanyIds}
               onToggle={toggleCompany}
               onSelectAll={() => {
                 setSelectedCompanyIds(new Set(companies.map((c) => String(c.id))));
                 setPage(0);
               }}
-              onSelectNone={() => {
+              onClear={() => {
                 setSelectedCompanyIds(new Set());
                 setPage(0);
               }}
-              icon={Building2}
-              allLabel="Todas as empresas"
-              noneLabel="Nenhuma empresa"
+              title="Empresas"
+              allPlaceholder="Todas as empresas"
+              searchPlaceholder="Buscar empresa ou CNPJ"
+              selectAllLabel="Selecionar todas"
             />
           </div>
         </div>
