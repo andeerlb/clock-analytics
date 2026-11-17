@@ -1371,6 +1371,10 @@ tr:last-child td {
   gap: 1rem 1.2rem;
 }
 
+.import-payments-fields.import-payments-fields-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .import-source-head {
   display: flex;
   align-items: center;
@@ -1510,7 +1514,8 @@ tr:last-child td {
 }
 
 @media (max-width: 720px) {
-  .import-payments-fields {
+  .import-payments-fields,
+  .import-payments-fields.import-payments-fields-3 {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -2113,6 +2118,10 @@ button.preview-chip[aria-pressed="true"] {
 
 .row-state-warn::before {
   background: var(--warning);
+}
+
+.row-state-error::before {
+  background: var(--danger);
 }
 
 .table-card .table-scroll {

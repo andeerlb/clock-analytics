@@ -3,21 +3,21 @@ import {
   AlertCircle,
   AlertTriangle,
   CheckCircle2,
-  Eye,
   FileText,
   History,
   Lightbulb,
-  PlusCircle,
+  Play,
   RotateCcw,
   Search,
   ShieldCheck,
   UploadCloud,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import Drawer from "../components/Drawer";
+import OptionPicker from "../components/OptionPicker";
 import PageHeader from "../components/PageHeader";
 import Pagination from "../components/Pagination";
 import PickFilesButton from "../components/PickFilesButton";
@@ -32,7 +32,7 @@ import {
   saveParsedTimesheet,
   type ClientRow,
 } from "../lib/db";
-import { formatDateTime, formatPeriod, normalizeCnpj } from "../lib/format";
+import { formatCnpj, formatDateTime, formatPeriod, normalizeCnpj } from "../lib/format";
 import { importStatusOf } from "../lib/types";
 import type {
   ConflictInfo,
@@ -54,6 +54,28 @@ interface FileStatus {
   hash: string;
   fileName: string;
   duplicate: DuplicateFileInfo | null;
+}
+
+type SheetFilter = "all" | "selected" | "new" | "conflict" | "mismatch" | "error";
+
+/** For the "⌘F" vs "Ctrl F" hint on the preview's search. */
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
+/** "Processar", "Processar 1 arquivo", "Processar 3 arquivos". */
+function processLabel(count: number): string {
+  if (count === 0) return "Processar";
+  return `Processar ${count} arquivo${count === 1 ? "" : "s"}`;
+}
+
+/** "/home/me/Ponto/joao.pdf" -> "joao.pdf". */
+function fileNameOf(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
+
+/** "/home/me/Ponto/joao.pdf" -> "/home/me/Ponto" — the short origin under a picked file's name. */
+function parentDirOf(path: string): string {
+  const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return i > 0 ? path.slice(0, i) : "";
 }
 
 type PreviewRow =
@@ -79,6 +101,9 @@ export default function ImportTimesheetPage() {
   const [conflicts, setConflicts] = useState<ConflictInfo[]>([]);
   const [selectedSheets, setSelectedSheets] = useState<Set<number>>(new Set());
   const [previewPage, setPreviewPage] = useState(0);
+  const [sheetFilter, setSheetFilter] = useState<SheetFilter>("all");
+  const [nameSearch, setNameSearch] = useState("");
+  const previewSearchRef = useRef<HTMLInputElement>(null);
   const [previewPageSize, setPreviewPageSize] = useState(PREVIEW_PAGE_SIZE_OPTIONS[0]);
   const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
   const [recentFilesTotal, setRecentFilesTotal] = useState(0);
@@ -173,6 +198,8 @@ export default function ImportTimesheetPage() {
     setConflicts([]);
     setSelectedSheets(new Set());
     setPreviewPage(0);
+    setSheetFilter("all");
+    setNameSearch("");
   }
 
   function reset() {
@@ -312,14 +339,71 @@ export default function ImportTimesheetPage() {
 
   const errorCount = fileResults.filter((r) => r.error).length;
 
-  const previewPageCount = Math.max(1, Math.ceil(previewRows.length / previewPageSize));
+  // Preview filter chips + name/CPF search — same look and behavior as the
+  // payment import's preview.
+  const visibleRows = useMemo(() => {
+    const query = nameSearch.trim().toLowerCase();
+    const digits = query.replace(/\D/g, "");
+    return previewRows.filter((row) => {
+      if (row.kind === "error") return !query && (sheetFilter === "all" || sheetFilter === "error");
+      const conflict = conflictBySheetIndex.has(row.sheetIndex);
+      const mismatched = mismatchedSheetIndexes.has(row.sheetIndex);
+      const matchesFilter =
+        sheetFilter === "all" ||
+        (sheetFilter === "selected" && selectedSheets.has(row.sheetIndex)) ||
+        (sheetFilter === "new" && !conflict && !mismatched) ||
+        (sheetFilter === "conflict" && conflict) ||
+        (sheetFilter === "mismatch" && mismatched);
+      const matchesSearch =
+        !query ||
+        row.sheet.employee.name.toLowerCase().includes(query) ||
+        (digits.length >= 3 && row.sheet.employee.cpf.replace(/\D/g, "").includes(digits));
+      return matchesFilter && matchesSearch;
+    });
+  }, [previewRows, sheetFilter, nameSearch, selectedSheets, conflictBySheetIndex, mismatchedSheetIndexes]);
+
+  const newSheetCount = sheets.filter((_, i) => !conflictBySheetIndex.has(i) && !mismatchedSheetIndexes.has(i)).length;
+  const sheetChips: { filter: SheetFilter; label: string; count: number; color?: string; title?: string }[] = [
+    { filter: "all", label: "Todos", count: sheets.length + errorCount },
+    { filter: "selected", label: "A importar", count: selectedSheets.size, color: "var(--text)", title: "Marcados — vão ser salvos." },
+    { filter: "new", label: "Novos", count: newSheetCount, color: "var(--success)" },
+    ...(conflicts.length > 0
+      ? [{ filter: "conflict" as SheetFilter, label: "Já têm dados no período", count: conflicts.length, color: "#93c5fd" }]
+      : []),
+    ...(mismatchedSheetIndexes.size > 0
+      ? [{ filter: "mismatch" as SheetFilter, label: "CNPJ diferente", count: mismatchedSheetIndexes.size, color: "var(--warning)" }]
+      : []),
+    ...(errorCount > 0 ? [{ filter: "error" as SheetFilter, label: "Erros", count: errorCount, color: "var(--danger)" }] : []),
+  ];
+
+  function toggleSheetFilter(filter: SheetFilter) {
+    setSheetFilter((prev) => (prev === filter ? "all" : filter));
+    setPreviewPage(0);
+  }
+
+  // Ctrl/⌘+F jumps to the preview's search while a preview is open.
+  const hasPreview = fileResults.length > 0;
+  useEffect(() => {
+    if (!hasPreview) return;
+    function onKeyDown(e: globalThis.KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        previewSearchRef.current?.focus();
+        previewSearchRef.current?.scrollIntoView({ block: "nearest" });
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [hasPreview]);
+
+  const previewPageCount = Math.max(1, Math.ceil(visibleRows.length / previewPageSize));
   const previewPageItems = useMemo(
     () =>
-      previewRows.slice(
+      visibleRows.slice(
         previewPage * previewPageSize,
         previewPage * previewPageSize + previewPageSize,
       ),
-    [previewRows, previewPage, previewPageSize],
+    [visibleRows, previewPage, previewPageSize],
   );
 
   const allSelected = sheets.length > 0 && sheets.every((_, i) => selectedSheets.has(i));
@@ -452,238 +536,326 @@ export default function ImportTimesheetPage() {
 
       <div className="import-layout" style={{ display: "block" }}>
       <div className="import-main">
-      <div className="card">
-        <div className="field-row" style={{ marginBottom: "1.2rem" }}>
-          <div className="field" style={{ flex: "1 1 220px" }}>
-            <label htmlFor="client">Cliente</label>
-            <select
-              id="client"
-              value={clientId}
-              onChange={(e) => setClientId(e.target.value)}
-              disabled={clients.length === 0}
-            >
-              <option value="">Selecione um cliente</option>
-              {clientOptions.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            {clients.length === 0 ? (
+      <div className="card import-payments-card">
+        <section className="import-payments-section">
+          <div className="import-payments-fields import-payments-fields-3">
+            <div className="field">
+              <label>Cliente</label>
+              <OptionPicker
+                single
+                align="left"
+                options={clientOptions.map((c) => ({ id: String(c.id), label: c.name, meta: c.cnpj ? formatCnpj(c.cnpj) : undefined }))}
+                selected={clientId ? new Set([clientId]) : new Set()}
+                onToggle={(id) => setClientId(id)}
+                title="Clientes"
+                allPlaceholder={clients.length === 0 ? "Nenhum cliente cadastrado" : "Selecione um cliente"}
+                searchPlaceholder="Buscar cliente ou CNPJ"
+              />
+              {clients.length === 0 ? (
+                <p className="field-hint">
+                  <Link to="/clients">Cadastre um cliente</Link> antes de importar.
+                </p>
+              ) : (
+                <p className="field-hint">Os colaboradores importados ficam vinculados a ele.</p>
+              )}
+            </div>
+            <div className="field">
+              <label>Empresa</label>
+              <OptionPicker
+                single
+                align="left"
+                options={clientCompanies.map((c) => ({ id: String(c.companyId), label: c.companyName }))}
+                selected={companyId ? new Set([companyId]) : new Set()}
+                onToggle={(id) => setCompanyId(id)}
+                title="Empresas"
+                allPlaceholder={clientId ? "Selecione uma empresa" : "Escolha o cliente primeiro"}
+                searchPlaceholder="Buscar empresa"
+              />
               <p className="field-hint">
-                Nenhum cliente cadastrado. <Link to="/clients">Cadastre um cliente</Link> antes de
-                importar.
+                {clientCompanies.length > 1
+                  ? "Esse cliente está vinculado a mais de uma empresa — escolha uma."
+                  : "Definida automaticamente pelo cliente."}
               </p>
-            ) : (
-              <p className="field-hint">Os colaboradores importados ficam vinculados a ele.</p>
+            </div>
+            <div className="field">
+              <label>Provedor</label>
+              <OptionPicker
+                single
+                options={providers.map((pr) => ({ id: pr.id, label: pr.label }))}
+                selected={provider ? new Set([provider]) : new Set()}
+                onToggle={(id) => setProvider(id)}
+                title="Provedores"
+                allPlaceholder="Selecione um provedor"
+                searchPlaceholder="Buscar provedor"
+              />
+              <p className="field-hint">O formato de extração varia conforme o sistema de origem.</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="import-payments-section">
+          <div className="field">
+            <div className="import-source-head">
+              <label>Arquivos</label>
+              {paths.length > 0 && (
+                <span className="muted" style={{ fontSize: "0.78rem" }}>
+                  {paths.length} {paths.length === 1 ? "arquivo" : "arquivos"}
+                </span>
+              )}
+            </div>
+            <div className={`dropzone import-dropzone${dragActive ? " drag-active" : ""}`}>
+              <div className="dropzone-icon">
+                <UploadCloud size={18} />
+              </div>
+              <PickFilesButton onPickFiles={handlePickFiles} onPickFolder={handlePickFolder} />
+              <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
+                ou arraste aqui · PDF · suporta múltiplos arquivos
+              </p>
+            </div>
+
+            {paths.length > 0 && (
+              <div className="file-list import-file-list">
+                {pagedPaths.map((p) => {
+                  const status = fileStatuses.get(p);
+                  const name = status?.fileName ?? fileNameOf(p);
+                  return (
+                    <div className="file-row" key={p}>
+                      <div className="file-row-icon import-file-icon">
+                        <FileText size={18} />
+                      </div>
+                      <div className="file-row-info">
+                        <div className="file-name">{name}</div>
+                        <div className="file-meta import-file-meta">
+                          {status?.duplicate ? (
+                            <span className="import-file-origin">
+                              {status.duplicate.employees.length > 0 ? (
+                                <>
+                                  {status.duplicate.employees[0].companyName} ·{" "}
+                                  {status.duplicate.employees.map((e, i) => (
+                                    <span key={e.importId}>
+                                      {i > 0 && ", "}
+                                      <Link to={`/employee/${e.importId}`}>{e.employeeName}</Link>
+                                    </span>
+                                  ))}
+                                </>
+                              ) : (
+                                `${status.duplicate.pageCount} páginas`
+                              )}
+                              {" · importado em "}
+                              {formatDateTime(status.duplicate.importedAt)}
+                            </span>
+                          ) : (
+                            <span className="import-file-origin" title={p}>
+                              {parentDirOf(p)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="file-row-actions">
+                        {status?.duplicate &&
+                          (forceReprocess.has(p) ? (
+                            <>
+                              <span className="row-state row-state-warn">Será reprocessado</span>
+                              <button
+                                type="button"
+                                className="ghost"
+                                style={{ padding: "0.3rem 0.6rem", fontSize: "0.8rem" }}
+                                onClick={() => toggleForceReprocess(p)}
+                              >
+                                Cancelar
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <span className="row-state row-state-info">Já importado</span>
+                              <button
+                                type="button"
+                                className="ghost"
+                                style={{ padding: "0.3rem 0.6rem", fontSize: "0.8rem" }}
+                                onClick={() => toggleForceReprocess(p)}
+                              >
+                                <RotateCcw size={13} style={{ marginRight: "0.35rem" }} />
+                                Reprocessar
+                              </button>
+                            </>
+                          ))}
+                        <span className="import-file-ext">pdf</span>
+                        <button
+                          type="button"
+                          className="ghost"
+                          style={{ padding: "0.3rem" }}
+                          onClick={() => removePath(p)}
+                          aria-label="Remover"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {paths.length > PATHS_PAGE_SIZE_OPTIONS[0] && (
+              <Pagination
+                page={pathsPage}
+                pageCount={pathsPageCount}
+                onPageChange={setPathsPage}
+                rangeLabel={`Mostrando ${pathsPage * pathsPageSize + 1} a ${Math.min(
+                  paths.length,
+                  pathsPage * pathsPageSize + pathsPageSize,
+                )} de ${paths.length}`}
+                pageSize={pathsPageSize}
+                pageSizeOptions={PATHS_PAGE_SIZE_OPTIONS}
+                onPageSizeChange={(size) => {
+                  setPathsPageSize(size);
+                  setPathsPage(0);
+                }}
+              />
+            )}
+            {duplicateCount > 0 && (
+              <p className="field-hint">
+                {duplicateCount === 1
+                  ? "1 arquivo já importado não vai ser reprocessado."
+                  : `${duplicateCount} arquivos já importados não vão ser reprocessados.`}
+              </p>
             )}
           </div>
-          <div className="field" style={{ flex: "1 1 180px" }}>
-            <label htmlFor="company">Empresa</label>
-            <select
-              id="company"
-              value={companyId}
-              onChange={(e) => setCompanyId(e.target.value)}
-              disabled={clientCompanies.length <= 1}
-            >
-              {clientCompanies.length !== 1 && <option value="">Selecione uma empresa</option>}
-              {clientCompanies.map((c) => (
-                <option key={c.companyId} value={c.companyId}>
-                  {c.companyName}
-                </option>
-              ))}
-            </select>
-            <p className="field-hint">
-              {clientCompanies.length > 1
-                ? "Esse cliente está vinculado a mais de uma empresa — escolha uma."
-                : "Definida automaticamente pelo cliente selecionado."}
-            </p>
-          </div>
-          <div className="field" style={{ flex: "1 1 220px" }}>
-            <label htmlFor="provider">Provedor</label>
-            <select id="provider" value={provider} onChange={(e) => setProvider(e.target.value)}>
-              {providers.length === 0 && <option value="">Selecione um provedor</option>}
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-            <p className="field-hint">O formato de extração varia conforme o sistema de origem.</p>
-          </div>
-        </div>
+        </section>
 
-        <div className="field">
-          <label>Arquivos PDF</label>
-          <div className={`dropzone${dragActive ? " drag-active" : ""}`}>
-            <div className="dropzone-icon">
-              <UploadCloud size={20} />
-            </div>
-            <h4>Selecione ou arraste os PDFs</h4>
-            <p className="muted" style={{ margin: 0 }}>
-              Suporta múltiplos arquivos.
-            </p>
-            <PickFilesButton onPickFiles={handlePickFiles} onPickFolder={handlePickFolder} />
-          </div>
-
-          {paths.length > 0 && (
-            <div className="file-list">
-              {pagedPaths.map((p) => {
-                const status = fileStatuses.get(p);
-                return (
-                  <div className="file-row" key={p}>
-                    <div className="file-row-icon">
-                      <FileText size={18} />
-                    </div>
-                    <div className="file-row-info">
-                      <div className="file-name">{status?.fileName ?? p}</div>
-                      {status?.duplicate && status.duplicate.employees.length > 0 && (
-                        <div className="file-meta">
-                          {status.duplicate.employees[0].companyName} ·{" "}
-                          {status.duplicate.employees.map((e, i) => (
-                            <span key={e.importId}>
-                              {i > 0 && ", "}
-                              <Link to={`/employee/${e.importId}`}>{e.employeeName}</Link>
-                            </span>
-                          ))}
-                          {" · importado em "}
-                          {formatDateTime(status.duplicate.importedAt)}
-                        </div>
-                      )}
-                      {status?.duplicate && status.duplicate.employees.length === 0 && (
-                        <div className="file-meta">
-                          {status.duplicate.pageCount} páginas · importado em{" "}
-                          {formatDateTime(status.duplicate.importedAt)}
-                        </div>
-                      )}
-                    </div>
-                    <div className="file-row-actions">
-                      {status?.duplicate && !forceReprocess.has(p) && (
-                        <>
-                          <span className="badge duplicate">Já importado</span>
-                          <button
-                            type="button"
-                            className="ghost"
-                            style={{ padding: "0.3rem 0.6rem", fontSize: "0.8rem" }}
-                            onClick={() => toggleForceReprocess(p)}
-                          >
-                            <RotateCcw size={13} style={{ marginRight: "0.35rem" }} />
-                            Reprocessar
-                          </button>
-                        </>
-                      )}
-                      {status?.duplicate && forceReprocess.has(p) && (
-                        <>
-                          <span className="badge warn">Será reprocessado</span>
-                          <button
-                            type="button"
-                            className="ghost"
-                            style={{ padding: "0.3rem 0.6rem", fontSize: "0.8rem" }}
-                            onClick={() => toggleForceReprocess(p)}
-                          >
-                            Cancelar
-                          </button>
-                        </>
-                      )}
-                      <button
-                        type="button"
-                        className="ghost"
-                        style={{ padding: "0.3rem" }}
-                        onClick={() => removePath(p)}
-                        aria-label="Remover"
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          {paths.length > PATHS_PAGE_SIZE_OPTIONS[0] && (
-            <Pagination
-              page={pathsPage}
-              pageCount={pathsPageCount}
-              onPageChange={setPathsPage}
-              rangeLabel={`Mostrando ${pathsPage * pathsPageSize + 1} a ${Math.min(
-                paths.length,
-                pathsPage * pathsPageSize + pathsPageSize,
-              )} de ${paths.length}`}
-              pageSize={pathsPageSize}
-              pageSizeOptions={PATHS_PAGE_SIZE_OPTIONS}
-              onPageSizeChange={(size) => {
-                setPathsPageSize(size);
-                setPathsPage(0);
-              }}
-            />
-          )}
-          {duplicateCount > 0 && (
-            <p className="muted" style={{ textAlign: "center", marginTop: "0.75rem" }}>
-              {duplicateCount} arquivo(s) já importado(s) não serão reprocessados.
-            </p>
-          )}
-        </div>
-
-        <div className="card-footer">
+        <div className="import-payments-footer">
           <button
             type="button"
             disabled={eligiblePaths.length === 0 || !provider || !clientId || !companyId || busy}
             onClick={handleParse}
           >
-            {busy ? "Processando..." : `Processar ${eligiblePaths.length || ""} PDF(s)`}
+            <Play size={14} style={{ marginRight: "0.45rem" }} />
+            {busy && fileResults.length === 0 ? "Processando..." : processLabel(eligiblePaths.length)}
           </button>
         </div>
       </div>
 
       {fileResults.length > 0 && (
         <>
-        <div className="card card-flush">
-          <div className="page-header" style={{ marginBottom: 0, alignItems: "flex-end" }}>
-            <div>
-              <h3 style={{ margin: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <Eye size={18} />
-                Pré-visualização da Importação
-              </h3>
-              {(conflicts.length > 0 || mismatchedSheetIndexes.size > 0) ? (
-                <p className="muted" style={{ maxWidth: "42rem" }}>
-                  {conflicts.length > 0 &&
-                    "Alguns colaboradores já possuem dados importados para este período. "}
-                  {mismatchedSheetIndexes.size > 0 &&
-                    "Alguns arquivos têm um CNPJ diferente do cliente selecionado. "}
-                  Revise a lista e marque o que você quer salvar — o resto fica de fora.
-                </p>
-              ) : (
-                <p className="muted">Revise os dados antes de confirmar.</p>
-              )}
+        <div className="card table-card">
+          <div className="preview-header">
+            <div className="preview-heading">
+              <span className="preview-file-icon" aria-hidden="true">
+                <FileText size={19} />
+              </span>
+              <div style={{ minWidth: 0 }}>
+                <h3 className="preview-title">Pré-visualização da importação</h3>
+                <div className="preview-meta">
+                  {[
+                    fileResults.length === 1 ? fileResults[0].fileName : `${fileResults.length} arquivos`,
+                    selectedClient?.name,
+                    providers.find((pr) => pr.id === provider)?.label,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </div>
+              </div>
             </div>
             <div style={{ display: "flex", gap: "0.6rem", flexShrink: 0 }}>
               <button type="button" className="outline" onClick={cancelPreview} disabled={busy}>
                 Cancelar
               </button>
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={busy || selectedSheets.size === 0}
-              >
-                {busy ? "Salvando..." : "Salvar"}
+              <button type="button" onClick={handleSave} disabled={busy || selectedSheets.size === 0}>
+                {busy
+                  ? "Salvando..."
+                  : selectedSheets.size === 0
+                    ? "Salvar"
+                    : `Salvar ${selectedSheets.size} ${selectedSheets.size === 1 ? "espelho" : "espelhos"}`}
               </button>
             </div>
           </div>
-        </div>
 
-        <div className="card table-card">
-          <div className="table-toolbar">
-            <div className="counts">
-              <span>{sheets.length} registro(s) encontrado(s)</span>
-              {conflicts.length > 0 && (
-                <span className="count-chip">{conflicts.length} conflito(s)</span>
+          <div className="preview-status-row">
+            <p className="preview-status">
+              <span
+                className="preview-status-dot"
+                style={{ background: selectedSheets.size > 0 ? "var(--success)" : "var(--warning)" }}
+              />
+              <span>
+                {selectedSheets.size === 0
+                  ? "Nenhum espelho para importar ainda."
+                  : `${selectedSheets.size} ${selectedSheets.size === 1 ? "espelho será importado" : "espelhos serão importados"}.`}
+                {conflicts.length > 0 && (
+                  <>
+                    {" "}
+                    <button type="button" className="preview-status-link" onClick={() => toggleSheetFilter("conflict")}>
+                      {conflicts.length} {conflicts.length === 1 ? "já tem dados" : "já têm dados"} no período
+                    </button>
+                    {" — marque para sobrescrever."}
+                  </>
+                )}
+                {mismatchedSheetIndexes.size > 0 && (
+                  <>
+                    {" "}
+                    <button type="button" className="preview-status-link" onClick={() => toggleSheetFilter("mismatch")}>
+                      {mismatchedSheetIndexes.size} com CNPJ diferente do cliente
+                    </button>
+                    .
+                  </>
+                )}
+              </span>
+            </p>
+          </div>
+
+          <div className="table-toolbar preview-toolbar">
+            <label className={`preview-search${nameSearch ? " preview-search-has-value" : ""}`}>
+              <Search size={14} aria-hidden="true" />
+              <input
+                ref={previewSearchRef}
+                type="text"
+                value={nameSearch}
+                onChange={(e) => {
+                  setNameSearch(e.target.value);
+                  setPreviewPage(0);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setNameSearch("");
+                    setPreviewPage(0);
+                    e.currentTarget.blur();
+                  }
+                }}
+                placeholder="Buscar por nome ou CPF"
+                aria-label="Buscar por nome ou CPF"
+              />
+              {nameSearch ? (
+                <button
+                  type="button"
+                  className="preview-search-clear"
+                  aria-label="Limpar busca"
+                  onClick={() => {
+                    setNameSearch("");
+                    setPreviewPage(0);
+                    previewSearchRef.current?.focus();
+                  }}
+                >
+                  <X size={13} />
+                </button>
+              ) : (
+                <kbd>{IS_MAC ? "⌘F" : "Ctrl F"}</kbd>
               )}
-              {errorCount > 0 && (
-                <span className="badge file-error">
-                  <AlertCircle size={13} />
-                  {errorCount} erro(s)
-                </span>
-              )}
+            </label>
+            <span className="preview-toolbar-sep" aria-hidden="true" />
+            <div className="preview-chips">
+              {sheetChips.map((chip) => (
+                <button
+                  key={chip.filter}
+                  type="button"
+                  className="preview-chip"
+                  aria-pressed={sheetFilter === chip.filter}
+                  onClick={() => (chip.filter === "all" ? (setSheetFilter("all"), setPreviewPage(0)) : toggleSheetFilter(chip.filter))}
+                  title={chip.title}
+                >
+                  {chip.color && <span className="preview-chip-dot" style={{ background: chip.color }} />}
+                  {chip.label}
+                  <b>{chip.count}</b>
+                </button>
+              ))}
             </div>
           </div>
 
@@ -704,10 +876,17 @@ export default function ImportTimesheetPage() {
                 <th>CPF</th>
                 <th>Empresa</th>
                 <th>Período</th>
-                <th>Status</th>
+                <th>Situação</th>
               </tr>
             </thead>
             <tbody>
+              {previewPageItems.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
+                    {nameSearch.trim() ? "Nenhum espelho com esse nome ou CPF." : "Nenhum espelho neste filtro."}
+                  </td>
+                </tr>
+              )}
               {previewPageItems.map((row, i) => {
                 if (row.kind === "error") {
                   return (
@@ -720,10 +899,7 @@ export default function ImportTimesheetPage() {
                         <div className="muted">{row.message}</div>
                       </td>
                       <td>
-                        <span className="badge file-error">
-                          <AlertCircle size={13} />
-                          Erro no arquivo
-                        </span>
+                        <span className="row-state row-state-error">Erro no arquivo</span>
                       </td>
                     </tr>
                   );
@@ -751,25 +927,16 @@ export default function ImportTimesheetPage() {
                     <td>{row.sheet.company.name}</td>
                     <td>{formatPeriod(row.sheet.period.start, row.sheet.period.end)}</td>
                     <td>
-                      {!conflict && !mismatched && (
-                        <span className="badge ok">
-                          <PlusCircle size={13} />
-                          Novo
-                        </span>
-                      )}
+                      {!conflict && !mismatched && <span className="row-state row-state-ok">Novo</span>}
                       {mismatched && (
                         <div style={{ marginBottom: conflict ? "0.4rem" : 0 }}>
-                          <span className="badge warn">
-                            <AlertTriangle size={13} />
-                            CNPJ diferente do cliente selecionado
-                          </span>
+                          <span className="row-state row-state-warn">CNPJ diferente do cliente</span>
                         </div>
                       )}
                       {conflict && (
                         <>
-                          <span className="badge overwrite">
-                            <AlertTriangle size={13} />
-                            Sobrescrever
+                          <span className="row-state row-state-info">
+                            {selectedSheets.has(row.sheetIndex) ? "Vai sobrescrever" : "Já tem dados no período"}
                           </span>
                           <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.25rem" }}>
                             {formatPeriod(conflict.existingPeriodStart, conflict.existingPeriodEnd)}{" "}
@@ -785,15 +952,15 @@ export default function ImportTimesheetPage() {
           </table>
           </div>
 
-          {previewRows.length > PREVIEW_PAGE_SIZE_OPTIONS[0] && (
+          {visibleRows.length > PREVIEW_PAGE_SIZE_OPTIONS[0] && (
             <Pagination
               page={previewPage}
               pageCount={previewPageCount}
               onPageChange={setPreviewPage}
               rangeLabel={`Mostrando ${previewPage * previewPageSize + 1} a ${Math.min(
-                previewRows.length,
+                visibleRows.length,
                 previewPage * previewPageSize + previewPageSize,
-              )} de ${previewRows.length}`}
+              )} de ${visibleRows.length}`}
               pageSize={previewPageSize}
               pageSizeOptions={PREVIEW_PAGE_SIZE_OPTIONS}
               onPageSizeChange={(size) => {
