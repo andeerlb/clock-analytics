@@ -21,10 +21,11 @@ pub struct StorageUsage {
     pub imports_file_count: u64,
 }
 
-pub fn usage(data_dir: &Path) -> StorageUsage {
+/// `db_dir` holds `pontoscan.db` (see `db::db_dir`), `data_dir` the `imports/` files.
+pub fn usage(db_dir: &Path, data_dir: &Path) -> StorageUsage {
     let mut db_bytes = 0u64;
     for suffix in ["", "-wal", "-shm"] {
-        let path = data_dir.join(format!("pontoscan.db{suffix}"));
+        let path = db_dir.join(format!("pontoscan.db{suffix}"));
         if let Ok(meta) = fs::metadata(&path) {
             db_bytes += meta.len();
         }
@@ -133,6 +134,7 @@ pub fn clear_imports_dir(data_dir: &Path) -> Result<(), String> {
 /// only the database, skipping the potentially much larger PDF files)
 /// instead of always bundling both.
 pub fn backup(
+    db_dir: &Path,
     data_dir: &Path,
     dest_zip_path: &str,
     include_db: bool,
@@ -145,7 +147,7 @@ pub fn backup(
     if include_db {
         for suffix in ["", "-wal", "-shm"] {
             let name = format!("pontoscan.db{suffix}");
-            let path = data_dir.join(&name);
+            let path = db_dir.join(&name);
             if path.exists() {
                 let bytes = fs::read(&path).map_err(|e| e.to_string())?;
                 zip.start_file(&name, options).map_err(|e| e.to_string())?;

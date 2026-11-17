@@ -1,3 +1,4 @@
+use crate::db;
 use crate::hashing;
 use crate::model::{FileHash, ParsedTimesheet};
 use crate::parsers;
@@ -707,7 +708,7 @@ pub fn generate_report_zip(
 #[tauri::command]
 pub fn get_storage_usage(app: AppHandle) -> Result<StorageUsage, String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    Ok(storage::usage(&data_dir))
+    Ok(storage::usage(&db::db_dir(&app)?, &data_dir))
 }
 
 /// Itemized breakdown behind the "PDFs importados" tile — what's actually
@@ -746,7 +747,7 @@ pub fn backup_app_data(
     include_files: bool,
 ) -> Result<(), String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    storage::backup(&data_dir, &dest_zip_path, include_db, include_files)
+    storage::backup(&db::db_dir(&app)?, &data_dir, &dest_zip_path, include_db, include_files)
 }
 
 /// Writes arbitrary bytes to `path` — used for the Pagamentos "Gerar PDF"
@@ -761,35 +762,31 @@ pub fn write_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
 /// `storage::export_database` for why the frontend checkpoints first.
 #[tauri::command]
 pub fn export_database(app: AppHandle, dest_path: String) -> Result<(), String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    storage::export_database(&data_dir, &dest_path)
+    storage::export_database(&db::db_dir(&app)?, &dest_path)
 }
 
 /// Validates and stages a database import. The actual swap happens early on
 /// the next launch, before SQLite is opened; the frontend relaunches after
-/// this returns.
+/// this returns. Staged next to the live database (`db::db_dir`), where the
+/// startup swap looks for it.
 #[tauri::command]
 pub fn import_database(app: AppHandle, src_path: String) -> Result<Vec<storage::DatabaseImportEvent>, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    storage::import_database(&data_dir, &src_path)
+    storage::import_database(&db::db_dir(&app)?, &src_path)
 }
 
 #[tauri::command]
 pub fn cancel_database_import(app: AppHandle) -> Result<(), String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    storage::cancel_database_import(&data_dir)
+    storage::cancel_database_import(&db::db_dir(&app)?)
 }
 
 #[tauri::command]
 pub fn take_database_import_result(app: AppHandle) -> Result<Option<storage::DatabaseImportResult>, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    storage::take_database_import_result(&data_dir)
+    storage::take_database_import_result(&db::db_dir(&app)?)
 }
 
 #[tauri::command]
 pub fn clear_database_import_result(app: AppHandle) -> Result<(), String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    storage::clear_database_import_result(&data_dir)
+    storage::clear_database_import_result(&db::db_dir(&app)?)
 }
 
 fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {
