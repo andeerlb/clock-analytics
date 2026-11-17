@@ -1290,29 +1290,12 @@ tr:last-child td {
   gap: 1rem;
 }
 
-/* Set on `<html>` by `useWindowGlassInit` once, at startup, once the Rust
-   native blur-behind (Windows Acrylic, macOS Vibrancy) — applied for the
-   window's whole lifetime, not toggled per Modal/Drawer — is confirmed
-   active. Drops the app's own opaque `--bg` permanently, so the real
-   desktop shows through wherever the DOM above it doesn't paint its own
-   background (most of `.app-shell`'s chrome — cards/sidebar keep their own
-   opaque surfaces). */
-:root.glass-native {
-  background-color: transparent;
-}
-
 /* Shared by every `Modal`-based dialog (ConfirmModal, UpdateModal,
-   ConfirmPaymentModal) — a frosted-glass backdrop instead of a flat dark
-   scrim, so whatever's behind the modal stays legible as shapes/colors
-   without competing for attention. Only the visual default: see
-   `:root.glass-css-only` right below for why Linux doesn't actually get
-   this look. */
+   ConfirmPaymentModal) — a flat dark scrim, no blur, on every platform. */
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(8, 8, 10, 0.45);
-  backdrop-filter: blur(28px) saturate(1.4);
-  -webkit-backdrop-filter: blur(28px) saturate(1.4);
+  background: rgba(8, 8, 10, 0.68);
   z-index: 200;
   display: flex;
   align-items: center;
@@ -1320,46 +1303,11 @@ tr:last-child td {
   animation: modal-overlay-in 0.18s ease;
 }
 
-/* Set instead of `glass-native` wherever `window_glass_active` reports no
-   native effect (Linux) — but only overrides `.modal-overlay-fullscreen`
-   (a `<Modal fullScreen>` like `PdfViewerModal`), not every
-   `.modal-overlay`/`.drawer-overlay-visible`.
-   Small centered modals and drawers keep the CSS `backdrop-filter` blur
-   they've always had on Linux — this class only steps in for the one case
-   that actually broke: a fullScreen surface has no `.card` covering most of
-   the viewport, so its backdrop *is* nearly the whole screen, and on at
-   least one real machine WebKitGTK silently renders `backdrop-filter` as
-   flat, unblurred transparency instead of failing loudly, letting whatever
-   page was mounted behind it (e.g. `PaymentsPage`'s sidebar) show sharply
-   through. Going fully solid there sidesteps whether the blur works at all,
-   without giving up the frosted look everywhere else. */
-:root.glass-css-only .modal-overlay-fullscreen {
+/* A `<Modal fullScreen>` (e.g. `PdfViewerModal`) has no `.card` covering
+   most of the viewport, so its backdrop is nearly the whole screen — go
+   fully solid there instead of letting the page behind show through. */
+.modal-overlay-fullscreen {
   background: var(--bg);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-
-/* Native blur-behind is active (see `:root.glass-native` above): the
-   `backdrop-filter` above is dropped rather than left in place, because it
-   doesn't actually render anything — WebView2's transparent-window mode
-   (needed for Acrylic to have somewhere to show through) breaks Chromium's
-   own `backdrop-filter` compositing, full stop. Confirmed against a
-   computed-style inspection (the declaration shows as "active", not
-   overridden — the CSS is accepted, it just never paints) and matches a
-   still-open upstream limitation: WebView2's background-alpha API only
-   accepts 0 or 255, nothing in between, so there's no configuration that
-   gets both a transparent window and a working CSS blur at the same time
-   (see https://github.com/MicrosoftEdge/WebView2Feedback/issues/4945 and
-   https://issues.chromium.org/issues/365818856). Left declared above (not
-   deleted) since it's still exactly right on Linux, where the window is
-   never natively transparent to begin with. With no blur to help sell "a
-   layer is here", the tint goes darker than the CSS-only case's 0.45
-   instead of lighter — otherwise the dimming alone reads as too subtle to
-   notice at a glance. */
-:root.glass-native .modal-overlay {
-  background: rgba(8, 8, 10, 0.68);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 
 @keyframes modal-overlay-in {
@@ -1450,23 +1398,10 @@ tr:last-child td {
 .drawer-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(8, 8, 10, 0);
-  backdrop-filter: blur(0px);
-  -webkit-backdrop-filter: blur(0px);
+  background: transparent;
   z-index: 200;
   display: flex;
   justify-content: flex-end;
-  transition: background 0.22s ease, backdrop-filter 0.22s ease, -webkit-backdrop-filter 0.22s ease;
-}
-
-/* No dim and no blur behind a side panel, on every screen and platform:
-   the page stays as it is, and the panel's own border and shadow mark it.
-   The overlay is still there, invisible, so a click outside closes it. */
-.drawer-overlay-visible,
-:root.glass-native .drawer-overlay-visible {
-  background: transparent;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 
 .drawer-panel {
@@ -1556,8 +1491,6 @@ tr:last-child td {
   display: flex;
   gap: 0.8rem;
   background: var(--card-bg-soft);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 1rem;
@@ -2110,7 +2043,6 @@ tr.row-active.row-erro:hover {
   position: sticky;
   top: 0;
   z-index: 1;
-  backdrop-filter: blur(6px);
 }
 
 .spreadsheet-grid td.row-gutter,
@@ -2236,7 +2168,6 @@ tr.row-active.row-erro:hover {
 
 .glass-panel {
   background: rgba(37, 37, 43, 0.6);
-  backdrop-filter: blur(12px);
   border: 1px solid var(--border-soft);
   border-radius: 8px;
   padding: 24px;

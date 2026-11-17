@@ -14,7 +14,6 @@ mod report_zip;
 mod settings;
 mod spreadsheet;
 mod storage;
-mod window_glass;
 
 pub use ai_claude_code::run_tool_server_if_requested;
 
@@ -148,32 +147,20 @@ pub fn run() {
             }
 
             // Built here instead of declaratively in `tauri.conf.json`
-            // (whose `app.windows` is deliberately empty) so `transparent`
-            // can differ by OS: Windows/macOS need it for `window_glass`'s
-            // Acrylic/Vibrancy to have anything to show through, but
-            // WebKitGTK on Linux has known rendering glitches (ghosted,
-            // overlapping frames — see the screenshot that prompted this)
-            // on transparent windows, so Linux keeps an opaque one and
-            // relies solely on `.modal-overlay`'s CSS-only blur instead.
-            let main_window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            // (whose `app.windows` is deliberately empty). Opaque on every
+            // OS — no native blur-behind (Acrylic/Vibrancy) and no
+            // transparent window.
+            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("PontoScan")
                 .inner_size(1280.0, 800.0)
                 .maximized(true)
-                .transparent(cfg!(any(target_os = "windows", target_os = "macos")))
                 // Same color as App.css's `--bg` — without this, the window/
                 // webview's own default (opaque white) paints for the brief
                 // moment between the native window appearing and the page's
                 // CSS actually loading, showing as a white flash before the
-                // real dark theme (or the transparent/Acrylic look) kicks in.
+                // real dark theme kicks in.
                 .background_color(tauri::window::Color(11, 11, 13, 255))
                 .build()?;
-
-            // Applied once, for the window's whole lifetime — not toggled
-            // per Modal/Drawer open — so the app has a permanent frosted-glass
-            // look on Windows/macOS. Whether it actually took is reported back
-            // to the frontend via `window_glass_active` (see `window_glass.rs`).
-            let glass_active = window_glass::enable(&main_window).is_ok();
-            app.manage(window_glass::WindowGlassState(glass_active));
 
             // Always present (regardless of the "Minimizar na bandeja ao
             // fechar" setting) — it's the only way back once a close has
@@ -279,7 +266,6 @@ pub fn run() {
             commands::is_reconciliation_window_open,
             db_backup::backup_database_before_delete,
             db_batch::run_write_batch,
-            window_glass::window_glass_active,
             ai_investigation::ai_status,
             ai_investigation::ai_set_api_key,
             ai_investigation::ai_clear_api_key,

@@ -295,17 +295,6 @@ export function addRecentPaymentFile(path: string): Promise<void> {
   return invoke("add_recent_payment_file", { path });
 }
 
-/**
- * Whether the real OS-level window blur-behind (Acrylic/Vibrancy), applied
- * once at startup for the window's whole lifetime, actually took. Resolves
- * `true` only on Windows/macOS, where the effect exists — `false` on Linux
- * (and anywhere else `window-vibrancy` has no native backend), so callers
- * know to use the CSS-only blur fallback instead. See `useWindowGlassInit`.
- */
-export function isWindowGlassActive(): Promise<boolean> {
-  return invoke("window_glass_active");
-}
-
 /** "Destacar" on "Conferência de Pagamentos" — opens (or refocuses) it as its own OS window. See `open_reconciliation_window`. */
 export function openReconciliationWindow(): Promise<void> {
   return invoke("open_reconciliation_window");
