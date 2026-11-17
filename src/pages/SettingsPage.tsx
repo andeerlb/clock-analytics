@@ -3,28 +3,16 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { exit, relaunch } from "@tauri-apps/plugin-process";
 import type { Update } from "@tauri-apps/plugin-updater";
-import {
-  AlertTriangle,
-  Archive,
-  CheckCircle2,
-  Database,
-  Download,
-  FileCheck2,
-  FolderOpen,
-  Minimize2,
-  RefreshCw,
-  Sparkles,
-  Trash2,
-  Upload,
-  XCircle,
-} from "lucide-react";
-import { useEffect, useState } from "react";
+import { Archive, CheckCircle2, ChevronRight, Download, FolderOpen, RefreshCw, Search, Trash2, Upload, XCircle } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import AiSettingsCard from "../components/AiSettingsCard";
+import AiSettingsCard, { type AiConnection } from "../components/AiSettingsCard";
+import ConfirmModal from "../components/ConfirmModal";
 import GithubIcon from "../components/GithubIcon";
 import Modal from "../components/Modal";
 import UpdateModal from "../components/UpdateModal";
 import {
+  aiStatus,
   backupAppData,
   cancelDatabaseImport,
   checkPopplerStatus,
@@ -49,6 +37,7 @@ import {
   markOriginalsRemoved,
   vacuumDatabase,
   type DatabaseTableSize,
+  type RedundantOriginal,
 } from "../lib/db";
 import { formatBytes } from "../lib/format";
 import type { PopplerStatus, StorageFileEntry, StorageUsage } from "../lib/types";
@@ -56,6 +45,9 @@ import { checkForUpdate, REPO_URL } from "../lib/updateCheck";
 
 const CLEAR_CONFIRM_PHRASE = "APAGAR TUDO";
 const IMPORT_CONFIRM_PHRASE = "SUBSTITUIR BANCO";
+
+/** Rows whose details open below them. */
+type ExpandableRow = "atualizacoes" | "espaco" | "pdf" | "ia";
 
 export default function SettingsPage() {
   const navigate = useNavigate();
@@ -275,29 +267,6 @@ export default function SettingsPage() {
     }
   }
 
-  async function handlePurgeRedundant() {
-    setError(null);
-    setPurgeMessage(null);
-    setPurging(true);
-    try {
-      const candidates = await findRedundantOriginals();
-      if (candidates.length === 0) {
-        setPurgeMessage("Nenhum arquivo original redundante encontrado.");
-        return;
-      }
-      const freedBytes = await deletePaths(candidates.map((c) => c.path));
-      await markOriginalsRemoved(candidates.map((c) => c.sourceFileId));
-      setPurgeMessage(
-        `${candidates.length} arquivo(s) original(is) removido(s), liberando ${formatBytes(freedBytes)}.`,
-      );
-      await refreshStorage();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setPurging(false);
-    }
-  }
-
   async function handleOpenDataDir() {
     try {
       await openAppDataDir();
@@ -412,489 +381,663 @@ export default function SettingsPage() {
     }
   }
 
+  const [search, setSearch] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [expanded, setExpanded] = useState<ExpandableRow | null>(null);
+  const [aiConnection, setAiConnection] = useState<AiConnection | null>(null);
+  const [purgeCandidates, setPurgeCandidates] = useState<RedundantOriginal[] | null>(null);
+  /** Step of the "Apagar histórico" wizard; null when closed. */
+  const [wizardStep, setWizardStep] = useState<number | null>(null);
+  const [importDbOpen, setImportDbOpen] = useState(false);
+
+  // The assistant row shows how it's connected before it's opened.
+  useEffect(() => {
+    aiStatus()
+      .then((status) => setAiConnection(status.claudeCode ? "claude-code" : status.apiKey ? "api-key" : "none"))
+      .catch(() => setAiConnection(null));
+  }, []);
+
+  // Ctrl/Cmd+K jumps to the search.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   const totalBytes = storage ? storage.dbBytes + storage.importsBytes : 0;
+  const popplerMissing = popplerStatus ? popplerStatus.binaries.filter((b) => !b.path).length : 0;
+
+  async function handleFindRedundant() {
+    setError(null);
+    setPurgeMessage(null);
+    setPurging(true);
+    try {
+      const candidates = await findRedundantOriginals();
+      if (candidates.length === 0) setPurgeMessage("Nenhum original repetido para remover.");
+      else setPurgeCandidates(candidates);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setPurging(false);
+    }
+  }
+
+  async function handleConfirmPurge() {
+    if (!purgeCandidates) return;
+    setPurging(true);
+    try {
+      const freedBytes = await deletePaths(purgeCandidates.map((c) => c.path));
+      await markOriginalsRemoved(purgeCandidates.map((c) => c.sourceFileId));
+      setPurgeMessage(`${purgeCandidates.length} ${purgeCandidates.length === 1 ? "original removido" : "originais removidos"}, ${formatBytes(freedBytes)} liberados.`);
+      setPurgeCandidates(null);
+      await refreshStorage();
+    } catch (e) {
+      setError(String(e));
+      setPurgeCandidates(null);
+    } finally {
+      setPurging(false);
+    }
+  }
+
+  function openClearWizard() {
+    setConfirmText("");
+    setWizardStep(0);
+  }
+
+  const keptSummary = [
+    keepCompanies && "empresas",
+    keepClients && "clientes",
+    keepEmployees && "colaboradores",
+    keepManuallyEditedShifts && "turnos de pagamento editados à mão",
+    keepPaymentTemplates && "modelos de pagamento",
+    keepEmployeeTemplates && "modelos de colaboradores",
+  ].filter((v): v is string => Boolean(v));
+  const removedSummary = [
+    "histórico de importações",
+    "arquivos importados",
+    !keepEmployees && "colaboradores",
+    !keepClients && "clientes",
+    !keepCompanies && "empresas",
+    !keepPaymentTemplates && "modelos de pagamento",
+    !keepEmployeeTemplates && "modelos de colaboradores",
+  ].filter((v): v is string => Boolean(v));
+
+  // The list filters as you type: each row matches on its own words plus
+  // its title, so "backup", "espaço" or "bandeja" finds the right one.
+  const query = normalizeSearch(search.trim());
+  const matches = (keywords: string) => !query || normalizeSearch(keywords).includes(query);
+
+  const rows = {
+    bandeja: matches("geral continuar rodando fechar janela bandeja segundo plano minimizar"),
+    atualizacoes: matches("geral atualizações atualizacao versão nova github sobre"),
+    espaco: matches("dados espaço usado armazenamento disco tamanho banco arquivos"),
+    originais: matches("dados liberar espaço remover originais repetidos redundantes pdf lote"),
+    compactar: matches("dados compactar banco vacuum espaço"),
+    copia: matches("dados salvar cópia copia backup exportar banco"),
+    pasta: matches("dados abrir pasta de dados explorador"),
+    pdf: matches("integrações ferramentas de pdf poppler pdfinfo pdftotext pdfseparate pdfunite"),
+    ia: matches("integrações assistente ia inteligência artificial claude anthropic chave api"),
+    apagar: matches("zona de risco apagar tudo histórico arquivos limpar zerar backup"),
+    substituir: matches("zona de risco substituir banco importar restaurar arquivo db"),
+  };
+  const groups = {
+    geral: rows.bandeja || rows.atualizacoes,
+    dados: rows.espaco || rows.originais || rows.compactar || rows.copia || rows.pasta,
+    integracoes: rows.pdf || rows.ia,
+    risco: rows.apagar || rows.substituir,
+  };
+  const nothingFound = !Object.values(groups).some(Boolean);
+
+  function toggleRow(id: ExpandableRow) {
+    setExpanded((current) => (current === id ? null : id));
+  }
 
   return (
-    <div>
-      <div className="page-header">
+    <div className="settings-page">
+      <div className="settings-head">
         <h2>Configurações</h2>
+        <p className="page-subtitle">Procure pelo que você quer fazer.</p>
       </div>
-      <p className="page-subtitle">
-        O PontoScan guarda tudo localmente neste computador — banco de dados e cópias dos
-        arquivos importados (PDFs de ponto e, quando baixadas por link, planilhas de pagamento).
-        Com o tempo isso ocupa espaço em disco; aqui dá pra acompanhar e liberar.
-      </p>
+
+      <label className="settings-search">
+        <Search size={16} />
+        <input
+          ref={searchRef}
+          type="search"
+          placeholder="Ex.: espaço, backup, atualização, bandeja"
+          aria-label="Buscar nas configurações"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <kbd>Ctrl K</kbd>
+      </label>
 
       {error && <div className="error-box">{error}</div>}
 
-      <div className="card">
-        <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <Minimize2 size={18} />
-          Geral
-        </h3>
-        <label style={{ display: "flex", alignItems: "flex-start", gap: "0.6rem", cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={closeToTray}
-            disabled={closeToTraySaving}
-            onChange={(e) => handleCloseToTrayChange(e.target.checked)}
-            style={{ marginTop: "0.2rem" }}
-          />
-          <span>
-            Minimizar na bandeja ao fechar
-            <div className="muted" style={{ fontSize: "0.85rem", marginTop: "0.2rem" }}>
-              Em vez de encerrar o PontoScan, o botão de fechar da janela só esconde o app — ele
-              continua rodando em segundo plano (ícone na bandeja do sistema), mantendo ativas as
-              verificações automáticas de arquivos (Importar Pagamentos → Verificação automática).
-              Pra encerrar de verdade, use "Sair" no menu do ícone da bandeja.
-            </div>
-          </span>
-        </label>
-        {closeToTrayError && (
-          <div className="error-box" style={{ marginTop: "0.8rem" }}>
-            {closeToTrayError}
-          </div>
-        )}
-      </div>
+      {nothingFound && <p className="settings-empty">Nada encontrado com “{search.trim()}”.</p>}
 
-      <div className="card">
-        <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <FileCheck2 size={18} />
-          Ferramentas de PDF (Poppler)
-        </h3>
-        <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
-          A importação e exportação de PDFs depende de quatro ferramentas de linha de comando do
-          Poppler (pdfinfo, pdftotext, pdfseparate, pdfunite). Se alguma não for encontrada, informe
-          abaixo a pasta onde elas estão instaladas (ex.: a pasta <code>bin</code> do Homebrew).
-        </p>
+      {groups.geral && (
+        <section className="settings-group" aria-labelledby="settings-group-geral">
+          <h3 id="settings-group-geral" className="settings-group-title">
+            Geral
+          </h3>
+          <div className="settings-card">
+            {rows.bandeja && (
+              <label className="settings-row settings-row-clickable">
+                <span className="settings-row-text">
+                  <span className="settings-row-title">Continuar rodando ao fechar a janela</span>
+                  <span className="settings-row-desc">Fica na bandeja e mantém as verificações automáticas. Para encerrar, use “Sair” no menu da bandeja.</span>
+                </span>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  className="settings-switch"
+                  checked={closeToTray}
+                  disabled={closeToTraySaving}
+                  onChange={(e) => handleCloseToTrayChange(e.target.checked)}
+                />
+              </label>
+            )}
+            {rows.bandeja && closeToTrayError && <div className="error-box settings-error">{closeToTrayError}</div>}
 
-        {popplerError && <div className="error-box">{popplerError}</div>}
-
-        {popplerStatus && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", marginBottom: "1rem" }}>
-            {popplerStatus.binaries.map((b) => (
-              <div key={b.name} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
-                {b.found ? (
-                  <CheckCircle2 size={16} color="var(--accent)" />
-                ) : (
-                  <XCircle size={16} color="var(--danger)" />
+            {rows.atualizacoes && (
+              <div className="settings-expandable">
+                <ExpandHead
+                  open={expanded === "atualizacoes"}
+                  onToggle={() => toggleRow("atualizacoes")}
+                  title="Atualizações"
+                  desc={appVersion ? `PontoScan ${appVersion}` : undefined}
+                  value={
+                    availableUpdate ? (
+                      <span className="settings-pill settings-pill-info">{availableUpdate.version} disponível</span>
+                    ) : upToDate ? (
+                      <span className="settings-pill settings-pill-ok">Em dia</span>
+                    ) : undefined
+                  }
+                />
+                {expanded === "atualizacoes" && (
+                  <div className="settings-detail">
+                    <p className="settings-detail-text">
+                      {availableUpdate ? (
+                        <>
+                          Nova versão disponível: <strong style={{ color: "var(--success)" }}>{availableUpdate.version}</strong>. Você está na {appVersion}.
+                        </>
+                      ) : upToDate ? (
+                        "Você já está na versão mais recente."
+                      ) : (
+                        "Procure para ver se há uma versão nova."
+                      )}
+                    </p>
+                    {updateCheckError && <p className="settings-detail-text settings-text-danger">Não foi possível verificar: {updateCheckError}</p>}
+                    <div className="settings-actions">
+                      {availableUpdate ? (
+                        <button type="button" className="settings-button settings-button-primary" onClick={() => setShowUpdateModal(true)}>
+                          Atualizar para {availableUpdate.version}
+                        </button>
+                      ) : (
+                        <button type="button" className="settings-button" onClick={handleCheckForUpdate} disabled={checkingUpdate}>
+                          <RefreshCw size={14} />
+                          {checkingUpdate ? "Procurando..." : "Procurar atualização"}
+                        </button>
+                      )}
+                      <button type="button" className="settings-button settings-button-ghost" onClick={() => openUrl(REPO_URL)}>
+                        <GithubIcon size={14} />
+                        Ver no GitHub
+                      </button>
+                    </div>
+                  </div>
                 )}
-                <code>{b.name}</code>
-                {b.found && b.path && (
-                  <span className="muted" style={{ fontSize: "0.8rem" }}>
-                    — {b.path}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {groups.dados && (
+        <section className="settings-group" aria-labelledby="settings-group-dados">
+          <h3 id="settings-group-dados" className="settings-group-title">
+            Dados
+          </h3>
+          <div className="settings-card">
+            {rows.espaco && (
+              <div className="settings-expandable">
+                <ExpandHead
+                  open={expanded === "espaco"}
+                  onToggle={() => toggleRow("espaco")}
+                  title="Espaço usado"
+                  desc={storage ? `Banco ${formatBytes(storage.dbBytes)} · Arquivos ${formatBytes(storage.importsBytes)}` : undefined}
+                  value={<span className="settings-row-value">{loadingStorage || !storage ? "Calculando..." : formatBytes(totalBytes)}</span>}
+                />
+                {expanded === "espaco" && storage && (
+                  <div className="settings-detail">
+                    {totalBytes > 0 && (
+                      <div className="settings-storage-bar" aria-hidden="true">
+                        <i style={{ width: `${(storage.dbBytes / totalBytes) * 100}%`, background: "#60a5fa" }} />
+                        <i style={{ width: `${(storage.importsBytes / totalBytes) * 100}%`, background: "#a78bfa" }} />
+                      </div>
+                    )}
+                    <div className="settings-storage-legend">
+                      <button type="button" onClick={() => setStorageDetail("db")} title="Ver o que ocupa espaço, do maior para o menor">
+                        <i style={{ background: "#60a5fa" }} />
+                        Banco de dados · {formatBytes(storage.dbBytes)}
+                      </button>
+                      <button type="button" onClick={() => setStorageDetail("imports")} title="Ver o que ocupa espaço, do maior para o menor">
+                        <i style={{ background: "#a78bfa" }} />
+                        Arquivos importados · {formatBytes(storage.importsBytes)} ({storage.importsFileCount} {storage.importsFileCount === 1 ? "arquivo" : "arquivos"})
+                      </button>
+                    </div>
+                    <p className="settings-detail-text">Clique em cada parte para ver o que ocupa mais espaço.</p>
+                  </div>
+                )}
+              </div>
+            )}
+            {rows.originais && (
+              <div className="settings-row">
+                <span className="settings-row-text">
+                  <span className="settings-row-title">Remover originais repetidos</span>
+                  <span className="settings-row-desc">
+                    PDFs em lote já importados por inteiro. Cada colaborador continua com a própria página.
+                    {purgeMessage && <span className="settings-row-result"> {purgeMessage}</span>}
                   </span>
-                )}
-                {!b.found && (
-                  <span style={{ color: "var(--danger)", fontSize: "0.8rem" }}>não encontrado</span>
+                </span>
+                <button type="button" className="settings-button" onClick={handleFindRedundant} disabled={purging}>
+                  {purging ? "Procurando..." : "Procurar e remover"}
+                </button>
+              </div>
+            )}
+            {rows.compactar && (
+              <div className="settings-row">
+                <span className="settings-row-text">
+                  <span className="settings-row-title">Compactar o banco</span>
+                  <span className="settings-row-desc">Recupera o espaço de registros já apagados, sem remover nenhum dado.</span>
+                </span>
+                <button type="button" className="settings-button" onClick={handleVacuum} disabled={vacuuming}>
+                  {vacuuming ? "Compactando..." : "Compactar"}
+                </button>
+              </div>
+            )}
+            {rows.copia && (
+              <div className="settings-row">
+                <span className="settings-row-text">
+                  <span className="settings-row-title">Salvar uma cópia do banco</span>
+                  <span className="settings-row-desc">Um arquivo .db para guardar ou mandar pra alguém analisar. Não muda nada aqui.</span>
+                </span>
+                <button type="button" className="settings-button" onClick={handleExportDatabase} disabled={exporting}>
+                  <Download size={14} />
+                  {exporting ? "Salvando..." : "Salvar cópia"}
+                </button>
+              </div>
+            )}
+            {rows.pasta && (
+              <div className="settings-row">
+                <span className="settings-row-text">
+                  <span className="settings-row-title">Abrir pasta de dados</span>
+                  <span className="settings-row-desc">Onde ficam o banco e os arquivos importados.</span>
+                </span>
+                <button type="button" className="settings-button settings-button-ghost" onClick={handleOpenDataDir}>
+                  <FolderOpen size={14} />
+                  Abrir
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {groups.integracoes && (
+        <section className="settings-group" aria-labelledby="settings-group-integracoes">
+          <h3 id="settings-group-integracoes" className="settings-group-title">
+            Integrações
+          </h3>
+          <div className="settings-card">
+            {rows.pdf && (
+              <div className="settings-expandable">
+                <ExpandHead
+                  open={expanded === "pdf"}
+                  onToggle={() => toggleRow("pdf")}
+                  title="Ferramentas de PDF"
+                  desc={popplerStatus?.popplerDir ?? "Poppler, para ler e montar PDFs"}
+                  value={
+                    popplerStatus &&
+                    (popplerMissing === 0 ? (
+                      <span className="settings-pill settings-pill-ok">
+                        {popplerStatus.binaries.length} de {popplerStatus.binaries.length}
+                      </span>
+                    ) : (
+                      <span className="settings-pill settings-pill-bad">
+                        {popplerMissing} de {popplerStatus.binaries.length} faltando
+                      </span>
+                    ))
+                  }
+                />
+                {expanded === "pdf" && (
+                  <div className="settings-detail">
+                    <div className="settings-binaries">
+                      {popplerStatus?.binaries.map((b) => (
+                        <div key={b.name} className="settings-binary">
+                          {b.path ? <CheckCircle2 size={15} color="var(--success)" /> : <XCircle size={15} color="var(--danger)" />}
+                          <code>{b.name}</code>
+                          <span className="settings-binary-path">{b.path ?? "não encontrado"}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="settings-field">
+                      <label htmlFor="poppler-dir">{popplerMissing > 0 ? "Informe a pasta onde o Poppler está instalado" : "Usar outra pasta (opcional)"}</label>
+                      <div className="settings-inline-form">
+                        <input id="poppler-dir" type="text" placeholder="ex.: /opt/homebrew/bin" value={popplerDirInput} onChange={(e) => setPopplerDirInput(e.target.value)} />
+                        <button type="button" className="settings-button" onClick={handleChoosePopplerDir}>
+                          <FolderOpen size={14} />
+                          Escolher…
+                        </button>
+                        <button type="button" className="settings-button settings-button-primary" onClick={handleSavePopplerDir} disabled={popplerSaving}>
+                          {popplerSaving ? "Testando..." : "Salvar e testar"}
+                        </button>
+                      </div>
+                    </div>
+                    {popplerError && <div className="error-box settings-error">{popplerError}</div>}
+                  </div>
                 )}
               </div>
-            ))}
-          </div>
-        )}
-
-        <div className="field-row" style={{ alignItems: "flex-end" }}>
-          <div className="field" style={{ flex: "1 1 260px", marginBottom: 0 }}>
-            <label htmlFor="poppler-dir">Pasta dos binários do Poppler (opcional)</label>
-            <input
-              id="poppler-dir"
-              type="text"
-              value={popplerDirInput}
-              onChange={(e) => setPopplerDirInput(e.target.value)}
-              placeholder="ex.: /opt/homebrew/bin"
-            />
-          </div>
-          <button type="button" className="secondary" onClick={handleChoosePopplerDir}>
-            <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-            Escolher pasta
-          </button>
-          <button type="button" onClick={handleSavePopplerDir} disabled={popplerSaving}>
-            {popplerSaving ? "Salvando..." : "Salvar e testar"}
-          </button>
-        </div>
-      </div>
-
-      <div className="card">
-        <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <Database size={18} />
-          Armazenamento
-        </h3>
-        {loadingStorage && <p className="muted">Calculando...</p>}
-        {!loadingStorage && storage && (
-          <div className="summary-row" style={{ marginBottom: 0 }}>
-            <div
-              className="summary-tile clickable"
-              role="button"
-              tabIndex={0}
-              onClick={() => setStorageDetail("db")}
-              title="Ver detalhado, ordenado por tamanho"
-            >
-              <div className="label">Banco de dados</div>
-              <div className="value">{formatBytes(storage.dbBytes)}</div>
-            </div>
-            <div
-              className="summary-tile clickable"
-              role="button"
-              tabIndex={0}
-              onClick={() => setStorageDetail("imports")}
-              title="Ver detalhado, ordenado por tamanho"
-            >
-              <div className="label">Arquivos importados ({storage.importsFileCount} arquivos)</div>
-              <div className="value">{formatBytes(storage.importsBytes)}</div>
-            </div>
-            <div className="summary-tile">
-              <div className="label">Total</div>
-              <div className="value" style={{ color: "var(--accent)" }}>
-                {formatBytes(totalBytes)}
+            )}
+            {rows.ia && (
+              <div className="settings-expandable">
+                <ExpandHead
+                  open={expanded === "ia"}
+                  onToggle={() => toggleRow("ia")}
+                  title="Assistente com IA"
+                  desc={aiConnection === "claude-code" ? "Pelo Claude Code deste computador" : aiConnection === "api-key" ? "Pela chave de API da Anthropic" : "Responde perguntas sobre o app e os dados"}
+                  value={
+                    aiConnection &&
+                    (aiConnection === "none" ? (
+                      <span className="settings-pill settings-pill-warn">Desligado</span>
+                    ) : (
+                      <span className="settings-pill settings-pill-ok">Pronto</span>
+                    ))
+                  }
+                />
+                {expanded === "ia" && (
+                  <div className="settings-detail settings-detail-flush">
+                    <AiSettingsCard onConnectionChange={setAiConnection} />
+                  </div>
+                )}
               </div>
-            </div>
+            )}
           </div>
-        )}
-      </div>
+        </section>
+      )}
+
+      {groups.risco && (
+        <section className="settings-group" aria-labelledby="settings-group-risco">
+          <h3 id="settings-group-risco" className="settings-group-title settings-text-danger">
+            Zona de risco
+          </h3>
+          <div className="settings-card settings-card-danger">
+            {rows.apagar && (
+              <div className="settings-row">
+                <span className="settings-row-text">
+                  <span className="settings-row-title settings-text-danger">Apagar histórico e arquivos</span>
+                  <span className="settings-row-desc">Escolha o que manter e salve um backup antes.</span>
+                </span>
+                <button type="button" className="settings-button settings-button-danger" onClick={openClearWizard}>
+                  Começar…
+                </button>
+              </div>
+            )}
+            {rows.substituir && (
+              <div className="settings-row">
+                <span className="settings-row-text">
+                  <span className="settings-row-title settings-text-danger">Substituir o banco</span>
+                  <span className="settings-row-desc">Restaura tudo a partir de um arquivo .db. O app reinicia.</span>
+                </span>
+                <button
+                  type="button"
+                  className="settings-button settings-button-danger"
+                  onClick={() => {
+                    setImportConfirmText("");
+                    setImportDbOpen(true);
+                  }}
+                >
+                  Começar…
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {storageDetail && (
-        <Modal
-          onClose={closeStorageDetail}
-          title={storageDetail === "db" ? "Banco de dados" : "Arquivos importados"}
-          maxHeight="70vh"
-        >
+        <Modal onClose={closeStorageDetail} title={storageDetail === "db" ? "Banco de dados" : "Arquivos importados"} maxHeight="70vh">
           {loadingStorageDetail && <p className="muted">Calculando...</p>}
           {storageDetailError && <div className="error-box">{storageDetailError}</div>}
-          {!loadingStorageDetail && !storageDetailError && storageDetail === "db" && (
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              {(dbTableSizes ?? []).length === 0 && <p className="muted">Nada para mostrar.</p>}
-              {dbTableSizes?.map((t) => (
-                <div
-                  key={t.tableName}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: "1rem",
-                    fontSize: "0.88rem",
-                    padding: "0.4rem 0",
-                    borderBottom: "1px solid var(--border)",
-                  }}
-                >
-                  <span>{t.tableName}</span>
-                  <span className="muted" style={{ flexShrink: 0 }}>
-                    {formatBytes(t.bytes)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-          {!loadingStorageDetail && !storageDetailError && storageDetail === "imports" && (
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              {(importFileEntries ?? []).length === 0 && <p className="muted">Nada para mostrar.</p>}
-              {importFileEntries?.map((f, i) => (
-                <div
-                  key={i}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: "1rem",
-                    fontSize: "0.88rem",
-                    padding: "0.4rem 0",
-                    borderBottom: "1px solid var(--border)",
-                  }}
-                >
-                  <span style={{ overflowWrap: "anywhere" }}>{f.name}</span>
-                  <span className="muted" style={{ flexShrink: 0 }}>
-                    {formatBytes(f.bytes)}
-                  </span>
-                </div>
-              ))}
+          {!loadingStorageDetail && !storageDetailError && (
+            <div className="settings-detail-list">
+              {(storageDetail === "db" ? (dbTableSizes ?? []).length : (importFileEntries ?? []).length) === 0 && <p className="muted">Nada para mostrar.</p>}
+              {storageDetail === "db" &&
+                dbTableSizes?.map((t) => (
+                  <div key={t.tableName} className="settings-detail-row">
+                    <span>{t.tableName}</span>
+                    <span className="muted">{formatBytes(t.bytes)}</span>
+                  </div>
+                ))}
+              {storageDetail === "imports" &&
+                importFileEntries?.map((f, i) => (
+                  <div key={i} className="settings-detail-row">
+                    <span style={{ overflowWrap: "anywhere" }}>{f.name}</span>
+                    <span className="muted">{formatBytes(f.bytes)}</span>
+                  </div>
+                ))}
             </div>
           )}
         </Modal>
       )}
 
-      <div className="card">
-        <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <Sparkles size={18} />
-          Manutenção
-        </h3>
-        <div className="field-row" style={{ alignItems: "flex-start", marginBottom: 0 }}>
-          <div style={{ flex: "1 1 260px" }}>
-            <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
-              Recompacta o arquivo do banco, recuperando espaço deixado por registros já
-              apagados. Não remove nenhum dado.
-            </p>
-            <button type="button" className="secondary" onClick={handleVacuum} disabled={vacuuming}>
-              {vacuuming ? "Compactando..." : "Compactar banco de dados"}
-            </button>
-          </div>
-          <div style={{ flex: "1 1 260px" }}>
-            <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
-              Quando um arquivo em lote (várias pessoas num PDF só) já teve todas as páginas
-              importadas com sucesso, o arquivo original inteiro fica redundante — cada
-              colaborador já tem sua própria página salva. Remove só essa cópia extra.
-            </p>
-            <button type="button" className="secondary" onClick={handlePurgeRedundant} disabled={purging}>
-              {purging ? "Verificando..." : "Remover originais redundantes"}
-            </button>
-            {purgeMessage && (
-              <p className="muted" style={{ fontSize: "0.8rem", marginTop: "0.5rem" }}>
-                {purgeMessage}
-              </p>
+      {purgeCandidates && (
+        <ConfirmModal
+          title={`Remover ${purgeCandidates.length} ${purgeCandidates.length === 1 ? "original repetido" : "originais repetidos"}?`}
+          message="São PDFs em lote que já tiveram todas as páginas importadas. As páginas de cada colaborador continuam salvas; só o arquivo inteiro original é apagado."
+          confirmLabel={purging ? "Removendo..." : "Remover"}
+          confirmDisabled={purging}
+          onConfirm={handleConfirmPurge}
+          onCancel={() => setPurgeCandidates(null)}
+        />
+      )}
+
+      {wizardStep !== null && (
+        <Modal onClose={() => !clearing && setWizardStep(null)} width="34rem" closeOnBackdrop={false}>
+          <div className="settings-wizard">
+            <div className="settings-wizard-head">
+              <div>
+                <h3>Apagar histórico e arquivos</h3>
+                <span className="muted">
+                  Passo {wizardStep + 1} de 3 · {["O que manter", "Backup", "Confirmar"][wizardStep]}
+                </span>
+              </div>
+              <div className="settings-wizard-steps" aria-hidden="true">
+                {[0, 1, 2].map((s) => (
+                  <i key={s} className={s <= wizardStep ? "on" : undefined} />
+                ))}
+              </div>
+            </div>
+
+            {wizardStep === 0 && (
+              <div className="settings-wizard-body">
+                <p className="muted">O histórico de importações e os arquivos importados sempre são apagados: dá pra recriar tudo reimportando. O que mais você quer manter?</p>
+                <span className="settings-label">Cadastro</span>
+                <WizardOption checked={keepCompanies} disabled={keepClients} onChange={toggleKeepCompanies} title="Empresas" />
+                <WizardOption checked={keepClients} disabled={keepEmployees} onChange={toggleKeepClients} title="Clientes" desc="Mantém as empresas também" />
+                <WizardOption checked={keepEmployees} onChange={toggleKeepEmployees} title="Colaboradores" desc="Mantém clientes e empresas também" />
+                <WizardOption
+                  checked={keepManuallyEditedShifts}
+                  disabled={!keepEmployees}
+                  onChange={setKeepManuallyEditedShifts}
+                  title="Turnos de pagamento editados à mão"
+                  desc={keepEmployees ? "Pagos, voltados para pendente ou com valor corrigido" : "Precisa manter os colaboradores"}
+                />
+                <span className="settings-label">Configuração</span>
+                <WizardOption checked={keepPaymentTemplates} onChange={setKeepPaymentTemplates} title="Modelos de pagamento" desc="Mapeamento de colunas das planilhas" />
+                <WizardOption checked={keepEmployeeTemplates} onChange={setKeepEmployeeTemplates} title="Modelos de colaboradores" />
+              </div>
             )}
-          </div>
-          <div style={{ flex: "1 1 260px" }}>
-            <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
-              Abre a pasta onde o banco de dados e os PDFs ficam salvos, pra você conferir com os
-              próprios olhos.
-            </p>
-            <button type="button" className="secondary" onClick={handleOpenDataDir}>
-              <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-              Abrir pasta de dados
-            </button>
-          </div>
-          <div style={{ flex: "1 1 260px" }}>
-            <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
-              Salva uma cópia completa do banco de dados atual num único arquivo — pra guardar, ou
-              pra mandar pra alguém analisar um problema. Só lê; não muda nada aqui.
-            </p>
-            <button type="button" className="secondary" onClick={handleExportDatabase} disabled={exporting}>
-              <Download size={15} style={{ marginRight: "0.4rem" }} />
-              {exporting ? "Exportando..." : "Exportar banco de dados"}
-            </button>
-          </div>
-        </div>
-      </div>
 
-      <div className="card" style={{ borderColor: "var(--danger)" }}>
-        <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem", color: "var(--danger)" }}>
-          <AlertTriangle size={18} />
-          Zona de risco
-        </h3>
+            {wizardStep === 1 && (
+              <div className="settings-wizard-body">
+                <p className="muted">Recomendado: salve um backup antes. Você escolhe onde salvar o .zip depois de confirmar.</p>
+                <WizardOption checked={backupDb} onChange={setBackupDb} title="Banco de dados" desc="Cadastro, histórico e configurações" />
+                <WizardOption checked={backupFiles} onChange={setBackupFiles} title="Arquivos importados" desc="PDFs de ponto e planilhas baixadas por link" />
+              </div>
+            )}
 
-        <p className="muted" style={{ fontSize: "0.85rem" }}>
-          Sempre apaga todo o histórico de importações e todos os PDFs salvos — isso não tem como
-          escolher, já que é justamente o que dá pra recriar reimportando os mesmos arquivos. Como
-          esse é o único lugar onde esses dados existem, considere salvar uma cópia antes.
-        </p>
+            {wizardStep === 2 && (
+              <div className="settings-wizard-body">
+                <div className="settings-wizard-summary">
+                  <div>
+                    <strong className="settings-text-danger">Vai apagar</strong>
+                    <span>{removedSummary.join(", ")}.</span>
+                  </div>
+                  <div>
+                    <strong>Vai manter</strong>
+                    <span>{keptSummary.length ? `${keptSummary.join(", ")}.` : "nada."}</span>
+                  </div>
+                  <div>
+                    <strong>Backup</strong>
+                    <span>
+                      {backupDb || backupFiles
+                        ? `Sim: ${[backupDb && "banco de dados", backupFiles && "arquivos importados"].filter(Boolean).join(" e ")}.`
+                        : "Não. Não vai dar pra desfazer."}
+                    </span>
+                  </div>
+                </div>
+                <label htmlFor="clear-confirm" className="muted">
+                  Digite <strong className="settings-text-strong">{CLEAR_CONFIRM_PHRASE}</strong> para confirmar
+                </label>
+                <input id="clear-confirm" type="text" autoFocus value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder={CLEAR_CONFIRM_PHRASE} />
+              </div>
+            )}
 
-        <div style={{ marginBottom: "1.2rem" }}>
-          <p className="muted" style={{ fontSize: "0.8rem", marginBottom: "0.5rem" }}>
-            Opcionalmente, mantenha o cadastro (evita ter que digitar tudo de novo). Manter
-            colaboradores exige manter clientes e empresas; manter clientes exige manter empresas.
-          </p>
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
-              <input
-                type="checkbox"
-                checked={keepCompanies}
-                disabled={keepClients}
-                onChange={(e) => toggleKeepCompanies(e.target.checked)}
-              />
-              Manter empresas
-            </label>
-            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
-              <input
-                type="checkbox"
-                checked={keepClients}
-                disabled={keepEmployees}
-                onChange={(e) => toggleKeepClients(e.target.checked)}
-              />
-              Manter clientes
-            </label>
-            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
-              <input
-                type="checkbox"
-                checked={keepEmployees}
-                onChange={(e) => toggleKeepEmployees(e.target.checked)}
-              />
-              Manter colaboradores
-            </label>
-            <label
-              style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}
-              title={
-                keepEmployees
-                  ? undefined
-                  : "Exige manter colaboradores — um turno mantido continua precisando de um colaborador válido"
-              }
-            >
-              <input
-                type="checkbox"
-                checked={keepManuallyEditedShifts}
-                disabled={!keepEmployees}
-                onChange={(e) => setKeepManuallyEditedShifts(e.target.checked)}
-              />
-              Manter turnos de pagamento atualizados manualmente (Fazer pagamento/Editar valor/Voltar
-              para pendente)
-            </label>
-          </div>
-        </div>
-
-        <div style={{ marginBottom: "1.2rem" }}>
-          <p className="muted" style={{ fontSize: "0.8rem", marginBottom: "0.5rem" }}>
-            Templates de importação são configuração (mapeamento de colunas), não histórico —
-            independentes do cadastro acima, também podem ser mantidos.
-          </p>
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
-              <input
-                type="checkbox"
-                checked={keepPaymentTemplates}
-                onChange={(e) => setKeepPaymentTemplates(e.target.checked)}
-              />
-              Manter templates de pagamento
-            </label>
-            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
-              <input
-                type="checkbox"
-                checked={keepEmployeeTemplates}
-                onChange={(e) => setKeepEmployeeTemplates(e.target.checked)}
-              />
-              Manter templates de colaboradores
-            </label>
-          </div>
-        </div>
-
-        <div style={{ marginBottom: "1.2rem" }}>
-          <p className="muted" style={{ fontSize: "0.8rem", marginBottom: "0.5rem" }}>
-            Backup antes de apagar — escolha o quê incluir no zip.
-          </p>
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
-              <input type="checkbox" checked={backupDb} onChange={(e) => setBackupDb(e.target.checked)} />
-              Banco
-            </label>
-            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
-              <input type="checkbox" checked={backupFiles} onChange={(e) => setBackupFiles(e.target.checked)} />
-              PDFs
-            </label>
-          </div>
-        </div>
-
-        <div className="field" style={{ maxWidth: "22rem", marginTop: "0.4rem", marginBottom: "1rem", gap: "0.6rem" }}>
-          <label htmlFor="clear-confirm">
-            Digite <strong>{CLEAR_CONFIRM_PHRASE}</strong> para confirmar
-          </label>
-          <input
-            id="clear-confirm"
-            type="text"
-            value={confirmText}
-            onChange={(e) => setConfirmText(e.target.value)}
-            placeholder={CLEAR_CONFIRM_PHRASE}
-          />
-        </div>
-
-        <button
-          type="button"
-          onClick={handleClearAll}
-          disabled={clearing || confirmText.trim() !== CLEAR_CONFIRM_PHRASE}
-          style={{ background: "var(--danger)", borderColor: "var(--danger)", color: "#410002" }}
-        >
-          {backupDb || backupFiles ? (
-            <Archive size={15} style={{ marginRight: "0.4rem" }} />
-          ) : (
-            <Trash2 size={15} style={{ marginRight: "0.4rem" }} />
-          )}
-          {clearing ? "Apagando..." : "Apagar tudo"}
-        </button>
-
-        <hr style={{ margin: "1.4rem 0", border: "none", borderTop: "1px solid var(--border)" }} />
-
-        <p className="muted" style={{ fontSize: "0.85rem" }}>
-          Substitui TODO o banco de dados atual (cadastro, histórico, configurações — tudo) pelo
-          arquivo escolhido. Durante a troca, o banco atual é mantido temporariamente para permitir
-          recuperação automática se houver erro; após o sucesso, essa cópia é apagada. O app
-          reinicia sozinho. Só use se souber exatamente o que há nesse arquivo.
-        </p>
-
-        <div className="field" style={{ maxWidth: "22rem", marginTop: "0.4rem", marginBottom: "1rem", gap: "0.6rem" }}>
-          <label htmlFor="import-confirm">
-            Digite <strong>{IMPORT_CONFIRM_PHRASE}</strong> para confirmar
-          </label>
-          <input
-            id="import-confirm"
-            type="text"
-            value={importConfirmText}
-            onChange={(e) => setImportConfirmText(e.target.value)}
-            placeholder={IMPORT_CONFIRM_PHRASE}
-          />
-        </div>
-
-        <button
-          type="button"
-          onClick={handleImportDatabase}
-          disabled={importing || importConfirmText.trim() !== IMPORT_CONFIRM_PHRASE}
-          style={{ background: "var(--danger)", borderColor: "var(--danger)", color: "#410002" }}
-        >
-          <Upload size={15} style={{ marginRight: "0.4rem" }} />
-          {importing ? "Substituindo..." : "Importar banco de dados"}
-        </button>
-      </div>
-
-      <AiSettingsCard />
-
-      <div className="card">
-        <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <GithubIcon size={18} />
-          Sobre
-        </h3>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.8rem" }}>
-          <div>
-            <p className="muted" style={{ margin: 0, fontSize: "0.85rem" }}>
-              PontoScan {appVersion ? `v${appVersion}` : ""}
-              {availableUpdate && (
-                <>
-                  {" "}— nova versão disponível:{" "}
-                  <strong style={{ color: "var(--success)" }}>{availableUpdate.version}</strong>
-                </>
+            <div className="settings-wizard-foot">
+              <button type="button" className="settings-button settings-button-ghost" onClick={() => setWizardStep(null)} disabled={clearing}>
+                Cancelar
+              </button>
+              {wizardStep > 0 && (
+                <button type="button" className="settings-button" onClick={() => setWizardStep(wizardStep - 1)} disabled={clearing}>
+                  Voltar
+                </button>
               )}
-              {upToDate && " — você já está na versão mais recente"}
-            </p>
-            {updateCheckError && (
-              <p className="muted" style={{ margin: "0.3rem 0 0", fontSize: "0.8rem", color: "var(--danger)" }}>
-                Não foi possível verificar atualizações: {updateCheckError}
-              </p>
-            )}
+              {wizardStep < 2 ? (
+                <button type="button" className="settings-button settings-button-primary" onClick={() => setWizardStep(wizardStep + 1)}>
+                  Continuar
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="settings-button settings-button-danger-solid"
+                  onClick={handleClearAll}
+                  disabled={clearing || confirmText.trim() !== CLEAR_CONFIRM_PHRASE}
+                >
+                  {backupDb || backupFiles ? <Archive size={14} /> : <Trash2 size={14} />}
+                  {clearing ? "Apagando..." : backupDb || backupFiles ? "Salvar backup e apagar" : "Apagar"}
+                </button>
+              )}
+            </div>
+            {error && <div className="error-box settings-error">{error}</div>}
           </div>
-          <div style={{ display: "flex", gap: "0.6rem" }}>
-            {availableUpdate ? (
-              <button type="button" onClick={() => setShowUpdateModal(true)}>
-                Ver nova versão
+        </Modal>
+      )}
+
+      {importDbOpen && restartCountdown === null && (
+        <Modal onClose={() => !importing && setImportDbOpen(false)} width="32rem" closeOnBackdrop={false}>
+          <div className="settings-wizard">
+            <div className="settings-wizard-head">
+              <div>
+                <h3>Substituir o banco por outro arquivo</h3>
+                <span className="muted">Cadastro, histórico e configurações: tudo vem do arquivo escolhido.</span>
+              </div>
+            </div>
+            <div className="settings-wizard-body">
+              <div className="settings-wizard-summary">
+                <div>
+                  <strong>Como funciona</strong>
+                  <span>
+                    O arquivo é conferido antes. Durante a troca, o banco atual fica guardado; se algo der errado, ele volta sozinho. Depois que dá certo, essa cópia é apagada e o
+                    app reinicia.
+                  </span>
+                </div>
+                <div>
+                  <strong className="settings-text-danger">Atenção</strong>
+                  <span>Só use se souber exatamente o que há nesse arquivo. Se quiser, salve antes uma cópia do banco atual em Dados e armazenamento.</span>
+                </div>
+              </div>
+              <label htmlFor="import-confirm" className="muted">
+                Digite <strong className="settings-text-strong">{IMPORT_CONFIRM_PHRASE}</strong> para confirmar
+              </label>
+              <input id="import-confirm" type="text" autoFocus value={importConfirmText} onChange={(e) => setImportConfirmText(e.target.value)} placeholder={IMPORT_CONFIRM_PHRASE} />
+            </div>
+            <div className="settings-wizard-foot">
+              <button type="button" className="settings-button settings-button-ghost" onClick={() => setImportDbOpen(false)} disabled={importing}>
+                Cancelar
               </button>
-            ) : (
-              <button type="button" className="secondary" onClick={handleCheckForUpdate} disabled={checkingUpdate}>
-                <RefreshCw size={15} style={{ marginRight: "0.4rem" }} />
-                {checkingUpdate ? "Verificando..." : "Procurar atualização"}
+              <button
+                type="button"
+                className="settings-button settings-button-danger-solid"
+                onClick={handleImportDatabase}
+                disabled={importing || importConfirmText.trim() !== IMPORT_CONFIRM_PHRASE}
+              >
+                <Upload size={14} />
+                {importing ? "Substituindo..." : "Escolher arquivo e substituir"}
               </button>
-            )}
-            <button type="button" className="secondary" onClick={() => openUrl(REPO_URL)}>
-              <GithubIcon size={15} style={{ marginRight: "0.4rem" }} />
-              Ver no GitHub
-            </button>
+            </div>
+            {error && <div className="error-box settings-error">{error}</div>}
           </div>
-        </div>
-      </div>
+        </Modal>
+      )}
 
       {restartCountdown !== null && (
         <Modal onClose={() => {}} closeOnEscape={false} closeOnBackdrop={false} width="30rem">
           <h3 style={{ marginTop: 0 }}>Banco pronto para restauração</h3>
           <p className="muted" style={{ lineHeight: 1.55 }}>
-            O arquivo foi validado e preparado. {import.meta.env.DEV
-              ? <>O modo de desenvolvimento será encerrado em <strong>{restartCountdown} segundo(s)</strong>. Depois, execute <code>yarn tauri dev</code> novamente para concluir a restauração.</>
-              : <>O PontoScan reiniciará em <strong>{restartCountdown} segundo(s)</strong> para restaurar o banco com segurança.</>}
+            O arquivo foi validado e preparado.{" "}
+            {import.meta.env.DEV ? (
+              <>
+                O modo de desenvolvimento será encerrado em <strong>{restartCountdown} segundo(s)</strong>. Depois, execute <code>yarn tauri dev</code> novamente para concluir a
+                restauração.
+              </>
+            ) : (
+              <>
+                O PontoScan reiniciará em <strong>{restartCountdown} segundo(s)</strong> para restaurar o banco com segurança.
+              </>
+            )}
           </p>
           <p className="muted" style={{ fontSize: "0.85rem" }}>
             Se ocorrer algum erro, o banco atual será mantido. Nenhuma cópia extra permanecerá após uma restauração bem-sucedida.
           </p>
           <div style={{ display: "grid", gap: "0.4rem", margin: "1rem 0" }}>
             {importEvents.map((event) => (
-              <div key={`${event.label}-${event.occurredAt}`} style={{ display: "flex", justifyContent: "space-between", gap: "1rem", padding: "0.5rem 0.65rem", background: "var(--sidebar-bg)", borderRadius: 6 }}>
-                <span>✓ {event.label}</span><code>{event.occurredAt}</code>
+              <div
+                key={`${event.label}-${event.occurredAt}`}
+                style={{ display: "flex", justifyContent: "space-between", gap: "1rem", padding: "0.5rem 0.65rem", background: "var(--sidebar-bg)", borderRadius: 6 }}
+              >
+                <span>✓ {event.label}</span>
+                <code>{event.occurredAt}</code>
               </div>
             ))}
             <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", padding: "0.5rem 0.65rem", background: "var(--accent-soft)", borderRadius: 6 }}>
-              <span>⏳ Reinício pendente</span><code>em {restartCountdown}s</code>
+              <span>⏳ Reinício pendente</span>
+              <code>em {restartCountdown}s</code>
             </div>
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.1rem" }}>
-            <button type="button" className="secondary" onClick={cancelPendingImport}>Cancelar importação</button>
-            <button type="button" onClick={() => setRestartCountdown(0)}>{import.meta.env.DEV ? "Fechar modo dev agora" : "Reiniciar agora"}</button>
+            <button type="button" className="secondary" onClick={cancelPendingImport}>
+              Cancelar importação
+            </button>
+            <button type="button" onClick={() => setRestartCountdown(0)}>
+              {import.meta.env.DEV ? "Fechar modo dev agora" : "Reiniciar agora"}
+            </button>
           </div>
         </Modal>
       )}
@@ -910,4 +1053,48 @@ export default function SettingsPage() {
       )}
     </div>
   );
+}
+
+/** One "keep this" / "include this" choice in the Apagar wizard: the whole row is the checkbox. */
+function WizardOption({
+  checked,
+  onChange,
+  title,
+  desc,
+  disabled = false,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  title: string;
+  desc?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <label className={disabled ? "settings-option settings-option-disabled" : "settings-option"}>
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+      <span>
+        <span className="settings-option-title">{title}</span>
+        {desc && <span className="settings-option-desc">{desc}</span>}
+      </span>
+    </label>
+  );
+}
+
+/** A settings row that opens its details below it when clicked. */
+function ExpandHead({ open, onToggle, title, desc, value }: { open: boolean; onToggle: () => void; title: string; desc?: ReactNode; value?: ReactNode }) {
+  return (
+    <button type="button" className="settings-row settings-row-button" aria-expanded={open} onClick={onToggle}>
+      <span className="settings-row-text">
+        <span className="settings-row-title">{title}</span>
+        {desc && <span className="settings-row-desc">{desc}</span>}
+      </span>
+      {value}
+      <ChevronRight size={16} className={open ? "settings-chevron settings-chevron-open" : "settings-chevron"} />
+    </button>
+  );
+}
+
+/** Lowercase, without accents: "Atualização" and "atualizacao" find the same row. */
+function normalizeSearch(text: string): string {
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
