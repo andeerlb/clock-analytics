@@ -110,8 +110,8 @@ export default function OptionPicker({
       const list = listRef.current;
       if (!list) return;
       const footerHeight = footerRef.current?.offsetHeight ?? 0;
-      // Inside the Filtros panel the box ends where its scrolling area does, not at the window's bottom.
-      const area = list.closest(".side-panel-body");
+      // Inside a side panel or sheet (Filtros) the box ends where its scrolling area does, not at the window's bottom.
+      const area = list.closest(".side-panel-body, .drawer-body");
       const bottom = area ? Math.min(window.innerHeight, area.getBoundingClientRect().bottom) : window.innerHeight;
       const room = bottom - list.getBoundingClientRect().top - footerHeight - WINDOW_MARGIN_PX;
       setListMaxHeight(Math.max(MIN_LIST_HEIGHT_PX, Math.floor(room)));
