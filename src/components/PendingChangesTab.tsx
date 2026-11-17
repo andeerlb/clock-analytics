@@ -1,13 +1,12 @@
-import { Bell, CheckCheck, ChevronDown, ChevronRight, Clock3, FileSpreadsheet } from "lucide-react";
+import { Bell, CheckCheck, ChevronDown, ChevronRight, Clock3 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { deletePaymentShift, dismissCheckDiffs, listAllLatestShiftDiffs, type CheckDiffRow } from "../lib/db";
-import { acceptShiftChange } from "../lib/remoteCheckDiff";
-import { formatCountdown, formatDateAbbrevYY, formatDateTime, parseSqliteDateTime, resolveReimportConfigLabel } from "../lib/format";
-import ChangeDiffPanel from "./ChangeDiffPanel";
+import { formatCountdown, formatDateAbbrevYY, formatDateTime, formatPersonName, parseSqliteDateTime, resolveReimportConfigLabel } from "../lib/format";
+import ChangeCards from "./ChangeCards";
+import ConfirmModal from "./ConfirmModal";
 import Drawer from "./Drawer";
-import PillButton from "./PillButton";
 
 /** Measured, since the sidebar can be collapsed. The floating card can be dragged anywhere EXCEPT over it: that column is real layout, not an overlay. */
 function sidebarWidth(): number {
@@ -53,7 +52,7 @@ function clampCardPosition(top: number, left: number, width: number, height: num
  * unseen (unless the Drawer is already open, which then just stays open).
  *
  * The Drawer itself is grouped by colaborador/turno (each card is already
- * one turno — `ChangeDiffPanel`'s own identity grouping does this for free)
+ * one turno — the same `ChangeCards` Verificação automática uses)
  * and offers the same "Aceitar"/"Marcar como excluído" actions as the
  * Pagamentos page's own review Drawer — no need to go find the row over
  * there just to act on something spotted from here.
@@ -65,11 +64,9 @@ export default function PendingChangesTab() {
   const [rows, setRows] = useState<CheckDiffRow[]>([]);
   const [open, setOpen] = useState(false);
 
-  const [acceptingShiftId, setAcceptingShiftId] = useState<number | null>(null);
-  const [acceptedShiftIds, setAcceptedShiftIds] = useState<Set<number>>(new Set());
-  const [markingShiftId, setMarkingShiftId] = useState<number | null>(null);
-  const [markedShiftIds, setMarkedShiftIds] = useState<Set<number>>(new Set());
-  const [dismissingIds, setDismissingIds] = useState<Set<number>>(new Set());
+  const [busyKeys, setBusyKeys] = useState<Set<string>>(new Set());
+  const [deleteShiftTarget, setDeleteShiftTarget] = useState<{ shiftId: number; who: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [now, setNow] = useState(() => Date.now());
@@ -153,62 +150,37 @@ export default function PendingChangesTab() {
     setRows(await listAllLatestShiftDiffs());
   }
 
-  /** Mirrors `PaymentsPage.handleAcceptChange` — re-downloads that shift's own config fresh and writes just this one turno's pending field change (see `acceptShiftChange`). */
-  async function handleAccept(shiftId: number) {
-    const configId = rows.find((r) => r.matchedShiftId === shiftId && r.changeKind === "field" && !r.applied)?.configId ?? null;
-    const config = configId !== null ? reimportConfigs.find((c) => c.id === configId) : undefined;
-    if (!config) {
-      setActionError("Não foi possível encontrar a configuração de reimportação que encontrou essa mudança — pode ter sido removida.");
-      return;
-    }
-    setAcceptingShiftId(shiftId);
+  /** Runs a card/group action with `key` marked busy, then reloads the list. */
+  async function run(key: string, action: () => Promise<void>) {
+    setBusyKeys((prev) => new Set(prev).add(key));
     setActionError(null);
     try {
-      await acceptShiftChange(config, shiftId);
-      setAcceptedShiftIds((prev) => new Set(prev).add(shiftId));
+      await action();
       await refreshRows();
     } catch (e) {
       setActionError(String(e instanceof Error ? e.message : e));
     } finally {
-      setAcceptingShiftId(null);
-    }
-  }
-
-  /** Mirrors `PaymentsPage.handleMarkReviewDeleted` — same soft-delete `deletePaymentShift` uses everywhere else. */
-  async function handleMarkDeleted(shiftId: number) {
-    setMarkingShiftId(shiftId);
-    setActionError(null);
-    try {
-      await deletePaymentShift(shiftId);
-      setMarkedShiftIds((prev) => new Set(prev).add(shiftId));
-      await refreshRows();
-    } catch (e) {
-      setActionError(String(e instanceof Error ? e.message : e));
-    } finally {
-      setMarkingShiftId(null);
-    }
-  }
-
-  /** "Visto" — acknowledges this card/line's diff rows (see `dismissCheckDiffs`) so it stops counting toward this tab's badge. Never suppresses a future occurrence: a later check finding the same problem again writes a brand-new, undismissed row. */
-  async function handleDismiss(rowIds: number[]) {
-    setDismissingIds((prev) => new Set([...prev, ...rowIds]));
-    setActionError(null);
-    try {
-      await dismissCheckDiffs(rowIds);
-      await refreshRows();
-    } catch (e) {
-      setActionError(String(e instanceof Error ? e.message : e));
-    } finally {
-      setDismissingIds((prev) => {
+      setBusyKeys((prev) => {
         const next = new Set(prev);
-        rowIds.forEach((id) => next.delete(id));
+        next.delete(key);
         return next;
       });
     }
   }
 
-  async function handleDismissAll() {
-    await handleDismiss(unseenRows.map((row) => row.id));
+  async function handleDeleteShift() {
+    if (!deleteShiftTarget) return;
+    setDeleting(true);
+    setActionError(null);
+    try {
+      await deletePaymentShift(deleteShiftTarget.shiftId);
+      await refreshRows();
+      setDeleteShiftTarget(null);
+    } catch (e) {
+      setActionError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setDeleting(false);
+    }
   }
 
   function toggleGroup(key: string) {
@@ -230,7 +202,7 @@ export default function PendingChangesTab() {
 
   const pending = rows.filter((r) => !r.applied);
   const applied = rows.filter((r) => r.applied);
-  const dismissingAll = unseenRows.length > 0 && unseenRows.every((row) => dismissingIds.has(row.id));
+  const dismissingAll = busyKeys.has("all");
 
   function renderGroups(groupRows: CheckDiffRow[], appliedGroup = false) {
     const groups = new Map<string, CheckDiffRow[]>();
@@ -270,63 +242,68 @@ export default function PendingChangesTab() {
         : reimportConfigs.some((item) => item.sourceUrl === first.sourceUrl && checkingConfigIds.has(item.id));
       const groupUnseen = entries.filter((row) => row.dismissedAt === null);
       const groupSeenCount = entries.length - groupUnseen.length;
-      const dismissingGroup = groupUnseen.length > 0 && groupUnseen.every((row) => dismissingIds.has(row.id));
+      const dismissingGroup = busyKeys.has(`g${key}`);
       const collapsed = collapsedGroups.has(key);
       const lastCheckTitle = config?.lastCheckedAt
         ? `Última análise: ${formatDateTime(config.lastCheckedAt)}`
         : "Esta configuração ainda não foi analisada";
 
       return (
-        <section key={key} style={{ border: "1px solid var(--border-soft)", borderRadius: 10, overflow: "hidden", marginBottom: "0.65rem" }}>
-          <div style={{ padding: "0.65rem 0.75rem", background: "var(--surface-variant)", borderBottom: collapsed ? "none" : "1px solid var(--border-soft)" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 650, fontSize: "0.82rem" }}>
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => toggleGroup(key)}
-                aria-expanded={!collapsed}
-                title={collapsed ? "Expandir grupo" : "Recolher grupo"}
-                style={{ display: "flex", alignItems: "center", gap: "0.4rem", minWidth: 0, padding: 0, flex: 1, textAlign: "left", color: "inherit" }}
-              >
-                <ChevronDown size={14} style={{ flexShrink: 0, transform: collapsed ? "rotate(-90deg)" : undefined, transition: "transform 120ms ease" }} />
-                <FileSpreadsheet size={14} style={{ flexShrink: 0 }} />
-                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fileName}</span>
-              </button>
-              <span className="badge neutral" style={{ flexShrink: 0 }}>
-                {entries.length} {entries.length === 1 ? "notificação" : "notificações"}
+        <section key={key} className="pc-group">
+          <div className="pc-group-head">
+            <button type="button" className="pc-group-toggle" onClick={() => toggleGroup(key)} aria-expanded={!collapsed} title={collapsed ? "Expandir" : "Recolher"}>
+              <span className={/\.xlsx?$/i.test(fileName) ? "rv-file-ico" : "rv-file-ico rv-file-ico-other"} aria-hidden="true">
+                {/\.(\w{2,4})$/.exec(fileName)?.[1].toUpperCase().slice(0, 3) ?? "URL"}
               </span>
-            </div>
-            <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.3rem" }}>
-              Configuração: {ruleLabel} · Analisado: {period}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.45rem", marginTop: "0.35rem" }}>
-              <div title={lastCheckTitle} style={{ display: "flex", alignItems: "center", gap: "0.3rem", color: nextAt === null ? "var(--text-muted)" : "var(--accent)", fontSize: "0.72rem", fontWeight: 600 }}>
+              <span className="rv-text">
+                <span className="pc-group-title">{fileName}</span>
+                <span className="rv-small">
+                  {ruleLabel} · {period}
+                </span>
+              </span>
+              <span className={`rv-tag ${groupUnseen.length > 0 ? (appliedGroup ? "rv-tag-auto" : "rv-tag-alt") : "rv-tag-who"}`}>
+                {groupUnseen.length > 0 ? `${groupUnseen.length} ${appliedGroup ? (groupUnseen.length === 1 ? "nova" : "novas") : groupUnseen.length === 1 ? "pendente" : "pendentes"}` : "Tudo visto"}
+              </span>
+              <ChevronDown size={15} className="pc-group-chevron" style={{ transform: collapsed ? "rotate(-90deg)" : undefined }} aria-hidden="true" />
+            </button>
+            <div className="pc-group-meta">
+              <span title={lastCheckTitle} className={nextAt === null ? "pc-next pc-next-off" : "pc-next"}>
                 <Clock3 size={12} />
-                {isChecking ? "Analisando agora…" : config?.checkDisabled ? "Análise automática pausada" : nextAt === null ? "Próxima análise indisponível" : `Próxima análise em ${formatCountdown(nextAt - now)}`}
-              </div>
-              <span className={`badge ${groupUnseen.length > 0 ? "warn" : "neutral"}`} style={{ marginLeft: "auto" }}>
-                {groupUnseen.length > 0 ? `${groupUnseen.length} pendente${groupUnseen.length === 1 ? "" : "s"}` : "Tudo visto"}
+                {isChecking ? "Conferindo agora…" : config?.checkDisabled ? "Conferência pausada" : nextAt === null ? "Sem próxima conferência" : `Próxima conferência em ${formatCountdown(nextAt - now)}`}
               </span>
-              {groupSeenCount > 0 && groupUnseen.length > 0 && <span className="muted" style={{ fontSize: "0.7rem" }}>{groupSeenCount} visto{groupSeenCount === 1 ? "" : "s"}</span>}
+              {groupSeenCount > 0 && groupUnseen.length > 0 && (
+                <span className="rv-small">
+                  {groupSeenCount} {groupSeenCount === 1 ? "vista" : "vistas"}
+                </span>
+              )}
               {groupUnseen.length > 0 && (
-                <PillButton disabled={dismissingGroup} onClick={() => handleDismiss(groupUnseen.map((row) => row.id))}>
-                  <CheckCheck size={12} /> {dismissingGroup ? "Marcando…" : "Visto neste grupo"}
-                </PillButton>
+                <button
+                  type="button"
+                  className="settings-button settings-button-ghost pc-seen"
+                  disabled={dismissingGroup}
+                  onClick={() => run(`g${key}`, () => dismissCheckDiffs(groupUnseen.map((row) => row.id)))}
+                >
+                  <CheckCheck size={13} /> {dismissingGroup ? "Marcando…" : "Marcar como visto"}
+                </button>
               )}
             </div>
           </div>
-          {!collapsed && <div style={{ padding: "0.65rem" }}>
-            <ChangeDiffPanel
-              rows={entries}
-              {...(!appliedGroup ? {
-                onAccept: handleAccept, acceptingShiftId, acceptedShiftIds,
-                onMarkDeleted: handleMarkDeleted, markingShiftId, markedShiftIds,
-                onReprocess: handleReprocess,
-              } : {})}
-              onDismiss={handleDismiss}
-              dismissingIds={dismissingIds}
-            />
-          </div>}
+          {!collapsed && (
+            <div className="pc-group-body">
+              <ChangeCards
+                rows={entries}
+                keyPrefix={`${key}:`}
+                configFor={() => config}
+                stateOf={(cardRows) =>
+                  appliedGroup || cardRows.every((r) => r.applied) ? "applied" : cardRows.every((r) => r.dismissedAt !== null) ? "seen" : "pending"
+                }
+                busyKeys={busyKeys}
+                run={run}
+                onDeleteShift={setDeleteShiftTarget}
+                onReprocess={handleReprocess}
+              />
+            </div>
+          )}
         </section>
       );
     });
@@ -371,34 +348,56 @@ export default function PendingChangesTab() {
           setActionError(null);
         }}
         title="Atualizações pendentes"
+        className="rv-drawer"
+        width="min(480px, calc(100vw - 24px))"
+        header={
+          <div className="rv-drawer-head">
+            <span className="pc-head-icon" aria-hidden="true">
+              <Bell size={16} />
+            </span>
+            <div className="rv-text">
+              <span className="rv-drawer-title">Atualizações pendentes</span>
+              <span className="rv-drawer-sub">
+                {unseenRows.length ? `${unseenRows.length} ${unseenRows.length === 1 ? "nova" : "novas"} nas planilhas acompanhadas` : "Tudo visto"}
+              </span>
+            </div>
+          </div>
+        }
+        footer={
+          <>
+            <span className="rv-footer-note">Vistas saem do aviso, mas continuam aqui.</span>
+            <button type="button" className="settings-button settings-button-primary" disabled={dismissingAll || unseenRows.length === 0} onClick={() => run("all", () => dismissCheckDiffs(unseenRows.map((row) => row.id)))}>
+              <CheckCheck size={13} /> {dismissingAll ? "Marcando…" : `Marcar tudo como visto (${unseenRows.length})`}
+            </button>
+          </>
+        }
       >
-        <div style={{ display: "flex", flexDirection: "column", gap: "1.2rem" }}>
+        <div className="pc-body">
           {actionError && <div className="error-box">{actionError}</div>}
-          {unseenRows.length > 0 && (
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              <PillButton disabled={dismissingAll} onClick={handleDismissAll}>
-                <CheckCheck size={13} /> {dismissingAll ? "Marcando…" : `Visto em todos (${unseenRows.length})`}
-              </PillButton>
-            </div>
-          )}
           {pending.length > 0 && (
-            <div>
-              <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.5rem" }}>
-                Pendentes ({pending.length})
-              </div>
+            <section className="pc-section">
+              <span className="rv-section-label">Para revisar</span>
               {renderGroups(pending)}
-            </div>
+            </section>
           )}
           {applied.length > 0 && (
-            <div>
-              <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.5rem" }}>
-                Aplicadas automaticamente ({applied.length})
-              </div>
+            <section className="pc-section">
+              <span className="rv-section-label">Aplicadas sozinho</span>
               {renderGroups(applied, true)}
-            </div>
+            </section>
           )}
         </div>
       </Drawer>
+      {deleteShiftTarget && (
+        <ConfirmModal
+          title="Excluir este turno?"
+          message={`O turno${deleteShiftTarget.who ? ` de ${formatPersonName(deleteShiftTarget.who)}` : ""} saiu da planilha e vai ser excluído do PontoScan também.`}
+          confirmLabel={deleting ? "Excluindo..." : "Excluir turno"}
+          confirmDisabled={deleting}
+          onConfirm={handleDeleteShift}
+          onCancel={() => setDeleteShiftTarget(null)}
+        />
+      )}
     </>
   );
 }
