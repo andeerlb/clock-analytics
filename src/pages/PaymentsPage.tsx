@@ -18,7 +18,6 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { useAiAssistant } from "../components/AiAssistant";
 import Avatar from "../components/Avatar";
 import Drawer from "../components/Drawer";
 import ExtraColumnsDrawer from "../components/ExtraColumnsDrawer";
@@ -403,8 +402,7 @@ export default function PaymentsPage() {
 
   const [shiftDiffs, setShiftDiffs] = useState<Map<number, ShiftFieldDiffRow[]>>(new Map());
 
-  // The turno open in the docked `ShiftPanel` — clicking a row opens it;
-  // the panel's arrows move it to the row above/below on the same tab.
+  // The turno open in the docked `ShiftPanel` — clicking a row opens it.
   const [openShift, setOpenShift] = useState<{ shift: PaymentShiftRow; companyId: number; groupRef: GroupRef } | null>(null);
   const [panelTab, setPanelTab] = useState<ShiftPanelTab>("pay");
   const [actionBusy, setActionBusy] = useState(false);
@@ -426,10 +424,6 @@ export default function PaymentsPage() {
   // Which row stays highlighted — the turno open in the panel, kept lit
   // after closing it so you don't lose track of which row it was.
   const [activeShiftId, setActiveShiftId] = useState<number | null>(null);
-  const { askAboutShift } = useAiAssistant();
-  function handleInvestigate(shift: PaymentShiftRow) {
-    askAboutShift({ shiftId: shift.id, employeeId: shift.employeeId, employeeName: shift.employeeName, workDate: shift.workDate });
-  }
 
   useEffect(() => {
     Promise.all([listCompanies(), listClients(), listRolesGlobal(), listDistinctPaymentShiftLocals()]).then(
@@ -775,9 +769,9 @@ export default function PaymentsPage() {
     setActionError(null);
   }
 
-  // Every turno row on screen, in table order — what the panel's arrows
-  // walk through. Grouped view: only the rows of expanded groups, since
-  // those are the ones visible.
+  // Every turno row on screen — for the panel's "other pending turnos of
+  // this colaborador". Grouped view: only the rows of expanded groups,
+  // since those are the ones visible.
   const panelRows: { shift: PaymentShiftRow; companyId: number; groupRef: GroupRef }[] = grouped
     ? summaries.flatMap((s) =>
         expandedKeys.has(groupKey(s.employeeId, s.competencia))
@@ -789,14 +783,6 @@ export default function PaymentsPage() {
           : [],
       )
     : flatRows.map((r) => ({ shift: r, companyId: r.companyId, groupRef: null }));
-  const foundIndex = openShift ? panelRows.findIndex((r) => r.shift.id === openShift.shift.id) : -1;
-  // Where the open turno was last seen in the list. After paying (or any
-  // change) it may drop out of a filtered list — the arrows then continue
-  // from the spot it left instead of going dead.
-  const panelAnchor = useRef(-1);
-  if (foundIndex >= 0) panelAnchor.current = foundIndex;
-  const prevRow = openShift ? (foundIndex >= 0 ? panelRows[foundIndex - 1] : panelRows[panelAnchor.current - 1]) : undefined;
-  const nextRow = openShift ? (foundIndex >= 0 ? panelRows[foundIndex + 1] : panelRows[panelAnchor.current]) : undefined;
 
   /** After a change appends a new row for the open turno, keep the panel on that new row. */
   async function followNewRow(newShiftId: number) {
@@ -1481,15 +1467,10 @@ export default function PaymentsPage() {
         busy={actionBusy}
         error={actionError}
         lastPayment={lastPayment}
-        canPrev={prevRow !== undefined}
-        canNext={nextRow !== undefined}
-        onPrev={() => prevRow && openShiftPanel(prevRow.shift, prevRow.companyId, prevRow.groupRef)}
-        onNext={() => nextRow && openShiftPanel(nextRow.shift, nextRow.companyId, nextRow.groupRef)}
         onOpenShift={(shift) => {
           const row = panelRows.find((r) => r.shift.id === shift.id);
           if (row) openShiftPanel(row.shift, row.companyId, row.groupRef);
         }}
-        onAskAi={() => openShift && handleInvestigate(openShift.shift)}
         onReview={() => openShift && setReviewingShift({ shift: openShift.shift, groupRef: openShift.groupRef })}
         onConfirmPay={handleConfirmPayment}
         onConfirmRevert={handleConfirmRevert}

@@ -2,16 +2,13 @@ import {
   AlertTriangle,
   CalendarDays,
   Check,
-  ChevronDown,
   ChevronLeft,
-  ChevronUp,
   Copy,
   CreditCard,
   History,
   Info,
   MoreVertical,
   Pencil,
-  Sparkles,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
@@ -378,8 +375,7 @@ function DataTab({
 /**
  * Everything about one turno on Pagamentos, in a panel docked beside the
  * table (same as the assistant): pagar or see the payment, edit its data,
- * its history, ask the assistant, remove it. Opened by clicking a row; the
- * arrows move to the row above/below on the same tab.
+ * its history, remove it. Opened by clicking a row.
  */
 export default function ShiftPanel({
   shift: shiftProp,
@@ -392,12 +388,7 @@ export default function ShiftPanel({
   busy,
   error,
   lastPayment,
-  canPrev,
-  canNext,
-  onPrev,
-  onNext,
   onOpenShift,
-  onAskAi,
   onReview,
   onConfirmPay,
   onConfirmRevert,
@@ -417,12 +408,7 @@ export default function ShiftPanel({
   busy: boolean;
   error: string | null;
   lastPayment: LastPayment | null;
-  canPrev: boolean;
-  canNext: boolean;
-  onPrev: () => void;
-  onNext: () => void;
   onOpenShift: (shift: PaymentShiftRow) => void;
-  onAskAi: () => void;
   /** Opens the review of what the automatic verification found. */
   onReview: () => void;
   onConfirmPay: (amount: number, pixKey: EmployeePixKeyRow | null) => void;
@@ -797,16 +783,6 @@ export default function ShiftPanel({
       width={400}
       actions={
         <>
-          <button type="button" className="sa-ai-button" onClick={onAskAi} title="Abre o Assistente com este turno">
-            <Sparkles size={14} />
-            Perguntar à IA
-          </button>
-          <button type="button" className="side-panel-icon-button" aria-label="Turno anterior" title="Turno anterior" onClick={onPrev} disabled={!canPrev}>
-            <ChevronUp size={16} />
-          </button>
-          <button type="button" className="side-panel-icon-button" aria-label="Próximo turno" title="Próximo turno" onClick={onNext} disabled={!canNext}>
-            <ChevronDown size={16} />
-          </button>
           <span className="sa-more">
             <button
               type="button"
