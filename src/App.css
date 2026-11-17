@@ -5156,50 +5156,7 @@ tr.payments-row-clickable {
   font-size: 11px;
 }
 
-.sa-more {
-  position: relative;
-  display: inline-flex;
-}
-
-.sa-more-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 4;
-}
-
-.sa-more-menu {
-  position: absolute;
-  top: 38px;
-  right: 0;
-  z-index: 5;
-  min-width: 180px;
-  padding: 6px;
-  background: #1c1c20;
-  border: 1px solid #2e2e33;
-  border-radius: 10px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
-}
-
-.sa-more-menu button {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  background: transparent;
-  border: 0;
-  border-radius: 6px;
-  box-shadow: none;
-  font-size: 13px;
-  font-weight: 400;
-  text-align: left;
-}
-
-.sa-more-menu button:hover:not(:disabled) {
-  background: #26262b;
-}
-
-.sa-more-menu button.sa-more-danger {
+button.side-panel-icon-button.sa-trash-button:hover:not(:disabled) {
   color: var(--danger);
 }
 

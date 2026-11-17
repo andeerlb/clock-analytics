@@ -10,7 +10,6 @@ import {
   Link2,
   Moon,
   Info,
-  MoreVertical,
   Pencil,
   Sun,
   Trash2,
@@ -528,7 +527,6 @@ export default function ShiftPanel({
   const [deleting, setDeleting] = useState(false);
   const [deleteAck, setDeleteAck] = useState(false);
   const [confirmingRevert, setConfirmingRevert] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
   const [dataFooter, setDataFooter] = useState<ReactNode>(null);
 
   const shiftId = shift?.id ?? null;
@@ -536,7 +534,6 @@ export default function ShiftPanel({
     setDeleting(false);
     setDeleteAck(false);
     setConfirmingRevert(false);
-    setMoreOpen(false);
   }, [shiftId]);
   useEffect(() => {
     setDigits(suggestedDigits);
@@ -877,39 +874,16 @@ export default function ShiftPanel({
       width={400}
       actions={
         <>
-          <span className="sa-more">
-            <button
-              type="button"
-              className="side-panel-icon-button"
-              aria-label="Mais opções"
-              title="Mais opções"
-              aria-expanded={moreOpen}
-              onClick={() => setMoreOpen((v) => !v)}
-            >
-              <MoreVertical size={16} />
-            </button>
-            {moreOpen && (
-              <>
-                <div className="sa-more-backdrop" onClick={() => setMoreOpen(false)} />
-                <div className="sa-more-menu" role="menu">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="sa-more-danger"
-                    disabled={blocked}
-                    title={blocked ? "Revise a alteração da fonte antes" : undefined}
-                    onClick={() => {
-                      setMoreOpen(false);
-                      setDeleting(true);
-                    }}
-                  >
-                    <Trash2 size={14} />
-                    Remover turno
-                  </button>
-                </div>
-              </>
-            )}
-          </span>
+          <button
+            type="button"
+            className="side-panel-icon-button sa-trash-button"
+            aria-label="Remover turno"
+            title={blocked ? "Revise a alteração da fonte antes de remover" : "Remover turno"}
+            disabled={blocked || deleting}
+            onClick={() => setDeleting(true)}
+          >
+            <Trash2 size={16} />
+          </button>
         </>
       }
       subheader={
