@@ -1,7 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { checkRemotePaymentFile, deletePaths, downloadPaymentFileFromUrl, hashPaymentFile, setTrayStatus } from "../lib/api";
+import { checkRemotePaymentFile, deletePaths, downloadPaymentFileFromUrl, hashPaymentFile, readSpreadsheetAuthor, setTrayStatus } from "../lib/api";
 import {
   copyCheckDiffs,
   createReimportConfig as createReimportConfigDb,
@@ -19,6 +19,7 @@ import {
   untrackPaymentUrl as untrackPaymentUrlDb,
   updateReimportConfig as updateReimportConfigDb,
   type CheckDiffInput,
+  type FileAuthor,
   type EvaluatedConfigSnapshot,
   type ReimportConfig,
   type ReimportConfigInput,
@@ -437,10 +438,15 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
           // this exact path again once this check is done with it. Left
           // unset otherwise — nothing to clean up.
           let downloadedPath: string | null = null;
+          // Who saved this version (from the file's properties), so each
+          // change found here can say who made it. Best-effort: a file that
+          // can't tell just records nothing.
+          let author: FileAuthor | null = null;
           try {
             const downloaded = await downloadPaymentFileFromUrl(t.sourceUrl);
             downloadSucceeded = true;
             downloadedPath = downloaded.path;
+            author = await readSpreadsheetAuthor(downloaded.path).catch(() => null);
 
             // "Atualizar registros automaticamente" needs real provenance
             // for anything it writes (source_row_number/sheet position
@@ -532,8 +538,9 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
             effectiveResult,
             wholeUrlErrorMessage,
             configs.map(toEvaluatedConfigSnapshot),
+            author,
           );
-          await saveCheckDiffs(checkLogId, t.sourceUrl, entries);
+          await saveCheckDiffs(checkLogId, t.sourceUrl, entries, author);
           // A failed DOWNLOAD isn't cached as "checked" — a transient
           // network blip should be retried next tick, not stuck reusing an
           // 'error' verdict forever until the header changes again. A

@@ -15,10 +15,16 @@ export default function Drawer({
   footer,
   width = "min(640px, 92vw)",
   side = "right",
+  header,
+  className,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
+  /** Replaces the plain `title` heading (kept as the accessible name) with richer content, e.g. an icon and a subtitle. */
+  header?: ReactNode;
+  /** Extra class on the panel, for a screen-specific look. */
+  className?: string;
   children: ReactNode;
   /** Rendered below the scrollable body, pinned to the bottom of the panel — for action buttons that should stay reachable without scrolling (e.g. "Aplicar filtros"). Omit for a Drawer with no persistent actions. */
   footer?: ReactNode;
@@ -98,12 +104,14 @@ export default function Drawer({
       }}
     >
       <div
-        className={`drawer-panel drawer-panel-${side}${visible ? " drawer-panel-visible" : ""}`}
+        className={`drawer-panel drawer-panel-${side}${visible ? " drawer-panel-visible" : ""}${className ? ` ${className}` : ""}`}
         style={{ width }}
+        role="dialog"
+        aria-label={title}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="drawer-header">
-          <h3>{title}</h3>
+          {header ?? <h3>{title}</h3>}
           <button type="button" className="ghost" onClick={onClose} aria-label="Fechar">
             <X size={18} />
           </button>

@@ -1,8 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ChevronRight, ExternalLink, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, ExternalLink, FileSpreadsheet, Plus, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import ChangeDiffPanel from "../components/ChangeDiffPanel";
 import ConfirmModal from "../components/ConfirmModal";
 import DateRangePicker from "../components/DateRangePicker";
 import Drawer from "../components/Drawer";
@@ -50,11 +49,11 @@ function settingsOf(c: ReimportConfig): RuleSettings {
 
 const NEW_RULE_DEFAULTS: RuleSettings = {
   label: "",
-  dateMode: "relative",
+  dateMode: "month",
   periodStart: null,
   periodEnd: null,
-  startOffsetDays: 30,
-  endOffsetDays: 0,
+  startOffsetDays: null,
+  endOffsetDays: null,
   checkIntervalMinutes: DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES,
   keepManualEdits: true,
   autoApplyEnabled: false,
@@ -62,33 +61,29 @@ const NEW_RULE_DEFAULTS: RuleSettings = {
   autoApplyOverwritePaid: false,
 };
 
-/** Shortcuts for "Quais turnos olhar". */
+/** Shortcuts for "Quais turnos olhar" (plus "Período fixo…", which opens the date picker). */
 const PERIOD_CHOICES: { key: string; label: string; settings: Pick<RuleSettings, "dateMode" | "periodStart" | "periodEnd" | "startOffsetDays" | "endOffsetDays"> }[] = [
-  { key: "7", label: "Últimos 7 dias", settings: { dateMode: "relative", periodStart: null, periodEnd: null, startOffsetDays: 7, endOffsetDays: 0 } },
+  { key: "month", label: "Mês atual", settings: { dateMode: "month", periodStart: null, periodEnd: null, startOffsetDays: null, endOffsetDays: null } },
   { key: "30", label: "Últimos 30 dias", settings: { dateMode: "relative", periodStart: null, periodEnd: null, startOffsetDays: 30, endOffsetDays: 0 } },
-  { key: "60", label: "Últimos 60 dias", settings: { dateMode: "relative", periodStart: null, periodEnd: null, startOffsetDays: 60, endOffsetDays: 0 } },
-  { key: "all", label: "Planilha inteira", settings: { dateMode: "fixed", periodStart: null, periodEnd: null, startOffsetDays: null, endOffsetDays: null } },
 ];
 
+/** Which "Quais turnos olhar" option a rule is on; "custom" for an older relative range none of the shortcuts covers. */
 function periodChoiceOf(s: RuleSettings): string {
-  const hit = PERIOD_CHOICES.find(
-    (p) =>
-      p.settings.dateMode === s.dateMode &&
-      (s.dateMode === "relative"
-        ? p.settings.startOffsetDays === s.startOffsetDays && p.settings.endOffsetDays === s.endOffsetDays
-        : p.settings.periodStart === s.periodStart && p.settings.periodEnd === s.periodEnd),
-  );
-  if (hit) return hit.key;
-  return s.dateMode === "fixed" ? "fixed" : "custom";
+  if (s.dateMode === "month") return "month";
+  if (s.dateMode === "fixed") return "fixed";
+  return s.startOffsetDays === 30 && s.endOffsetDays === 0 ? "30" : "custom";
 }
 
-/** "últimos 30 dias", "01/nov/26 a 30/nov/26", "planilha inteira" — the rule's period in a few words. */
+/** "mês atual", "últimos 30 dias", "01/nov/26 a 30/nov/26", "planilha inteira" — the rule's period in a few words. */
 function periodText(s: RuleSettings): string {
   const choice = PERIOD_CHOICES.find((p) => p.key === periodChoiceOf(s));
   if (choice) return choice.label.toLowerCase();
-  const r = resolveReimportPeriod(s);
-  if (s.dateMode === "relative") return `de ${s.startOffsetDays ?? "?"} a ${s.endOffsetDays ?? "?"} dias atrás`;
-  return `${r.start ? formatDateAbbrevYY(r.start) : "início"} a ${r.end ? formatDateAbbrevYY(r.end) : "fim"}`;
+  if (s.dateMode === "relative") {
+    if (s.endOffsetDays === 0 && s.startOffsetDays !== null) return `últimos ${s.startOffsetDays} dias`;
+    return `de ${s.startOffsetDays ?? "?"} a ${s.endOffsetDays ?? "?"} dias atrás`;
+  }
+  if (!s.periodStart && !s.periodEnd) return "planilha inteira";
+  return `${s.periodStart ? formatDateAbbrevYY(s.periodStart) : "início"} a ${s.periodEnd ? formatDateAbbrevYY(s.periodEnd) : "fim"}`;
 }
 
 function todayRange(s: RuleSettings): string {
@@ -116,6 +111,36 @@ function ago(sqlite: string | null, now: number): string {
   if (hours < 24) return `há ${hours} h`;
   const days = Math.round(hours / 24);
   return `há ${days} ${days === 1 ? "dia" : "dias"}`;
+}
+
+/** "hoje às 14:28", "ontem às 18:40", "16/11 às 10:00" — when a spreadsheet version was saved (as written in the file). */
+function savedWhen(iso: string | null): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const time = date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (date.toDateString() === today.toDateString()) return `hoje às ${time}`;
+  if (date.toDateString() === yesterday.toDateString()) return `ontem às ${time}`;
+  return `${date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} às ${time}`;
+}
+
+/** " · por Maria e Carlos" — who saved the versions these changes came from; "" when nobody is known. */
+function byWhom(rows: CheckDiffRow[]): string {
+  const names = Array.from(new Set(rows.map((r) => r.savedBy?.trim()).filter((n): n is string => Boolean(n))));
+  if (names.length === 0) return "";
+  if (names.length === 1) return ` · por ${names[0]}`;
+  const first = names.map((n) => n.split(/\s+/)[0]);
+  return ` · por ${first.slice(0, -1).join(", ")} e ${first[first.length - 1]}`;
+}
+
+/** The "Quem alterou" key of a change: the name, "no name in the file", or not known at all. */
+const UNNAMED_AUTHOR = "Sem nome no arquivo";
+function authorKey(r: CheckDiffRow): string | null {
+  if (!r.savedAt && !r.savedBy) return null;
+  return r.savedBy?.trim() || UNNAMED_AUTHOR;
 }
 
 function fileExt(name: string): string {
@@ -237,7 +262,7 @@ export default function RemoteUpdatesPage() {
       const n = countItems(pending);
       return {
         tone: "warn",
-        text: `${n} ${n === 1 ? "mudança encontrada" : "mudanças encontradas"} ${ago(c.lastCheckedAt, now)}`,
+        text: `${n} ${n === 1 ? "mudança encontrada" : "mudanças encontradas"} ${ago(c.lastCheckedAt, now)}${byWhom(pending)}`,
         action: (
           <button type="button" className="settings-button settings-button-primary" onClick={(e) => (e.stopPropagation(), openSheet({ kind: "review", configId: c.id, mode: "pending" }))}>
             Revisar
@@ -249,7 +274,7 @@ export default function RemoteUpdatesPage() {
       const n = countItems(applied);
       return {
         tone: "info",
-        text: `${n} ${n === 1 ? "mudança aplicada" : "mudanças aplicadas"} sozinho ${ago(c.lastCheckedAt, now)}`,
+        text: `${n} ${n === 1 ? "mudança aplicada" : "mudanças aplicadas"} sozinho ${ago(c.lastCheckedAt, now)}${byWhom(applied)}`,
         action: (
           <button type="button" className="settings-button" onClick={(e) => (e.stopPropagation(), openSheet({ kind: "review", configId: c.id, mode: "applied" }))}>
             Ver
@@ -340,6 +365,7 @@ export default function RemoteUpdatesPage() {
     try {
       await action();
       await refreshDiffs();
+      setCheckReload((n) => n + 1);
     } catch (e) {
       setActionError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -374,6 +400,7 @@ export default function RemoteUpdatesPage() {
   }, [sheet?.kind, sheetConfigId, sheetConfigChecked]);
 
   const [checkDiffs, setCheckDiffs] = useState<CheckDiffRow[] | null>(null);
+  const [checkReload, setCheckReload] = useState(0);
   useEffect(() => {
     if (sheet?.kind !== "check") return;
     setCheckDiffs(null);
@@ -381,7 +408,7 @@ export default function RemoteUpdatesPage() {
       .then((rows) => setCheckDiffs(rows.filter((r) => r.configId === sheet.configId)))
       .catch(() => setCheckDiffs([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheet]);
+  }, [sheet, checkReload]);
 
   // ---- rendering helpers ----
   function statusLine(tone: Tone, text: string) {
@@ -550,7 +577,10 @@ export default function RemoteUpdatesPage() {
         <label className="rv-toggle">
           <span className="rv-text">
             <span className="rv-toggle-title">Aplicar mudanças sozinho</span>
-            <span className="rv-toggle-desc">Alterações e turnos novos entram sem precisar revisar. Turnos já pagos não são alterados, a não ser que você permita em “Mais detalhes”.</span>
+            <span className="rv-toggle-desc">
+              Alterações, turnos novos e turnos que saíram da planilha entram sem precisar revisar.{" "}
+              {s.autoApplyOverwritePaid ? "Turnos já pagos também são alterados (veja “Mais detalhes”)" : "Turnos já pagos nunca são alterados"}, e nomes sem cadastro sempre esperam você.
+            </span>
           </span>
           <input type="checkbox" role="switch" className="settings-switch" checked={s.autoApplyEnabled} onChange={(e) => onChange({ autoApplyEnabled: e.target.checked })} />
         </label>
@@ -561,26 +591,10 @@ export default function RemoteUpdatesPage() {
   function renderRuleSheet(c: ReimportConfig) {
     const s = settingsOf(c);
     const file = fileOf(c.sourceUrl);
-    const siblings = configsByUrl.get(c.sourceUrl) ?? [];
     const { error } = rowsFor(c);
     const errorMessage = error?.message || (file?.lastResult === "error" ? file.lastErrorMessage : null);
     return (
       <div className="rv-sheet">
-        <div className="rv-sheet-sub">
-          {siblings.length > 1 ? (
-            <>
-              Regra: {ruleName(c)} · {periodText(s)} ·{" "}
-              <button type="button" className="rv-link" onClick={() => openSheet({ kind: "file", sourceUrl: c.sourceUrl })}>
-                ver as outras regras
-              </button>
-            </>
-          ) : (
-            <button type="button" className="rv-link" onClick={() => openUrl(c.sourceUrl)}>
-              Abrir link <ExternalLink size={11} />
-            </button>
-          )}
-        </div>
-
         {errorMessage && (
           <div className="rv-banner rv-banner-bad">
             <strong>Não deu pra conferir a planilha</strong>
@@ -616,85 +630,142 @@ export default function RemoteUpdatesPage() {
 
         {renderRuleFields(s, (patch) => saveRule(c, patch))}
 
-        <details className="rv-details">
-          <summary>Mais detalhes</summary>
-          <div className="rv-details-body">
-            <label className="rv-toggle rv-toggle-sub">
-              <span className="rv-text">
-                <span className="rv-toggle-title">Também alterar turnos editados à mão</span>
-                <span className="rv-toggle-desc">Quando aplica sozinho. Pagos, voltados para pendente ou com valor corrigido.</span>
-              </span>
-              <input
-                type="checkbox"
-                role="switch"
-                className="settings-switch"
-                checked={c.autoApplyOverwriteManualEdits}
-                disabled={!c.autoApplyEnabled}
-                onChange={(e) => saveRule(c, { autoApplyOverwriteManualEdits: e.target.checked })}
-              />
-            </label>
-            <label className="rv-toggle rv-toggle-sub">
-              <span className="rv-text">
-                <span className="rv-toggle-title">Também alterar turnos já pagos</span>
-                <span className="rv-toggle-desc">Quando aplica sozinho.</span>
-              </span>
-              <input
-                type="checkbox"
-                role="switch"
-                className="settings-switch"
-                checked={c.autoApplyOverwritePaid}
-                disabled={!c.autoApplyEnabled}
-                onChange={(e) => saveRule(c, { autoApplyOverwritePaid: e.target.checked })}
-              />
-            </label>
-            <label className="rv-toggle rv-toggle-sub">
-              <span className="rv-text">
-                <span className="rv-toggle-title">Ao reimportar, manter turnos editados à mão</span>
-                <span className="rv-toggle-desc">Vale quando você usa “Reimportar agora”, abaixo.</span>
-              </span>
-              <input type="checkbox" role="switch" className="settings-switch" checked={c.keepManualEdits} onChange={(e) => saveRule(c, { keepManualEdits: e.target.checked })} />
-            </label>
+        <div className={moreOpen ? "rv-more rv-more-open" : "rv-more"}>
+          <button type="button" className="rv-more-toggle" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>
+            <span className="rv-more-icon" aria-hidden="true">
+              <SlidersHorizontal size={15} />
+            </span>
+            <span className="rv-text">
+              <span className="rv-more-title">Mais detalhes</span>
+              <span className="rv-more-desc">Turnos editados à mão, modelo, histórico e ações</span>
+            </span>
+            <ChevronDown size={16} className="rv-more-chevron" aria-hidden="true" />
+          </button>
 
-            <div className="rv-field">
-              <span className="rv-label">Modelo da planilha</span>
-              <span>{c.templateName ?? "Modelo removido"}</span>
-              <span className="rv-small">Para usar outro modelo, crie uma nova regra.</span>
-            </div>
+          {moreOpen && (
+            <div className="rv-more-body">
+              <section className="rv-more-section">
+                <span className="rv-section-label">Turnos editados à mão</span>
+                <div className="rv-group">
+                  <label className={c.autoApplyEnabled ? "rv-group-row" : "rv-group-row rv-group-row-off"}>
+                    <span className="rv-text">
+                      <span className="rv-group-title">Alterar quando aplicar sozinho</span>
+                      <span className="rv-group-desc">
+                        Turnos pagos, voltados para pendente ou com valor corrigido.
+                        {!c.autoApplyEnabled && " Ligue “Aplicar mudanças sozinho” para usar."}
+                      </span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      className="settings-switch"
+                      checked={c.autoApplyOverwriteManualEdits}
+                      disabled={!c.autoApplyEnabled}
+                      onChange={(e) => saveRule(c, { autoApplyOverwriteManualEdits: e.target.checked })}
+                    />
+                  </label>
+                  <label className={c.autoApplyEnabled ? "rv-group-row" : "rv-group-row rv-group-row-off"}>
+                    <span className="rv-text">
+                      <span className="rv-group-title">Alterar também os já pagos</span>
+                      <span className="rv-group-desc">Quando aplicar sozinho.</span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      className="settings-switch"
+                      checked={c.autoApplyOverwritePaid}
+                      disabled={!c.autoApplyEnabled}
+                      onChange={(e) => saveRule(c, { autoApplyOverwritePaid: e.target.checked })}
+                    />
+                  </label>
+                  <label className="rv-group-row">
+                    <span className="rv-text">
+                      <span className="rv-group-title">Manter ao reimportar</span>
+                      <span className="rv-group-desc">Vale para “Reimportar agora”, abaixo.</span>
+                    </span>
+                    <input type="checkbox" role="switch" className="settings-switch" checked={c.keepManualEdits} onChange={(e) => saveRule(c, { keepManualEdits: e.target.checked })} />
+                  </label>
+                </div>
+              </section>
 
-            <div className="rv-field">
-              <span className="rv-label">Últimas verificações</span>
-              {history === null && <span className="rv-small">Carregando...</span>}
-              {history?.length === 0 && <span className="rv-small">Ainda não foi conferida.</span>}
-              <div className="rv-history">
-                {history?.map((entry) => {
-                  const tone: Tone = entry.result === "error" || entry.hasOwnError ? "bad" : entry.diffCount > 0 ? "warn" : entry.result === "unknown" ? "off" : "ok";
-                  const text =
-                    tone === "bad" ? "erro" : entry.diffCount > 0 ? `${entry.diffCount} ${entry.diffCount === 1 ? "mudança" : "mudanças"}` : entry.result === "unknown" ? "não deu pra saber" : "sem mudanças";
-                  return (
-                    <button key={entry.id} type="button" onClick={() => openSheet({ kind: "check", configId: c.id, entry })}>
-                      <i className={`rv-dot rv-dot-${tone}`} aria-hidden="true" />
-                      {formatDateTimeAbbrevYY(entry.checkedAt)} · {text}
-                      <span className="rv-history-go">Ver ›</span>
-                    </button>
-                  );
-                })}
+              <section className="rv-more-section">
+                <span className="rv-section-label">Modelo da planilha</span>
+                <div className="rv-group">
+                  <div className="rv-group-row">
+                    <span className="rv-more-icon" aria-hidden="true">
+                      <FileSpreadsheet size={15} />
+                    </span>
+                    <span className="rv-text">
+                      <span className="rv-group-title">{c.templateName ?? "Modelo removido"}</span>
+                      <span className="rv-group-desc">Para usar outro modelo, crie uma nova regra.</span>
+                    </span>
+                  </div>
+                </div>
+              </section>
+
+              <section className="rv-more-section">
+                <span className="rv-section-label">
+                  Últimas verificações
+                  {history && history.length > 0 && <span className="rv-section-count">{history.length} mais recentes</span>}
+                </span>
+                {history === null && <span className="rv-small">Carregando...</span>}
+                {history?.length === 0 && <span className="rv-small">Ainda não foi conferida.</span>}
+                {history && history.length > 0 && (
+                  <div className="rv-group">
+                    {history.map((entry) => {
+                      const tone: Tone = entry.result === "error" || entry.hasOwnError ? "bad" : entry.diffCount > 0 ? "warn" : entry.result === "unknown" ? "off" : "ok";
+                      const text =
+                        tone === "bad"
+                          ? "Erro"
+                          : entry.diffCount > 0
+                            ? `${entry.diffCount} ${entry.diffCount === 1 ? "mudança" : "mudanças"}`
+                            : entry.result === "unknown"
+                              ? "Não deu pra saber"
+                              : "Sem mudanças";
+                      const author = entry.diffCount > 0 && entry.savedAt ? entry.savedBy?.trim() || "Sem nome no arquivo" : null;
+                      return (
+                        <button key={entry.id} type="button" className="rv-group-row rv-history-row" onClick={() => openSheet({ kind: "check", configId: c.id, entry })}>
+                          <i className={`rv-dot rv-dot-${tone}`} aria-hidden="true" />
+                          <span className="rv-text">
+                            <span className="rv-history-line">
+                              <span className="rv-history-when">{formatDateTimeAbbrevYY(entry.checkedAt)}</span>
+                              <span className={`rv-history-result rv-history-result-${tone}`}>{text}</span>
+                            </span>
+                            {author && (
+                              <span className="rv-history-author">
+                                <span className="rv-avatar rv-avatar-xs" style={{ background: entry.savedBy ? colorForName(author) : "#3a3a42" }} aria-hidden="true">
+                                  {entry.savedBy ? initials(author) : "?"}
+                                </span>
+                                <span className="rv-history-author-text">
+                                  salva por {author} {savedWhen(entry.savedAt)}
+                                </span>
+                              </span>
+                            )}
+                          </span>
+                          <ChevronRight size={15} className="rv-chevron" aria-hidden="true" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <div className="rv-more-actions">
+                <button type="button" className="settings-button" onClick={() => forceCheckConfig(c.id)} disabled={checkingConfigIds.has(c.id)}>
+                  <RefreshCw size={13} />
+                  {checkingConfigIds.has(c.id) ? "Conferindo..." : "Conferir agora"}
+                </button>
+                <button type="button" className="settings-button" onClick={() => reprocess(c.id, resolveReimportPeriod(s).start, resolveReimportPeriod(s).end)}>
+                  Reimportar agora
+                </button>
+                <button type="button" className="settings-button settings-button-ghost" onClick={() => openNewRule(c.sourceUrl)}>
+                  <Plus size={13} />
+                  Outra regra para esta planilha
+                </button>
               </div>
             </div>
-
-            <div className="rv-actions">
-              <button type="button" className="settings-button" onClick={() => forceCheckConfig(c.id)} disabled={checkingConfigIds.has(c.id)}>
-                <RefreshCw size={13} />
-                {checkingConfigIds.has(c.id) ? "Conferindo..." : "Conferir agora"}
-              </button>
-              <button type="button" className="settings-button" onClick={() => reprocess(c.id, resolveReimportPeriod(s).start, resolveReimportPeriod(s).end)}>
-                Reimportar agora
-              </button>
-              <button type="button" className="settings-button settings-button-ghost" onClick={() => openNewRule(c.sourceUrl)}>
-                + Outra regra para esta planilha
-              </button>
-            </div>
-          </div>
-        </details>
+          )}
+        </div>
       </div>
     );
   }
@@ -703,11 +774,6 @@ export default function RemoteUpdatesPage() {
     const configs = configsByUrl.get(sourceUrl) ?? [];
     return (
       <div className="rv-sheet">
-        <div className="rv-sheet-sub">
-          <button type="button" className="rv-link" onClick={() => openUrl(sourceUrl)}>
-            Abrir link <ExternalLink size={11} />
-          </button>
-        </div>
         <p className="rv-muted">
           A mesma planilha é conferida por {configs.length} regras. Cada uma usa o seu modelo e o seu período, e avisa separado.
         </p>
@@ -780,7 +846,8 @@ export default function RemoteUpdatesPage() {
     unresolved: ["rv-tag-who", "Sem cadastro"],
   };
 
-  function renderCard(c: ReimportConfig, key: string, rows: CheckDiffRow[], applied: boolean) {
+  function renderCard(c: ReimportConfig, key: string, rows: CheckDiffRow[], state: "pending" | "applied" | "seen") {
+    const applied = state === "applied";
     const first = rows[0];
     const [tagClass, tagLabel] = KIND_TAG[first.changeKind] ?? ["rv-tag-who", first.changeKind];
     const where = [first.local, first.role].filter(Boolean).join(" · ");
@@ -813,7 +880,7 @@ export default function RemoteUpdatesPage() {
     }
 
     let actions: ReactNode = null;
-    if (!applied) {
+    if (state === "pending") {
       const ignore = (label: string) => (
         <button type="button" className="settings-button settings-button-ghost" disabled={busy} onClick={() => withBusy(key, () => dismissCheckDiffs(ids))}>
           {label}
@@ -855,16 +922,92 @@ export default function RemoteUpdatesPage() {
           <span className="rv-change-date">{first.workDate ? formatDateAbbrevYY(first.workDate) : "Sem data"}</span>
           {where && <span className="rv-small">{where}</span>}
           <span className={`rv-tag ${applied ? "rv-tag-auto" : tagClass}`}>{applied ? "Aplicado" : tagLabel}</span>
+          {state === "seen" && <span className="rv-tag rv-tag-who">Visto</span>}
         </div>
         {body}
-        {sheetPlace && <span className="rv-small">{sheetPlace}</span>}
+        <div className="rv-change-meta">
+          {authorKey(first) && (
+            <span className="rv-by">
+              <span className="rv-avatar rv-avatar-xs" style={{ background: first.savedBy ? colorForName(first.savedBy) : "#3a3a42" }} aria-hidden="true">
+                {first.savedBy ? initials(first.savedBy) : "?"}
+              </span>
+              {first.savedBy ? (
+                <>
+                  Alterado por <b>{first.savedBy}</b>
+                </>
+              ) : (
+                UNNAMED_AUTHOR
+              )}
+              {first.savedAt && ` · ${savedWhen(first.savedAt)}`}
+            </span>
+          )}
+          {sheetPlace && <span className="rv-small">{sheetPlace}</span>}
+        </div>
         {actions && <div className="rv-actions">{actions}</div>}
       </div>
     );
   }
 
   const [reviewFilter, setReviewFilter] = useState<string>("all");
-  useEffect(() => setReviewFilter("all"), [sheet?.kind, sheetConfigId]);
+  const [authorFilter, setAuthorFilter] = useState<string | null>(null);
+  const [authorInfoOpen, setAuthorInfoOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  useEffect(() => {
+    setReviewFilter("all");
+    setAuthorFilter(null);
+    setAuthorInfoOpen(false);
+    setMoreOpen(false);
+  }, [sheet?.kind, sheetConfigId]);
+
+  /** "Quem alterou a planilha": each person who saved a version with these changes; a click filters to theirs. */
+  function renderAuthors(rows: CheckDiffRow[]) {
+    const authors = new Map<string, { name: string; count: Set<string>; lastAt: string | null }>();
+    for (const r of rows) {
+      const key = authorKey(r);
+      if (!key) continue;
+      const entry = authors.get(key) ?? { name: key, count: new Set<string>(), lastAt: null };
+      entry.count.add(r.changeKind === "field" && r.matchedShiftId !== null ? `s${r.matchedShiftId}` : `d${r.id}`);
+      if (r.savedAt && (!entry.lastAt || r.savedAt > entry.lastAt)) entry.lastAt = r.savedAt;
+      authors.set(key, entry);
+    }
+    if (authors.size === 0) return null;
+    return (
+      <div className="rv-authors">
+        <div className="rv-authors-head">
+          <span className="rv-section-label">Quem alterou a planilha</span>
+          <button type="button" className="rv-link" aria-expanded={authorInfoOpen} onClick={() => setAuthorInfoOpen((v) => !v)}>
+            Como sabemos?
+          </button>
+        </div>
+        {authorInfoOpen && (
+          <p className="rv-authors-info">
+            O Excel guarda quem salvou a planilha por último. A cada conferência, o PontoScan anota esse nome junto com as mudanças daquela versão. Se duas pessoas
+            salvarem entre uma conferência e outra, aparece só a última. “{UNNAMED_AUTHOR}” é quando a planilha foi salva por um programa que não grava o nome.
+          </p>
+        )}
+        <div className="rv-author-list">
+          {Array.from(authors.values()).map((a) => {
+            const unnamed = a.name === UNNAMED_AUTHOR;
+            const n = a.count.size;
+            return (
+              <button key={a.name} type="button" className="rv-author" aria-pressed={authorFilter === a.name} onClick={() => setAuthorFilter((cur) => (cur === a.name ? null : a.name))}>
+                <span className="rv-avatar rv-avatar-sm" style={{ background: unnamed ? "#3a3a42" : colorForName(a.name) }} aria-hidden="true">
+                  {unnamed ? "?" : initials(a.name)}
+                </span>
+                <span className="rv-author-text">
+                  <b>{a.name}</b>
+                  <span>
+                    {n} {n === 1 ? "mudança" : "mudanças"}
+                    {a.lastAt && ` · salvou ${savedWhen(a.lastAt)}`}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   function renderReview(c: ReimportConfig, mode: "pending" | "applied") {
     const { pending, applied } = rowsFor(c);
@@ -879,7 +1022,9 @@ export default function RemoteUpdatesPage() {
       );
     }
     const kinds = ["field", "new-shift", "removed", "unresolved"].filter((k) => rows.some((r) => r.changeKind === k));
-    const shown = reviewFilter === "all" ? rows : rows.filter((r) => r.changeKind === reviewFilter);
+    const shown = rows
+      .filter((r) => reviewFilter === "all" || r.changeKind === reviewFilter)
+      .filter((r) => authorFilter === null || authorKey(r) === authorFilter);
     const counts = (k: string) => countItems(rows.filter((r) => r.changeKind === k));
     return (
       <div className="rv-sheet rv-sheet-tight">
@@ -901,6 +1046,7 @@ export default function RemoteUpdatesPage() {
             ))}
           </div>
         )}
+        {renderAuthors(rows)}
         {actionError && <div className="error-box">{actionError}</div>}
         {cardsOf(shown).map((person) => (
           <div key={person.name} className="rv-person">
@@ -915,7 +1061,7 @@ export default function RemoteUpdatesPage() {
                 </span>
               </span>
             </div>
-            {person.cards.map((card) => renderCard(c, card.key, card.rows, mode === "applied"))}
+            {person.cards.map((card) => renderCard(c, card.key, card.rows, mode === "applied" ? "applied" : "pending"))}
           </div>
         ))}
       </div>
@@ -926,13 +1072,39 @@ export default function RemoteUpdatesPage() {
   const sheetConfig = sheetConfigId !== null ? reimportConfigs.find((c) => c.id === sheetConfigId) : undefined;
   const reviewConfig = sheet?.kind === "review" ? reimportConfigs.find((c) => c.id === sheet.configId) : undefined;
   let sheetTitle = "";
+  /** The line under the title: which rule, a way back, or the link. */
+  let sheetSub: ReactNode = null;
+  /** The spreadsheet these sheets are about, shown as its icon in the header. */
+  let sheetFileName: string | null = null;
   let sheetBody: ReactNode = null;
   let sheetFooter: ReactNode = null;
+
+  const linkTo = (url: string) => (
+    <button type="button" className="rv-link" onClick={() => openUrl(url)}>
+      Abrir link <ExternalLink size={11} />
+    </button>
+  );
+  /** "Regra: Modelo Atlas · mês atual · ver as outras regras" when the spreadsheet has several rules. */
+  const ruleSub = (c: ReimportConfig, extra?: string) => {
+    const siblings = configsByUrl.get(c.sourceUrl) ?? [];
+    if (siblings.length < 2) return extra ? <>{extra}</> : linkTo(c.sourceUrl);
+    return (
+      <>
+        Regra: {ruleName(c)} · {periodText(settingsOf(c))}
+        {extra ? ` · ${extra}` : ""} ·{" "}
+        <button type="button" className="rv-link" onClick={() => openSheet({ kind: "file", sourceUrl: c.sourceUrl })}>
+          ver as outras regras
+        </button>
+      </>
+    );
+  };
 
   if (sheet?.kind === "rule" && sheetConfig) {
     const file = fileOf(sheetConfig.sourceUrl);
     const siblings = configsByUrl.get(sheetConfig.sourceUrl) ?? [];
     sheetTitle = file?.fileName ?? "Planilha";
+    sheetFileName = sheetTitle;
+    sheetSub = ruleSub(sheetConfig);
     sheetBody = renderRuleSheet(sheetConfig);
     sheetFooter = (
       <>
@@ -953,6 +1125,8 @@ export default function RemoteUpdatesPage() {
   } else if (sheet?.kind === "file") {
     const file = fileOf(sheet.sourceUrl);
     sheetTitle = file?.fileName ?? "Planilha";
+    sheetFileName = sheetTitle;
+    sheetSub = linkTo(sheet.sourceUrl);
     sheetBody = renderFileSheet(sheet.sourceUrl);
     sheetFooter = file && (
       <button type="button" className="settings-button settings-button-danger" onClick={() => setUntrackTarget(file)}>
@@ -962,9 +1136,10 @@ export default function RemoteUpdatesPage() {
   } else if (sheet?.kind === "new-rule") {
     const file = fileOf(sheet.sourceUrl);
     sheetTitle = "Nova regra";
+    sheetFileName = file?.fileName ?? null;
+    sheetSub = file?.fileName;
     sheetBody = (
       <>
-        <div className="rv-sheet-sub rv-sheet-sub-top">{file?.fileName}</div>
         {renderNewRuleSheet()}
         {actionError && <div className="error-box">{actionError}</div>}
       </>
@@ -984,22 +1159,15 @@ export default function RemoteUpdatesPage() {
     const rows = sheet.mode === "pending" ? pending : applied;
     const n = countItems(rows);
     const file = fileOf(reviewConfig.sourceUrl);
-    const siblings = configsByUrl.get(reviewConfig.sourceUrl) ?? [];
     sheetTitle =
       sheet.mode === "applied"
         ? `${n} ${n === 1 ? "mudança aplicada" : "mudanças aplicadas"} sozinho`
         : n
           ? `${n} ${n === 1 ? "mudança para revisar" : "mudanças para revisar"}`
           : "Tudo revisado";
-    sheetBody = (
-      <>
-        <div className="rv-sheet-sub rv-sheet-sub-top">
-          {file?.fileName}
-          {siblings.length > 1 && ` · ${ruleName(reviewConfig)}`} · encontradas {ago(reviewConfig.lastCheckedAt, now)}
-        </div>
-        {renderReview(reviewConfig, sheet.mode)}
-      </>
-    );
+    const siblings = configsByUrl.get(reviewConfig.sourceUrl) ?? [];
+    sheetSub = `${file?.fileName ?? ""}${siblings.length > 1 ? ` · ${ruleName(reviewConfig)}` : ""} · encontradas ${ago(reviewConfig.lastCheckedAt, now)}`;
+    sheetBody = renderReview(reviewConfig, sheet.mode);
     const fieldShifts = new Set(pending.filter((r) => r.changeKind === "field" && r.matchedShiftId !== null).map((r) => r.matchedShiftId)).size;
     sheetFooter =
       sheet.mode === "applied" ? (
@@ -1018,43 +1186,65 @@ export default function RemoteUpdatesPage() {
         </>
       );
   } else if (sheet?.kind === "check" && sheetConfig) {
+    // A past check, with the same cards as "Revisar": still pending ones keep
+    // their actions, the rest say what happened to them.
+    const file = fileOf(sheetConfig.sourceUrl);
     sheetTitle = `Verificação de ${formatDateTimeAbbrevYY(sheet.entry.checkedAt)}`;
+    sheetFileName = file?.fileName ?? null;
+    sheetSub = (
+      <button type="button" className="rv-link" onClick={() => openSheet({ kind: "rule", configId: sheetConfig.id })}>
+        ← Voltar para a regra
+      </button>
+    );
+    const changes = (checkDiffs ?? []).filter((r) => r.changeKind !== "error");
+    const errors = (checkDiffs ?? []).filter((r) => r.changeKind === "error");
+    const cardState = (cardRows: CheckDiffRow[]): "pending" | "applied" | "seen" =>
+      cardRows.every((r) => r.applied) ? "applied" : cardRows.every((r) => r.dismissedAt !== null) ? "seen" : "pending";
     sheetBody = (
-      <div className="rv-sheet">
-        <div className="rv-sheet-sub">
-          <button type="button" className="rv-link" onClick={() => openSheet({ kind: "rule", configId: sheetConfig.id })}>
-            ← Voltar para a regra
-          </button>
-        </div>
-        {sheet.entry.message && <div className="error-box">{sheet.entry.message}</div>}
+      <div className="rv-sheet rv-sheet-tight">
+        {(sheet.entry.message || errors.length > 0) && (
+          <div className="rv-banner rv-banner-bad">
+            <strong>Não deu pra conferir nesta verificação</strong>
+            <span>{sheet.entry.message || errors.map((e) => e.message).filter(Boolean).join(" ")}</span>
+          </div>
+        )}
+        {sheet.entry.savedAt && changes.length > 0 && (
+          <p className="rv-muted rv-check-author">
+            Planilha salva por <b>{sheet.entry.savedBy?.trim() || "alguém sem nome no arquivo"}</b> {savedWhen(sheet.entry.savedAt)}.
+          </p>
+        )}
         {actionError && <div className="error-box">{actionError}</div>}
         {checkDiffs === null && <p className="rv-muted">Carregando...</p>}
-        {checkDiffs?.length === 0 && !sheet.entry.message && <p className="rv-muted">Nenhuma mudança nesta verificação.</p>}
-        {checkDiffs && checkDiffs.length > 0 && (
-          <ChangeDiffPanel
-            rows={checkDiffs}
-            markingShiftId={null}
-            markedShiftIds={new Set()}
-            onMarkDeleted={(shiftId) => {
-              const who = checkDiffs.find((r) => r.matchedShiftId === shiftId)?.employeeName ?? "";
-              setDeleteShiftTarget({ shiftId, who });
-            }}
-            onAccept={(shiftId) => withBusy(`s${shiftId}`, () => acceptShiftChange(sheetConfig, shiftId))}
-            acceptingShiftId={null}
-            acceptedShiftIds={new Set()}
-            onDismiss={(ids) =>
-              withBusy(`d${ids.join(",")}`, async () => {
-                await dismissCheckDiffs(ids);
-                setCheckDiffs((prev) => prev?.map((r) => (ids.includes(r.id) ? { ...r, dismissedAt: new Date().toISOString() } : r)) ?? null);
-              })
-            }
-            dismissingIds={new Set()}
-            onReprocess={reprocess}
-          />
-        )}
+        {checkDiffs !== null && changes.length === 0 && !sheet.entry.message && errors.length === 0 && <p className="rv-muted">Nenhuma mudança nesta verificação.</p>}
+        {cardsOf(changes).map((person) => (
+          <div key={person.name} className="rv-person">
+            <div className="rv-person-head">
+              <span className="rv-avatar" style={{ background: colorForName(person.name) }}>
+                {initials(person.name.replace(/[“”]/g, ""))}
+              </span>
+              <span className="rv-text">
+                <span className="rv-person-name">{person.name}</span>
+                <span className="rv-small">
+                  {person.cards.length} {person.cards.length === 1 ? "turno" : "turnos"}
+                </span>
+              </span>
+            </div>
+            {person.cards.map((card) => renderCard(sheetConfig, card.key, card.rows, cardState(card.rows)))}
+          </div>
+        ))}
       </div>
     );
   }
+
+  const sheetHeader = sheet ? (
+    <div className="rv-drawer-head">
+      {sheetFileName && fileIcon(sheetFileName)}
+      <div className="rv-text">
+        <span className="rv-drawer-title">{sheetTitle}</span>
+        {sheetSub && <span className="rv-drawer-sub">{sheetSub}</span>}
+      </div>
+    </div>
+  ) : null;
 
   const files = trackedFiles;
 
@@ -1115,7 +1305,15 @@ export default function RemoteUpdatesPage() {
         </>
       )}
 
-      <Drawer open={sheet !== null && sheetBody !== null} onClose={() => setSheet(null)} title={sheetTitle} width="min(480px, 94vw)" footer={sheetFooter ? <div className="rv-footer">{sheetFooter}</div> : undefined}>
+      <Drawer
+        open={sheet !== null && sheetBody !== null}
+        onClose={() => setSheet(null)}
+        title={sheetTitle}
+        header={sheetHeader}
+        className="rv-drawer"
+        width="min(480px, calc(100vw - 24px))"
+        footer={sheetFooter ? <div className="rv-footer">{sheetFooter}</div> : undefined}
+      >
         {sheetBody}
       </Drawer>
 

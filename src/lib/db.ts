@@ -1757,7 +1757,8 @@ export async function listTrackedPaymentUrls(): Promise<TrackedPaymentUrl[]> {
   );
 }
 
-export type ReimportDateMode = "fixed" | "relative";
+/** "month" = "Mês atual": from the 1st of the current month to today (see `resolveReimportPeriod`). */
+export type ReimportDateMode = "fixed" | "relative" | "month";
 
 export interface ReimportConfig {
   id: number;
@@ -2034,11 +2035,13 @@ export async function logUrlCheckResult(
   result: UrlCheckResult,
   message: string | null,
   evaluatedConfigs: EvaluatedConfigSnapshot[],
+  /** Who saved the version this check downloaded; `null` when nothing was downloaded or the format says nothing. */
+  author: FileAuthor | null = null,
 ): Promise<number> {
   const db = await getDb();
   const inserted = await db.execute(
-    `INSERT INTO source_url_check_log (source_url, file_name, result, message) VALUES ($1, $2, $3, $4)`,
-    [sourceUrl, fileName, result, message],
+    `INSERT INTO source_url_check_log (source_url, file_name, result, message, saved_by, saved_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [sourceUrl, fileName, result, message, author?.savedBy ?? null, author?.savedAt ?? null],
   );
   const checkLogId = inserted.lastInsertId as number;
   for (const config of evaluatedConfigs) {
@@ -2097,6 +2100,9 @@ export interface UrlCheckLogEntry {
   errorDiffId: number | null;
   /** "Visto" — when that error row was acknowledged, `null` until then. Dismissing it here also clears it everywhere else that same row is read (e.g. the pending-updates banner), since it's the exact same row, not a copy. */
   errorDismissedAt: string | null;
+  /** Who saved the spreadsheet version this check downloaded (see `FileAuthor`). */
+  savedBy: string | null;
+  savedAt: string | null;
 }
 
 /**
@@ -2116,6 +2122,7 @@ export async function listUrlCheckLogForConfig(
   const db = await getDb();
   const rawRows = await db.select<(Omit<UrlCheckLogEntry, "hasOwnError"> & { hasOwnError: number })[]>(
     `SELECT l.id, l.source_url AS sourceUrl, l.file_name AS fileName, l.checked_at AS checkedAt, l.result, l.message,
+            l.saved_by AS savedBy, l.saved_at AS savedAt,
             jc.template_id AS templateId, jc.template_name AS templateName,
             jc.period_start AS periodStart, jc.period_end AS periodEnd,
             (SELECT COUNT(*) FROM source_url_check_diffs d WHERE d.check_log_id = l.id AND d.config_id = $1) AS diffCount,
@@ -2178,9 +2185,27 @@ export interface CheckDiffRow {
   /** The período THIS config actually used on the check that produced this row — joined from `source_url_check_log_configs` (migration 0064), not read live off the config (which may have since changed, especially a "relative to today" one). `null` for a whole-URL row (`configId IS NULL`, no single config to attribute a período to) or a check logged before migration 0064. Drives "Reprocessar agora" replaying the SAME período that failed, not today's. */
   periodStart: string | null;
   periodEnd: string | null;
+  /**
+   * Who saved the spreadsheet version where this change FIRST showed up,
+   * read from the file's properties (only the last person to save before
+   * that check is known). `savedAt` null: not known (from before this was
+   * recorded, or a format without that property). `savedBy` null with a
+   * `savedAt`: saved by a program that wrote no name.
+   */
+  savedBy: string | null;
+  savedAt: string | null;
 }
 
-export type CheckDiffInput = Omit<CheckDiffRow, "id" | "checkLogId" | "sourceUrl" | "dismissedAt" | "periodStart" | "periodEnd">;
+export type CheckDiffInput = Omit<
+  CheckDiffRow,
+  "id" | "checkLogId" | "sourceUrl" | "dismissedAt" | "periodStart" | "periodEnd" | "savedBy" | "savedAt"
+>;
+
+/** Who saved a downloaded spreadsheet, from its own properties — see `read_spreadsheet_author` in Rust. */
+export interface FileAuthor {
+  savedBy: string | null;
+  savedAt: string | null;
+}
 
 type CheckDiffRowRaw = Omit<CheckDiffRow, "applied"> & { applied: number };
 
@@ -2254,7 +2279,13 @@ function fingerprintSqlExpr(prefix: string): string {
 }
 
 /** Bulk-inserts the deep-check diff for one check attempt — see `computeReimportDiff` (`remoteCheckDiff.ts`) for how these are produced. `sourceUrl` scopes the "Visto" fingerprint lookup (see `diffContentFingerprint`): a new row whose content exactly matches one already dismissed for this URL is inserted already dismissed, so re-alerting only happens when something actually changed. */
-export async function saveCheckDiffs(checkLogId: number, sourceUrl: string, entries: CheckDiffInput[]): Promise<void> {
+export async function saveCheckDiffs(
+  checkLogId: number,
+  sourceUrl: string,
+  entries: CheckDiffInput[],
+  /** Who saved the version this check downloaded — given to each change that shows up for the first time here. */
+  author: FileAuthor | null = null,
+): Promise<void> {
   if (entries.length === 0) return;
   const db = await getDb();
   for (const e of entries) {
@@ -2263,12 +2294,25 @@ export async function saveCheckDiffs(checkLogId: number, sourceUrl: string, entr
       `SELECT id FROM dismissed_diff_fingerprints WHERE source_url = $1 AND fingerprint = $2 LIMIT 1`,
       [sourceUrl, fingerprint],
     );
+    // The same change already seen on an earlier check of this URL keeps the
+    // author of the version it first appeared in (even an unknown one, from
+    // before authors were recorded): later checks only saw it again.
+    const earlier = await db.select<{ savedBy: string | null; savedAt: string | null }[]>(
+      `SELECT d.saved_by AS savedBy, d.saved_at AS savedAt
+       FROM source_url_check_diffs d
+       JOIN source_url_check_log l ON l.id = d.check_log_id
+       WHERE l.source_url = $1 AND d.check_log_id < $2 AND ${fingerprintSqlExpr("d.")} = $3
+       ORDER BY d.id DESC LIMIT 1`,
+      [sourceUrl, checkLogId, fingerprint],
+    );
+    const savedBy = earlier.length > 0 ? earlier[0].savedBy : (author?.savedBy ?? null);
+    const savedAt = earlier.length > 0 ? earlier[0].savedAt : (author?.savedAt ?? null);
     const inserted = await db.execute(
       `INSERT INTO source_url_check_diffs
          (check_log_id, config_id, config_label, change_kind, matched_shift_id, employee_id, employee_name,
           work_date, local, role, schedule_start_minutes, schedule_end_minutes, sheet_name, row_number,
-          column_letter, field_name, old_value, new_value, message, applied)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+          column_letter, field_name, old_value, new_value, message, applied, saved_by, saved_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
       [
         checkLogId,
         e.configId,
@@ -2290,6 +2334,8 @@ export async function saveCheckDiffs(checkLogId: number, sourceUrl: string, entr
         e.newValue,
         e.message,
         e.applied ? 1 : 0,
+        savedBy,
+        savedAt,
       ],
     );
     if (dismissedMatch.length > 0) {
@@ -2310,7 +2356,8 @@ export async function listCheckDiffs(checkLogId: number): Promise<CheckDiffRow[]
             d.schedule_start_minutes AS scheduleStartMinutes, d.schedule_end_minutes AS scheduleEndMinutes,
             d.sheet_name AS sheetName, d.row_number AS rowNumber, d.column_letter AS columnLetter,
             d.field_name AS fieldName, d.old_value AS oldValue, d.new_value AS newValue, d.message, d.applied,
-            d.dismissed_at AS dismissedAt, jc.period_start AS periodStart, jc.period_end AS periodEnd
+            d.dismissed_at AS dismissedAt, jc.period_start AS periodStart, jc.period_end AS periodEnd,
+            d.saved_by AS savedBy, d.saved_at AS savedAt
      FROM source_url_check_diffs d
      JOIN source_url_check_log l ON l.id = d.check_log_id
      LEFT JOIN source_url_check_log_configs jc ON jc.check_log_id = d.check_log_id AND jc.config_id = d.config_id
@@ -2430,7 +2477,8 @@ export async function listAllLatestShiftDiffs(): Promise<CheckDiffRow[]> {
             d.schedule_start_minutes AS scheduleStartMinutes, d.schedule_end_minutes AS scheduleEndMinutes,
             d.sheet_name AS sheetName, d.row_number AS rowNumber, d.column_letter AS columnLetter,
             d.field_name AS fieldName, d.old_value AS oldValue, d.new_value AS newValue, d.message, d.applied,
-            d.dismissed_at AS dismissedAt, jc.period_start AS periodStart, jc.period_end AS periodEnd
+            d.dismissed_at AS dismissedAt, jc.period_start AS periodStart, jc.period_end AS periodEnd,
+            d.saved_by AS savedBy, d.saved_at AS savedAt
      FROM source_url_check_diffs d
      JOIN source_url_check_log l ON l.id = d.check_log_id
      LEFT JOIN source_url_check_log_configs jc ON jc.check_log_id = d.check_log_id AND jc.config_id = d.config_id
@@ -2542,17 +2590,26 @@ export async function copyCheckDiffs(fromCheckLogId: number, toCheckLogId: numbe
     `INSERT INTO source_url_check_diffs
        (check_log_id, config_id, config_label, change_kind, matched_shift_id, employee_id, employee_name,
         work_date, local, role, schedule_start_minutes, schedule_end_minutes, sheet_name, row_number,
-        column_letter, field_name, old_value, new_value, message, applied, dismissed_at)
+        column_letter, field_name, old_value, new_value, message, applied, dismissed_at, saved_by, saved_at)
      SELECT $2, config_id, config_label, change_kind, matched_shift_id, employee_id, employee_name,
             work_date, local, role, schedule_start_minutes, schedule_end_minutes, sheet_name, row_number,
             column_letter, field_name, old_value, new_value, message, applied,
             CASE WHEN EXISTS (
               SELECT 1 FROM dismissed_diff_fingerprints f
               WHERE f.source_url = $3 AND f.fingerprint = ${fingerprintSqlExpr("")}
-            ) THEN datetime('now') ELSE NULL END
+            ) THEN datetime('now') ELSE NULL END,
+            saved_by, saved_at
      FROM source_url_check_diffs
      WHERE check_log_id = $1`,
     [fromCheckLogId, toCheckLogId, sourceUrl],
+  );
+  // Same downloaded version, so the same author on the check itself.
+  await db.execute(
+    `UPDATE source_url_check_log
+     SET saved_by = (SELECT saved_by FROM source_url_check_log WHERE id = $1),
+         saved_at = (SELECT saved_at FROM source_url_check_log WHERE id = $1)
+     WHERE id = $2`,
+    [fromCheckLogId, toCheckLogId],
   );
 }
 

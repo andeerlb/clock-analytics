@@ -4,6 +4,7 @@ mod commands;
 mod db;
 mod db_backup;
 mod db_batch;
+mod file_author;
 mod hashing;
 mod model;
 mod parsers;
@@ -252,6 +253,7 @@ pub fn run() {
             commands::preview_spreadsheet,
             commands::apply_payment_template,
             commands::hash_payment_file,
+            commands::read_spreadsheet_author,
             commands::generate_report_zip,
             commands::get_storage_usage,
             commands::get_imports_file_list,
