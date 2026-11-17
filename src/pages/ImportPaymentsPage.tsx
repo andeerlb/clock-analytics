@@ -137,6 +137,9 @@ function importPeriodPresets(): PeriodPreset[] {
   return [{ label: "Arquivo inteiro", start: "", end: "" }, ...periodPresets()];
 }
 
+/** For the "⌘F" vs "Ctrl F" hint on the preview's search. */
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
 /** "Processar", "Processar 1 arquivo", "Processar 3 arquivos". */
 function processLabel(count: number): string {
   if (count === 0) return "Processar";
@@ -817,6 +820,23 @@ export default function ImportPaymentsPage() {
   const deletedCount = categoryCounts.deleted;
   const duplicateInFileCount = categoryCounts["duplicate-in-file"];
   const skippedCount = categoryCounts.skipped;
+
+  // Ctrl/⌘+F jumps to the preview's name search while a preview is open,
+  // instead of the webview's own find bar.
+  const previewSearchRef = useRef<HTMLInputElement>(null);
+  const hasPreview = fileResults.length > 0;
+  useEffect(() => {
+    if (!hasPreview) return;
+    function onKeyDown(e: globalThis.KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        previewSearchRef.current?.focus();
+        previewSearchRef.current?.scrollIntoView({ block: "nearest" });
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [hasPreview]);
 
   // Rows the user still has to fix before they can be imported — named in
   // the preview's status line, each a shortcut to its filter.
@@ -2143,6 +2163,45 @@ export default function ImportPaymentsPage() {
                 </div>
 
                 <div className="table-toolbar preview-toolbar">
+                  <label className={`preview-search${nameSearch ? " preview-search-has-value" : ""}`}>
+                    <Search size={14} aria-hidden="true" />
+                    <input
+                      ref={previewSearchRef}
+                      type="text"
+                      value={nameSearch}
+                      onChange={(e) => {
+                        setNameSearch(e.target.value);
+                        setPreviewPage(0);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          setNameSearch("");
+                          setPreviewPage(0);
+                          e.currentTarget.blur();
+                        }
+                      }}
+                      placeholder="Buscar por nome"
+                      aria-label="Buscar por nome"
+                    />
+                    {nameSearch ? (
+                      <button
+                        type="button"
+                        className="preview-search-clear"
+                        aria-label="Limpar busca"
+                        onClick={() => {
+                          setNameSearch("");
+                          setPreviewPage(0);
+                          previewSearchRef.current?.focus();
+                        }}
+                      >
+                        <X size={13} />
+                      </button>
+                    ) : (
+                      <kbd>{IS_MAC ? "⌘F" : "Ctrl F"}</kbd>
+                    )}
+                  </label>
+                  <span className="preview-toolbar-sep" aria-hidden="true" />
                   <div className="preview-chips">
                     {previewChips.map((chip) => (
                       <button
@@ -2158,28 +2217,6 @@ export default function ImportPaymentsPage() {
                         <b>{chip.count}</b>
                       </button>
                     ))}
-                  </div>
-                  <div style={{ position: "relative", flexShrink: 0 }}>
-                    <Search
-                      size={14}
-                      style={{
-                        position: "absolute",
-                        left: "0.65rem",
-                        top: "50%",
-                        transform: "translateY(-50%)",
-                        color: "var(--text-muted)",
-                      }}
-                    />
-                    <input
-                      type="text"
-                      value={nameSearch}
-                      onChange={(e) => {
-                        setNameSearch(e.target.value);
-                        setPreviewPage(0);
-                      }}
-                      placeholder="Buscar por nome"
-                      style={{ paddingLeft: "2rem", width: "14rem" }}
-                    />
                   </div>
                 </div>
 

@@ -1860,7 +1860,108 @@ button.preview-status-link {
   padding: 0.75rem 1.4rem;
 }
 
+.table-card .table-toolbar.preview-toolbar {
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+/* Name search before the filter chips: starts compact, grows while focused
+   or holding text. */
+.preview-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  width: 13rem;
+  max-width: 100%;
+  height: 34px;
+  padding: 0 0.5rem 0 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-container-lowest);
+  color: var(--text-muted);
+  cursor: text;
+  transition: width 0.2s cubic-bezier(0.32, 0.72, 0, 1), border-color 0.15s ease;
+}
+
+.preview-search:hover {
+  border-color: #4a4a55;
+}
+
+.preview-search:focus-within,
+.preview-search-has-value {
+  width: 22rem;
+}
+
+.preview-search:focus-within {
+  border-color: var(--outline);
+  color: var(--text);
+}
+
+.preview-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  box-shadow: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.preview-search input:focus {
+  outline: none;
+}
+
+.preview-search kbd {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 10.5px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.preview-search:focus-within kbd {
+  display: none;
+}
+
+button.preview-search-clear {
+  display: grid;
+  place-items: center;
+  padding: 2px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+button.preview-search-clear:hover {
+  color: var(--text);
+  background: var(--surface-container);
+}
+
+.preview-toolbar-sep {
+  width: 1px;
+  height: 20px;
+  flex-shrink: 0;
+  background: var(--border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preview-search {
+    transition: none;
+  }
+}
+
 .preview-chips {
+  flex: 1;
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
