@@ -352,7 +352,9 @@ button.app-nav-toggle:hover {
 .app-content {
   flex: 1;
   min-width: 0;
-  padding: 2rem 2.5rem;
+  /* Extra room at the bottom so the end of a page can scroll above the
+     floating "atualizações pendentes" card and the assistant button. */
+  padding: 2rem 2.5rem 6rem;
 }
 
 /* PageHeader — the standard top of every page (see PageHeader.tsx). */
@@ -8970,4 +8972,51 @@ td.num-cell {
   text-align: right;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* Pagamentos infinite scroll: under the table, doubles as the load trigger. */
+.payments-scroll-footer {
+  min-height: 1px;
+  padding: 14px 0 4px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.payments-scroll-footer:empty {
+  padding: 0;
+}
+
+/* Pagamentos flat table: virtualized (only rows near the viewport are
+   drawn), so every row has one fixed height — no wrapping — and the
+   columns a fixed layout, so they don't shift as rows come and go. */
+.payments-flat-table {
+  table-layout: fixed;
+}
+
+.payments-flat-table td {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.payments-flat-table .person-cell {
+  min-width: 0;
+}
+
+.payments-flat-table .person-cell-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.payments-flat-table .payments-error-reason {
+  display: inline;
+  margin: 0 0 0 6px;
+}
+
+tr.virtual-spacer td {
+  padding: 0;
+  border: 0;
 }
