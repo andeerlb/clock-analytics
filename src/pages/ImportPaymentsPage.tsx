@@ -10,7 +10,6 @@ import {
   History,
   Link2,
   Play,
-  PlusCircle,
   RefreshCw,
   Search,
   Settings2,
@@ -782,9 +781,14 @@ export default function ImportPaymentsPage() {
         continue;
       }
       for (const row of result.rows) {
+        // "Todas" leaves out the skipped rows (title/header/footer lines with
+        // no valid date) — they have their own "Ignoradas" filter.
         const matchesFilter =
-          rowFilter === "all" ||
-          (rowFilter === "selected" ? selectedRows.has(idx) : rowFilter === row.category);
+          rowFilter === "all"
+            ? row.category !== "skipped"
+            : rowFilter === "selected"
+              ? selectedRows.has(idx)
+              : rowFilter === row.category;
         const matchesName = !query || (row.employee?.name ?? row.nameRaw).toLowerCase().includes(query);
         if (matchesFilter && matchesName) out.push({ kind: "shift", index: idx, row });
         idx++;
@@ -813,6 +817,51 @@ export default function ImportPaymentsPage() {
   const deletedCount = categoryCounts.deleted;
   const duplicateInFileCount = categoryCounts["duplicate-in-file"];
   const skippedCount = categoryCounts.skipped;
+
+  // Rows the user still has to fix before they can be imported — named in
+  // the preview's status line, each a shortcut to its filter.
+  const previewIssues = (
+    [
+      { filter: "not-found", count: categoryCounts["not-found"], one: "linha sem colaborador", many: "linhas sem colaborador" },
+      { filter: "role-not-found", count: categoryCounts["role-not-found"], one: "linha sem função cadastrada", many: "linhas sem função cadastrada" },
+      { filter: "unresolved-route", count: categoryCounts["unresolved-route"], one: "linha sem empresa/cliente", many: "linhas sem empresa/cliente" },
+    ] as const
+  )
+    .filter((issue) => issue.count > 0)
+    .map((issue) => ({ filter: issue.filter as RowFilter, text: `${issue.count} ${issue.count === 1 ? issue.one : issue.many}`, count: issue.count }));
+  const previewIssueCount = previewIssues.reduce((sum, issue) => sum + issue.count, 0);
+
+  const previewChips: { filter: RowFilter; label: string; count: number; color?: string; title?: string; separate?: boolean }[] = [
+    {
+      filter: "all",
+      label: "Todas",
+      count: Object.entries(categoryCounts).reduce((sum, [category, n]) => (category === "skipped" ? sum : sum + n), 0) + errorCount,
+    },
+    { filter: "selected", label: "A importar", count: selectedRows.size, color: "var(--text)", title: "Linhas marcadas — vão ser importadas ao salvar." },
+    { filter: "valid", label: "Novos", count: categoryCounts.valid, color: "var(--success)", title: "Colaborador encontrado, sem turno igual já importado." },
+    ...(duplicateCount > 0
+      ? [{ filter: "duplicate" as RowFilter, label: "Já importados", count: duplicateCount, color: "#93c5fd", title: "Todas as colunas batem com um turno já salvo." }]
+      : []),
+    ...(deletedCount > 0
+      ? [{ filter: "deleted" as RowFilter, label: "Excluídos", count: deletedCount, color: "var(--text-muted)", title: "Esse turno foi removido no sistema." }]
+      : []),
+    ...(duplicateInFileCount > 0
+      ? [{ filter: "duplicate-in-file" as RowFilter, label: "Duplicados no arquivo", count: duplicateInFileCount, color: "var(--text-muted)", title: "Idêntica a outra linha já importável deste mesmo arquivo." }]
+      : []),
+    ...(categoryCounts["not-found"] > 0
+      ? [{ filter: "not-found" as RowFilter, label: "Colaborador não encontrado", count: categoryCounts["not-found"], color: "var(--warning)" }]
+      : []),
+    ...(categoryCounts["role-not-found"] > 0
+      ? [{ filter: "role-not-found" as RowFilter, label: "Função não encontrada", count: categoryCounts["role-not-found"], color: "var(--warning)" }]
+      : []),
+    ...(categoryCounts["unresolved-route"] > 0
+      ? [{ filter: "unresolved-route" as RowFilter, label: "Empresa/cliente não definido", count: categoryCounts["unresolved-route"], color: "var(--warning)" }]
+      : []),
+    ...(errorCount > 0 ? [{ filter: "error" as RowFilter, label: "Erros", count: errorCount, color: "var(--danger)" }] : []),
+    ...(skippedCount > 0
+      ? [{ filter: "skipped" as RowFilter, label: "Ignoradas", count: skippedCount, separate: true, title: "Linhas sem uma data válida na coluna mapeada — presumidas título, cabeçalho ou rodapé." }]
+      : []),
+  ];
 
   const previewPageCount = Math.max(1, Math.ceil(previewRows.length / previewPageSize));
   const previewPageItems = useMemo(
@@ -1978,34 +2027,6 @@ export default function ImportPaymentsPage() {
 
           {fileResults.length > 0 && (
             <>
-              <div className="card card-flush">
-                <div className="page-header" style={{ marginBottom: 0, alignItems: "flex-end" }}>
-                  <div>
-                    <h3 style={{ margin: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                      <Eye size={18} />
-                      Pré-visualização da Importação
-                    </h3>
-                    {duplicateCount > 0 || deletedCount > 0 ? (
-                      <p className="muted" style={{ maxWidth: "42rem" }}>
-                        Algumas linhas batem, em todas as colunas, com um turno já salvo
-                        {deletedCount > 0 && " (ou já removido)"} — marque a linha se quiser
-                        reprocessar (importar de novo) mesmo assim.
-                      </p>
-                    ) : (
-                      <p className="muted">Revise os dados antes de confirmar.</p>
-                    )}
-                  </div>
-                  <div style={{ display: "flex", gap: "0.6rem", flexShrink: 0 }}>
-                    <button type="button" className="outline" onClick={cancelPreview} disabled={busy}>
-                      Cancelar
-                    </button>
-                    <button type="button" onClick={handleSave} disabled={busy || selectedRows.size === 0}>
-                      {busy ? "Salvando..." : `Salvar (${selectedRows.size})`}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
               {missingSourceShifts.length > 0 && (
                 <div className="warning-box">
                   <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 600, fontSize: "0.85rem" }}>
@@ -2059,104 +2080,69 @@ export default function ImportPaymentsPage() {
               )}
 
               <div className="card table-card">
-                <div className="table-toolbar">
-                  <div className="counts">
-                    <button
-                      type="button"
-                      className={`badge ok chip-filter${rowFilter === "selected" ? " active" : ""}`}
-                      onClick={() => toggleRowFilter("selected")}
-                      title="Linhas marcadas — vão ser importadas ao salvar. Clique para filtrar."
-                    >
-                      {selectedRows.size} a importar
+                <div className="preview-header">
+                  <div style={{ minWidth: 0 }}>
+                    <h3 className="preview-title">
+                      <Eye size={18} />
+                      Pré-visualização da importação
+                    </h3>
+                    <p className="preview-status">
+                      <span
+                        className="preview-status-dot"
+                        style={{ background: selectedRows.size > 0 ? "var(--success)" : "var(--warning)" }}
+                      />
+                      <span>
+                        {selectedRows.size === 0
+                          ? "Nenhum turno para importar ainda."
+                          : `${selectedRows.size} ${selectedRows.size === 1 ? "turno será importado" : "turnos serão importados"}.`}
+                        {previewIssues.length > 0 && (
+                          <>
+                            {" "}
+                            {previewIssues.map((issue, i) => (
+                              <span key={issue.filter}>
+                                {i > 0 && (i === previewIssues.length - 1 ? " e " : ", ")}
+                                <button type="button" className="preview-status-link" onClick={() => toggleRowFilter(issue.filter)}>
+                                  {issue.text}
+                                </button>
+                              </span>
+                            ))}
+                            {selectedRows.size === 0 ? "." : ` ${previewIssueCount === 1 ? "fica" : "ficam"} de fora.`}
+                          </>
+                        )}
+                        {duplicateCount + deletedCount > 0 && " Marque um já importado para reprocessar."}
+                      </span>
+                    </p>
+                  </div>
+                  <div style={{ display: "flex", gap: "0.6rem", flexShrink: 0 }}>
+                    <button type="button" className="outline" onClick={cancelPreview} disabled={busy}>
+                      Cancelar
                     </button>
-                    <button
-                      type="button"
-                      className={`badge info chip-filter${rowFilter === "valid" ? " active" : ""}`}
-                      onClick={() => toggleRowFilter("valid")}
-                      title="Colaborador encontrado, sem turno igual já importado. Clique para filtrar."
-                    >
-                      {categoryCounts.valid} novo(s)
+                    <button type="button" onClick={handleSave} disabled={busy || selectedRows.size === 0}>
+                      {busy
+                        ? "Salvando..."
+                        : selectedRows.size === 0
+                          ? "Salvar"
+                          : `Salvar ${selectedRows.size} ${selectedRows.size === 1 ? "turno" : "turnos"}`}
                     </button>
-                    {duplicateCount > 0 && (
+                  </div>
+                </div>
+
+                <div className="table-toolbar preview-toolbar">
+                  <div className="preview-chips">
+                    {previewChips.map((chip) => (
                       <button
+                        key={chip.filter}
                         type="button"
-                        className={`badge overwrite chip-filter${rowFilter === "duplicate" ? " active" : ""}`}
-                        onClick={() => toggleRowFilter("duplicate")}
-                        title="Todas as colunas batem com um turno já salvo. Clique para filtrar."
+                        className={`preview-chip${chip.separate ? " preview-chip-separate" : ""}`}
+                        aria-pressed={rowFilter === chip.filter}
+                        onClick={() => (chip.filter === "all" ? (setRowFilter("all"), setPreviewPage(0)) : toggleRowFilter(chip.filter))}
+                        title={chip.title}
                       >
-                        {duplicateCount} já importado(s)
+                        {chip.color && <span className="preview-chip-dot" style={{ background: chip.color }} />}
+                        {chip.label}
+                        <b>{chip.count}</b>
                       </button>
-                    )}
-                    {deletedCount > 0 && (
-                      <button
-                        type="button"
-                        className={`count-chip chip-filter${rowFilter === "deleted" ? " active" : ""}`}
-                        onClick={() => toggleRowFilter("deleted")}
-                        title="Esse turno foi removido no sistema. Clique para filtrar."
-                      >
-                        {deletedCount} excluído(s)
-                      </button>
-                    )}
-                    {duplicateInFileCount > 0 && (
-                      <button
-                        type="button"
-                        className={`count-chip chip-filter${rowFilter === "duplicate-in-file" ? " active" : ""}`}
-                        onClick={() => toggleRowFilter("duplicate-in-file")}
-                        title="Idêntica a outra linha já importável deste mesmo arquivo. Clique para filtrar."
-                      >
-                        {duplicateInFileCount} duplicado(s) no arquivo
-                      </button>
-                    )}
-                    {categoryCounts["not-found"] > 0 && (
-                      <button
-                        type="button"
-                        className={`badge warn chip-filter${rowFilter === "not-found" ? " active" : ""}`}
-                        onClick={() => toggleRowFilter("not-found")}
-                        title="Clique para filtrar"
-                      >
-                        {categoryCounts["not-found"]} colaborador não encontrado
-                      </button>
-                    )}
-                    {categoryCounts["role-not-found"] > 0 && (
-                      <button
-                        type="button"
-                        className={`badge warn chip-filter${rowFilter === "role-not-found" ? " active" : ""}`}
-                        onClick={() => toggleRowFilter("role-not-found")}
-                        title="Clique para filtrar"
-                      >
-                        {categoryCounts["role-not-found"]} função não encontrada
-                      </button>
-                    )}
-                    {categoryCounts["unresolved-route"] > 0 && (
-                      <button
-                        type="button"
-                        className={`badge warn chip-filter${rowFilter === "unresolved-route" ? " active" : ""}`}
-                        onClick={() => toggleRowFilter("unresolved-route")}
-                        title="Clique para filtrar"
-                      >
-                        {categoryCounts["unresolved-route"]} empresa/cliente não definido
-                      </button>
-                    )}
-                    {skippedCount > 0 && (
-                      <button
-                        type="button"
-                        className={`count-chip chip-filter${rowFilter === "skipped" ? " active" : ""}`}
-                        onClick={() => toggleRowFilter("skipped")}
-                        title="Linhas sem uma data válida na coluna mapeada — presumidas título, cabeçalho ou rodapé. Clique para filtrar."
-                      >
-                        {skippedCount} linha(s) ignorada(s)
-                      </button>
-                    )}
-                    {errorCount > 0 && (
-                      <button
-                        type="button"
-                        className={`badge file-error chip-filter${rowFilter === "error" ? " active" : ""}`}
-                        onClick={() => toggleRowFilter("error")}
-                        title="Clique para filtrar"
-                      >
-                        {errorCount} erro(s)
-                      </button>
-                    )}
+                    ))}
                   </div>
                   <div style={{ position: "relative", flexShrink: 0 }}>
                     <Search
@@ -2176,8 +2162,8 @@ export default function ImportPaymentsPage() {
                         setNameSearch(e.target.value);
                         setPreviewPage(0);
                       }}
-                      placeholder="Buscar por nome..."
-                      style={{ paddingLeft: "2rem", width: "13rem" }}
+                      placeholder="Buscar por nome"
+                      style={{ paddingLeft: "2rem", width: "14rem" }}
                     />
                   </div>
                 </div>
@@ -2204,15 +2190,15 @@ export default function ImportPaymentsPage() {
                         <th>Função</th>
                         <th>Horário</th>
                         <th>Status pgto.</th>
-                        <th>Status</th>
+                        <th>Situação</th>
                         <th>Vincular</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {previewRows.length === 0 && rowFilter !== "all" && (
+                      {previewRows.length === 0 && (
                         <tr>
                           <td colSpan={12} className="muted" style={{ textAlign: "center", padding: "1.4rem" }}>
-                            Nenhuma linha nesta categoria.
+                            {nameSearch.trim() ? "Nenhuma linha com esse nome." : "Nenhuma linha neste filtro."}
                           </td>
                         </tr>
                       )}
@@ -2279,7 +2265,10 @@ export default function ImportPaymentsPage() {
                                   {row.employee.name}
                                 </div>
                               ) : (
-                                <span className="muted" title={row.nameRaw ? "Nome lido da planilha, mas não encontrado no cadastro" : undefined}>
+                                <span
+                                  className={row.nameRaw ? "preview-raw-name" : "muted"}
+                                  title={row.nameRaw ? "Nome lido da planilha, mas não encontrado no cadastro" : undefined}
+                                >
                                   {row.nameRaw || "—"}
                                 </span>
                               )}
@@ -2313,65 +2302,58 @@ export default function ImportPaymentsPage() {
                             </td>
                             <td>
                               {row.category === "valid" && (
-                                <span className="badge ok">
-                                  <PlusCircle size={13} />
+                                <span className="row-state row-state-ok">
                                   Novo
                                 </span>
                               )}
                               {row.category === "duplicate" &&
                                 (row.matchedStatus === "pago" ? (
-                                  <span className="badge info" title="Esse turno já foi pago — reprocessar nunca vai sobrescrevê-lo.">
-                                    <AlertTriangle size={13} />
+                                  <span className="row-state row-state-info" title="Esse turno já foi pago — reprocessar nunca vai sobrescrevê-lo.">
                                     Pago — mantido
                                   </span>
                                 ) : protectedMatch ? (
                                   <span
-                                    className="badge info"
+                                    className="row-state row-state-info"
                                     title={
                                       row.matchedIdentityChanged
                                         ? "Esse turno foi atualizado manualmente (Data/Local/Função/Horário não batem mais com esta planilha) — reprocessar não vai sobrescrevê-lo."
                                         : "Todas as colunas batem com um turno já salvo, mas esse turno foi atualizado manualmente — reprocessar não vai sobrescrevê-lo."
                                     }
                                   >
-                                    <AlertTriangle size={13} />
                                     {row.matchedIdentityChanged ? "Dados alterados manualmente — mantido" : "Editado manualmente — mantido"}
                                   </span>
                                 ) : selectedRows.has(index) ? (
-                                  <span className="badge warn">
-                                    <AlertTriangle size={13} />
+                                  <span className="row-state row-state-warn">
                                     Será reprocessado
                                   </span>
                                 ) : (
                                   <span
-                                    className="badge overwrite"
+                                    className="row-state row-state-info"
                                     title={
                                       row.matchedIdentityChanged
                                         ? "Esse turno foi atualizado manualmente (Data/Local/Função/Horário não batem mais com esta planilha). Marque a linha para reprocessar (importar de novo) mesmo assim."
                                         : "Todas as colunas batem com um turno já salvo. Marque a linha para reprocessar (importar de novo)."
                                     }
                                   >
-                                    <AlertTriangle size={13} />
                                     Já importado
                                   </span>
                                 ))}
                               {row.category === "deleted" &&
                                 (selectedRows.has(index) ? (
-                                  <span className="badge warn">
-                                    <Trash2 size={13} />
+                                  <span className="row-state row-state-warn">
                                     Será restaurado
                                   </span>
                                 ) : (
                                   <span
-                                    className="badge neutral"
+                                    className="row-state row-state-muted"
                                     title="Esse turno foi removido no sistema (Remover, na tela de Pagamentos). Marque a linha para importar de novo (restaurar) mesmo assim."
                                   >
-                                    <Trash2 size={13} />
                                     Excluído anteriormente
                                   </span>
                                 ))}
                               {row.category === "duplicate-in-file" && (
                                 <span
-                                  className="badge neutral"
+                                  className="row-state row-state-muted"
                                   title="Idêntico a outra linha deste mesmo arquivo — só a primeira ocorrência é importável."
                                 >
                                   Duplicado no arquivo
@@ -2379,8 +2361,7 @@ export default function ImportPaymentsPage() {
                               )}
                               {row.category === "unresolved-route" && (
                                 <div style={{ marginBottom: "0.3rem" }}>
-                                  <span className="badge warn">
-                                    <AlertTriangle size={13} />
+                                  <span className="row-state row-state-warn">
                                     Empresa/cliente não definido
                                   </span>
                                   <div style={{ marginTop: "0.25rem" }}>
@@ -2392,8 +2373,7 @@ export default function ImportPaymentsPage() {
                               )}
                               {row.category === "not-found" && (
                                 <div style={{ marginBottom: "0.3rem" }}>
-                                  <span className="badge warn">
-                                    <AlertTriangle size={13} />
+                                  <span className="row-state row-state-warn">
                                     Colaborador não encontrado
                                   </span>
                                   <div style={{ marginTop: "0.25rem", display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
@@ -2424,8 +2404,7 @@ export default function ImportPaymentsPage() {
                               )}
                               {row.category === "role-not-found" && (
                                 <div style={{ marginBottom: "0.3rem" }}>
-                                  <span className="badge warn">
-                                    <AlertTriangle size={13} />
+                                  <span className="row-state row-state-warn">
                                     Função não encontrada
                                   </span>
                                   <div style={{ marginTop: "0.25rem", display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
@@ -2441,7 +2420,7 @@ export default function ImportPaymentsPage() {
                                 </div>
                               )}
                               {row.category === "skipped" && (
-                                <span className="badge neutral" title="A coluna mapeada como Data não pôde ser interpretada nesta linha">
+                                <span className="row-state row-state-muted" title="A coluna mapeada como Data não pôde ser interpretada nesta linha">
                                   Data não reconhecida
                                 </span>
                               )}

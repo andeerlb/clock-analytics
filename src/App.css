@@ -1777,6 +1777,145 @@ input[type="checkbox"]:disabled {
   margin-bottom: 0;
 }
 
+/* Importar pagamentos — preview: header (title, one-line status, actions)
+   and the filter chips live in the same card as the table. */
+.preview-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.2rem 1.4rem;
+}
+
+.preview-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.preview-status {
+  margin: 0.4rem 0 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.86rem;
+  color: var(--text-muted);
+}
+
+.preview-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transform: translateY(-1px);
+}
+
+button.preview-status-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  font: inherit;
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.table-card .table-toolbar.preview-toolbar {
+  background: transparent;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+  padding: 0.75rem 1.4rem;
+}
+
+.preview-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+button.preview-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+button.preview-chip:hover {
+  color: var(--text);
+  border-color: var(--outline);
+  background: transparent;
+}
+
+button.preview-chip b {
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+button.preview-chip[aria-pressed="true"] {
+  background: var(--surface-container-high);
+  border-color: var(--surface-container-high);
+  color: var(--text);
+}
+
+.preview-chip-separate {
+  margin-left: 0.4rem;
+}
+
+.preview-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.preview-raw-name {
+  color: var(--warning);
+}
+
+/* Situação column: a colored dot + plain text instead of a filled badge. */
+.row-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.row-state::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+
+.row-state-ok::before {
+  background: var(--success);
+}
+
+.row-state-info::before {
+  background: #93c5fd;
+}
+
+.row-state-warn::before {
+  background: var(--warning);
+}
+
 .table-card .table-scroll {
   overflow-x: auto;
 }
