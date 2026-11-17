@@ -1,8 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
-  AlertCircle,
-  AlertTriangle,
-  CheckCircle2,
   FileText,
   History,
   Lightbulb,
@@ -16,7 +13,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import Avatar from "../components/Avatar";
-import Drawer from "../components/Drawer";
+import ImportHistoryDrawer from "../components/ImportHistoryDrawer";
 import OptionPicker from "../components/OptionPicker";
 import PageHeader from "../components/PageHeader";
 import Pagination from "../components/Pagination";
@@ -25,7 +22,6 @@ import { hashFiles, listDirFiles, listProviders, parseImport, pickFolder, pickPd
 import {
   findConflicts,
   listClients,
-  listImportFiles,
   findDuplicateFiles,
   logSourceFile,
   markSourceFileSaved,
@@ -38,17 +34,10 @@ import type {
   ConflictInfo,
   DuplicateFileInfo,
   FileParseResult,
-  ImportFileRow,
-  ImportStatus,
   ParsedTimesheet,
   ProviderInfo,
 } from "../lib/types";
 
-const STATUS_BADGE: Record<ImportStatus, { className: string; label: string; icon: typeof CheckCircle2 }> = {
-  success: { className: "badge ok", label: "Sucesso", icon: CheckCircle2 },
-  warning: { className: "badge overwrite", label: "Com alertas", icon: AlertTriangle },
-  error: { className: "badge file-error", label: "Falha", icon: AlertCircle },
-};
 
 interface FileStatus {
   hash: string;
@@ -83,7 +72,6 @@ type PreviewRow =
   | { kind: "error"; fileName: string; message: string };
 
 const PREVIEW_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
-const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const PATHS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 export default function ImportTimesheetPage() {
@@ -105,12 +93,7 @@ export default function ImportTimesheetPage() {
   const [nameSearch, setNameSearch] = useState("");
   const previewSearchRef = useRef<HTMLInputElement>(null);
   const [previewPageSize, setPreviewPageSize] = useState(PREVIEW_PAGE_SIZE_OPTIONS[0]);
-  const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
-  const [recentFilesTotal, setRecentFilesTotal] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [historySearch, setHistorySearch] = useState("");
-  const [historyPage, setHistoryPage] = useState(0);
-  const [historyPageSize, setHistoryPageSize] = useState(HISTORY_PAGE_SIZE_OPTIONS[0]);
   const [dragActive, setDragActive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,11 +106,6 @@ export default function ImportTimesheetPage() {
     });
     listClients().then(setClients);
   }, []);
-
-  // History panel — filtered and paginated in SQL, not in memory.
-  useEffect(() => {
-    refreshRecentFiles();
-  }, [historySearch, historyPage, historyPageSize]);
 
   useEffect(() => {
     const unlisten = getCurrentWebview().onDragDropEvent((event) => {
@@ -171,15 +149,6 @@ export default function ImportTimesheetPage() {
       cancelled = true;
     };
   }, [paths]);
-
-  function refreshRecentFiles() {
-    listImportFiles({ importType: "timesheet", search: historySearch, page: historyPage, pageSize: historyPageSize }).then(
-      ({ rows, total }) => {
-        setRecentFiles(rows);
-        setRecentFilesTotal(total);
-      },
-    );
-  }
 
   function addPaths(newPaths: string[]) {
     setPaths((prev) => Array.from(new Set([...prev, ...newPaths])));
@@ -408,7 +377,6 @@ export default function ImportTimesheetPage() {
 
   const allSelected = sheets.length > 0 && sheets.every((_, i) => selectedSheets.has(i));
 
-  const historyPageCount = Math.max(1, Math.ceil(recentFilesTotal / historyPageSize));
 
   async function handleParse() {
     if (!selectedClient || !companyId) return;
@@ -501,7 +469,6 @@ export default function ImportTimesheetPage() {
       for (const fileHash of savedFileHashes) {
         await markSourceFileSaved(fileHash);
       }
-      refreshRecentFiles();
       reset();
       setSuccessMessage(
         savedCount === 1
@@ -976,95 +943,11 @@ export default function ImportTimesheetPage() {
 
       </div>
 
-      <Drawer open={historyOpen} onClose={() => setHistoryOpen(false)} title="Histórico de importações" icon={History} subtitle={`${recentFilesTotal} ${recentFilesTotal === 1 ? "arquivo importado" : "arquivos importados"}`}>
-          {!(recentFilesTotal === 0 && !historySearch.trim()) && (
-            <div className="field" style={{ marginBottom: "0.8rem" }}>
-              <div style={{ position: "relative" }}>
-                <Search
-                  size={14}
-                  style={{
-                    position: "absolute",
-                    left: "0.65rem",
-                    top: "50%",
-                    transform: "translateY(-50%)",
-                    color: "var(--text-muted)",
-                  }}
-                />
-                <input
-                  type="text"
-                  value={historySearch}
-                  onChange={(e) => {
-                    setHistorySearch(e.target.value);
-                    setHistoryPage(0);
-                  }}
-                  placeholder="Buscar por nome do arquivo..."
-                  style={{ width: "100%", paddingLeft: "2rem" }}
-                />
-              </div>
-            </div>
-          )}
-
-          {recentFilesTotal === 0 && !historySearch.trim() && (
-            <p className="muted">Nenhum arquivo importado ainda.</p>
-          )}
-          {recentFilesTotal === 0 && historySearch.trim() && (
-            <p className="muted">Nenhum arquivo encontrado.</p>
-          )}
-
-          {recentFilesTotal > 0 && (
-            <div className="file-list">
-              {recentFiles.map((f) => {
-                const badge = STATUS_BADGE[f.status];
-                const BadgeIcon = badge.icon;
-                return (
-                  <div className="file-row" key={f.id}>
-                    <div className="file-row-icon">
-                      <FileText size={18} />
-                    </div>
-                    <div className="file-row-info">
-                      <div className="file-name" title={f.fileName}>
-                        {f.fileName}
-                      </div>
-                      <div className="file-meta">
-                        {f.provider || "—"} · {formatDateTime(f.importedAt)}
-                      </div>
-                      {f.status !== "success" && f.errorMessage && (
-                        <div className="muted" style={{ fontSize: "0.75rem", marginTop: "0.15rem" }}>
-                          {f.errorMessage}
-                        </div>
-                      )}
-                    </div>
-                    <div className="file-row-actions">
-                      <span className={badge.className}>
-                        <BadgeIcon size={13} />
-                        {badge.label}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {recentFilesTotal > HISTORY_PAGE_SIZE_OPTIONS[0] && (
-            <Pagination
-              page={historyPage}
-              pageCount={historyPageCount}
-              onPageChange={setHistoryPage}
-              rangeLabel={`Mostrando ${historyPage * historyPageSize + 1} a ${Math.min(
-                recentFilesTotal,
-                historyPage * historyPageSize + historyPageSize,
-              )} de ${recentFilesTotal}`}
-              pageSize={historyPageSize}
-              pageSizeOptions={HISTORY_PAGE_SIZE_OPTIONS}
-              onPageSizeChange={(size) => {
-                setHistoryPageSize(size);
-                setHistoryPage(0);
-              }}
-              maxPageButtons={3}
-            />
-          )}
-      </Drawer>
+      <ImportHistoryDrawer
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        importType="timesheet"
+      />
 
       <div className="tip-row">
           <div className="tip-card">

@@ -1738,6 +1738,242 @@ button.ghost.drawer-close {
   padding: 0.35rem;
 }
 
+.drawer-toolbar {
+  flex-shrink: 0;
+  padding: 12px 18px 10px;
+  border-bottom: 1px solid #26262a;
+}
+
+/* ImportHistoryDrawer — day-grouped list with infinite scroll. */
+.history-drawer .drawer-body {
+  padding: 0 8px 12px;
+}
+
+.history-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.preview-search.history-search,
+.preview-search.history-search:focus-within,
+.preview-search.history-search.preview-search-has-value {
+  width: 100%;
+}
+
+.history-day {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 12px 10px 6px;
+  background: #18181b;
+  color: #71717a;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.history-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 9px;
+}
+
+.history-row:hover,
+.history-row:focus-within {
+  background: #1f1f24;
+}
+
+.history-row:focus-visible {
+  outline: 2px solid var(--outline);
+  outline-offset: -2px;
+}
+
+.history-ext {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.history-ext-sheet {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.history-ext-pdf {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.history-ext-csv {
+  background: rgba(147, 197, 253, 0.12);
+  color: #93c5fd;
+}
+
+.history-info {
+  min-width: 0;
+}
+
+.history-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.history-meta {
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.history-src {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.history-provider {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: #71717a;
+}
+
+.history-msg {
+  margin-top: 3px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.72rem;
+}
+
+.history-msg-error {
+  color: var(--danger);
+}
+
+.history-msg-warning {
+  color: var(--warning);
+}
+
+.history-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.history-time {
+  color: #71717a;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-actions {
+  display: none;
+  gap: 2px;
+}
+
+.history-row:hover .history-actions,
+.history-row:focus-within .history-actions {
+  display: flex;
+}
+
+.history-row:hover .history-time,
+.history-row:focus-within .history-time {
+  display: none;
+}
+
+button.history-action {
+  display: grid;
+  place-items: center;
+  padding: 0.3rem;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+button.history-action:hover {
+  background: var(--surface-container-high);
+  color: var(--text);
+}
+
+.history-status {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.history-empty {
+  margin: 0;
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.history-loader,
+.history-end {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 14px;
+  color: #71717a;
+  font-size: 0.75rem;
+}
+
+.history-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--text-muted);
+  border-radius: 50%;
+  animation: history-spin 0.8s linear infinite;
+}
+
+@keyframes history-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .history-spinner {
+    animation: none;
+  }
+}
+
+.history-footer {
+  margin-right: auto;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  width: 100%;
+  color: #71717a;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .drawer-body {
   padding: 18px;
   overflow-y: auto;

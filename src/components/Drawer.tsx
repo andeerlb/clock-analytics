@@ -22,6 +22,7 @@ export default function Drawer({
   className,
   icon: Icon,
   subtitle,
+  toolbar,
 }: {
   open: boolean;
   onClose: () => void;
@@ -30,6 +31,8 @@ export default function Drawer({
   icon?: LucideIcon;
   /** Short line under the title, e.g. how many items the sheet lists. */
   subtitle?: ReactNode;
+  /** Pinned between the header and the scrolling body — for a search/filters row that shouldn't scroll away. */
+  toolbar?: ReactNode;
   /** Replaces the plain `title` heading (kept as the accessible name) with richer content, e.g. an icon and a subtitle. */
   header?: ReactNode;
   /** Extra class on the panel, for a screen-specific look. */
@@ -137,6 +140,7 @@ export default function Drawer({
             <X size={16} />
           </button>
         </div>
+        {toolbar && <div className="drawer-toolbar">{toolbar}</div>}
         <div className="drawer-body">{children}</div>
         {footer && <div className="drawer-footer">{footer}</div>}
       </div>

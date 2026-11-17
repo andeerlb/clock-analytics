@@ -1632,10 +1632,37 @@ export async function findConflicts(
 
 export interface ImportFilesQuery {
   importType: ImportType;
-  /** Substring match on file name — case-insensitive only for ASCII (SQLite's `LOWER()` doesn't case-fold accents). */
+  /** Substring match on file name or provider/template — case-insensitive only for ASCII (SQLite's `LOWER()` doesn't case-fold accents). */
   search?: string;
+  /** "link": downloaded from a URL; "local": picked from disk. */
+  source?: "link" | "local";
+  /** Only files whose import didn't fully succeed (warning or error). */
+  problemsOnly?: boolean;
   page: number;
   pageSize: number;
+}
+
+export interface ImportFileCounts {
+  total: number;
+  link: number;
+  local: number;
+  problems: number;
+}
+
+/** Per-filter counts for the import history's chips (unaffected by search). */
+export async function countImportFiles(importType: ImportType): Promise<ImportFileCounts> {
+  const db = await getDb();
+  const rows = await db.select<ImportFileCounts[]>(
+    `SELECT
+      COUNT(*) AS total,
+      COALESCE(SUM(CASE WHEN source_url IS NOT NULL THEN 1 ELSE 0 END), 0) AS link,
+      COALESCE(SUM(CASE WHEN source_url IS NULL THEN 1 ELSE 0 END), 0) AS local,
+      COALESCE(SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END), 0) AS problems
+    FROM source_files
+    WHERE import_type = $1`,
+    [importType],
+  );
+  return rows[0] ?? { total: 0, link: 0, local: 0, problems: 0 };
 }
 
 /**
@@ -1644,19 +1671,23 @@ export interface ImportFilesQuery {
  */
 export async function listImportFiles(query: ImportFilesQuery): Promise<PagedResult<ImportFileRow>> {
   const db = await getDb();
-  const conditions = ["import_type = $1"];
+  const conditions = ["sf.import_type = $1"];
   const params: (string | number)[] = [query.importType];
 
   const search = query.search?.trim();
   if (search) {
     params.push(search);
-    conditions.push(`LOWER(file_name) LIKE '%' || LOWER($${params.length}) || '%'`);
+    const n = params.length;
+    conditions.push(`(LOWER(sf.file_name) LIKE '%' || LOWER($${n}) || '%' OR LOWER(sf.provider) LIKE '%' || LOWER($${n}) || '%')`);
   }
+  if (query.source === "link") conditions.push("sf.source_url IS NOT NULL");
+  if (query.source === "local") conditions.push("sf.source_url IS NULL");
+  if (query.problemsOnly) conditions.push("sf.status <> 'success'");
 
   const whereClause = `WHERE ${conditions.join(" AND ")}`;
 
   const countRows = await db.select<{ count: number }[]>(
-    `SELECT COUNT(*) AS count FROM source_files ${whereClause}`,
+    `SELECT COUNT(*) AS count FROM source_files sf ${whereClause}`,
     params,
   );
   const total = countRows[0]?.count ?? 0;

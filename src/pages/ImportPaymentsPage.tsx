@@ -1,8 +1,6 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   AlertCircle,
   AlertTriangle,
-  CheckCircle2,
   FileText,
   FileSpreadsheet,
   FolderOpen,
@@ -19,7 +17,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
-import Drawer from "../components/Drawer";
+import ImportHistoryDrawer from "../components/ImportHistoryDrawer";
 import EmployeePicker from "../components/EmployeePicker";
 import { periodPresets } from "../components/LibraryFiltersPanel";
 import OptionPicker from "../components/OptionPicker";
@@ -55,7 +53,6 @@ import {
   getPaymentTemplate,
   linkEmployeeToClientCompany,
   listHeadShiftsForSourceUrl,
-  listImportFiles,
   listPaymentTemplates,
   logSourceFile,
   reassignEmployeeHistoryToClientCompany,
@@ -70,7 +67,6 @@ import {
   fileNameFromPath,
   formatDate,
   formatDateSlash,
-  formatDateTime,
   formatMinutesAsTime,
   parseDateWithFormat,
   parseScheduleToMinutes,
@@ -82,19 +78,12 @@ import {
 import {
   PAYMENT_SHIFT_STATUS_LABELS,
   type IdentifierAttempt,
-  type ImportFileRow,
-  type ImportStatus,
   type PaymentFileKind,
   type PaymentShiftStatus,
   type PaymentTemplateListRow,
   type PaymentTemplateRow,
 } from "../lib/types";
 
-const STATUS_BADGE: Record<ImportStatus, { className: string; label: string; icon: typeof CheckCircle2 }> = {
-  success: { className: "badge ok", label: "Sucesso", icon: CheckCircle2 },
-  warning: { className: "badge overwrite", label: "Com alertas", icon: AlertTriangle },
-  error: { className: "badge file-error", label: "Falha", icon: AlertCircle },
-};
 
 /** Which badge color reflects the shift's resolved payment status — see `resolvePaymentStatus`. */
 const PAYMENT_STATUS_BADGE_CLASS: Record<PaymentShiftStatus, string> = {
@@ -339,7 +328,6 @@ function shiftDedupKey(
 }
 
 const PREVIEW_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
-const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const PATHS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 export default function ImportPaymentsPage() {
@@ -423,12 +411,7 @@ export default function ImportPaymentsPage() {
     }
   }
 
-  const [recentFiles, setRecentFiles] = useState<ImportFileRow[]>([]);
-  const [recentFilesTotal, setRecentFilesTotal] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [historySearch, setHistorySearch] = useState("");
-  const [historyPage, setHistoryPage] = useState(0);
-  const [historyPageSize, setHistoryPageSize] = useState(HISTORY_PAGE_SIZE_OPTIONS[0]);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -447,20 +430,6 @@ export default function ImportPaymentsPage() {
   useEffect(() => {
     listPaymentTemplates().then(setTemplates);
   }, []);
-
-  // History panel — filtered and paginated in SQL, not in memory.
-  useEffect(() => {
-    refreshRecentFiles();
-  }, [historySearch, historyPage, historyPageSize]);
-
-  function refreshRecentFiles() {
-    listImportFiles({ importType: "payment", search: historySearch, page: historyPage, pageSize: historyPageSize }).then(
-      ({ rows, total }) => {
-        setRecentFiles(rows);
-        setRecentFilesTotal(total);
-      },
-    );
-  }
 
   // Hash newly picked files (no page-count/duplicate check like timesheets
   // — a payment file has no equivalent to "one PDF, one employee", and the
@@ -932,7 +901,6 @@ export default function ImportPaymentsPage() {
     });
   }
 
-  const historyPageCount = Math.max(1, Math.ceil(recentFilesTotal / historyPageSize));
 
   async function handleProcess() {
     if (!selectedTemplate) return;
@@ -1761,7 +1729,6 @@ export default function ImportPaymentsPage() {
         }
       }
 
-      refreshRecentFiles();
       reset();
       setSuccessMessage(
         shiftInputs.length === 1
@@ -2530,121 +2497,15 @@ export default function ImportPaymentsPage() {
 
       </div>
 
-      <Drawer open={historyOpen} onClose={() => setHistoryOpen(false)} title="Histórico de importações" icon={History} subtitle={`${recentFilesTotal} ${recentFilesTotal === 1 ? "arquivo importado" : "arquivos importados"}`}>
-            {!(recentFilesTotal === 0 && !historySearch.trim()) && (
-              <div className="field" style={{ marginBottom: "0.8rem" }}>
-                <div style={{ position: "relative" }}>
-                  <Search
-                    size={14}
-                    style={{
-                      position: "absolute",
-                      left: "0.65rem",
-                      top: "50%",
-                      transform: "translateY(-50%)",
-                      color: "var(--text-muted)",
-                    }}
-                  />
-                  <input
-                    type="text"
-                    value={historySearch}
-                    onChange={(e) => {
-                      setHistorySearch(e.target.value);
-                      setHistoryPage(0);
-                    }}
-                    placeholder="Buscar por nome do arquivo..."
-                    style={{ width: "100%", paddingLeft: "2rem" }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {recentFilesTotal === 0 && !historySearch.trim() && (
-              <p className="muted">Nenhum arquivo importado ainda.</p>
-            )}
-            {recentFilesTotal === 0 && historySearch.trim() && (
-              <p className="muted">Nenhum arquivo encontrado.</p>
-            )}
-
-            {recentFilesTotal > 0 && (
-              <div className="file-list">
-                {recentFiles.map((f) => {
-                  const badge = STATUS_BADGE[f.status];
-                  const BadgeIcon = badge.icon;
-                  return (
-                    <div className="file-row" key={f.id}>
-                      <div className="file-row-icon">
-                        <FileText size={18} />
-                      </div>
-                      <div className="file-row-info">
-                        <div className="file-name" title={f.fileName}>
-                          {safeDecodeFileName(f.fileName)}
-                        </div>
-                        {f.sourceUrl && (
-                          <button
-                            type="button"
-                            className="link-button"
-                            onClick={() => openUrl(f.sourceUrl!)}
-                            title={
-                              f.checkDisabled
-                                ? `Verificação automática desativada — ${f.sourceUrl}`
-                                : `Verificação automática de atualização ativa — ${f.sourceUrl}`
-                            }
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "0.3rem",
-                              marginTop: "0.15rem",
-                              maxWidth: "100%",
-                              fontSize: "0.78rem",
-                              opacity: f.checkDisabled ? 0.55 : 1,
-                            }}
-                          >
-                            <Link2 size={12} style={{ flexShrink: 0 }} />
-                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                              {f.sourceUrl}
-                            </span>
-                          </button>
-                        )}
-                        <div className="file-meta">
-                          {f.provider || "—"} · {formatDateTime(f.importedAt)}
-                        </div>
-                        {f.status !== "success" && f.errorMessage && (
-                          <div className="muted" style={{ fontSize: "0.75rem", marginTop: "0.15rem" }}>
-                            {f.errorMessage}
-                          </div>
-                        )}
-                      </div>
-                      <div className="file-row-actions">
-                        <span className={badge.className}>
-                          <BadgeIcon size={13} />
-                          {badge.label}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {recentFilesTotal > HISTORY_PAGE_SIZE_OPTIONS[0] && (
-              <Pagination
-                page={historyPage}
-                pageCount={historyPageCount}
-                onPageChange={setHistoryPage}
-                rangeLabel={`Mostrando ${historyPage * historyPageSize + 1} a ${Math.min(
-                  recentFilesTotal,
-                  historyPage * historyPageSize + historyPageSize,
-                )} de ${recentFilesTotal}`}
-                pageSize={historyPageSize}
-                pageSizeOptions={HISTORY_PAGE_SIZE_OPTIONS}
-                onPageSizeChange={(size) => {
-                  setHistoryPageSize(size);
-                  setHistoryPage(0);
-                }}
-                maxPageButtons={3}
-              />
-            )}
-      </Drawer>
+      <ImportHistoryDrawer
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        importType="payment"
+        onReuseUrl={(url) => {
+          setImportMode("url");
+          setUrlInput(url);
+        }}
+      />
 
       {confirmFullImport && (
         <ConfirmModal
