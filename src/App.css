@@ -1780,9 +1780,23 @@ tr:last-child td {
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 
+/* The whole card is an <a>: opt out of the global a:hover underline, and
+   mark the hover with the border, background and arrow instead. */
 .choice-card:hover {
-  border-color: var(--border);
+  border-color: var(--outline);
   background: #1f1f24;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.choice-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  text-decoration: none;
+}
+
+.choice-card:hover .choice-card-go {
+  border-color: var(--outline);
   color: var(--text);
 }
 
