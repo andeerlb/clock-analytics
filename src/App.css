@@ -5579,6 +5579,86 @@ button.sa-pix-option-on {
   color: var(--text);
 }
 
+button.sa-pix-option-add {
+  border-style: dashed;
+}
+
+/* "Cadastrar" / "+ Nova chave": the PIX key form inline on the Pagamento tab. */
+.sa-pix-form {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+input.sa-pix-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
+input.sa-pix-input:placeholder-shown {
+  font-family: inherit;
+}
+
+.sa-pix-types {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.sa-pix-types-hint {
+  margin-right: 2px;
+  color: #71717a;
+  font-size: 11.5px;
+}
+
+button.sa-pix-type {
+  padding: 2px 9px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+button.sa-pix-type:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text);
+}
+
+button.sa-pix-type[aria-pressed="true"],
+button.sa-pix-type[aria-pressed="true"]:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.sa-pix-warn {
+  color: #fbbf24;
+  font-size: 12px;
+}
+
+.sa-pix-warn-bad {
+  color: var(--danger);
+}
+
+.sa-pix-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.sa-pix-saved {
+  color: #34d399;
+  font-size: 12px;
+}
+
 .sa-siblings {
   display: flex;
   align-items: center;
@@ -8015,6 +8095,62 @@ button.rv-chip[aria-pressed="true"]:hover {
   font-weight: 600;
 }
 
+/* "Dias atrás…": "De [N] até [M] dias atrás" under the period chips. */
+.rv-days {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #141417;
+  border: 1px solid #26262a;
+  border-radius: 10px;
+}
+
+.rv-days-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+input.rv-days-input {
+  width: 64px;
+  height: 30px;
+  padding: 0 6px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.rv-days-error {
+  color: #fbbf24;
+  font-size: 0.75rem;
+}
+
+.rv-days-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+button.rv-days-preset {
+  height: 24px;
+  padding: 0 9px;
+  background: transparent;
+  border: 1px dashed #3b3b44;
+  border-radius: 12px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+button.rv-days-preset:hover {
+  background: transparent;
+  color: var(--text);
+}
+
 .rv-chip-n {
   opacity: 0.6;
   font-variant-numeric: tabular-nums;
@@ -8610,14 +8746,14 @@ button.rv-more-toggle:hover {
   text-transform: none;
 }
 
-.rv-group {
+.rv-opts {
   overflow: hidden;
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 10px;
 }
 
-.rv-group-row {
+.rv-opts-row {
   width: 100%;
   padding: 10px 12px;
   display: flex;
@@ -8627,24 +8763,24 @@ button.rv-more-toggle:hover {
   cursor: pointer;
 }
 
-.rv-group-row + .rv-group-row {
+.rv-opts-row + .rv-opts-row {
   border-top: 1px solid #26262a;
 }
 
-div.rv-group-row {
+div.rv-opts-row {
   cursor: default;
 }
 
-.rv-group-row-off .rv-group-title {
+.rv-opts-row-off .rv-opts-title {
   color: var(--text-muted);
 }
 
-.rv-group-title {
+.rv-opts-title {
   font-size: 0.85rem;
   font-weight: 500;
 }
 
-.rv-group-desc {
+.rv-opts-desc {
   margin-top: 1px;
   color: #71717a;
   font-size: 0.75rem;

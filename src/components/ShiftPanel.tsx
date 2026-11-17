@@ -19,8 +19,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
 import {
+  addEmployeePixKey,
   getPaymentShiftHistory,
   listEmployeePixKeys,
   type EffectivePaymentRules,
@@ -43,7 +43,7 @@ import {
   scheduleDurationMinutes,
   shiftValue,
 } from "../lib/format";
-import { PIX_KEY_TYPE_LABELS } from "../lib/pix";
+import { detectPixKeyType, PIX_KEY_TYPE_LABELS, PIX_KEY_TYPES, type PixKeyType } from "../lib/pix";
 import type { PaymentShiftRow, PaymentShiftStatus, ShiftPeriod } from "../lib/types";
 import Avatar from "./Avatar";
 import CurrencyInput from "./CurrencyInput";
@@ -146,6 +146,100 @@ function ShiftStrip({ shift, period }: { shift: PaymentShiftRow; period: ShiftPe
         <StripItem icon={BriefcaseBusiness} label="Função">
           {shift.role || <span className="muted">Sem função</span>}
         </StripItem>
+      </div>
+    </div>
+  );
+}
+
+/** "Cadastrar" / "+ Nova chave" on the Pagamento tab: one field, the type is guessed (and can be corrected),
+ *  Enter saves to the employee and hands back the fresh list with the new key's index; an existing key is just selected. */
+function PixKeyForm({
+  employeeId,
+  firstName,
+  keys,
+  onDone,
+  onCancel,
+}: {
+  employeeId: number;
+  firstName: string;
+  keys: EmployeePixKeyRow[];
+  onDone: (keys: EmployeePixKeyRow[], index: number) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState("");
+  const [typeOverride, setTypeOverride] = useState<PixKeyType | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const trimmed = value.trim();
+  const type = typeOverride ?? (trimmed ? detectPixKeyType(trimmed) : null);
+  const dupIndex = trimmed ? keys.findIndex((k) => k.keyValue.trim().toLowerCase() === trimmed.toLowerCase()) : -1;
+
+  async function save() {
+    if (!trimmed || busy) return;
+    if (dupIndex >= 0) return onDone(keys, dupIndex);
+    setBusy(true);
+    setError(null);
+    try {
+      await addEmployeePixKey(employeeId, trimmed, type ?? undefined);
+      const fresh = await listEmployeePixKeys(employeeId);
+      onDone(fresh, Math.max(0, fresh.findIndex((k) => k.keyValue === trimmed)));
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="sa-pix-form">
+      <label className="sa-slip-label" htmlFor="shift-pix-new">
+        Nova chave PIX de {firstName}
+      </label>
+      <input
+        id="shift-pix-new"
+        className="sa-pix-input"
+        autoFocus
+        autoComplete="off"
+        spellCheck={false}
+        placeholder="Cole a chave: CPF, telefone, e-mail ou aleatória"
+        value={value}
+        disabled={busy}
+        onChange={(e) => {
+          setValue(e.target.value);
+          setError(null);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            save();
+          } else if (e.key === "Escape") {
+            // Only closes the form, not the whole panel.
+            e.stopPropagation();
+            onCancel();
+          }
+        }}
+      />
+      <div className="sa-pix-types">
+        <span className="sa-pix-types-hint">{!typeOverride && type ? "Reconhecida como:" : "Tipo:"}</span>
+        {PIX_KEY_TYPES.map((t) => (
+          <button key={t} type="button" className="sa-pix-type" aria-pressed={type === t} disabled={busy} onClick={() => setTypeOverride(t)}>
+            {PIX_KEY_TYPE_LABELS[t]}
+          </button>
+        ))}
+      </div>
+      {error ? (
+        <span className="sa-pix-warn sa-pix-warn-bad">{error}</span>
+      ) : dupIndex >= 0 ? (
+        <span className="sa-pix-warn">Essa chave já está no cadastro ({PIX_KEY_TYPE_LABELS[keys[dupIndex].keyType]}).</span>
+      ) : (
+        type === "other" && !typeOverride && <span className="sa-pix-warn">Não reconheci o formato. Confira a chave ou escolha o tipo.</span>
+      )}
+      <div className="sa-pix-form-actions">
+        <button type="button" className="ghost" onClick={onCancel} disabled={busy}>
+          Cancelar
+        </button>
+        <button type="button" onClick={save} disabled={!trimmed || busy}>
+          {busy ? "Salvando…" : dupIndex >= 0 ? "Usar esta chave" : "Salvar chave"}
+        </button>
       </div>
     </div>
   );
@@ -557,7 +651,6 @@ export default function ShiftPanel({
   onConfirmDelete: () => void;
   onClose: () => void;
 }) {
-  const navigate = useNavigate();
   // Kept after the shift clears so the content doesn't vanish mid slide-out.
   const [shown, setShown] = useState(shiftProp);
   useEffect(() => {
@@ -572,6 +665,20 @@ export default function ShiftPanel({
   const [pixKeys, setPixKeys] = useState<EmployeePixKeyRow[] | null>(null);
   const [pixError, setPixError] = useState<string | null>(null);
   const [pixIndex, setPixIndex] = useState(0);
+  const [pixAdding, setPixAdding] = useState(false);
+  const [pixJustSaved, setPixJustSaved] = useState(false);
+  useEffect(() => {
+    if (!pixJustSaved) return;
+    const t = window.setTimeout(() => setPixJustSaved(false), 3500);
+    return () => window.clearTimeout(t);
+  }, [pixJustSaved]);
+  function pixSaved(keys: EmployeePixKeyRow[], index: number) {
+    const added = pixKeys !== null && keys.length > pixKeys.length;
+    setPixKeys(keys);
+    setPixIndex(index);
+    setPixAdding(false);
+    setPixJustSaved(added);
+  }
   const [deleting, setDeleting] = useState(false);
   const [deleteAck, setDeleteAck] = useState(false);
   const [confirmingRevert, setConfirmingRevert] = useState(false);
@@ -592,6 +699,8 @@ export default function ShiftPanel({
     setPixKeys(null);
     setPixError(null);
     setPixIndex(0);
+    setPixAdding(false);
+    setPixJustSaved(false);
     if (employeeId === null) return;
     let cancelled = false;
     listEmployeePixKeys(employeeId)
@@ -800,37 +909,61 @@ export default function ShiftPanel({
             </div>
             <CopyButton text={amountValid ? centsMaskToAmount(digits).toFixed(2).replace(".", ",") : ""} label="Copiar valor" />
           </div>
-          <div className="sa-slip-row">
-            <div className="sa-slip-main">
-              <div className="sa-slip-label">Chave PIX{pix ? ` · ${PIX_KEY_TYPE_LABELS[pix.keyType]}` : ""}</div>
-              {pixKeys === null && !pixError && <div className="muted sa-small">Carregando chaves…</div>}
-              {pixError && <div className="sa-small" style={{ color: "var(--danger)" }}>{pixError}</div>}
-              {pixKeys !== null && pixKeys.length === 0 && <div className="muted sa-small">Nenhuma chave cadastrada para {firstName}.</div>}
-              {pix && <div className="sa-pix-key">{pix.keyValue}</div>}
+          {pixKeys !== null && pixKeys.length === 0 && pixAdding ? (
+            <div className="sa-slip-row">
+              <PixKeyForm employeeId={shift.employeeId} firstName={firstName} keys={pixKeys} onDone={pixSaved} onCancel={() => setPixAdding(false)} />
             </div>
-            {pix ? (
-              <CopyButton text={pix.keyValue} label="Copiar chave PIX" />
-            ) : (
-              pixKeys !== null && (
-                <button type="button" className="sa-copy" onClick={() => navigate(`/employees/${shift.employeeId}`)}>
-                  Cadastrar
-                </button>
-              )
-            )}
-          </div>
-          {pixKeys && pixKeys.length > 1 && (
+          ) : (
+            <div className="sa-slip-row">
+              <div className="sa-slip-main">
+                <div className="sa-slip-label">Chave PIX{pix ? ` · ${PIX_KEY_TYPE_LABELS[pix.keyType]}` : ""}</div>
+                {pixKeys === null && !pixError && <div className="muted sa-small">Carregando chaves…</div>}
+                {pixError && <div className="sa-small" style={{ color: "var(--danger)" }}>{pixError}</div>}
+                {pixKeys !== null && pixKeys.length === 0 && <div className="muted sa-small">Nenhuma chave cadastrada para {firstName}.</div>}
+                {pix && <div className="sa-pix-key">{pix.keyValue}</div>}
+                {pixJustSaved && <div className="sa-pix-saved">✓ Salva no cadastro de {firstName}</div>}
+              </div>
+              {pix ? (
+                <CopyButton text={pix.keyValue} label="Copiar chave PIX" />
+              ) : (
+                pixKeys !== null && (
+                  <button type="button" className="sa-copy" onClick={() => setPixAdding(true)}>
+                    Cadastrar
+                  </button>
+                )
+              )}
+            </div>
+          )}
+          {pixKeys && pixKeys.length > 0 && (
             <div className="sa-pix-options">
-              {pixKeys.map((k, i) => (
-                <button
-                  key={k.id}
-                  type="button"
-                  className={k === pix ? "sa-pix-option sa-pix-option-on" : "sa-pix-option"}
-                  aria-pressed={k === pix}
-                  onClick={() => setPixIndex(i)}
-                >
-                  {PIX_KEY_TYPE_LABELS[k.keyType]}
-                </button>
-              ))}
+              {pixKeys.length > 1 &&
+                pixKeys.map((k, i) => (
+                  <button
+                    key={k.id}
+                    type="button"
+                    className={k === pix && !pixAdding ? "sa-pix-option sa-pix-option-on" : "sa-pix-option"}
+                    aria-pressed={k === pix && !pixAdding}
+                    onClick={() => {
+                      setPixIndex(i);
+                      setPixAdding(false);
+                    }}
+                  >
+                    {PIX_KEY_TYPE_LABELS[k.keyType]}
+                  </button>
+                ))}
+              <button
+                type="button"
+                className={pixAdding ? "sa-pix-option sa-pix-option-add sa-pix-option-on" : "sa-pix-option sa-pix-option-add"}
+                aria-pressed={pixAdding}
+                onClick={() => setPixAdding((v) => !v)}
+              >
+                + Nova chave
+              </button>
+            </div>
+          )}
+          {pixKeys && pixKeys.length > 0 && pixAdding && (
+            <div className="sa-slip-row">
+              <PixKeyForm employeeId={shift.employeeId} firstName={firstName} keys={pixKeys} onDone={pixSaved} onCancel={() => setPixAdding(false)} />
             </div>
           )}
         </div>
