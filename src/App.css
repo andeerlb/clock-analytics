@@ -5697,14 +5697,16 @@ input.settings-switch::after {
   transition: transform 0.15s ease, background 0.15s ease;
 }
 
+/* On: green track, white knob to the right. Off: gray track, gray knob to the left. */
 input.settings-switch:checked {
-  background: var(--accent);
+  background: var(--success);
 }
 
 input.settings-switch:checked::after {
   transform: translateX(14px);
-  background: var(--on-accent);
+  background: #ffffff;
 }
+
 
 input.settings-switch:disabled {
   opacity: 0.5;
