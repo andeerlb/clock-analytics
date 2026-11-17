@@ -1368,11 +1368,7 @@ export default function PaymentsPage() {
             </TableScroll>
 
             <div ref={setSentinel} className="payments-scroll-footer" aria-live="polite">
-              {loadingMore || loadedCount < total
-                ? `Carregando mais… ${loadedCount} de ${total}`
-                : total > CHUNK
-                  ? `Todos os ${total} ${grouped ? "colaboradores" : "turnos"} carregados`
-                  : null}
+              {loadedCount < total ? `Carregando mais… ${loadedCount} de ${total}` : null}
             </div>
           </>
         )}
@@ -1406,11 +1402,7 @@ export default function PaymentsPage() {
             </TableScroll>
 
             <div ref={setSentinel} className="payments-scroll-footer" aria-live="polite">
-              {loadingMore || loadedCount < total
-                ? `Carregando mais… ${loadedCount} de ${total}`
-                : total > CHUNK
-                  ? `Todos os ${total} ${grouped ? "colaboradores" : "turnos"} carregados`
-                  : null}
+              {loadedCount < total ? `Carregando mais… ${loadedCount} de ${total}` : null}
             </div>
           </>
         )}
