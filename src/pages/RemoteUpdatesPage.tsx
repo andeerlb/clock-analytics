@@ -118,6 +118,36 @@ function ago(sqlite: string | null, now: number): string {
   return `há ${days} ${days === 1 ? "dia" : "dias"}`;
 }
 
+/** "hoje às 14:28", "ontem às 18:40", "16/11 às 10:00" — when a spreadsheet version was saved (as written in the file). */
+function savedWhen(iso: string | null): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const time = date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (date.toDateString() === today.toDateString()) return `hoje às ${time}`;
+  if (date.toDateString() === yesterday.toDateString()) return `ontem às ${time}`;
+  return `${date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} às ${time}`;
+}
+
+/** " · por Maria e Carlos" — who saved the versions these changes came from; "" when nobody is known. */
+function byWhom(rows: CheckDiffRow[]): string {
+  const names = Array.from(new Set(rows.map((r) => r.savedBy?.trim()).filter((n): n is string => Boolean(n))));
+  if (names.length === 0) return "";
+  if (names.length === 1) return ` · por ${names[0]}`;
+  const first = names.map((n) => n.split(/\s+/)[0]);
+  return ` · por ${first.slice(0, -1).join(", ")} e ${first[first.length - 1]}`;
+}
+
+/** The "Quem alterou" key of a change: the name, "no name in the file", or not known at all. */
+const UNNAMED_AUTHOR = "Sem nome no arquivo";
+function authorKey(r: CheckDiffRow): string | null {
+  if (!r.savedAt && !r.savedBy) return null;
+  return r.savedBy?.trim() || UNNAMED_AUTHOR;
+}
+
 function fileExt(name: string): string {
   const ext = name.split(".").pop()?.toUpperCase() ?? "";
   return ext.length >= 2 && ext.length <= 4 ? ext : "URL";
@@ -237,7 +267,7 @@ export default function RemoteUpdatesPage() {
       const n = countItems(pending);
       return {
         tone: "warn",
-        text: `${n} ${n === 1 ? "mudança encontrada" : "mudanças encontradas"} ${ago(c.lastCheckedAt, now)}`,
+        text: `${n} ${n === 1 ? "mudança encontrada" : "mudanças encontradas"} ${ago(c.lastCheckedAt, now)}${byWhom(pending)}`,
         action: (
           <button type="button" className="settings-button settings-button-primary" onClick={(e) => (e.stopPropagation(), openSheet({ kind: "review", configId: c.id, mode: "pending" }))}>
             Revisar
@@ -249,7 +279,7 @@ export default function RemoteUpdatesPage() {
       const n = countItems(applied);
       return {
         tone: "info",
-        text: `${n} ${n === 1 ? "mudança aplicada" : "mudanças aplicadas"} sozinho ${ago(c.lastCheckedAt, now)}`,
+        text: `${n} ${n === 1 ? "mudança aplicada" : "mudanças aplicadas"} sozinho ${ago(c.lastCheckedAt, now)}${byWhom(applied)}`,
         action: (
           <button type="button" className="settings-button" onClick={(e) => (e.stopPropagation(), openSheet({ kind: "review", configId: c.id, mode: "applied" }))}>
             Ver
@@ -673,7 +703,15 @@ export default function RemoteUpdatesPage() {
                   return (
                     <button key={entry.id} type="button" onClick={() => openSheet({ kind: "check", configId: c.id, entry })}>
                       <i className={`rv-dot rv-dot-${tone}`} aria-hidden="true" />
-                      {formatDateTimeAbbrevYY(entry.checkedAt)} · {text}
+                      <span className="rv-history-text">
+                        {formatDateTimeAbbrevYY(entry.checkedAt)} · {text}
+                        {entry.diffCount > 0 && entry.savedAt && (
+                          <>
+                            {" "}
+                            · salva por <b>{entry.savedBy?.trim() || "alguém sem nome no arquivo"}</b> {savedWhen(entry.savedAt)}
+                          </>
+                        )}
+                      </span>
                       <span className="rv-history-go">Ver ›</span>
                     </button>
                   );
@@ -857,14 +895,87 @@ export default function RemoteUpdatesPage() {
           <span className={`rv-tag ${applied ? "rv-tag-auto" : tagClass}`}>{applied ? "Aplicado" : tagLabel}</span>
         </div>
         {body}
-        {sheetPlace && <span className="rv-small">{sheetPlace}</span>}
+        <div className="rv-change-meta">
+          {authorKey(first) && (
+            <span className="rv-by">
+              <span className="rv-avatar rv-avatar-xs" style={{ background: first.savedBy ? colorForName(first.savedBy) : "#3a3a42" }} aria-hidden="true">
+                {first.savedBy ? initials(first.savedBy) : "?"}
+              </span>
+              {first.savedBy ? (
+                <>
+                  Alterado por <b>{first.savedBy}</b>
+                </>
+              ) : (
+                UNNAMED_AUTHOR
+              )}
+              {first.savedAt && ` · ${savedWhen(first.savedAt)}`}
+            </span>
+          )}
+          {sheetPlace && <span className="rv-small">{sheetPlace}</span>}
+        </div>
         {actions && <div className="rv-actions">{actions}</div>}
       </div>
     );
   }
 
   const [reviewFilter, setReviewFilter] = useState<string>("all");
-  useEffect(() => setReviewFilter("all"), [sheet?.kind, sheetConfigId]);
+  const [authorFilter, setAuthorFilter] = useState<string | null>(null);
+  const [authorInfoOpen, setAuthorInfoOpen] = useState(false);
+  useEffect(() => {
+    setReviewFilter("all");
+    setAuthorFilter(null);
+    setAuthorInfoOpen(false);
+  }, [sheet?.kind, sheetConfigId]);
+
+  /** "Quem alterou a planilha": each person who saved a version with these changes; a click filters to theirs. */
+  function renderAuthors(rows: CheckDiffRow[]) {
+    const authors = new Map<string, { name: string; count: Set<string>; lastAt: string | null }>();
+    for (const r of rows) {
+      const key = authorKey(r);
+      if (!key) continue;
+      const entry = authors.get(key) ?? { name: key, count: new Set<string>(), lastAt: null };
+      entry.count.add(r.changeKind === "field" && r.matchedShiftId !== null ? `s${r.matchedShiftId}` : `d${r.id}`);
+      if (r.savedAt && (!entry.lastAt || r.savedAt > entry.lastAt)) entry.lastAt = r.savedAt;
+      authors.set(key, entry);
+    }
+    if (authors.size === 0) return null;
+    return (
+      <div className="rv-authors">
+        <div className="rv-authors-head">
+          <span className="rv-section-label">Quem alterou a planilha</span>
+          <button type="button" className="rv-link" aria-expanded={authorInfoOpen} onClick={() => setAuthorInfoOpen((v) => !v)}>
+            Como sabemos?
+          </button>
+        </div>
+        {authorInfoOpen && (
+          <p className="rv-authors-info">
+            O Excel guarda quem salvou a planilha por último. A cada conferência, o PontoScan anota esse nome junto com as mudanças daquela versão. Se duas pessoas
+            salvarem entre uma conferência e outra, aparece só a última. “{UNNAMED_AUTHOR}” é quando a planilha foi salva por um programa que não grava o nome.
+          </p>
+        )}
+        <div className="rv-author-list">
+          {Array.from(authors.values()).map((a) => {
+            const unnamed = a.name === UNNAMED_AUTHOR;
+            const n = a.count.size;
+            return (
+              <button key={a.name} type="button" className="rv-author" aria-pressed={authorFilter === a.name} onClick={() => setAuthorFilter((cur) => (cur === a.name ? null : a.name))}>
+                <span className="rv-avatar rv-avatar-sm" style={{ background: unnamed ? "#3a3a42" : colorForName(a.name) }} aria-hidden="true">
+                  {unnamed ? "?" : initials(a.name)}
+                </span>
+                <span className="rv-author-text">
+                  <b>{a.name}</b>
+                  <span>
+                    {n} {n === 1 ? "mudança" : "mudanças"}
+                    {a.lastAt && ` · salvou ${savedWhen(a.lastAt)}`}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   function renderReview(c: ReimportConfig, mode: "pending" | "applied") {
     const { pending, applied } = rowsFor(c);
@@ -879,7 +990,9 @@ export default function RemoteUpdatesPage() {
       );
     }
     const kinds = ["field", "new-shift", "removed", "unresolved"].filter((k) => rows.some((r) => r.changeKind === k));
-    const shown = reviewFilter === "all" ? rows : rows.filter((r) => r.changeKind === reviewFilter);
+    const shown = rows
+      .filter((r) => reviewFilter === "all" || r.changeKind === reviewFilter)
+      .filter((r) => authorFilter === null || authorKey(r) === authorFilter);
     const counts = (k: string) => countItems(rows.filter((r) => r.changeKind === k));
     return (
       <div className="rv-sheet rv-sheet-tight">
@@ -901,6 +1014,7 @@ export default function RemoteUpdatesPage() {
             ))}
           </div>
         )}
+        {renderAuthors(rows)}
         {actionError && <div className="error-box">{actionError}</div>}
         {cardsOf(shown).map((person) => (
           <div key={person.name} className="rv-person">

@@ -120,6 +120,11 @@ export function downloadPaymentFileFromUrl(url: string): Promise<DownloadedPayme
   return invoke("download_payment_file_from_url", { url });
 }
 
+/** Who last saved a downloaded spreadsheet, and when, from the file's own properties (.xlsx/.ods; nothing for .xls/.csv). */
+export function readSpreadsheetAuthor(path: string): Promise<{ savedBy: string | null; savedAt: string | null }> {
+  return invoke("read_spreadsheet_author", { path });
+}
+
 export interface RemoteFileSignature {
   etag: string | null;
   lastModified: string | null;

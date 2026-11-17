@@ -422,6 +422,13 @@ pub fn hash_payment_file(path: String) -> Result<PaymentFileHash, String> {
     Ok(PaymentFileHash { path, file_name, hash })
 }
 
+/// Who last saved a downloaded spreadsheet, and when (see `file_author`) —
+/// recorded on each remote check so a change can say who made it.
+#[tauri::command]
+pub fn read_spreadsheet_author(path: String) -> crate::file_author::FileAuthor {
+    crate::file_author::read(&path)
+}
+
 const OFFICE_DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const OFFICE_HEAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 

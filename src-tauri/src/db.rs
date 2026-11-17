@@ -472,5 +472,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0077_unique_previous_shift.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 78,
+            description: "who saved the spreadsheet version a remote check looked at (saved_by/saved_at, from the file's own properties) on source_url_check_log, and on each diff the one who saved the version where that change first showed up",
+            sql: include_str!("../migrations/0078_check_saved_by.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

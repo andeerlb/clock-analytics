@@ -6866,3 +6866,128 @@ button.rv-chip[aria-pressed="true"]:hover {
     animation: none;
   }
 }
+
+/* ---------- Verificação automática: who changed the spreadsheet ---------- */
+
+.rv-change-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.rv-by {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.rv-by b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.rv-avatar-xs {
+  width: 18px;
+  height: 18px;
+  font-size: 8px;
+}
+
+.rv-avatar-sm {
+  width: 26px;
+  height: 26px;
+  font-size: 10px;
+}
+
+.rv-authors {
+  margin: 12px 0 4px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #1b1b1f;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.rv-authors-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.75rem;
+}
+
+.rv-section-label {
+  color: #71717a;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.rv-authors-info {
+  margin: 0;
+  padding: 9px 11px;
+  background: #222227;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.rv-author-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+button.rv-author {
+  padding: 6px 12px 6px 6px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: transparent;
+  border: 1px solid #3b3b44;
+  border-radius: 22px;
+  color: var(--text);
+  font-weight: 400;
+  text-align: left;
+}
+
+button.rv-author:hover {
+  background: transparent;
+  border-color: #55555f;
+}
+
+button.rv-author[aria-pressed="true"],
+button.rv-author[aria-pressed="true"]:hover {
+  background: #2c2c33;
+  border-color: var(--accent);
+}
+
+.rv-author-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.rv-author-text b {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.rv-author-text span {
+  color: #71717a;
+  font-size: 0.72rem;
+}
+
+.rv-history-text {
+  min-width: 0;
+}
+
+.rv-history-text b {
+  font-weight: 600;
+}
