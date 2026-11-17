@@ -885,19 +885,9 @@ tr:last-child td {
   gap: 0.65rem;
 }
 
-/* Pagamentos "Modo edição" — a table cell that turns into an input on click. */
-.editable-value {
-  cursor: text;
-  border-bottom: 1px dashed var(--border);
-}
-
-.editable-value:hover {
-  border-bottom-color: var(--accent);
-}
-
 /* `CurrencyInput` — shared "R$ 1.234,56" masked field. `-sm` (Pagamentos
    table's inline Valor edit) keeps the old label-beside-input look at a
-   fixed compact width; `-md` (form/modal use, e.g. ConfirmPaymentModal)
+   fixed compact width; `-md` (form/modal use)
    insets the "R$" prefix into a full-width, monospace, darker-than-usual
    field instead. */
 .currency-input {
@@ -955,22 +945,6 @@ tr:last-child td {
   font-weight: 700;
   text-align: right;
   letter-spacing: 0.02em;
-}
-
-/* Shared by every label/value Drawer row (`ShiftHistoryDrawer`,
-   `ExtraColumnsDrawer`) — each line highlights on its own as the mouse
-   moves over it, not the whole panel at once, so a long list is easier to
-   scan row by row. Negative margin/extra padding lets the highlight bleed
-   slightly past the text instead of hugging it exactly. */
-.drawer-detail-row {
-  margin: 0 -0.4rem;
-  padding-left: 0.4rem;
-  padding-right: 0.4rem;
-  border-radius: 6px;
-  transition: background 0.12s ease;
-}
-.drawer-detail-row:hover {
-  background: var(--surface-variant);
 }
 
 .avatar {
@@ -1554,8 +1528,8 @@ tr:last-child td {
   gap: 1rem;
 }
 
-/* Shared by every `Modal`-based dialog (ConfirmModal, UpdateModal,
-   ConfirmPaymentModal) — a flat dark scrim, no blur, on every platform. */
+/* Shared by every `Modal`-based dialog (ConfirmModal,
+   UpdateModal) — a flat dark scrim, no blur, on every platform. */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -5114,6 +5088,627 @@ button.status-chip[aria-pressed="true"]:hover {
   margin-left: auto;
 }
 
+.side-panel-icon {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: #26262b;
+  color: var(--text);
+}
+
+.side-panel-icon-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+button.side-panel-icon-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* ---------- Painel do turno (ShiftPanel) ---------- */
+
+tr.payments-row-clickable {
+  cursor: pointer;
+}
+
+.sa-tabs {
+  flex-shrink: 0;
+  display: flex;
+  gap: 2px;
+  margin: 12px 16px 0;
+  padding: 3px;
+  border: 1px solid #26262a;
+  border-radius: 9px;
+  background: #121215;
+}
+
+.sa-tabs button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.sa-tabs button:hover {
+  color: var(--text);
+}
+
+.sa-tabs button[aria-selected="true"] {
+  background: #26262b;
+  color: var(--text);
+}
+
+.sa-tab-count {
+  color: #71717a;
+  font-size: 11px;
+}
+
+button.side-panel-icon-button.sa-trash-button:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+button.sa-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+button.sa-back:hover {
+  color: var(--text);
+}
+
+.sa-delete-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.sa-review {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: var(--warning-soft);
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  color: #fde68a;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.sa-review > svg {
+  flex-shrink: 0;
+}
+
+.sa-review strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.sa-done {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--success-soft);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+
+.sa-done-check {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--success);
+  color: #052e1f;
+}
+
+.sa-done-title {
+  color: var(--success);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.sa-pix-key-sm {
+  font-size: 1rem;
+}
+
+.sa-inline-confirm {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #151518;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sa-inline-confirm strong {
+  color: var(--text);
+}
+
+.sa-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sa-form .field {
+  margin: 0;
+}
+
+.sa-form input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.sa-form-two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.sa-details {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #26262a;
+  border-radius: 9px;
+}
+
+.sa-detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.sa-detail-row + .sa-detail-row {
+  border-top: 1px solid #26262a;
+}
+
+.sa-detail-row > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+button.sa-link-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-align: right;
+}
+
+button.sa-date-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-container-lowest);
+  border: 1px solid var(--border);
+  box-shadow: none;
+  color: var(--text);
+  font-weight: 400;
+  text-align: left;
+}
+
+.sa-strip {
+  flex-shrink: 0;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #151518;
+  border-bottom: 1px solid #26262a;
+}
+
+.sa-strip-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sa-strip-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-strip-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 14px;
+}
+
+.sa-strip-item {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+.sa-strip-item > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: #71717a;
+}
+
+.sa-strip-item > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.sa-small {
+  font-size: 12px;
+  margin: 0;
+}
+
+.sa-spacer {
+  flex: 1;
+}
+
+.sa-section-label {
+  margin-bottom: 8px;
+  color: #71717a;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sa-notice {
+  display: flex;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.sa-notice > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.sa-notice-warn {
+  background: var(--warning-soft);
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  color: #fde68a;
+}
+
+.sa-notice-danger {
+  background: var(--danger-soft);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  color: #fecaca;
+}
+
+.sa-notice-info {
+  background: #202024;
+  border: 1px solid #2e2e33;
+  color: var(--text-muted);
+}
+
+.sa-notice strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.sa-diff {
+  margin-top: 4px;
+}
+
+.sa-diff s,
+.sa-tl-changes s {
+  color: #71717a;
+}
+
+/* The "comprovante": exactly what goes into the bank app. */
+.sa-slip {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-container-lowest);
+  overflow: hidden;
+}
+
+.sa-slip-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 12px 12px 14px;
+}
+
+.sa-slip-row + .sa-slip-row {
+  border-top: 1px dashed var(--border);
+}
+
+.sa-slip-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.sa-slip-label {
+  display: block;
+  margin-bottom: 4px;
+  color: #71717a;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sa-slip .currency-input-lg .currency-input-prefix {
+  left: 0;
+  font-size: 1rem;
+}
+
+.sa-slip .currency-input-lg input {
+  padding: 0 0 0 1.9rem;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  font-size: 1.9rem;
+  text-align: left;
+}
+
+.sa-slip .currency-input-lg input:focus {
+  outline: none;
+}
+
+.sa-slip-row-needs {
+  background: var(--warning-soft);
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+
+.sa-slip-row-needs .sa-slip-label,
+.sa-origin-needs {
+  color: var(--warning);
+}
+
+.sa-origin {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+button.sa-link {
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.sa-pix-key {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 1.1rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+button.sa-copy {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 9px;
+  background: #26262b;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+button.sa-copy:hover {
+  color: var(--text);
+}
+
+button.sa-copy.sa-copy-done {
+  color: var(--success);
+  border-color: rgba(52, 211, 153, 0.4);
+}
+
+.sa-pix-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 14px 12px;
+}
+
+button.sa-pix-option {
+  padding: 3px 9px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+button.sa-pix-option-on {
+  background: #26262b;
+  color: var(--text);
+}
+
+.sa-siblings {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #26262a;
+  border-radius: 9px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.sa-paid-amount {
+  font-size: 1.35rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sa-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sa-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font-size: 13px;
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.sa-ack input {
+  margin: 3px 0 0;
+  accent-color: var(--danger);
+}
+
+/* Histórico: a timeline that shows only what changed at each step. */
+.sa-timeline {
+  display: flex;
+  flex-direction: column;
+}
+
+.sa-tl-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr);
+  gap: 12px;
+  padding-bottom: 18px;
+}
+
+.sa-tl-item:last-child {
+  padding-bottom: 0;
+}
+
+.sa-tl-item::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 19px;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+
+.sa-tl-item:last-child::before {
+  display: none;
+}
+
+.sa-tl-dot {
+  width: 17px;
+  height: 17px;
+  margin-top: 1px;
+  box-sizing: border-box;
+  border: 2px solid var(--border);
+  border-radius: 50%;
+  background: #18181b;
+}
+
+.sa-tl-now .sa-tl-dot {
+  border-color: var(--text);
+  background: var(--text);
+  box-shadow: 0 0 0 3px rgba(246, 246, 248, 0.12);
+}
+
+.sa-tl-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.sa-tl-title {
+  font-weight: 600;
+}
+
+.sa-tag {
+  max-width: 180px;
+  padding: 1px 6px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #26262b;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-tl-when {
+  margin-top: 2px;
+  color: #71717a;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sa-tl-changes {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12.5px;
+}
+
 /* ---------- Cartão Ponto header and filter bar ---------- */
 
 .library-bar {
@@ -8367,4 +8962,12 @@ button.ns-rule small { grid-column: 2; color: var(--text-muted); font-size: 0.75
 @media (max-width: 640px) {
   .form-row-2 { grid-template-columns: minmax(0, 1fr); }
   .ns-verdict { margin-left: 0; }
+}
+
+/* Money columns: right-aligned, equal-width digits so the cents line up. */
+th.num-cell,
+td.num-cell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
