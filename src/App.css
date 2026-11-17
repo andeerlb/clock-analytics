@@ -5579,6 +5579,86 @@ button.sa-pix-option-on {
   color: var(--text);
 }
 
+button.sa-pix-option-add {
+  border-style: dashed;
+}
+
+/* "Cadastrar" / "+ Nova chave": the PIX key form inline on the Pagamento tab. */
+.sa-pix-form {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+input.sa-pix-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
+input.sa-pix-input:placeholder-shown {
+  font-family: inherit;
+}
+
+.sa-pix-types {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.sa-pix-types-hint {
+  margin-right: 2px;
+  color: #71717a;
+  font-size: 11.5px;
+}
+
+button.sa-pix-type {
+  padding: 2px 9px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+button.sa-pix-type:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text);
+}
+
+button.sa-pix-type[aria-pressed="true"],
+button.sa-pix-type[aria-pressed="true"]:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.sa-pix-warn {
+  color: #fbbf24;
+  font-size: 12px;
+}
+
+.sa-pix-warn-bad {
+  color: var(--danger);
+}
+
+.sa-pix-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.sa-pix-saved {
+  color: #34d399;
+  font-size: 12px;
+}
+
 .sa-siblings {
   display: flex;
   align-items: center;
