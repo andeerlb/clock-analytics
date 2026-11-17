@@ -302,7 +302,7 @@ export function diffFieldLabel(fieldName: string | null, columnLetter: string | 
  * use) and the Verificação automática page (previewing "vai usar: X → Y").
  */
 export function resolveReimportPeriod(config: {
-  dateMode: "fixed" | "relative";
+  dateMode: "fixed" | "relative" | "month";
   periodStart: string | null;
   periodEnd: string | null;
   startOffsetDays: number | null;
@@ -310,6 +310,8 @@ export function resolveReimportPeriod(config: {
 }): { start: string | null; end: string | null } {
   if (config.dateMode === "fixed") return { start: config.periodStart, end: config.periodEnd };
   const today = toIso(todayUtc());
+  // "Mês atual": from the 1st of this month to today, moving every month.
+  if (config.dateMode === "month") return { start: `${today.slice(0, 8)}01`, end: today };
   return {
     start: config.startOffsetDays !== null ? addDaysIso(today, -config.startOffsetDays) : null,
     end: config.endOffsetDays !== null ? addDaysIso(today, -config.endOffsetDays) : null,
@@ -319,11 +321,12 @@ export function resolveReimportPeriod(config: {
 /** A human label for a reimport config that was never given a custom one — recognizes the common relative shapes, falls back to a generic description otherwise. */
 export function resolveReimportConfigLabel(config: {
   label: string;
-  dateMode: "fixed" | "relative";
+  dateMode: "fixed" | "relative" | "month";
   startOffsetDays: number | null;
   endOffsetDays: number | null;
 }): string {
   if (config.label.trim()) return config.label;
+  if (config.dateMode === "month") return "Mês atual";
   if (config.dateMode !== "relative") return "Período fixo";
   const { startOffsetDays: start, endOffsetDays: end } = config;
   if (start === 0 && end === 0) return "Hoje";

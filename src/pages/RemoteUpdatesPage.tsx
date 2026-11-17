@@ -2,7 +2,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChevronRight, ExternalLink, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import ChangeDiffPanel from "../components/ChangeDiffPanel";
 import ConfirmModal from "../components/ConfirmModal";
 import DateRangePicker from "../components/DateRangePicker";
 import Drawer from "../components/Drawer";
@@ -50,11 +49,11 @@ function settingsOf(c: ReimportConfig): RuleSettings {
 
 const NEW_RULE_DEFAULTS: RuleSettings = {
   label: "",
-  dateMode: "relative",
+  dateMode: "month",
   periodStart: null,
   periodEnd: null,
-  startOffsetDays: 30,
-  endOffsetDays: 0,
+  startOffsetDays: null,
+  endOffsetDays: null,
   checkIntervalMinutes: DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES,
   keepManualEdits: true,
   autoApplyEnabled: false,
@@ -62,33 +61,29 @@ const NEW_RULE_DEFAULTS: RuleSettings = {
   autoApplyOverwritePaid: false,
 };
 
-/** Shortcuts for "Quais turnos olhar". */
+/** Shortcuts for "Quais turnos olhar" (plus "Período fixo…", which opens the date picker). */
 const PERIOD_CHOICES: { key: string; label: string; settings: Pick<RuleSettings, "dateMode" | "periodStart" | "periodEnd" | "startOffsetDays" | "endOffsetDays"> }[] = [
-  { key: "7", label: "Últimos 7 dias", settings: { dateMode: "relative", periodStart: null, periodEnd: null, startOffsetDays: 7, endOffsetDays: 0 } },
+  { key: "month", label: "Mês atual", settings: { dateMode: "month", periodStart: null, periodEnd: null, startOffsetDays: null, endOffsetDays: null } },
   { key: "30", label: "Últimos 30 dias", settings: { dateMode: "relative", periodStart: null, periodEnd: null, startOffsetDays: 30, endOffsetDays: 0 } },
-  { key: "60", label: "Últimos 60 dias", settings: { dateMode: "relative", periodStart: null, periodEnd: null, startOffsetDays: 60, endOffsetDays: 0 } },
-  { key: "all", label: "Planilha inteira", settings: { dateMode: "fixed", periodStart: null, periodEnd: null, startOffsetDays: null, endOffsetDays: null } },
 ];
 
+/** Which "Quais turnos olhar" option a rule is on; "custom" for an older relative range none of the shortcuts covers. */
 function periodChoiceOf(s: RuleSettings): string {
-  const hit = PERIOD_CHOICES.find(
-    (p) =>
-      p.settings.dateMode === s.dateMode &&
-      (s.dateMode === "relative"
-        ? p.settings.startOffsetDays === s.startOffsetDays && p.settings.endOffsetDays === s.endOffsetDays
-        : p.settings.periodStart === s.periodStart && p.settings.periodEnd === s.periodEnd),
-  );
-  if (hit) return hit.key;
-  return s.dateMode === "fixed" ? "fixed" : "custom";
+  if (s.dateMode === "month") return "month";
+  if (s.dateMode === "fixed") return "fixed";
+  return s.startOffsetDays === 30 && s.endOffsetDays === 0 ? "30" : "custom";
 }
 
-/** "últimos 30 dias", "01/nov/26 a 30/nov/26", "planilha inteira" — the rule's period in a few words. */
+/** "mês atual", "últimos 30 dias", "01/nov/26 a 30/nov/26", "planilha inteira" — the rule's period in a few words. */
 function periodText(s: RuleSettings): string {
   const choice = PERIOD_CHOICES.find((p) => p.key === periodChoiceOf(s));
   if (choice) return choice.label.toLowerCase();
-  const r = resolveReimportPeriod(s);
-  if (s.dateMode === "relative") return `de ${s.startOffsetDays ?? "?"} a ${s.endOffsetDays ?? "?"} dias atrás`;
-  return `${r.start ? formatDateAbbrevYY(r.start) : "início"} a ${r.end ? formatDateAbbrevYY(r.end) : "fim"}`;
+  if (s.dateMode === "relative") {
+    if (s.endOffsetDays === 0 && s.startOffsetDays !== null) return `últimos ${s.startOffsetDays} dias`;
+    return `de ${s.startOffsetDays ?? "?"} a ${s.endOffsetDays ?? "?"} dias atrás`;
+  }
+  if (!s.periodStart && !s.periodEnd) return "planilha inteira";
+  return `${s.periodStart ? formatDateAbbrevYY(s.periodStart) : "início"} a ${s.periodEnd ? formatDateAbbrevYY(s.periodEnd) : "fim"}`;
 }
 
 function todayRange(s: RuleSettings): string {
@@ -370,6 +365,7 @@ export default function RemoteUpdatesPage() {
     try {
       await action();
       await refreshDiffs();
+      setCheckReload((n) => n + 1);
     } catch (e) {
       setActionError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -404,6 +400,7 @@ export default function RemoteUpdatesPage() {
   }, [sheet?.kind, sheetConfigId, sheetConfigChecked]);
 
   const [checkDiffs, setCheckDiffs] = useState<CheckDiffRow[] | null>(null);
+  const [checkReload, setCheckReload] = useState(0);
   useEffect(() => {
     if (sheet?.kind !== "check") return;
     setCheckDiffs(null);
@@ -411,7 +408,7 @@ export default function RemoteUpdatesPage() {
       .then((rows) => setCheckDiffs(rows.filter((r) => r.configId === sheet.configId)))
       .catch(() => setCheckDiffs([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheet]);
+  }, [sheet, checkReload]);
 
   // ---- rendering helpers ----
   function statusLine(tone: Tone, text: string) {
@@ -580,7 +577,10 @@ export default function RemoteUpdatesPage() {
         <label className="rv-toggle">
           <span className="rv-text">
             <span className="rv-toggle-title">Aplicar mudanças sozinho</span>
-            <span className="rv-toggle-desc">Alterações e turnos novos entram sem precisar revisar. Turnos já pagos não são alterados, a não ser que você permita em “Mais detalhes”.</span>
+            <span className="rv-toggle-desc">
+              Alterações, turnos novos e turnos que saíram da planilha entram sem precisar revisar.{" "}
+              {s.autoApplyOverwritePaid ? "Turnos já pagos também são alterados (veja “Mais detalhes”)" : "Turnos já pagos nunca são alterados"}, e nomes sem cadastro sempre esperam você.
+            </span>
           </span>
           <input type="checkbox" role="switch" className="settings-switch" checked={s.autoApplyEnabled} onChange={(e) => onChange({ autoApplyEnabled: e.target.checked })} />
         </label>
@@ -591,26 +591,10 @@ export default function RemoteUpdatesPage() {
   function renderRuleSheet(c: ReimportConfig) {
     const s = settingsOf(c);
     const file = fileOf(c.sourceUrl);
-    const siblings = configsByUrl.get(c.sourceUrl) ?? [];
     const { error } = rowsFor(c);
     const errorMessage = error?.message || (file?.lastResult === "error" ? file.lastErrorMessage : null);
     return (
       <div className="rv-sheet">
-        <div className="rv-sheet-sub">
-          {siblings.length > 1 ? (
-            <>
-              Regra: {ruleName(c)} · {periodText(s)} ·{" "}
-              <button type="button" className="rv-link" onClick={() => openSheet({ kind: "file", sourceUrl: c.sourceUrl })}>
-                ver as outras regras
-              </button>
-            </>
-          ) : (
-            <button type="button" className="rv-link" onClick={() => openUrl(c.sourceUrl)}>
-              Abrir link <ExternalLink size={11} />
-            </button>
-          )}
-        </div>
-
         {errorMessage && (
           <div className="rv-banner rv-banner-bad">
             <strong>Não deu pra conferir a planilha</strong>
@@ -741,11 +725,6 @@ export default function RemoteUpdatesPage() {
     const configs = configsByUrl.get(sourceUrl) ?? [];
     return (
       <div className="rv-sheet">
-        <div className="rv-sheet-sub">
-          <button type="button" className="rv-link" onClick={() => openUrl(sourceUrl)}>
-            Abrir link <ExternalLink size={11} />
-          </button>
-        </div>
         <p className="rv-muted">
           A mesma planilha é conferida por {configs.length} regras. Cada uma usa o seu modelo e o seu período, e avisa separado.
         </p>
@@ -818,7 +797,8 @@ export default function RemoteUpdatesPage() {
     unresolved: ["rv-tag-who", "Sem cadastro"],
   };
 
-  function renderCard(c: ReimportConfig, key: string, rows: CheckDiffRow[], applied: boolean) {
+  function renderCard(c: ReimportConfig, key: string, rows: CheckDiffRow[], state: "pending" | "applied" | "seen") {
+    const applied = state === "applied";
     const first = rows[0];
     const [tagClass, tagLabel] = KIND_TAG[first.changeKind] ?? ["rv-tag-who", first.changeKind];
     const where = [first.local, first.role].filter(Boolean).join(" · ");
@@ -851,7 +831,7 @@ export default function RemoteUpdatesPage() {
     }
 
     let actions: ReactNode = null;
-    if (!applied) {
+    if (state === "pending") {
       const ignore = (label: string) => (
         <button type="button" className="settings-button settings-button-ghost" disabled={busy} onClick={() => withBusy(key, () => dismissCheckDiffs(ids))}>
           {label}
@@ -893,6 +873,7 @@ export default function RemoteUpdatesPage() {
           <span className="rv-change-date">{first.workDate ? formatDateAbbrevYY(first.workDate) : "Sem data"}</span>
           {where && <span className="rv-small">{where}</span>}
           <span className={`rv-tag ${applied ? "rv-tag-auto" : tagClass}`}>{applied ? "Aplicado" : tagLabel}</span>
+          {state === "seen" && <span className="rv-tag rv-tag-who">Visto</span>}
         </div>
         {body}
         <div className="rv-change-meta">
@@ -1029,7 +1010,7 @@ export default function RemoteUpdatesPage() {
                 </span>
               </span>
             </div>
-            {person.cards.map((card) => renderCard(c, card.key, card.rows, mode === "applied"))}
+            {person.cards.map((card) => renderCard(c, card.key, card.rows, mode === "applied" ? "applied" : "pending"))}
           </div>
         ))}
       </div>
@@ -1040,13 +1021,39 @@ export default function RemoteUpdatesPage() {
   const sheetConfig = sheetConfigId !== null ? reimportConfigs.find((c) => c.id === sheetConfigId) : undefined;
   const reviewConfig = sheet?.kind === "review" ? reimportConfigs.find((c) => c.id === sheet.configId) : undefined;
   let sheetTitle = "";
+  /** The line under the title: which rule, a way back, or the link. */
+  let sheetSub: ReactNode = null;
+  /** The spreadsheet these sheets are about, shown as its icon in the header. */
+  let sheetFileName: string | null = null;
   let sheetBody: ReactNode = null;
   let sheetFooter: ReactNode = null;
+
+  const linkTo = (url: string) => (
+    <button type="button" className="rv-link" onClick={() => openUrl(url)}>
+      Abrir link <ExternalLink size={11} />
+    </button>
+  );
+  /** "Regra: Modelo Atlas · mês atual · ver as outras regras" when the spreadsheet has several rules. */
+  const ruleSub = (c: ReimportConfig, extra?: string) => {
+    const siblings = configsByUrl.get(c.sourceUrl) ?? [];
+    if (siblings.length < 2) return extra ? <>{extra}</> : linkTo(c.sourceUrl);
+    return (
+      <>
+        Regra: {ruleName(c)} · {periodText(settingsOf(c))}
+        {extra ? ` · ${extra}` : ""} ·{" "}
+        <button type="button" className="rv-link" onClick={() => openSheet({ kind: "file", sourceUrl: c.sourceUrl })}>
+          ver as outras regras
+        </button>
+      </>
+    );
+  };
 
   if (sheet?.kind === "rule" && sheetConfig) {
     const file = fileOf(sheetConfig.sourceUrl);
     const siblings = configsByUrl.get(sheetConfig.sourceUrl) ?? [];
     sheetTitle = file?.fileName ?? "Planilha";
+    sheetFileName = sheetTitle;
+    sheetSub = ruleSub(sheetConfig);
     sheetBody = renderRuleSheet(sheetConfig);
     sheetFooter = (
       <>
@@ -1067,6 +1074,8 @@ export default function RemoteUpdatesPage() {
   } else if (sheet?.kind === "file") {
     const file = fileOf(sheet.sourceUrl);
     sheetTitle = file?.fileName ?? "Planilha";
+    sheetFileName = sheetTitle;
+    sheetSub = linkTo(sheet.sourceUrl);
     sheetBody = renderFileSheet(sheet.sourceUrl);
     sheetFooter = file && (
       <button type="button" className="settings-button settings-button-danger" onClick={() => setUntrackTarget(file)}>
@@ -1076,9 +1085,10 @@ export default function RemoteUpdatesPage() {
   } else if (sheet?.kind === "new-rule") {
     const file = fileOf(sheet.sourceUrl);
     sheetTitle = "Nova regra";
+    sheetFileName = file?.fileName ?? null;
+    sheetSub = file?.fileName;
     sheetBody = (
       <>
-        <div className="rv-sheet-sub rv-sheet-sub-top">{file?.fileName}</div>
         {renderNewRuleSheet()}
         {actionError && <div className="error-box">{actionError}</div>}
       </>
@@ -1098,22 +1108,15 @@ export default function RemoteUpdatesPage() {
     const rows = sheet.mode === "pending" ? pending : applied;
     const n = countItems(rows);
     const file = fileOf(reviewConfig.sourceUrl);
-    const siblings = configsByUrl.get(reviewConfig.sourceUrl) ?? [];
     sheetTitle =
       sheet.mode === "applied"
         ? `${n} ${n === 1 ? "mudança aplicada" : "mudanças aplicadas"} sozinho`
         : n
           ? `${n} ${n === 1 ? "mudança para revisar" : "mudanças para revisar"}`
           : "Tudo revisado";
-    sheetBody = (
-      <>
-        <div className="rv-sheet-sub rv-sheet-sub-top">
-          {file?.fileName}
-          {siblings.length > 1 && ` · ${ruleName(reviewConfig)}`} · encontradas {ago(reviewConfig.lastCheckedAt, now)}
-        </div>
-        {renderReview(reviewConfig, sheet.mode)}
-      </>
-    );
+    const siblings = configsByUrl.get(reviewConfig.sourceUrl) ?? [];
+    sheetSub = `${file?.fileName ?? ""}${siblings.length > 1 ? ` · ${ruleName(reviewConfig)}` : ""} · encontradas ${ago(reviewConfig.lastCheckedAt, now)}`;
+    sheetBody = renderReview(reviewConfig, sheet.mode);
     const fieldShifts = new Set(pending.filter((r) => r.changeKind === "field" && r.matchedShiftId !== null).map((r) => r.matchedShiftId)).size;
     sheetFooter =
       sheet.mode === "applied" ? (
@@ -1132,43 +1135,65 @@ export default function RemoteUpdatesPage() {
         </>
       );
   } else if (sheet?.kind === "check" && sheetConfig) {
+    // A past check, with the same cards as "Revisar": still pending ones keep
+    // their actions, the rest say what happened to them.
+    const file = fileOf(sheetConfig.sourceUrl);
     sheetTitle = `Verificação de ${formatDateTimeAbbrevYY(sheet.entry.checkedAt)}`;
+    sheetFileName = file?.fileName ?? null;
+    sheetSub = (
+      <button type="button" className="rv-link" onClick={() => openSheet({ kind: "rule", configId: sheetConfig.id })}>
+        ← Voltar para a regra
+      </button>
+    );
+    const changes = (checkDiffs ?? []).filter((r) => r.changeKind !== "error");
+    const errors = (checkDiffs ?? []).filter((r) => r.changeKind === "error");
+    const cardState = (cardRows: CheckDiffRow[]): "pending" | "applied" | "seen" =>
+      cardRows.every((r) => r.applied) ? "applied" : cardRows.every((r) => r.dismissedAt !== null) ? "seen" : "pending";
     sheetBody = (
-      <div className="rv-sheet">
-        <div className="rv-sheet-sub">
-          <button type="button" className="rv-link" onClick={() => openSheet({ kind: "rule", configId: sheetConfig.id })}>
-            ← Voltar para a regra
-          </button>
-        </div>
-        {sheet.entry.message && <div className="error-box">{sheet.entry.message}</div>}
+      <div className="rv-sheet rv-sheet-tight">
+        {(sheet.entry.message || errors.length > 0) && (
+          <div className="rv-banner rv-banner-bad">
+            <strong>Não deu pra conferir nesta verificação</strong>
+            <span>{sheet.entry.message || errors.map((e) => e.message).filter(Boolean).join(" ")}</span>
+          </div>
+        )}
+        {sheet.entry.savedAt && changes.length > 0 && (
+          <p className="rv-muted rv-check-author">
+            Planilha salva por <b>{sheet.entry.savedBy?.trim() || "alguém sem nome no arquivo"}</b> {savedWhen(sheet.entry.savedAt)}.
+          </p>
+        )}
         {actionError && <div className="error-box">{actionError}</div>}
         {checkDiffs === null && <p className="rv-muted">Carregando...</p>}
-        {checkDiffs?.length === 0 && !sheet.entry.message && <p className="rv-muted">Nenhuma mudança nesta verificação.</p>}
-        {checkDiffs && checkDiffs.length > 0 && (
-          <ChangeDiffPanel
-            rows={checkDiffs}
-            markingShiftId={null}
-            markedShiftIds={new Set()}
-            onMarkDeleted={(shiftId) => {
-              const who = checkDiffs.find((r) => r.matchedShiftId === shiftId)?.employeeName ?? "";
-              setDeleteShiftTarget({ shiftId, who });
-            }}
-            onAccept={(shiftId) => withBusy(`s${shiftId}`, () => acceptShiftChange(sheetConfig, shiftId))}
-            acceptingShiftId={null}
-            acceptedShiftIds={new Set()}
-            onDismiss={(ids) =>
-              withBusy(`d${ids.join(",")}`, async () => {
-                await dismissCheckDiffs(ids);
-                setCheckDiffs((prev) => prev?.map((r) => (ids.includes(r.id) ? { ...r, dismissedAt: new Date().toISOString() } : r)) ?? null);
-              })
-            }
-            dismissingIds={new Set()}
-            onReprocess={reprocess}
-          />
-        )}
+        {checkDiffs !== null && changes.length === 0 && !sheet.entry.message && errors.length === 0 && <p className="rv-muted">Nenhuma mudança nesta verificação.</p>}
+        {cardsOf(changes).map((person) => (
+          <div key={person.name} className="rv-person">
+            <div className="rv-person-head">
+              <span className="rv-avatar" style={{ background: colorForName(person.name) }}>
+                {initials(person.name.replace(/[“”]/g, ""))}
+              </span>
+              <span className="rv-text">
+                <span className="rv-person-name">{person.name}</span>
+                <span className="rv-small">
+                  {person.cards.length} {person.cards.length === 1 ? "turno" : "turnos"}
+                </span>
+              </span>
+            </div>
+            {person.cards.map((card) => renderCard(sheetConfig, card.key, card.rows, cardState(card.rows)))}
+          </div>
+        ))}
       </div>
     );
   }
+
+  const sheetHeader = sheet ? (
+    <div className="rv-drawer-head">
+      {sheetFileName && fileIcon(sheetFileName)}
+      <div className="rv-text">
+        <span className="rv-drawer-title">{sheetTitle}</span>
+        {sheetSub && <span className="rv-drawer-sub">{sheetSub}</span>}
+      </div>
+    </div>
+  ) : null;
 
   const files = trackedFiles;
 
@@ -1229,7 +1254,15 @@ export default function RemoteUpdatesPage() {
         </>
       )}
 
-      <Drawer open={sheet !== null && sheetBody !== null} onClose={() => setSheet(null)} title={sheetTitle} width="min(480px, 94vw)" footer={sheetFooter ? <div className="rv-footer">{sheetFooter}</div> : undefined}>
+      <Drawer
+        open={sheet !== null && sheetBody !== null}
+        onClose={() => setSheet(null)}
+        title={sheetTitle}
+        header={sheetHeader}
+        className="rv-drawer"
+        width="min(480px, calc(100vw - 24px))"
+        footer={sheetFooter ? <div className="rv-footer">{sheetFooter}</div> : undefined}
+      >
         {sheetBody}
       </Drawer>
 

@@ -6991,3 +6991,66 @@ button.rv-author[aria-pressed="true"]:hover {
 .rv-history-text b {
   font-weight: 600;
 }
+
+/* ---------- Verificação automática: floating sheet, like the mockup ---------- */
+
+.drawer-panel.rv-drawer {
+  height: calc(100% - 24px);
+  margin: 12px;
+  overflow: hidden;
+  background: #18181b;
+  border: 1px solid #2e2e33;
+  border-radius: 14px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+  /* Fully off-screen when closed, margin included. */
+  transform: translateX(calc(100% + 24px));
+}
+
+.drawer-panel.rv-drawer.drawer-panel-visible {
+  transform: translateX(0);
+}
+
+.rv-drawer .drawer-header {
+  padding: 16px 18px;
+  border-bottom: 1px solid #26262a;
+}
+
+.rv-drawer .drawer-body {
+  padding: 18px;
+}
+
+.rv-drawer .drawer-footer {
+  padding: 12px 18px;
+  border-top: 1px solid #26262a;
+}
+
+.rv-drawer-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.rv-drawer-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.rv-drawer-sub {
+  margin-top: 1px;
+  color: #71717a;
+  font-size: 0.75rem;
+}
+
+.rv-check-author {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+}
+
+.rv-check-author b {
+  color: var(--text);
+  font-weight: 600;
+}

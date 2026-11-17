@@ -1757,7 +1757,8 @@ export async function listTrackedPaymentUrls(): Promise<TrackedPaymentUrl[]> {
   );
 }
 
-export type ReimportDateMode = "fixed" | "relative";
+/** "month" = "Mês atual": from the 1st of the current month to today (see `resolveReimportPeriod`). */
+export type ReimportDateMode = "fixed" | "relative" | "month";
 
 export interface ReimportConfig {
   id: number;
