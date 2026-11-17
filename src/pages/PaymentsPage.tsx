@@ -5,13 +5,9 @@ import {
   ClipboardCheck,
   Eye,
   FolderOpen,
-  Info,
   List,
   ListFilter,
-  Moon,
   RefreshCw,
-  ShieldCheck,
-  Sun,
   Trash2,
   Users,
 } from "lucide-react";
@@ -20,7 +16,6 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import Drawer from "../components/Drawer";
-import ExtraColumnsDrawer from "../components/ExtraColumnsDrawer";
 import ColumnPicker from "../components/ColumnPicker";
 import Pagination from "../components/Pagination";
 import PageHeader from "../components/PageHeader";
@@ -28,7 +23,6 @@ import PaymentExportDrawer from "../components/PaymentExportDrawer";
 import PaymentsExportMenu from "../components/PaymentsExportMenu";
 import PaymentsFiltersPanel, { PaymentsFilterChips, usePaymentsActiveFilterCount } from "../components/PaymentsFiltersPanel";
 import PdfViewerModal from "../components/PdfViewerModal";
-import PillButton from "../components/PillButton";
 import ShiftPanel, { type LastPayment, type ShiftEditFields, type ShiftPanelTab } from "../components/ShiftPanel";
 import TableScroll from "../components/TableScroll";
 import { PAYMENT_SHIFT_STATUSES, PAYMENTS_PAGE_SIZE_OPTIONS, SHIFT_PERIODS, usePaymentsFilters } from "../contexts/FiltersContext";
@@ -79,7 +73,7 @@ import { generatePaymentsExportXlsx, type PaymentExportResult } from "../lib/pay
 import { withMissingValueShiftIds } from "../lib/paymentShiftValue";
 import { orAll } from "../lib/filterSets";
 import { generatePaymentsPdfExport, type PaymentPdfExportResult } from "../lib/paymentPdfExport";
-import { ALL_COLUMN_IDS, ALWAYS_VISIBLE_COLUMN_ID, FLAT_COLUMNS, PAYMENT_PICKER_COLUMNS } from "../lib/paymentColumns";
+import { ALWAYS_VISIBLE_COLUMN_ID, FLAT_COLUMNS, PAYMENT_PICKER_COLUMNS } from "../lib/paymentColumns";
 import { generatePaymentsReportPdf, generatePaymentsShiftReportPdf, type PaymentsReportResult } from "../lib/paymentsReport";
 import { acceptShiftChange } from "../lib/remoteCheckDiff";
 import type {
@@ -97,10 +91,14 @@ const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: strin
   pago: { className: "badge ok", label: "Pago" },
 };
 
-/** What a fresh install (no saved column preference yet) shows — everything except "Importado em", which is metadata most people don't need visible by default. */
-const DEFAULT_VISIBLE_COLUMN_IDS = ALL_COLUMN_IDS.filter((id) => id !== "importado");
+/** Shown in the turno's panel (Dados → Origem) instead of as table columns here — Conferência still offers them. */
+const PANEL_ONLY_COLUMN_IDS = new Set(["importado", "extras"]);
+const PAGE_COLUMNS = FLAT_COLUMNS.filter((c) => !PANEL_ONLY_COLUMN_IDS.has(c.id));
+const PAGE_PICKER_COLUMNS = PAYMENT_PICKER_COLUMNS.filter((c) => !PANEL_ONLY_COLUMN_IDS.has(c.id));
+/** What a fresh install (no saved column preference yet) shows — every column. */
+const DEFAULT_VISIBLE_COLUMN_IDS = PAGE_COLUMNS.map((c) => c.id);
 const IDENTITY_COLUMN_IDS = new Set(["colaborador", "cliente", "empresa"]);
-const TURNO_COLUMNS = FLAT_COLUMNS.filter((c) => !IDENTITY_COLUMN_IDS.has(c.id));
+const TURNO_COLUMNS = PAGE_COLUMNS.filter((c) => !IDENTITY_COLUMN_IDS.has(c.id));
 
 /**
  * The "Gerar PDF"/"Exportar Excel" empty-result message — `matchedCount`
@@ -131,23 +129,6 @@ function groupKey(employeeId: number, competencia: string): string {
 type GroupRef = { employeeId: number; competencia: string } | null;
 
 /**
- * The "extras" badge/modal shows a turno's unmapped columns AND its import
- * provenance (arquivo/aba/linha de origem) together, same as before these
- * were split into real columns (`sourceFileName`/`sourceSheetName`/
- * `sourceRowNumber`) for `findPaymentShiftByPosition` to index — this just
- * puts them back together for display. `null` when there's nothing at all
- * to show (a manually-created shift with no import origin and no unmapped
- * columns).
- */
-function displayExtraData(s: PaymentShiftRow): Record<string, string> | null {
-  const merged: Record<string, string> = { ...s.extraData };
-  if (s.sourceFileName) merged["arquivo de origem"] = s.sourceFileName;
-  if (s.sourceSheetName) merged["aba de origem"] = s.sourceSheetName;
-  if (s.sourceRowNumber !== null) merged["linha de origem"] = String(s.sourceRowNumber);
-  return Object.keys(merged).length > 0 ? merged : null;
-}
-
-/**
  * One turno's visible-column cells — shared between the flat table (which
  * prepends Colaborador/Cliente/Empresa via `identity`) and a grouped row's
  * expanded turno table (no `identity`, since that's already the group's own
@@ -161,7 +142,6 @@ function ShiftRow({
   visibleColumns,
   changes,
   onOpen,
-  onViewExtra,
   active,
 }: {
   shift: PaymentShiftRow & { shiftPeriod: ShiftPeriod | null };
@@ -171,7 +151,6 @@ function ShiftRow({
   /** What the last automatic verification found different for this shift (if anything) — see `listLatestFieldDiffsForShifts`. */
   changes: ShiftFieldDiffRow[];
   onOpen: () => void;
-  onViewExtra: (data: Record<string, string>, sourceUrl: string | null) => void;
   /** This row's turno is the one open in the panel (or was, last) — kept highlighted. */
   active: boolean;
 }) {
@@ -203,46 +182,22 @@ function ShiftRow({
       {identity && col("cliente") && <td>{identity.clientName}</td>}
       {identity && col("empresa") && <td>{identity.companyName}</td>}
       {col("data") && (
-        <td>
-          {formatDateAbbrevYY(s.workDate)}
-        </td>
+        <td>{formatDateAbbrevYY(s.workDate)}</td>
       )}
       {col("local") && (
-        <td>
-          {s.local}
-        </td>
+        <td>{s.local}</td>
       )}
       {col("funcao") && (
-        <td>
-          {s.role}
-        </td>
+        <td>{s.role}</td>
       )}
       {col("horario") && (
         <td>
-          {hasSchedule ? (
-                <span style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem" }}>
-                  <span>
-                    {formatMinutesAsTime(s.scheduleStartMinutes!)} – {formatMinutesAsTime(s.scheduleEndMinutes!)}
-                  </span>
-                  {s.shiftPeriod && (
-                    <span
-                      className={s.shiftPeriod === "noturno" ? "badge info" : "badge neutral"}
-                      title={s.shiftPeriod === "noturno" ? "Noturno" : "Diurno"}
-                    >
-                      {s.shiftPeriod === "noturno" ? <Moon size={12} /> : <Sun size={12} />}
-                    </span>
-                  )}
-                </span>
-              ) : (
-                "—"
-              )}
+          {hasSchedule ? `${formatMinutesAsTime(s.scheduleStartMinutes!)} – ${formatMinutesAsTime(s.scheduleEndMinutes!)}` : "—"}
         </td>
       )}
       {col("horas") && <td>{duration !== null ? formatMinutesAsTime(duration) : "—"}</td>}
       {col("valor") && (
-        <td>
-          {value !== null ? formatCurrencyBRL(value) : "—"}
-        </td>
+        <td>{value !== null ? formatCurrencyBRL(value) : "—"}</td>
       )}
       {col("status") && (
         <td>
@@ -254,43 +209,6 @@ function ShiftRow({
               {s.errorMessage}
             </span>
           )}
-        </td>
-      )}
-      {col("importado") && (
-        <td className="muted" style={{ fontSize: "0.8rem" }}>
-          {formatDateTimeAbbrevYY(s.importedAt)}
-        </td>
-      )}
-      {col("extras") && (
-        <td>
-          {(() => {
-            const extra = displayExtraData(s);
-            if (!s.editedManually && !extra) return <span className="muted">—</span>;
-            return (
-              <span style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: "0.4rem" }}>
-                {extra && (
-                  <span onClick={(e) => e.stopPropagation()}>
-                    <PillButton onClick={() => onViewExtra(extra, s.sourceUrl)} title="Ver colunas não mapeadas lidas do arquivo">
-                      <Info size={12} />
-                      {Object.keys(extra).length}
-                    </PillButton>
-                  </span>
-                )}
-                {s.editedManually && (
-                  <span
-                    className="badge info"
-                    title={
-                      s.status === "pago"
-                        ? "Atualizado manualmente — o histórico deste turno inclui um campo corrigido à mão (Data/Local/Função/Horário/Valor)."
-                        : "Atualizado manualmente — uma reimportação não sobrescreve este turno enquanto 'Manter registros atualizados manualmente' estiver ativado (Configurações → Zona de risco → Pagamentos)."
-                    }
-                  >
-                    <ShieldCheck size={13} />
-                  </span>
-                )}
-              </span>
-            );
-          })()}
         </td>
       )}
     </tr>
@@ -408,9 +326,6 @@ export default function PaymentsPage() {
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [lastPayment, setLastPayment] = useState<LastPayment | null>(null);
-  const [viewingExtraData, setViewingExtraData] = useState<{ data: Record<string, string>; sourceUrl: string | null } | null>(
-    null,
-  );
 
   // "Revisar alteração" Drawer — the last automatic verification found a
   // pending (or already auto-applied) change for this shift (see
@@ -1258,7 +1173,7 @@ export default function PaymentsPage() {
             </button>
           </div>
           <ColumnPicker
-            columns={PAYMENT_PICKER_COLUMNS}
+            columns={PAGE_PICKER_COLUMNS}
             visible={visibleColumns}
             defaults={DEFAULT_VISIBLE_COLUMN_IDS}
             onChange={(next) => {
@@ -1368,7 +1283,6 @@ export default function PaymentsPage() {
                                             rules={rulesByPair.get(`${s.clientId}:${s.companyId}`) ?? null}
                                             visibleColumns={visibleColumns}
                                             changes={shiftDiffs.get(r.id) ?? []}
-                                            onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
                                           />
                                         ))}
                                       </tbody>
@@ -1409,7 +1323,7 @@ export default function PaymentsPage() {
               <table>
                 <thead>
                   <tr>
-                    {FLAT_COLUMNS.filter((c) => visibleColumns.has(c.id)).map((c) => (
+                    {PAGE_COLUMNS.filter((c) => visibleColumns.has(c.id)).map((c) => (
                       <th key={c.id}>{c.label}</th>
                     ))}
                   </tr>
@@ -1425,7 +1339,6 @@ export default function PaymentsPage() {
                       rules={rulesByPair.get(`${r.clientId}:${r.companyId}`) ?? null}
                       visibleColumns={visibleColumns}
                       changes={shiftDiffs.get(r.id) ?? []}
-                      onViewExtra={(data, sourceUrl) => setViewingExtraData({ data, sourceUrl })}
                     />
                   ))}
                 </tbody>
@@ -1477,12 +1390,6 @@ export default function PaymentsPage() {
         onSave={handleSaveShift}
         onConfirmDelete={handleConfirmDelete}
         onClose={closeShiftPanel}
-      />
-      <ExtraColumnsDrawer
-        open={viewingExtraData !== null}
-        data={viewingExtraData?.data ?? null}
-        sourceUrl={viewingExtraData?.sourceUrl ?? null}
-        onClose={() => setViewingExtraData(null)}
       />
 
       <PaymentExportDrawer

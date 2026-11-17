@@ -1,3 +1,4 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   AlertTriangle,
   CalendarDays,
@@ -6,9 +7,12 @@ import {
   Copy,
   CreditCard,
   History,
+  Link2,
+  Moon,
   Info,
   MoreVertical,
   Pencil,
+  Sun,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
@@ -23,6 +27,7 @@ import {
 } from "../lib/db";
 import {
   centsMaskToAmount,
+  classifyShiftPeriod,
   describePaymentValueRule,
   diffFieldLabel,
   formatCurrencyBRL,
@@ -36,7 +41,7 @@ import {
   shiftValue,
 } from "../lib/format";
 import { PIX_KEY_TYPE_LABELS } from "../lib/pix";
-import type { PaymentShiftRow, PaymentShiftStatus } from "../lib/types";
+import type { PaymentShiftRow, PaymentShiftStatus, ShiftPeriod } from "../lib/types";
 import Avatar from "./Avatar";
 import CurrencyInput from "./CurrencyInput";
 import DatePicker from "./DatePicker";
@@ -77,8 +82,17 @@ function weekday(isoDate: string): string {
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("pt-BR", { weekday: "short" }).replace(".", "");
 }
 
+/** Diurno/noturno by the company's night window — `null` without an horário or rules. */
+function shiftPeriodOf(shift: PaymentShiftRow, rules: EffectivePaymentRules | null): ShiftPeriod | null {
+  if (!rules || shift.scheduleStartMinutes === null || shift.scheduleEndMinutes === null) return null;
+  const nightStart = parseTimeToMinutes(rules.nightStartTime);
+  const nightEnd = parseTimeToMinutes(rules.nightEndTime);
+  if (nightStart === null || nightEnd === null) return null;
+  return classifyShiftPeriod(rules.nightShiftRule, nightStart, nightEnd, shift.scheduleStartMinutes, shift.scheduleEndMinutes);
+}
+
 /** Which turno the panel is about — the same strip on every tab. */
-function ShiftStrip({ shift }: { shift: PaymentShiftRow }) {
+function ShiftStrip({ shift, period }: { shift: PaymentShiftRow; period: ShiftPeriod | null }) {
   const badge = STATUS_BADGE[shift.status];
   const duration = scheduleDurationMinutes(shift);
   const schedule = scheduleText(shift);
@@ -95,6 +109,12 @@ function ShiftStrip({ shift }: { shift: PaymentShiftRow }) {
         <div className="sa-strip-name">
           <span>{shift.employeeName}</span>
           <span className={badge.className}>{badge.label}</span>
+          {period && (
+            <span className={period === "noturno" ? "badge info" : "badge neutral"}>
+              {period === "noturno" ? <Moon size={12} /> : <Sun size={12} />}
+              {period === "noturno" ? "Noturno" : "Diurno"}
+            </span>
+          )}
         </div>
         <div className="sa-strip-meta">{meta.join(" · ")}</div>
       </div>
@@ -229,8 +249,78 @@ function useShiftHistory(shiftId: number | null) {
 }
 
 /** "Dados": the turno's editable fields — what used to be edited inline in the table. */
+/** Where the turno came from and what the import kept aside — read-only. */
+function OriginSection({ shift, importedAt }: { shift: PaymentShiftRow; importedAt: string | null }) {
+  // Lexicographic order alone misorders past column Z ("AA" < "B") — sort
+  // by letter count first so single-letter columns come before double.
+  const extras = shift.extraData ? Object.entries(shift.extraData).sort(([a], [b]) => a.length - b.length || a.localeCompare(b)) : [];
+  const rows: { label: string; value: ReactNode }[] = [];
+  if (importedAt) rows.push({ label: "Importado em", value: formatDateTime(importedAt) });
+  if (shift.sourceFileName) {
+    rows.push({
+      label: "Arquivo",
+      value: shift.sourceUrl ? (
+        <button type="button" className="sa-link sa-link-icon" onClick={() => openUrl(shift.sourceUrl!)} title={shift.sourceUrl}>
+          <Link2 size={12} />
+          {shift.sourceFileName}
+        </button>
+      ) : (
+        shift.sourceFileName
+      ),
+    });
+  }
+  if (shift.sourceSheetName) rows.push({ label: "Aba", value: shift.sourceSheetName });
+  if (shift.sourceRowNumber !== null) rows.push({ label: "Linha", value: String(shift.sourceRowNumber) });
+  if (shift.editedManually) {
+    rows.push({
+      label: "Editado manualmente",
+      value: (
+        <span
+          title={
+            shift.status === "pago"
+              ? "O histórico deste turno inclui um campo corrigido à mão."
+              : "Uma reimportação não sobrescreve este turno enquanto 'Manter registros atualizados manualmente' estiver ativado (Configurações → Zona de risco → Pagamentos)."
+          }
+        >
+          Sim
+        </span>
+      ),
+    });
+  }
+  if (rows.length === 0 && extras.length === 0) return null;
+  return (
+    <div>
+      <div className="sa-section-label">Origem</div>
+      <div className="sa-details">
+        {rows.map((r) => (
+          <div key={r.label} className="sa-detail-row">
+            <span className="muted">{r.label}</span>
+            <span>{r.value}</span>
+          </div>
+        ))}
+      </div>
+      {extras.length > 0 && (
+        <>
+          <div className="sa-section-label" style={{ marginTop: 14 }}>
+            Colunas não mapeadas
+          </div>
+          <div className="sa-details">
+            {extras.map(([key, value]) => (
+              <div key={key} className="sa-detail-row">
+                <span className="muted">{/^[A-Z]+$/i.test(key) ? `Coluna ${key}` : key}</span>
+                <span>{value}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function DataTab({
   shift,
+  importedAt,
   canEdit,
   blocked,
   busy,
@@ -238,6 +328,8 @@ function DataTab({
   setFooter,
 }: {
   shift: PaymentShiftRow;
+  /** When the turno first entered the app — the oldest row of its history. */
+  importedAt: string | null;
   canEdit: boolean;
   blocked: boolean;
   busy: boolean;
@@ -367,7 +459,8 @@ function DataTab({
           </div>
         )}
       </div>
-      <p className="muted sa-small">Salvar cria um novo registro marcado como editado manualmente. O registro atual fica no histórico.</p>
+      {canEdit && <p className="muted sa-small">Salvar cria um novo registro marcado como editado manualmente. O registro atual fica no histórico.</p>}
+      <OriginSection shift={shift} importedAt={importedAt} />
     </>
   );
 }
@@ -465,8 +558,9 @@ export default function ShiftPanel({
   }, [employeeId]);
 
   const history = useShiftHistory(shift && (tab === "history" || deleting) ? shift.id : null);
-  // Just the count for the tab label — cheap, and refreshed per turno.
-  const historyCount = useShiftHistory(shiftId).rows?.length ?? null;
+  // For the tab's count and "Importado em" (its oldest row) — refreshed per turno.
+  const chain = useShiftHistory(shiftId).rows;
+  const historyCount = chain?.length ?? null;
 
   if (!shift) return null;
   const pendingChanges = changes.filter((c) => !c.applied);
@@ -714,7 +808,7 @@ export default function ShiftPanel({
       </>
     );
   } else if (tab === "data") {
-    body = <DataTab shift={shift} canEdit={canEdit} blocked={blocked} busy={busy} onSave={onSave} setFooter={setDataFooter} />;
+    body = <DataTab shift={shift} importedAt={chain && chain.length > 0 ? chain[chain.length - 1].importedAt : null} canEdit={canEdit} blocked={blocked} busy={busy} onSave={onSave} setFooter={setDataFooter} />;
     footer = dataFooter;
   } else {
     const events = history.rows ? historyEvents(history.rows, rules).reverse() : null;
@@ -820,7 +914,7 @@ export default function ShiftPanel({
       }
       subheader={
         <>
-          <ShiftStrip shift={shift} />
+          <ShiftStrip shift={shift} period={shiftPeriodOf(shift, rules)} />
           {!deleting && (
             <div className="sa-tabs" role="tablist">
               {tabs.map((t) => (

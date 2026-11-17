@@ -947,22 +947,6 @@ tr:last-child td {
   letter-spacing: 0.02em;
 }
 
-/* Shared by every label/value Drawer row
-   (`ExtraColumnsDrawer`) — each line highlights on its own as the mouse
-   moves over it, not the whole panel at once, so a long list is easier to
-   scan row by row. Negative margin/extra padding lets the highlight bleed
-   slightly past the text instead of hugging it exactly. */
-.drawer-detail-row {
-  margin: 0 -0.4rem;
-  padding-left: 0.4rem;
-  padding-right: 0.4rem;
-  border-radius: 6px;
-  transition: background 0.12s ease;
-}
-.drawer-detail-row:hover {
-  background: var(--surface-variant);
-}
-
 .avatar {
   width: 32px;
   height: 32px;
@@ -5331,6 +5315,38 @@ button.sa-back:hover {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+
+.sa-details {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #26262a;
+  border-radius: 9px;
+}
+
+.sa-detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.sa-detail-row + .sa-detail-row {
+  border-top: 1px solid #26262a;
+}
+
+.sa-detail-row > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+button.sa-link-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-align: right;
 }
 
 button.sa-date-trigger {
