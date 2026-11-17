@@ -1,13 +1,11 @@
 import { Banknote, FileText, Users } from "lucide-react";
 import { Link } from "react-router-dom";
+import PageHeader from "../components/PageHeader";
 
 export default function ImportChooserPage() {
   return (
     <div>
-      <div className="page-header">
-        <h2>Importar dados</h2>
-      </div>
-      <p className="page-subtitle">O que você deseja importar?</p>
+      <PageHeader title="Importar dados" subtitle="O que você deseja importar?" />
 
       <div className="choice-grid">
         <Link to="/import/timesheet" className="choice-card">

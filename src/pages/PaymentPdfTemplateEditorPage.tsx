@@ -1,8 +1,8 @@
 import { CircleHelp } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
+import PageHeader from "../components/PageHeader";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import PaymentPdfTemplateHelpDrawer from "../components/PaymentPdfTemplateHelpDrawer";
 import PaymentPdfPreviewDrawer from "../components/PaymentPdfPreviewDrawer";
@@ -456,7 +456,7 @@ export default function PaymentPdfTemplateEditorPage() {
   if (loading) {
     return (
       <div>
-        <BackButton fallback="/payments/export-templates" />
+        <PageHeader title={isEditing ? "Editar template de PDF" : "Novo template de PDF"} backFallback="/payments/export-templates" backLabel="Voltar para Templates de exportação" />
         <p className="muted">Carregando...</p>
       </div>
     );
@@ -464,24 +464,22 @@ export default function PaymentPdfTemplateEditorPage() {
 
   return (
     <div>
-      <BackButton fallback="/payments/export-templates" />
-      <div className="page-header">
-        <h2>{isEditing ? "Editar template de PDF" : "Novo template de PDF"}</h2>
-        <div style={{ display: "flex", gap: "0.5rem" }}>
-          <button type="button" className="secondary" onClick={() => setHelpOpen(true)}>
-            <CircleHelp size={15} /> Como criar meu template
-          </button>
-          <button type="button" onClick={handleSave} disabled={busy}>
-            {busy ? "Salvando..." : "Salvar"}
-          </button>
-        </div>
-      </div>
-      <p className="page-subtitle">
-        Monte a página — texto, cor de fundo, negrito — e use o botão direito do mouse: numa célula,
-        pra inserir um campo; no número da linha, pra marcar seu papel (turno, cabeçalho de grupo,
-        separador, SOMA). Tudo acima da linha do turno vira o cabeçalho fixo, repetido no topo de
-        cada página do PDF.
-      </p>
+      <PageHeader
+        title={isEditing ? "Editar template de PDF" : "Novo template de PDF"}
+        backFallback="/payments/export-templates"
+        backLabel="Voltar para Templates de exportação"
+        subtitle="Monte a página — texto, cor de fundo, negrito — e use o botão direito do mouse: numa célula, pra inserir um campo; no número da linha, pra marcar seu papel (turno, cabeçalho de grupo, separador, SOMA). Tudo acima da linha do turno vira o cabeçalho fixo, repetido no topo de cada página do PDF."
+        actions={
+          <>
+            <button type="button" className="outline" onClick={() => setHelpOpen(true)}>
+              <CircleHelp size={15} /> Como criar meu template
+            </button>
+            <button type="button" onClick={handleSave} disabled={busy}>
+              {busy ? "Salvando..." : "Salvar"}
+            </button>
+          </>
+        }
+      />
 
       {error && <div className="error-box">{error}</div>}
 

@@ -1,9 +1,9 @@
 import { Building2, Calculator, Info, Moon, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import BackButton from "../components/BackButton";
 import FormPanel from "../components/FormPanel";
 import NightShiftRuleFields from "../components/NightShiftRuleFields";
+import PageHeader from "../components/PageHeader";
 import PaymentValueRulesEditor, {
   fromPaymentValueRules,
   isValueRulesValid,
@@ -150,15 +150,16 @@ export default function ClientFormPage() {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-        <BackButton fallback="/clients" />
-        <h2 style={{ margin: 0 }}>{isEditing ? "Editar cliente" : "Novo cliente"}</h2>
-      </div>
-      <p className="page-subtitle">
-        {isEditing
-          ? "Um cliente precisa continuar vinculado a pelo menos uma empresa — não é possível remover a última, nem uma empresa com colaboradores cadastrados para este cliente."
-          : "O CNPJ do cliente é único: cadastrar o mesmo CNPJ para outra empresa apenas vincula o cliente já existente a ela, em vez de duplicá-lo."}
-      </p>
+      <PageHeader
+        title={isEditing ? "Editar cliente" : "Novo cliente"}
+        backFallback="/clients"
+        backLabel="Voltar para Clientes"
+        subtitle={
+          isEditing
+            ? "Um cliente precisa continuar vinculado a pelo menos uma empresa — não é possível remover a última, nem uma empresa com colaboradores cadastrados para este cliente."
+            : "O CNPJ do cliente é único: cadastrar o mesmo CNPJ para outra empresa apenas vincula o cliente já existente a ela, em vez de duplicá-lo."
+        }
+      />
 
       {error && <div className="error-box">{error}</div>}
 

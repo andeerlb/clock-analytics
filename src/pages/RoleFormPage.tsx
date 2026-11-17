@@ -1,9 +1,9 @@
 import { Info, Plus, Tags, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
 import FormPanel from "../components/FormPanel";
+import PageHeader from "../components/PageHeader";
 import {
   addRoleAlias,
   createRole,
@@ -125,7 +125,7 @@ export default function RoleFormPage() {
       } else {
         await createRole(Number(companyId), name);
       }
-      // Same go-back-if-possible logic as `BackButton` — when this form was
+      // Same go-back-if-possible logic as `PageHeader`'s back button — when this form was
       // opened from the payment import preview's "Cadastrar função"
       // shortcut, this returns to that exact preview state instead of
       // always landing on the listing.
@@ -143,15 +143,16 @@ export default function RoleFormPage() {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-        <BackButton fallback="/roles" />
-        <h2 style={{ margin: 0 }}>{isEditing ? "Editar função" : "Nova função"}</h2>
-      </div>
-      <p className="page-subtitle">
-        {isEditing
-          ? "Empresa não pode ser alterada aqui — mudar de empresa é, na prática, uma função diferente."
-          : "O nome é único por empresa — a mesma função pode existir para empresas diferentes."}
-      </p>
+      <PageHeader
+        title={isEditing ? "Editar função" : "Nova função"}
+        backFallback="/roles"
+        backLabel="Voltar para Funções"
+        subtitle={
+          isEditing
+            ? "Empresa não pode ser alterada aqui — mudar de empresa é, na prática, uma função diferente."
+            : "O nome é único por empresa — a mesma função pode existir para empresas diferentes."
+        }
+      />
 
       {error && <div className="error-box">{error}</div>}
 

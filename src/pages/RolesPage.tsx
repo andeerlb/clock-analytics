@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
+import PageHeader from "../components/PageHeader";
 import { listCompanies, listRolesGlobal, type CompanyRow, type RoleRow } from "../lib/db";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
@@ -63,17 +64,16 @@ export default function RolesPage() {
 
   return (
     <div>
-      <div className="page-header">
-        <h2>Funções</h2>
-        <button type="button" onClick={() => navigate("/roles/new")}>
-          <Plus size={15} style={{ marginRight: "0.4rem" }} />
-          Nova função
-        </button>
-      </div>
-      <p className="page-subtitle">
-        Cadastro de funções (cargos), por empresa — usado para filtrar turnos por função e para dar
-        match com a coluna Função dos arquivos importados.
-      </p>
+      <PageHeader
+        title="Funções"
+        subtitle="Cadastro de funções (cargos), por empresa — usado para filtrar turnos por função e para dar match com a coluna Função dos arquivos importados."
+        actions={
+          <button type="button" onClick={() => navigate("/roles/new")}>
+            <Plus size={15} />
+            Nova função
+          </button>
+        }
+      />
 
       <div className="card">
         <div className="field-row" style={{ marginBottom: 0, alignItems: "flex-end" }}>

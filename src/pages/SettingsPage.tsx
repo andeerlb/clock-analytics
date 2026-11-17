@@ -10,6 +10,7 @@ import AiSettingsCard, { type AiConnection } from "../components/AiSettingsCard"
 import ConfirmModal from "../components/ConfirmModal";
 import GithubIcon from "../components/GithubIcon";
 import Modal from "../components/Modal";
+import PageHeader from "../components/PageHeader";
 import UpdateModal from "../components/UpdateModal";
 import {
   aiStatus,
@@ -500,10 +501,7 @@ export default function SettingsPage() {
 
   return (
     <div className="settings-page">
-      <div className="settings-head">
-        <h2>Configurações</h2>
-        <p className="page-subtitle">Procure pelo que você quer fazer.</p>
-      </div>
+      <PageHeader title="Configurações" subtitle="Procure pelo que você quer fazer." />
 
       <label className="settings-search">
         <Search size={16} />

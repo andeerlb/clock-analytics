@@ -1,8 +1,8 @@
 import { FileText, TrendingDown, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import BackButton from "../components/BackButton";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
+import PageHeader from "../components/PageHeader";
 import PdfViewerModal from "../components/PdfViewerModal";
 import { formatMinutes, isWeekend, overtimeMinutesForDay, sumIntervalMinutes } from "../lib/analysis";
 import { getImportById, listStoredDayRecords } from "../lib/db";
@@ -199,22 +199,20 @@ export default function EmployeeDetailPage() {
 
   return (
     <div>
-      <div className="page-header" style={{ alignItems: "flex-end" }}>
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <BackButton />
-            <h2>Cartão de Ponto - {importInfo.employeeName}</h2>
-          </div>
-          <p className="muted">
+      <PageHeader
+        title={<>Cartão de Ponto - {importInfo.employeeName}</>}
+        backFallback="/"
+        subtitle={
+          <>
             Período: <strong style={{ color: "var(--text)" }}>{formatDate(importInfo.periodStart)} a{" "}
             {formatDate(importInfo.periodEnd)}</strong>
             <span style={{ margin: "0 0.6rem", color: "var(--border)" }}>|</span>
             Empresa: <strong style={{ color: "var(--text)" }}>{importInfo.companyName}</strong>
             <span style={{ margin: "0 0.6rem", color: "var(--border)" }}>|</span>
             Cliente: <strong style={{ color: "var(--text)" }}>{importInfo.clientName}</strong>
-          </p>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       <div
         style={{

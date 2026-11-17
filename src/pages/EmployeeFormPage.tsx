@@ -1,9 +1,9 @@
 import { Briefcase, Info, KeyRound, Plus, Tags, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
 import FormPanel from "../components/FormPanel";
+import PageHeader from "../components/PageHeader";
 import {
   addEmployeeAlias,
   addEmployeePixKey,
@@ -297,7 +297,7 @@ export default function EmployeeFormPage() {
         const trimmedMatricula = matricula.trim() || null;
         await createEmployeeManual(Number(clientId), Number(companyId), name, cpf, trimmedMatricula);
       }
-      // Same go-back-if-possible logic as `BackButton` — when this form was
+      // Same go-back-if-possible logic as `PageHeader`'s back button — when this form was
       // opened from the payment import preview's "Cadastrar colaborador"
       // shortcut, this returns to that exact preview state (see
       // `PaymentImportNavState`) instead of always landing on the listing.
@@ -315,15 +315,16 @@ export default function EmployeeFormPage() {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-        <BackButton fallback="/employees" />
-        <h2 style={{ margin: 0 }}>{isEditing ? "Editar colaborador" : "Novo colaborador"}</h2>
-      </div>
-      <p className="page-subtitle">
-        {isEditing
-          ? "O CPF é único, globalmente — o mesmo colaborador pode estar vinculado a vários clientes e empresas, gerenciados na seção abaixo."
-          : "O CPF é único, globalmente — o mesmo CPF não pode ser cadastrado duas vezes; depois de criado, o colaborador pode ser vinculado a outros clientes/empresas na tela de edição."}
-      </p>
+      <PageHeader
+        title={isEditing ? "Editar colaborador" : "Novo colaborador"}
+        backFallback="/employees"
+        backLabel="Voltar para Colaboradores"
+        subtitle={
+          isEditing
+            ? "O CPF é único, globalmente — o mesmo colaborador pode estar vinculado a vários clientes e empresas, gerenciados na seção abaixo."
+            : "O CPF é único, globalmente — o mesmo CPF não pode ser cadastrado duas vezes; depois de criado, o colaborador pode ser vinculado a outros clientes/empresas na tela de edição."
+        }
+      />
 
       {error && <div className="error-box">{error}</div>}
 

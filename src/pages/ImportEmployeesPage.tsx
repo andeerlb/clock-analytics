@@ -1,7 +1,6 @@
 import {
   AlertCircle,
   AlertTriangle,
-  ArrowLeft,
   Building2,
   CheckCircle2,
   Eye,
@@ -19,6 +18,7 @@ import { Link, useNavigate } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import Drawer from "../components/Drawer";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
+import PageHeader from "../components/PageHeader";
 import Pagination from "../components/Pagination";
 import PickFilesButton from "../components/PickFilesButton";
 import {
@@ -592,27 +592,25 @@ export default function ImportEmployeesPage() {
 
   return (
     <div>
-      <Link to="/import" className="back-link">
-        <ArrowLeft size={14} />
-        Importar
-      </Link>
-      <div className="page-header">
-        <h2>Importar colaboradores</h2>
-        <div style={{ display: "flex", gap: "0.6rem" }}>
-          <button type="button" className="outline" onClick={() => setHistoryOpen(true)}>
-            <History size={15} style={{ marginRight: "0.4rem" }} />
-            Histórico
-          </button>
-          <button type="button" className="secondary" onClick={() => navigate("/import/employees/templates")}>
-            <Settings2 size={15} style={{ marginRight: "0.4rem" }} />
-            Gerenciar templates
-          </button>
-        </div>
-      </div>
-      <p className="page-subtitle">
-        Aplique um template já cadastrado a um arquivo de colaboradores (CSV, Excel ou ODS) e
-        cadastre cada linha nos clientes/empresas selecionados.
-      </p>
+      <PageHeader
+        title="Importar colaboradores"
+        backTo="/import"
+        backLabel="Voltar para Importar"
+        subtitle="Aplique um template já cadastrado a um arquivo de colaboradores e cadastre cada linha nos clientes/empresas selecionados."
+        tags={["CSV", "XLSX", "XLS", "ODS"]}
+        actions={
+          <>
+            <button type="button" className="ghost" onClick={() => setHistoryOpen(true)}>
+              <History size={15} />
+              Histórico
+            </button>
+            <button type="button" className="outline" onClick={() => navigate("/import/employees/templates")}>
+              <Settings2 size={15} />
+              Gerenciar templates
+            </button>
+          </>
+        }
+      />
 
       {error && <div className="error-box">{error}</div>}
       {successMessage && <div className="success-box">{successMessage}</div>}

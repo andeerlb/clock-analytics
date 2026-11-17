@@ -16,6 +16,7 @@ import { Link, useNavigate } from "react-router-dom";
 import DateRangePicker from "../components/DateRangePicker";
 import PaymentsFiltersDrawer, { type PaymentsFiltersValue } from "../components/PaymentsFiltersDrawer";
 import Modal from "../components/Modal";
+import PageHeader from "../components/PageHeader";
 import ConfirmModal from "../components/ConfirmModal";
 import { applyPaymentsFiltersSnapshot, PAYMENT_SHIFT_STATUSES, SHIFT_PERIODS, snapshotPaymentsFilters, usePaymentsFilters, type PaymentsFiltersSnapshot } from "../contexts/FiltersContext";
 import { orAll } from "../lib/filterSets";
@@ -229,10 +230,13 @@ export default function AnalyticsPage() {
 
   return (
     <div className="analytics-page">
-      <div className="page-header">
-        <div><h2>Análises</h2><p className="page-subtitle">Custos, operação e pontos de atenção em uma única visão.</p></div>
-        <div className="analytics-period"><span>Período</span><DateRangePicker startValue={periodStart} endValue={periodEnd} allowClear={false} onChange={(start, end) => setPeriod([start, end])} /><button type="button" className="secondary" onClick={()=>setFiltersOpen(true)}><Filter size={15}/> Filtros{activeFilterCount?` (${activeFilterCount})`:""}</button><button type="button" className="secondary" aria-label="Configurar cards" title="Configurar cards" onClick={()=>setCardsOpen(true)}><Settings2 size={15}/></button><button type="button" className="secondary" onClick={()=>setViewsOpen(true)}><Bookmark size={15}/> Visões</button><button type="button" className="secondary" disabled={exporting} aria-label="Exportar PDF" onClick={()=>doExport("pdf")}><FileDown size={15}/></button><button type="button" className="secondary" disabled={exporting} aria-label="Exportar Excel" onClick={()=>doExport("xlsx")}><FileSpreadsheet size={15}/></button></div>
-      </div>
+      <PageHeader
+        title="Análises"
+        subtitle="Custos, operação e pontos de atenção em uma única visão."
+        actions={
+          <div className="analytics-period"><span>Período</span><DateRangePicker startValue={periodStart} endValue={periodEnd} allowClear={false} onChange={(start, end) => setPeriod([start, end])} /><button type="button" className="secondary" onClick={()=>setFiltersOpen(true)}><Filter size={15}/> Filtros{activeFilterCount?` (${activeFilterCount})`:""}</button><button type="button" className="secondary" aria-label="Configurar cards" title="Configurar cards" onClick={()=>setCardsOpen(true)}><Settings2 size={15}/></button><button type="button" className="secondary" onClick={()=>setViewsOpen(true)}><Bookmark size={15}/> Visões</button><button type="button" className="secondary" disabled={exporting} aria-label="Exportar PDF" onClick={()=>doExport("pdf")}><FileDown size={15}/></button><button type="button" className="secondary" disabled={exporting} aria-label="Exportar Excel" onClick={()=>doExport("xlsx")}><FileSpreadsheet size={15}/></button></div>
+        }
+      />
 
       <div className="analytics-tabs" role="tablist">
         <button type="button" role="tab" aria-selected={tab==="overview"} className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")}>Visão geral</button>

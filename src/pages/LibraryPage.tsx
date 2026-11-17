@@ -5,6 +5,7 @@ import { Link } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import LibraryFiltersPanel, { LibraryFilterChips, useLibraryActiveFilterCount } from "../components/LibraryFiltersPanel";
 import Pagination from "../components/Pagination";
+import PageHeader from "../components/PageHeader";
 import PdfViewerModal from "../components/PdfViewerModal";
 import ZipExportButton from "../components/ZipExportButton";
 import { LIBRARY_PAGE_SIZE_OPTIONS, useLibraryFilters, type ReportMode } from "../contexts/FiltersContext";
@@ -200,13 +201,11 @@ export default function LibraryPage() {
 
   return (
     <div>
-      <div className="library-head">
-        <div className="library-head-text">
-          <h2>Cartão Ponto</h2>
-          <p className="page-subtitle">Espelhos de ponto importados, organizados em pastas por empresa e cliente.</p>
-        </div>
-        <ZipExportButton mode={mode} onModeChange={setMode} onGenerate={handleGenerateZip} busy={busy} total={loading ? null : total} />
-      </div>
+      <PageHeader
+        title="Cartão Ponto"
+        subtitle="Espelhos de ponto importados, organizados em pastas por empresa e cliente."
+        actions={<ZipExportButton mode={mode} onModeChange={setMode} onGenerate={handleGenerateZip} busy={busy} total={loading ? null : total} />}
+      />
 
       {error && <div className="error-box">{error}</div>}
 

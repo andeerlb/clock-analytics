@@ -2,7 +2,6 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   AlertCircle,
   AlertTriangle,
-  ArrowLeft,
   CheckCircle2,
   Eye,
   FileText,
@@ -19,6 +18,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import Drawer from "../components/Drawer";
+import PageHeader from "../components/PageHeader";
 import Pagination from "../components/Pagination";
 import PickFilesButton from "../components/PickFilesButton";
 import { hashFiles, listDirFiles, listProviders, parseImport, pickFolder, pickPdfFiles } from "../lib/api";
@@ -433,21 +433,19 @@ export default function ImportTimesheetPage() {
 
   return (
     <div>
-      <Link to="/import" className="back-link">
-        <ArrowLeft size={14} />
-        Importar
-      </Link>
-      <div className="page-header">
-        <h2>Importar espelhos de ponto</h2>
-        <button type="button" className="outline" onClick={() => setHistoryOpen(true)}>
-          <History size={15} style={{ marginRight: "0.4rem" }} />
-          Histórico
-        </button>
-      </div>
-      <p className="page-subtitle">
-        Faça o upload dos arquivos PDF fornecidos pelo seu provedor de ponto para extrair os
-        dados.
-      </p>
+      <PageHeader
+        title="Importar espelhos de ponto"
+        backTo="/import"
+        backLabel="Voltar para Importar"
+        subtitle="Faça o upload dos arquivos fornecidos pelo seu provedor de ponto para extrair os dados."
+        tags={["PDF"]}
+        actions={
+          <button type="button" className="ghost" onClick={() => setHistoryOpen(true)}>
+            <History size={15} />
+            Histórico
+          </button>
+        }
+      />
 
       {error && <div className="error-box">{error}</div>}
       {successMessage && <div className="success-box">{successMessage}</div>}

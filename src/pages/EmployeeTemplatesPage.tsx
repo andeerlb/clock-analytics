@@ -1,7 +1,7 @@
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
+import PageHeader from "../components/PageHeader";
 import EmployeeTemplateWizard from "../components/EmployeeTemplateWizard";
 import { deleteEmployeeTemplate, getEmployeeTemplate, listEmployeeTemplates } from "../lib/db";
 import { formatDateTime } from "../lib/format";
@@ -56,18 +56,18 @@ export default function EmployeeTemplatesPage() {
 
   return (
     <div>
-      <BackButton fallback="/import/employees" />
-      <div className="page-header">
-        <h2>Templates de colaboradores</h2>
-        <button type="button" onClick={() => setWizardTarget("new")}>
-          <Plus size={15} style={{ marginRight: "0.4rem" }} />
-          Novo template
-        </button>
-      </div>
-      <p className="page-subtitle">
-        Mapeamento de colunas usado ao importar arquivos de colaboradores — cada template descreve
-        como ler um formato de planilha.
-      </p>
+      <PageHeader
+        title="Templates de colaboradores"
+        backFallback="/import/employees"
+        backLabel="Voltar para Importar colaboradores"
+        subtitle="Mapeamento de colunas usado ao importar arquivos de colaboradores — cada template descreve como ler um formato de planilha."
+        actions={
+          <button type="button" onClick={() => setWizardTarget("new")}>
+            <Plus size={15} />
+            Novo template
+          </button>
+        }
+      />
 
       {error && <div className="error-box">{error}</div>}
 

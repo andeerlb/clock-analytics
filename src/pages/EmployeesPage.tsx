@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import Pagination from "../components/Pagination";
+import PageHeader from "../components/PageHeader";
 import { listClients, listCompanies, listEmployeesGlobal, type ClientRow, type CompanyRow, type EmployeeRow } from "../lib/db";
 import { formatCpf } from "../lib/format";
 
@@ -93,17 +94,16 @@ export default function EmployeesPage() {
 
   return (
     <div>
-      <div className="page-header">
-        <h2>Colaboradores</h2>
-        <button type="button" onClick={() => navigate("/employees/new")}>
-          <Plus size={15} style={{ marginRight: "0.4rem" }} />
-          Novo colaborador
-        </button>
-      </div>
-      <p className="page-subtitle">
-        Cadastro de colaboradores, independente de espelho de ponto ou pagamento importado. O CPF
-        é único por cliente — o mesmo CPF pode existir para clientes diferentes.
-      </p>
+      <PageHeader
+        title="Colaboradores"
+        subtitle="Cadastro de colaboradores, independente de espelho de ponto ou pagamento importado. O CPF é único por cliente — o mesmo CPF pode existir para clientes diferentes."
+        actions={
+          <button type="button" onClick={() => navigate("/employees/new")}>
+            <Plus size={15} />
+            Novo colaborador
+          </button>
+        }
+      />
 
       {error && <div className="error-box">{error}</div>}
 

@@ -2,7 +2,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   AlertCircle,
   AlertTriangle,
-  ArrowLeft,
   CheckCircle2,
   FileText,
   FileSpreadsheet,
@@ -24,6 +23,7 @@ import Drawer from "../components/Drawer";
 import EmployeePicker from "../components/EmployeePicker";
 import { periodPresets } from "../components/LibraryFiltersPanel";
 import OptionPicker from "../components/OptionPicker";
+import PageHeader from "../components/PageHeader";
 import Pagination from "../components/Pagination";
 import PeriodPicker, { type PeriodPreset } from "../components/PeriodPicker";
 import PickFilesButton from "../components/PickFilesButton";
@@ -305,7 +305,7 @@ interface UrlProvenance {
  * A snapshot of everything worth restoring on this page, attached to its
  * own history entry (via `navigate(".", {replace:true, state})`) right
  * before leaving for "Cadastrar colaborador" — so clicking "Voltar" there
- * (a plain `navigate(-1)`, see `BackButton`) pops back to this exact
+ * (a plain `navigate(-1)`, see `PageHeader`'s back button) pops back to this exact
  * preview instead of a blank page. Derived state (`selectedTemplate`,
  * `fileHashes`) isn't included — restoring `templateId`/`paths` makes
  * their own effects recompute it the same way a fresh load would.
@@ -1553,7 +1553,7 @@ export default function ImportPaymentsPage() {
    * "Cadastrar colaborador" on a "colaborador não encontrado" row: this
    * preview took real processing to build (file reads, DB lookups), so
    * instead of losing it, it's attached to this page's own history entry
-   * first — `navigate(-1)` from the cadastro form (see `BackButton`) then
+   * first — `navigate(-1)` from the cadastro form (see `PageHeader`'s back button) then
    * pops back to this exact state instead of a blank page.
    */
   function handleRegisterEmployee(row: PaymentPreviewRow) {
@@ -1781,27 +1781,25 @@ export default function ImportPaymentsPage() {
 
   return (
     <div>
-      <Link to="/import" className="back-link">
-        <ArrowLeft size={14} />
-        Importar
-      </Link>
-      <div className="page-header">
-        <h2>Importar pagamentos</h2>
-        <div style={{ display: "flex", gap: "0.6rem" }}>
-          <button type="button" className="outline" onClick={() => setHistoryOpen(true)}>
-            <History size={15} style={{ marginRight: "0.4rem" }} />
-            Histórico
-          </button>
-          <button type="button" className="secondary" onClick={() => navigate("/import/payments/templates")}>
-            <Settings2 size={15} style={{ marginRight: "0.4rem" }} />
-            Gerenciar templates
-          </button>
-        </div>
-      </div>
-      <p className="page-subtitle">
-        Aplique um template já cadastrado a um arquivo de pagamentos (CSV, Excel ou ODS) e
-        associe cada linha ao colaborador correspondente.
-      </p>
+      <PageHeader
+        title="Importar pagamentos"
+        backTo="/import"
+        backLabel="Voltar para Importar"
+        subtitle="Aplique um template à planilha e associe cada linha a um colaborador."
+        tags={["CSV", "XLSX", "XLS", "ODS"]}
+        actions={
+          <>
+            <button type="button" className="ghost" onClick={() => setHistoryOpen(true)}>
+              <History size={15} />
+              Histórico
+            </button>
+            <button type="button" className="outline" onClick={() => navigate("/import/payments/templates")}>
+              <Settings2 size={15} />
+              Gerenciar templates
+            </button>
+          </>
+        }
+      />
 
       {successMessage && <div className="success-box">{successMessage}</div>}
 
