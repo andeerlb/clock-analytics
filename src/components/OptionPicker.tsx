@@ -59,6 +59,7 @@ export default function OptionPicker({
   selectAllLabel,
   align = "right",
   single = false,
+  showTiles = true,
 }: {
   options: PickerOption[];
   selected: Set<string>;
@@ -73,6 +74,8 @@ export default function OptionPicker({
   selectAllLabel?: string;
   align?: "left" | "right";
   single?: boolean;
+  /** The colored initials before each option — off for short fixed lists (operators, "antes/depois"). */
+  showTiles?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -179,7 +182,7 @@ export default function OptionPicker({
         aria-expanded={open}
         onClick={() => (open ? setOpen(false) : openBox())}
       >
-        {chosen.length > 0 && (
+        {showTiles && chosen.length > 0 && (
           <span className="emp-picker-stack">
             {chosen.slice(0, STACK_SIZE).map((o) => (
               <Tile key={o.id} label={o.label} />
@@ -236,7 +239,7 @@ export default function OptionPicker({
                       pick(o.id);
                     }}
                   >
-                    <Tile label={o.label} />
+                    {showTiles && <Tile label={o.label} />}
                     <span className="emp-picker-who">
                       <span className="emp-picker-name">{o.label}</span>
                       {o.meta && <span className="emp-picker-meta">{o.meta}</span>}

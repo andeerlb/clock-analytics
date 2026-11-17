@@ -8218,13 +8218,13 @@ button.rv-history-row:hover {
 }
 /* ---------- Valor do turno (PaymentValueRulesEditor) ---------- */
 .vr { display: flex; flex-direction: column; gap: 0.75rem; }
-.vr-how { margin: 0; display: flex; gap: 0.55rem; align-items: flex-start; padding: 0.65rem 0.8rem; border: 1px solid var(--border-soft); border-radius: 9px; background: var(--surface-container-lowest); color: var(--text-muted); font-size: 0.8rem; line-height: 1.5; }
+.vr-how { margin: 0; display: flex; gap: 0.55rem; align-items: flex-start; padding: 0.65rem 0.8rem; border: 1px solid var(--border-soft); border-radius: 9px; background: rgba(255, 255, 255, 0.025); color: var(--text-muted); font-size: 0.8rem; line-height: 1.5; }
 .vr-how svg { flex-shrink: 0; margin-top: 2px; }
 .vr-how b { color: var(--text); font-weight: 600; }
 
 .vr-list { display: flex; flex-direction: column; gap: 0.45rem; }
 .vr-list-readonly { opacity: 0.8; }
-.vr-rule { border: 1px solid var(--border-soft); border-radius: 10px; background: var(--surface-container-lowest); }
+.vr-rule { border: 1px solid var(--border-soft); border-radius: 10px; background: rgba(255, 255, 255, 0.03); }
 .vr-rule-hit { border-color: var(--success); box-shadow: inset 0 0 0 1px var(--success); }
 .vr-rule-invalid:not(.vr-rule-hit) { border-color: rgba(251, 191, 36, 0.45); }
 .vr-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 0.75rem; padding: 0.65rem 0.75rem; }
@@ -8248,13 +8248,18 @@ button.vr-icon:disabled { opacity: 0.3; cursor: default; }
 .vr-label { margin-bottom: 0.4rem; color: var(--text-muted); font-size: 0.76rem; font-weight: 600; }
 .vr-hint { margin: 0; color: var(--text-muted); font-size: 0.76rem; }
 .vr-conds { display: flex; flex-direction: column; gap: 0.45rem; }
-.vr-cond { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr) auto; align-items: center; gap: 0.5rem; }
-.vr-cond > select, .vr-duration select, .vr-time select { height: 34px; }
+.vr-cond { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr) auto; align-items: center; gap: 0.5rem; }
+.vr-cond > .emp-picker, .vr-when .emp-picker, .vr-duration-picker .emp-picker { align-self: stretch; }
+.vr-when { width: 9.5rem; flex-shrink: 0; }
+.vr-duration-picker { width: 11rem; }
 .vr-multi { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; min-height: 34px; padding: 0.2rem 0.35rem; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-container); }
 .vr-multi .vr-chip { background: var(--surface-container-high); }
 .vr-multi input { flex: 1; min-width: 8rem; padding: 0.2rem 0.3rem; border: 0; background: transparent; box-shadow: none; outline: none; color: var(--text); font-size: 0.82rem; }
-.vr-multi input[type="date"] { flex: 0 1 auto; min-width: 9rem; color-scheme: dark; }
 .vr-time { display: flex; gap: 0.5rem; align-items: center; }
+button.vr-date-button { display: inline-flex; align-items: center; gap: 0.4rem; height: 34px; padding: 0 0.7rem; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-container); box-shadow: none; color: var(--text); font-size: 0.82rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+button.vr-date-button:hover { border-color: var(--outline); background: var(--surface-container); }
+.vr-multi button.vr-date-button { height: 26px; border: 0; background: none; color: var(--text-muted); padding: 0 0.3rem; }
+.vr-multi button.vr-date-button:hover { color: var(--text); }
 button.vr-add-cond { margin-top: 0.5rem; display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.7rem; border: 1px dashed var(--border); border-radius: 8px; background: transparent; box-shadow: none; color: var(--text-muted); font-size: 0.8rem; }
 button.vr-add-cond:hover { border-color: var(--outline); color: var(--text); background: transparent; }
 .vr-duration { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
@@ -8268,13 +8273,14 @@ button.vr-add-cond:hover { border-color: var(--outline); color: var(--text); bac
 .vr-editor-foot { display: flex; align-items: center; justify-content: flex-end; gap: 0.75rem; }
 button.vr-new { align-self: flex-start; display: inline-flex; align-items: center; gap: 0.4rem; }
 
-.vr-test { margin-top: 0.4rem; padding: 0.9rem 1rem; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--surface-container-lowest); }
+.vr-test { margin-top: 0.4rem; padding: 0.9rem 1rem; border: 1px solid var(--border-soft); border-radius: 10px; background: rgba(255, 255, 255, 0.03); }
 .vr-test-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem 0.6rem; margin-bottom: 0.7rem; }
 .vr-test-head strong { font-size: 0.88rem; }
 .vr-test-head span { color: var(--text-muted); font-size: 0.78rem; }
 .vr-test-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: 0.6rem; }
-.vr-test-fields label { display: flex; flex-direction: column; gap: 0.3rem; color: var(--text-muted); font-size: 0.75rem; font-weight: 600; }
-.vr-test-fields input { width: 100%; height: 34px; color-scheme: dark; }
+.vr-test-fields label, .vr-test-field { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; color: var(--text-muted); font-size: 0.75rem; font-weight: 600; }
+.vr-test-field > span { display: block; }
+.vr-test-fields input { width: 100%; height: 34px; }
 .vr-test-result { margin-top: 0.8rem; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem 0.7rem; }
 .vr-test-result strong { font-size: 1.2rem; font-variant-numeric: tabular-nums; }
 .vr-test-result span { color: var(--text-muted); font-size: 0.8rem; }

@@ -1,5 +1,7 @@
-import { ChevronDown, ChevronUp, Info, Pencil, Plus, Trash2, X } from "lucide-react";
-import { useEffect, useId, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Calendar, ChevronDown, ChevronUp, Info, Pencil, Plus, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import DatePicker from "./DatePicker";
+import OptionPicker from "./OptionPicker";
 import TimeField from "./TimeField";
 import {
   type PaymentValueRule,
@@ -197,54 +199,71 @@ function RuleSentence({ rule }: { rule: WizardValueRule }) {
   );
 }
 
-/** Chips + a free-text field with suggestions (known Funções/Locais); Enter or picking a suggestion adds it. */
-function ValuesInput({ values, suggestions, onChange, placeholder }: { values: string[]; suggestions: string[]; onChange: (v: string[]) => void; placeholder: string }) {
-  const [draft, setDraft] = useState("");
-  const listId = useId();
-  const left = suggestions.filter((s) => !values.some((v) => v.toLowerCase() === s.toLowerCase()));
-  function add(raw: string) {
-    const v = raw.trim();
-    if (!v || values.some((x) => x.toLowerCase() === v.toLowerCase())) return;
-    onChange([...values, v]);
-    setDraft("");
-  }
-  function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter" || e.key === ",") {
-      e.preventDefault();
-      add(draft);
-    } else if (e.key === "Backspace" && !draft && values.length) {
-      onChange(values.slice(0, -1));
-    }
-  }
+/** Single-choice picker for a short fixed list (condition kind, duration, antes/depois), in the app's picker style. */
+function ChoicePicker<T extends string>({ value, options, onChange, title, align = "left" }: { value: T; options: { id: T; label: string }[]; onChange: (v: T) => void; title: string; align?: "left" | "right" }) {
   return (
-    <div className="vr-multi">
-      {values.map((v) => (
-        <span key={v} className="vr-chip">
-          {v}
-          <button type="button" aria-label={`Remover ${v}`} onClick={() => onChange(values.filter((x) => x !== v))}>
-            <X size={11} />
-          </button>
-        </span>
-      ))}
-      <input
-        list={listId}
-        value={draft}
-        placeholder={values.length ? "+ outro" : placeholder}
-        onChange={(e) => {
-          const v = e.target.value;
-          // Picking a datalist suggestion fires a plain change with the full value.
-          if (left.some((s) => s === v)) add(v);
-          else setDraft(v);
-        }}
-        onKeyDown={onKeyDown}
-        onBlur={() => add(draft)}
-      />
-      <datalist id={listId}>
-        {left.map((s) => (
-          <option key={s} value={s} />
-        ))}
-      </datalist>
-    </div>
+    <OptionPicker
+      single
+      showTiles={false}
+      align={align}
+      options={options}
+      selected={new Set([value])}
+      onToggle={(id) => onChange(id as T)}
+      title={title}
+      allPlaceholder={title}
+      searchPlaceholder="Buscar"
+    />
+  );
+}
+
+/** Multi-choice of known Funções/Locais (values already in the rule but no longer in the list stay pickable). */
+function ValuesPicker({ values, suggestions, onChange, title, placeholder, searchPlaceholder }: { values: string[]; suggestions: string[]; onChange: (v: string[]) => void; title: string; placeholder: string; searchPlaceholder: string }) {
+  const options = useMemo(() => {
+    const all = [...suggestions];
+    values.forEach((v) => {
+      if (!all.some((s) => s.toLowerCase() === v.toLowerCase())) all.push(v);
+    });
+    return all.sort((a, b) => a.localeCompare(b)).map((v) => ({ id: v, label: v }));
+  }, [suggestions, values]);
+  const selected = new Set(options.filter((o) => values.some((v) => v.toLowerCase() === o.id.toLowerCase())).map((o) => o.id));
+  return (
+    <OptionPicker
+      align="left"
+      options={options}
+      selected={selected}
+      onToggle={(id) => (selected.has(id) ? onChange(values.filter((v) => v.toLowerCase() !== id.toLowerCase())) : onChange([...values, id]))}
+      onSelectAll={() => onChange(options.map((o) => o.id))}
+      onClear={() => onChange([])}
+      title={title}
+      allPlaceholder={placeholder}
+      searchPlaceholder={searchPlaceholder}
+      selectAllLabel="Selecionar todos"
+    />
+  );
+}
+
+/** A button that opens the app's calendar (`DatePicker`) and reports the picked ISO date. */
+function DateButton({ value, onPick, label }: { value: string; onPick: (iso: string) => void; label: string }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button ref={ref} type="button" className="vr-date-button" onClick={() => setOpen((o) => !o)} aria-haspopup="dialog" aria-expanded={open}>
+        <Calendar size={14} />
+        {label}
+      </button>
+      {open && (
+        <DatePicker
+          value={value}
+          anchorRef={ref}
+          onSelect={(iso) => {
+            onPick(iso);
+            setOpen(false);
+          }}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
   );
 }
 
@@ -259,15 +278,7 @@ function DatesInput({ values, onChange }: { values: string[]; onChange: (v: stri
           </button>
         </span>
       ))}
-      <input
-        type="date"
-        aria-label="Adicionar data"
-        value=""
-        onChange={(e) => {
-          const v = e.target.value;
-          if (v && !values.includes(v)) onChange([...values, v].sort());
-        }}
-      />
+      <DateButton value="" label={values.length ? "Outra data" : "Escolher data"} onPick={(iso) => { if (!values.includes(iso)) onChange([...values, iso].sort()); }} />
     </div>
   );
 }
@@ -359,7 +370,9 @@ export default function PaymentValueRulesEditor({
     const start = parseTimeToMinutes(testStart);
     const end = parseTimeToMinutes(testEnd);
     if (start === null || end === null) return null;
-    const saved = toPaymentValueRules(valueRules);
+    // Incomplete rules are left out: a condition with no values would match every shift.
+    const usable = valueRules.map((r, i) => ({ r, i })).filter((x) => x.r.kind === "else" ? x.r.amount.trim() !== "" : isValueRuleValid(x.r));
+    const saved = toPaymentValueRules(usable.map((x) => x.r));
     const duration = shiftDurationMinutes(start, end);
     const savedIndex = matchingPaymentValueRuleIndex(saved, duration, {
       workDate: testDate,
@@ -368,14 +381,15 @@ export default function PaymentValueRulesEditor({
       scheduleStartMinutes: start,
       scheduleEndMinutes: end,
     });
-    // `saved` drops an empty else row; map back to the draft index.
-    const draftIndexes = valueRules.map((r, i) => ({ r, i })).filter((x) => !(x.r.kind === "else" && x.r.amount.trim() === "")).map((x) => x.i);
+    const draftIndexes = usable.map((x) => x.i);
     return {
       duration,
       index: savedIndex === null ? null : draftIndexes[savedIndex],
       amount: savedIndex === null ? null : saved[savedIndex].amount,
     };
   }, [valueRules, testRole, testLocal, testStart, testEnd, testDate]);
+  const testRoleOptions = useMemo(() => roleNames.map((n) => ({ id: n, label: n })), [roleNames]);
+  const testLocalOptions = useMemo(() => locals.map((n) => ({ id: n, label: n })), [locals]);
   const fmtDuration = (m: number) => `${Math.floor(m / 60)}h${m % 60 ? String(m % 60).padStart(2, "0") : ""}`;
 
   return (
@@ -427,38 +441,34 @@ export default function PaymentValueRulesEditor({
                         const kind = conditionKind(c);
                         return (
                           <div key={ci} className="vr-cond">
-                            <select
+                            <ChoicePicker
                               value={kind}
-                              aria-label="Tipo de condição"
-                              onChange={(e) => {
-                                const next = [...rule.conditions];
-                                next[ci] = newCondition(e.target.value as ConditionKind);
-                                update(i, { conditions: next });
+                              options={CONDITION_KINDS}
+                              title="Condição"
+                              onChange={(next) => {
+                                if (next === kind) return;
+                                const list = [...rule.conditions];
+                                list[ci] = newCondition(next);
+                                update(i, { conditions: list });
                               }}
-                            >
-                              {CONDITION_KINDS.map((k) => (
-                                <option key={k.id} value={k.id}>
-                                  {k.label}
-                                </option>
-                              ))}
-                            </select>
+                            />
                             {kind === "funcao" && (
-                              <ValuesInput values={c.values} suggestions={roleNames} placeholder="Escolha ou digite uma função" onChange={(values) => updateCondition(i, ci, { values })} />
+                              <ValuesPicker values={c.values} suggestions={roleNames} title="Funções" placeholder="Escolha uma ou mais funções" searchPlaceholder="Buscar função" onChange={(values) => updateCondition(i, ci, { values })} />
                             )}
                             {kind === "local" && (
-                              <ValuesInput values={c.values} suggestions={locals} placeholder="Escolha ou digite um local" onChange={(values) => updateCondition(i, ci, { values })} />
+                              <ValuesPicker values={c.values} suggestions={locals} title="Locais" placeholder="Escolha um ou mais locais" searchPlaceholder="Buscar local" onChange={(values) => updateCondition(i, ci, { values })} />
                             )}
                             {kind === "data" && <DatesInput values={c.values} onChange={(values) => updateCondition(i, ci, { values })} />}
                             {(kind === "inicio" || kind === "fim") && (
                               <div className="vr-time">
-                                <select
-                                  value={c.scheduleRule.endsWith("after") ? "after" : "before"}
-                                  aria-label="Antes ou depois"
-                                  onChange={(e) => updateCondition(i, ci, { scheduleRule: `${kind === "inicio" ? "start" : "end"}-${e.target.value}` as ScheduleTimeRule })}
-                                >
-                                  <option value="after">depois das</option>
-                                  <option value="before">antes das</option>
-                                </select>
+                                <div className="vr-when">
+                                  <ChoicePicker
+                                    value={c.scheduleRule.endsWith("after") ? "after" : "before"}
+                                    options={[{ id: "after", label: "depois das" }, { id: "before", label: "antes das" }]}
+                                    title="Antes ou depois"
+                                    onChange={(v) => updateCondition(i, ci, { scheduleRule: `${kind === "inicio" ? "start" : "end"}-${v}` as ScheduleTimeRule })}
+                                  />
+                                </div>
                                 <TimeField value={c.scheduleTime} onChange={(v) => updateCondition(i, ci, { scheduleTime: v })} ariaLabel="Horário" />
                               </div>
                             )}
@@ -477,13 +487,9 @@ export default function PaymentValueRulesEditor({
                   <div>
                     <div className="vr-label">E a pessoa trabalhou</div>
                     <div className="vr-duration">
-                      <select value={rule.operator} aria-label="Duração" onChange={(e) => update(i, { operator: e.target.value as WizardDurationOperator })}>
-                        {DURATION_OPTIONS.map((o) => (
-                          <option key={o.id} value={o.id}>
-                            {o.label}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="vr-duration-picker">
+                        <ChoicePicker value={rule.operator} options={DURATION_OPTIONS} title="Duração" onChange={(v) => update(i, { operator: v })} />
+                      </div>
                       {rule.operator !== "any" && (
                         <span className="vr-hhmm">
                           <input inputMode="numeric" value={rule.hours} aria-label="Horas" placeholder="0" onChange={(e) => update(i, { hours: e.target.value.replace(/\D/g, "") })} /> h
@@ -544,16 +550,14 @@ export default function PaymentValueRulesEditor({
               <span>Veja qual regra vale e quanto o turno receberia.</span>
             </div>
             <div className="vr-test-fields">
-              <label>
-                Função
-                <input list="vr-test-roles" value={testRole} onChange={(e) => setTestRole(e.target.value)} placeholder="Ex.: Caixa" />
-                <datalist id="vr-test-roles">{roleNames.map((r) => <option key={r} value={r} />)}</datalist>
-              </label>
-              <label>
-                Local
-                <input list="vr-test-locals" value={testLocal} onChange={(e) => setTestLocal(e.target.value)} placeholder="Ex.: Loja 07" />
-                <datalist id="vr-test-locals">{locals.map((l) => <option key={l} value={l} />)}</datalist>
-              </label>
+              <div className="vr-test-field">
+                <span>Função</span>
+                <OptionPicker single align="left" options={testRoleOptions} selected={testRole ? new Set([testRole]) : new Set()} onToggle={setTestRole} title="Funções" allPlaceholder="Escolha a função" searchPlaceholder="Buscar função" />
+              </div>
+              <div className="vr-test-field">
+                <span>Local</span>
+                <OptionPicker single align="left" options={testLocalOptions} selected={testLocal ? new Set([testLocal]) : new Set()} onToggle={setTestLocal} title="Locais" allPlaceholder="Escolha o local" searchPlaceholder="Buscar local" />
+              </div>
               <label>
                 Início
                 <TimeField value={testStart} onChange={setTestStart} ariaLabel="Início do turno de teste" />
@@ -562,10 +566,10 @@ export default function PaymentValueRulesEditor({
                 Fim
                 <TimeField value={testEnd} onChange={setTestEnd} ariaLabel="Fim do turno de teste" />
               </label>
-              <label>
-                Data
-                <input type="date" value={testDate} onChange={(e) => setTestDate(e.target.value)} />
-              </label>
+              <div className="vr-test-field">
+                <span>Data</span>
+                <DateButton value={testDate} label={formatDateSlash(testDate)} onPick={setTestDate} />
+              </div>
             </div>
             <div className={`vr-test-result${test && test.amount === null ? " vr-test-miss" : ""}`}>
               {!test ? (
