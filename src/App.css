@@ -7317,9 +7317,12 @@ button.rv-history-row:hover {
   background: none;
 }
 
-.pc-group-toggle:hover .pc-group-title {
-  text-decoration: underline;
-  text-decoration-color: var(--text-muted);
+.pc-group-head {
+  transition: background 120ms ease;
+}
+
+.pc-group-head:has(.pc-group-toggle:hover) {
+  background: var(--surface-bright);
 }
 
 .pc-group-toggle .rv-tag {
