@@ -32,8 +32,9 @@ function clampCardPosition(top: number, left: number, width: number, height: num
  * "Você tem atualizações pendentes" card, mounted once at the app root (see
  * `App.tsx`) — floats freely over the page (drag it anywhere by the card
  * itself; a plain click, no real movement, opens the Drawer instead — see
- * `handlePointerUp`'s movement threshold). Starts in the top-right corner
- * each fresh session; wherever it's dragged to afterward is where it stays
+ * `handlePointerUp`'s movement threshold). Starts at the bottom, just
+ * right of the sidebar, each fresh session (out of the way of page headers
+ * and their actions); wherever it's dragged to afterward is where it stays
  * until the app restarts (position lives in plain component state, not
  * persisted). Can't be dragged over the sidebar — that's real layout, not
  * something floating over it — and always renders above every modal in the
@@ -77,13 +78,23 @@ export default function PendingChangesTab() {
   }, []);
 
   // Drag state — `position` is `null` until the very first drag, meaning
-  // "use the CSS top-right default" (`top`/`right` in the style below);
+  // "use the bottom-left default" (`bottom`/`left` in the style below);
   // once dragged, it switches to explicit pixel `top`/`left` and stays that
   // way for the rest of the session. `isDragging` is only for the cursor
   // style; `dragRef`/`movedRef` don't need to trigger re-renders, so they
   // stay in refs.
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  // The default spot is just right of the sidebar, at the bottom — kept in
+  // sync with the sidebar's width, since it can be collapsed.
+  const [navWidth, setNavWidth] = useState(sidebarWidth);
+  useEffect(() => {
+    const nav = document.querySelector(".app-nav");
+    if (!nav) return;
+    const observer = new ResizeObserver(() => setNavWidth(sidebarWidth()));
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, []);
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef<{ pointerX: number; pointerY: number; cardLeft: number; cardTop: number } | null>(null);
   const movedRef = useRef(false);
@@ -323,7 +334,7 @@ export default function PendingChangesTab() {
             position: "fixed",
             zIndex: CARD_Z_INDEX,
             cursor: isDragging ? "grabbing" : "grab",
-            ...(position ? { top: position.top, left: position.left } : { top: 16, right: 16 }),
+            ...(position ? { top: position.top, left: position.left } : { bottom: 16, left: navWidth + 16 }),
           }}
         >
           <div className="pending-changes-card-icon">
