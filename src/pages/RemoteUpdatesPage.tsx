@@ -2,7 +2,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChevronRight, ExternalLink, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import BackButton from "../components/BackButton";
 import ChangeDiffPanel from "../components/ChangeDiffPanel";
 import ConfirmModal from "../components/ConfirmModal";
 import DateRangePicker from "../components/DateRangePicker";
@@ -1061,9 +1060,6 @@ export default function RemoteUpdatesPage() {
 
   return (
     <div className="rv-page">
-      <div className="rv-back">
-        <BackButton fallback="/payments" />
-      </div>
       <div className="rv-head">
         <div>
           <h2>Verificação automática</h2>
