@@ -1,4 +1,3 @@
-import { save } from "@tauri-apps/plugin-dialog";
 import { writeBinaryFile } from "./api";
 import { getPaymentPdfTemplate, listPaymentShiftsForReport, type ListPaymentShiftSummariesQuery, type PaymentShiftReportRow } from "./db";
 import { formatTimestampForFileName, sanitizeFileName } from "./format";
@@ -53,12 +52,8 @@ export async function generatePaymentsPdfExport(
 
   const painter = drawPdfDocument(template.config, rows, amounts);
 
-  const destPath = await save({
-    defaultPath: `${sanitizeFileName(template.name)}-${formatTimestampForFileName()}.pdf`,
-    filters: [{ name: "PDF", extensions: ["pdf"] }],
-  });
-  if (!destPath) return { rowCount: rows.length, matchedCount: allRows.length, path: null, title: template.name };
-
+  // Web: no save dialog — the browser downloads it under the suggested name.
+  const destPath = `${sanitizeFileName(template.name)}-${formatTimestampForFileName()}.pdf`;
   const bytes = new Uint8Array(painter.doc.output("arraybuffer"));
   await writeBinaryFile(destPath, bytes);
 
