@@ -1,5 +1,5 @@
 /**
- * Client for the PontoScan web server (`server/`). Every call carries the
+ * Client for the Tá Pago web server (`server/`). Every call carries the
  * Firebase ID token of whoever is signed in; the server rejects anything
  * else. Errors come back as `{ error: "..." }` with a message meant for the
  * user, and are rethrown as a plain `Error` with that message — the same

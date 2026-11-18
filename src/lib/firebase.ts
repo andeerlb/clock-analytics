@@ -19,7 +19,7 @@ const configured = Boolean(config.apiKey && config.authDomain && config.projectI
 /**
  * `"firebase"`: real Google login.
  * `"dev"`: `yarn dev` without Firebase config — no login screen; the local
- *   server (started with PONTOSCAN_DEV_USER_EMAIL) answers as the dev user.
+ *   server (started with TAPAGO_DEV_USER_EMAIL) answers as the dev user.
  * `"missing"`: a production build without config — shown as an error,
  *   never silently skipped.
  */

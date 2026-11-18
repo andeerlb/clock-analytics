@@ -10,7 +10,7 @@ use sqlx::SqlitePool;
 
 /// Builds the list from `migrations_list.rs`: the same versions, SQL and
 /// order the desktop app used. sqlx stores a checksum of each migration's
-/// SQL, so a `pontoscan.db` from the desktop app is recognized here as
+/// SQL, so a `tapago.db` from the desktop app is recognized here as
 /// already migrated instead of failing with "previously applied but has
 /// been modified". Never edit an applied migration.
 macro_rules! migration_list {

@@ -84,9 +84,9 @@ pub async fn health() -> &'static str {
     "ok"
 }
 
-/// Git commit this binary was built from (set by CI via PONTOSCAN_BUILD_SHA;
+/// Git commit this binary was built from (set by CI via TAPAGO_BUILD_SHA;
 /// "dev" for local builds). Public so the deploy can wait until the VM is
 /// really running the new build before publishing the frontend.
 pub async fn version() -> &'static str {
-    option_env!("PONTOSCAN_BUILD_SHA").unwrap_or("dev")
+    option_env!("TAPAGO_BUILD_SHA").unwrap_or("dev")
 }

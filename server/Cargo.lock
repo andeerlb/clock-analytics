@@ -1589,38 +1589,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
-name = "pontoscan-server"
-version = "0.1.91"
-dependencies = [
- "axum",
- "calamine",
- "chrono",
- "chrono-tz",
- "csv",
- "futures-core",
- "http-body-util",
- "infer",
- "jsonwebtoken",
- "libsqlite3-sys",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "sqlx",
- "thiserror",
- "tokio",
- "tokio-util",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "zip 2.6.1",
-]
-
-[[package]]
 name = "potential_utf"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2453,6 +2421,38 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.10",
+]
+
+[[package]]
+name = "tapago-server"
+version = "0.1.91"
+dependencies = [
+ "axum",
+ "calamine",
+ "chrono",
+ "chrono-tz",
+ "csv",
+ "futures-core",
+ "http-body-util",
+ "infer",
+ "jsonwebtoken",
+ "libsqlite3-sys",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "zip 2.6.1",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  /** Web server base URL in production (e.g. https://pontoscan.duckdns.org). Empty in dev — Vite proxies `/api`. */
+  /** Web server base URL in production (e.g. https://tapago.duckdns.org). Empty in dev — Vite proxies `/api`. */
   readonly VITE_API_URL?: string;
   /** Firebase web app config (Firebase console → Configurações do projeto → Seus apps). All four, or none in dev. */
   readonly VITE_FIREBASE_API_KEY?: string;

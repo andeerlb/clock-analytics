@@ -28,7 +28,7 @@ Prerequisites: Node.js 20+ and Yarn, Rust (stable, via `rustup`), and Poppler (`
 yarn install
 
 # terminal 1: the server, without login (debug builds only)
-cd server && PONTOSCAN_DEV_USER_EMAIL=dev@local cargo run
+cd server && TAPAGO_DEV_USER_EMAIL=dev@local cargo run
 
 # terminal 2: the frontend on http://localhost:1420 (proxies /api to the server)
 yarn dev
