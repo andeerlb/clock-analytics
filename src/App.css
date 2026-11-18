@@ -330,20 +330,22 @@ button.app-nav-toggle:hover {
   text-decoration: none;
 }
 
-/* Groups GitHub + Configurações into their own card at the bottom of the
-   sidebar, set apart from the main nav links above (which flow into it via
-   .app-nav-links' flex: 1) instead of blending straight into the list. */
+/* The foot of the sidebar: Verificação automática and the account card,
+   each a bordered button of its own, set apart from the nav links above
+   (which flow into it via .app-nav-links' flex: 1). */
 .app-nav-footer {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px;
-  border-radius: 12px;
-  background: var(--surface-container);
-  border: 1px solid var(--border-soft);
+  gap: 6px;
 }
 
-.app-nav-footer .app-nav-link:not(.active):hover {
+.app-nav-footer > .app-nav-link {
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-container);
+}
+
+.app-nav-footer > .app-nav-link:not(.active):hover {
   background: var(--surface-variant);
 }
 
@@ -9188,99 +9190,191 @@ tr.virtual-spacer td {
 
 /* ---------- Login (web version) — see AuthGate.tsx ---------- */
 
+/* ---- Sign-in: "da planilha ao pagamento" ----
+   Dark like the rest of the app: a spreadsheet drifts slowly behind the
+   panel, barely visible, fading out under it. Its palette is local. */
 .signin {
+  --si-bg: #0b0b0d;
+  --si-ink: #f1f1f4;
+  --si-muted: #a6a7b0;
+  --si-cell: #1c1d22;
+  --si-cell-text: #3f414a;
+  --si-head: #131418;
+  --si-green: #4fbf86;
+  --si-green-soft: #11251a;
+  --si-chip: #1a1b20;
+  --si-chip-text: #b4b6bf;
+  --si-danger: #f2a2a5;
+  --si-danger-soft: #3a1618;
+  --si-warn: #f5c15a;
+  --si-warn-soft: #33270b;
+  position: relative;
   min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 2.5rem 1rem;
-  background:
-    radial-gradient(60rem 30rem at 50% -10%, rgba(246, 246, 248, 0.05), transparent 70%),
-    var(--bg);
+  overflow: hidden;
+  background: var(--si-bg);
+  color: var(--si-ink);
+  color-scheme: dark;
 }
 
-.signin-card {
-  width: 100%;
-  max-width: 400px;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 32px 28px 26px;
+.signin-loading {
   display: grid;
-  gap: 22px;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  place-items: center;
+}
+
+.signin-grid {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--si-cell-text);
+  pointer-events: none;
+}
+
+.signin-grid table {
+  border-collapse: collapse;
+  animation: signin-drift 60s linear infinite;
+}
+
+.signin-grid th,
+.signin-grid td {
+  border: 1px solid var(--si-cell);
+  padding: 6px 10px;
+  white-space: nowrap;
+  min-width: 92px;
+  text-align: left;
+  font-weight: 400;
+}
+
+.signin-grid th {
+  background: var(--si-head);
+  font-weight: 600;
+}
+
+.signin-grid td.hl {
+  background: var(--si-green-soft);
+  color: var(--si-green);
+}
+
+@keyframes signin-drift {
+  to {
+    transform: translateY(-50%);
+  }
+}
+
+.signin-fade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 30% 50%, rgba(11, 11, 13, 0.97) 0 34%, rgba(11, 11, 13, 0.68) 60%, rgba(11, 11, 13, 0.3) 100%);
+}
+
+.signin-panel {
+  position: relative;
+  min-height: 100vh;
+  display: grid;
+  align-content: center;
+  gap: 18px;
+  max-width: 560px;
+  padding-block: 48px;
+  padding-left: max(20px, 7vw);
+  padding-right: 20px;
 }
 
 .signin-brand {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 10px;
+  font-family: "Hanken Grotesk", Avenir, Helvetica, Arial, sans-serif;
+  font-weight: 700;
+  font-size: 21px;
+  letter-spacing: -0.01em;
 }
 
 .signin-brand-mark {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border-radius: 9px;
-  background: var(--surface-container);
-  border: 1px solid var(--border);
+  background: var(--si-ink);
+  color: var(--si-bg);
   display: grid;
   place-items: center;
 }
 
-.signin-brand-name {
+.signin-panel h1 {
+  margin: 0;
   font-family: "Hanken Grotesk", Avenir, Helvetica, Arial, sans-serif;
-  font-weight: 700;
-  font-size: 20px;
-  letter-spacing: -0.01em;
+  font-size: clamp(34px, 5vw, 50px);
+  line-height: 1;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
 }
 
-.signin-heading {
-  display: grid;
+.signin-panel h1 span {
+  color: var(--si-green);
+}
+
+.signin-lead {
+  margin: 0;
+  max-width: 40ch;
+  color: var(--si-muted);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.signin-formats {
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
-.signin-heading h1 {
-  margin: 0;
-  font-family: "Hanken Grotesk", Avenir, Helvetica, Arial, sans-serif;
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-
-.signin-heading p,
-.signin-hint {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 14px;
+.signin-formats span {
+  font: 600 11px "JetBrains Mono", ui-monospace, monospace;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: var(--si-chip);
+  color: var(--si-chip-text);
 }
 
 .signin-hint {
+  margin: 0;
   font-size: 13px;
-  color: var(--outline);
+  color: var(--si-muted);
 }
 
+/* Google's own sign-in button style: white, gray border, the colored G. */
 .signin-google-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
   width: 100%;
+  max-width: 320px;
   height: 44px;
-  border-radius: 8px;
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: var(--on-accent);
-  font-weight: 600;
-  font-size: 14.5px;
+  padding: 0 18px;
+  border-radius: 22px;
+  border: 1px solid #dadce0;
+  background: #ffffff;
+  color: #1f1f1f;
+  font-weight: 500;
+  font-size: 15px;
   cursor: pointer;
-  transition: background 0.15s;
+  box-shadow: none;
+  transition: background 0.15s, border-color 0.15s;
 }
 
 .signin-google-btn:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: #f7f8f8;
+  border-color: #c4c7cc;
+}
+
+.signin-google-btn:focus-visible {
+  outline: 2px solid #4285f4;
+  outline-offset: 2px;
 }
 
 .signin-google-btn:disabled {
-  opacity: 0.75;
+  opacity: 0.85;
   cursor: progress;
 }
 
@@ -9291,19 +9385,17 @@ tr.virtual-spacer td {
 }
 
 .signin-spinner {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  border: 2px solid rgba(16, 16, 19, 0.25);
-  border-top-color: var(--on-accent);
+  border: 2px solid #c5c8ce;
+  border-top-color: #4285f4;
   animation: signin-spin 0.8s linear infinite;
 }
 
 .signin-spinner.large {
   width: 28px;
   height: 28px;
-  border-color: var(--border);
-  border-top-color: var(--text);
 }
 
 @keyframes signin-spin {
@@ -9316,39 +9408,35 @@ tr.virtual-spacer td {
   .signin-spinner {
     animation-duration: 2.4s;
   }
+  .signin-grid table {
+    animation: none;
+  }
 }
 
 .signin-notice {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   justify-items: start;
+  max-width: 380px;
   border-radius: 10px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   font-size: 13.5px;
+  line-height: 1.45;
 }
 
 .signin-notice p {
   margin: 0;
-  color: var(--text-muted);
   font-size: 13px;
 }
 
 .signin-notice.danger {
-  background: var(--danger-soft);
-  border: 1px solid rgba(248, 113, 113, 0.35);
-}
-
-.signin-notice.danger strong {
-  color: var(--danger);
+  background: var(--si-danger-soft);
+  color: var(--si-danger);
 }
 
 .signin-notice.warning {
-  background: var(--warning-soft);
-  border: 1px solid rgba(251, 191, 36, 0.35);
-}
-
-.signin-notice.warning strong {
-  color: var(--warning);
+  background: var(--si-warn-soft);
+  color: var(--si-warn);
 }
 
 .signin-email-chip {
@@ -9356,27 +9444,13 @@ tr.virtual-spacer td {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  background: var(--surface-container);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 2px 10px;
-  font-size: 13px;
+  font: 12px "JetBrains Mono", ui-monospace, monospace;
 }
 
-.signin-footnote {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  color: var(--outline);
-  font-size: 12.5px;
-  line-height: 1.45;
-  border-top: 1px solid var(--border-soft);
-  padding-top: 16px;
-}
-
-.signin-footnote svg {
-  flex: none;
-  margin-top: 2px;
+@media (max-width: 720px) {
+  .signin-fade {
+    background: rgba(11, 11, 13, 0.88);
+  }
 }
 
 .signin-modal-backdrop {
@@ -9414,11 +9488,11 @@ tr.virtual-spacer td {
 
 /* ---------- Signed-in account, foot of the sidebar — SidebarAccount.tsx ---------- */
 
+/* The account card at the foot of the sidebar; its menu opens like the
+   app's pickers (`.emp-picker-popover`): the box grows out of the card,
+   upward, anchored to its bottom edge, with the card inside at the bottom. */
 .sidebar-account {
   position: relative;
-  margin-top: 4px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border-soft);
 }
 
 .sidebar-account-trigger {
@@ -9426,17 +9500,18 @@ tr.virtual-spacer td {
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 6px 6px 6px 4px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
+  padding: 8px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-container);
   color: var(--text);
   text-align: left;
   cursor: pointer;
+  box-shadow: none;
 }
 
 .sidebar-account-trigger:hover,
-.sidebar-account-trigger[aria-expanded="true"] {
+.sidebar-account-trigger.current {
   background: var(--surface-variant);
 }
 
@@ -9476,34 +9551,70 @@ tr.virtual-spacer td {
   text-overflow: ellipsis;
 }
 
-.sidebar-account-more {
+.sidebar-account-chevron {
   flex: none;
   color: var(--text-muted);
+  transition: transform 0.18s;
+}
+
+.sidebar-account-chevron.open {
+  transform: rotate(180deg);
 }
 
 .sidebar-account-menu {
   position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
-  width: 220px;
+  bottom: -2px;
+  left: -6px;
+  width: max(calc(100% + 12px), 230px);
   z-index: 50;
-  background: var(--surface-container-high);
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  background: #1c1c20;
+  border: 1px solid #3a3a42;
+  border-radius: 12px;
   padding: 6px;
   display: grid;
   gap: 2px;
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(0, 0, 0, 0.3);
+  animation: emp-picker-grow-up 0.18s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.sidebar-account-menu > * {
+  animation: emp-picker-fade 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-account-menu,
+  .sidebar-account-menu > * {
+    animation: none;
+  }
+}
+
+/* The card again, at the bottom of the box: clicking it closes the menu. */
+.sidebar-account-menu .sidebar-account-trigger {
+  margin-top: 4px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.sidebar-account-menu .sidebar-account-trigger:hover {
+  background: var(--surface-variant);
 }
 
 .sidebar-account-menu-head {
   display: grid;
+  gap: 1px;
   padding: 8px 10px 10px;
   margin-bottom: 4px;
   border-bottom: 1px solid var(--border-soft);
 }
 
-.sidebar-account-menu button {
+.sidebar-account-menu-head em {
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--success);
+}
+
+.sidebar-account-menu button[role="menuitem"] {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -9515,14 +9626,27 @@ tr.virtual-spacer td {
   font-size: 14px;
   text-align: left;
   cursor: pointer;
+  box-shadow: none;
 }
 
-.sidebar-account-menu button:hover {
+.sidebar-account-menu button[role="menuitem"] svg {
+  color: var(--text-muted);
+}
+
+.sidebar-account-menu button[role="menuitem"]:hover,
+.sidebar-account-menu button[role="menuitem"].active {
   background: var(--surface-variant);
 }
 
-.sidebar-account-menu button.danger {
+.sidebar-account-menu button[role="menuitem"].danger,
+.sidebar-account-menu button[role="menuitem"].danger svg {
   color: var(--danger);
+}
+
+.sidebar-account-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border-soft);
 }
 
 .sidebar-account-dev {

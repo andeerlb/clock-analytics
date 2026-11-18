@@ -1,10 +1,10 @@
-# Guia do PontoScan
+# Guia do Tá Pago
 
-O PontoScan é um aplicativo web, usado no navegador depois de entrar com uma conta autorizada, para importar espelhos de ponto (PDF) e planilhas de pagamento de turnos, conferir e registrar pagamentos. Os dados ficam guardados no servidor do PontoScan e são os mesmos para toda a equipe. Os textos entre aspas são os rótulos exatos da tela.
+O Tá Pago é um aplicativo web, usado no navegador depois de entrar com uma conta autorizada, para importar espelhos de ponto (PDF) e planilhas de pagamento de turnos, conferir e registrar pagamentos. Os dados ficam guardados no servidor do Tá Pago e são os mesmos para toda a equipe. Os textos entre aspas são os rótulos exatos da tela.
 
 ## Navegação
 
-Barra lateral, de cima para baixo. Em "Operação": "Importar", "Cartão Ponto", "Pagamentos", "Análises". Em "Cadastros": "Empresas", "Clientes", "Colaboradores", "Funções". No rodapé da barra: "Verificação automática" e "Configurações". O botão ao lado do nome PontoScan, no topo, fecha e abre a barra, que fica só com os ícones quando fechada e guarda o último estado.
+Barra lateral, de cima para baixo. Em "Operação": "Importar", "Cartão Ponto", "Pagamentos", "Análises". Em "Cadastros": "Empresas", "Clientes", "Colaboradores", "Funções". No rodapé da barra: "Verificação automática" e "Configurações". O botão ao lado do nome Tá Pago, no topo, fecha e abre a barra, que fica só com os ícones quando fechada e guarda o último estado.
 
 O ícone de "Verificação automática" tem uma bolinha de status (passe o mouse para ver o texto): "Verificando agora", "Falha na verificação", "Atualização encontrada", "Configuradas" ou "Nenhuma configurada".
 
@@ -250,23 +250,12 @@ Os totais usam o mesmo valor mostrado em "Pagamentos": turnos pendentes entram p
 Caminho: "Configurações". No topo há uma busca (Ctrl K) que filtra as opções.
 
 - "Geral" → "Versão": a versão em uso. A web se atualiza sozinha; se algo parecer estranho depois de uma atualização, recarregue a página.
-- "Dados":
-  - "Espaço usado": tamanho do banco de dados e dos arquivos importados, no servidor. Clique em cada parte para ver o que ocupa mais espaço.
-  - "Remover originais repetidos": apaga o PDF original de lote quando todas as páginas já foram salvas por colaborador. Cada colaborador continua com a própria página.
-  - "Compactar o banco": recupera espaço de registros apagados, sem remover dados.
-  - "Baixar uma cópia do banco": baixa um arquivo `.db` com tudo, sem mudar nada no app.
+- "Dados" → "Espaço usado": tamanho do banco de dados e dos arquivos importados, no servidor. Clique em cada parte para ver o que ocupa mais espaço.
 - "Integrações" → "Assistente com IA": a chave da Anthropic da equipe (veja "Assistente").
 
-### Zona de risco: "Apagar histórico e arquivos"
+Configurações e "Usuários e perfis" ficam no menu da conta: clique no seu nome no canto de baixo do menu lateral.
 
-Assistente em três passos. Sempre apaga o histórico de importações e todos os arquivos importados. No passo "O que manter" dá para manter:
-- "Empresas", "Clientes", "Colaboradores". Manter colaboradores mantém clientes e empresas; manter clientes mantém empresas.
-- "Turnos de pagamento editados à mão" (pagos, voltados para pendente ou com valor corrigido): exige manter colaboradores.
-- "Modelos de pagamento" e "Modelos de colaboradores": ligados por padrão.
-
-No passo "Backup", "Banco de dados" e "Arquivos importados" (ligados por padrão) geram um `.zip` que o navegador baixa antes de apagar. No último passo é preciso digitar APAGAR TUDO.
-
-Não existe mais a opção de substituir o banco por outro arquivo: restaurar um banco é uma tarefa de manutenção no servidor.
+Não há ferramentas de manutenção na tela (compactar o banco, baixar uma cópia, remover arquivos, apagar o histórico ou substituir o banco): o servidor faz backup contínuo, e manutenção do banco é feita por quem administra o servidor.
 
 ## Poppler (ferramentas de PDF)
 

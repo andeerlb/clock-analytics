@@ -880,7 +880,7 @@ export default function RemoteUpdatesPage() {
         </div>
         {authorInfoOpen && (
           <p className="rv-authors-info">
-            O Excel guarda quem salvou a planilha por último. A cada conferência, o PontoScan anota esse nome junto com as mudanças daquela versão. Se duas pessoas
+            O Excel guarda quem salvou a planilha por último. A cada conferência, o Tá Pago anota esse nome junto com as mudanças daquela versão. Se duas pessoas
             salvarem entre uma conferência e outra, aparece só a última. “{UNNAMED_AUTHOR}” é quando a planilha foi salva por um programa que não grava o nome.
           </p>
         )}
@@ -1143,7 +1143,7 @@ export default function RemoteUpdatesPage() {
     <div className="rv-page">
       <PageHeader
         title="Verificação automática"
-        subtitle="Planilhas importadas por link que o PontoScan confere sozinho."
+        subtitle="Planilhas importadas por link que o Tá Pago confere sozinho."
         actions={
           files.length > 0 && (
             <button type="button" className="settings-button" onClick={handleForceCheckAll} disabled={readOnly || forcingAll} title={roTitle}>
@@ -1162,7 +1162,7 @@ export default function RemoteUpdatesPage() {
             <RefreshCw size={20} />
           </span>
           <strong>Nenhuma planilha acompanhada ainda</strong>
-          <span className="rv-empty-lead">Quando uma planilha de pagamento vem de um link (OneDrive, SharePoint ou link direto), o PontoScan pode conferir sozinho se ela mudou.</span>
+          <span className="rv-empty-lead">Quando uma planilha de pagamento vem de um link (OneDrive, SharePoint ou link direto), o Tá Pago pode conferir sozinho se ela mudou.</span>
           <ol className="rv-empty-steps">
             <li>
               <b>1</b>Em Importar Pagamentos, importe a planilha pelo link.
@@ -1214,7 +1214,7 @@ export default function RemoteUpdatesPage() {
       {untrackTarget && (
         <ConfirmModal
           title="Parar de acompanhar esta planilha?"
-          message={`O PontoScan deixa de conferir “${untrackTarget.fileName}” e apaga as regras e o histórico de verificações dela. Os turnos já importados não mudam.`}
+          message={`O Tá Pago deixa de conferir “${untrackTarget.fileName}” e apaga as regras e o histórico de verificações dela. Os turnos já importados não mudam.`}
           confirmLabel={confirmBusy ? "Removendo..." : "Parar de acompanhar"}
           confirmDisabled={confirmBusy}
           error={confirmError}
@@ -1260,7 +1260,7 @@ export default function RemoteUpdatesPage() {
       {deleteShiftTarget && (
         <ConfirmModal
           title="Excluir este turno?"
-          message={`O turno${deleteShiftTarget.who ? ` de ${formatPersonName(deleteShiftTarget.who)}` : ""} saiu da planilha e vai ser excluído do PontoScan também.`}
+          message={`O turno${deleteShiftTarget.who ? ` de ${formatPersonName(deleteShiftTarget.who)}` : ""} saiu da planilha e vai ser excluído do Tá Pago também.`}
           confirmLabel={confirmBusy ? "Excluindo..." : "Excluir turno"}
           confirmDisabled={confirmBusy}
           error={confirmError}

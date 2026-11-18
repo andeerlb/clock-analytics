@@ -13,7 +13,7 @@ export const AREAS: { id: Area; label: string; desc: string; editable: boolean }
   { id: "pagamentos", label: "Pagamentos", desc: "Importar planilhas, turnos, conferência, modelos", editable: true },
   { id: "analises", label: "Análises", desc: "Só leitura por natureza", editable: false },
   { id: "verificacao", label: "Verificação automática", desc: "Editar: conferir agora, regras, marcar como visto", editable: true },
-  { id: "configuracoes", label: "Configurações", desc: "Espaço, compactar, apagar histórico, chave da IA", editable: true },
+  { id: "configuracoes", label: "Configurações", desc: "Espaço usado e a chave do assistente com IA", editable: true },
 ];
 
 export function areaLabel(area: Area): string {
