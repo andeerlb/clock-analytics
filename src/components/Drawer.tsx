@@ -23,6 +23,7 @@ export default function Drawer({
   icon: Icon,
   subtitle,
   toolbar,
+  closeOnBackdrop = true,
 }: {
   open: boolean;
   onClose: () => void;
@@ -43,6 +44,8 @@ export default function Drawer({
   /** Any valid CSS width — defaults to a comfortable panel on wide windows, nearly full-width on narrow ones. */
   width?: string;
   side?: "left" | "right";
+  /** `false` for a sheet holding work in progress (e.g. a wizard): a click outside it then does nothing, only the X / Escape close it. */
+  closeOnBackdrop?: boolean;
 }) {
   const [rendered, setRendered] = useState(open);
   const [visible, setVisible] = useState(false);
@@ -112,7 +115,7 @@ export default function Drawer({
       className={`drawer-overlay${visible ? " drawer-overlay-visible" : ""}`}
       onClick={(e) => {
         e.stopPropagation();
-        onClose();
+        if (closeOnBackdrop) onClose();
       }}
     >
       <div
