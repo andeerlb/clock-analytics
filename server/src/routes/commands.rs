@@ -403,6 +403,9 @@ async fn ensure_public_destination(url: &reqwest::Url) -> ApiResult<()> {
     if any { Ok(()) } else { Err(refused()) }
 }
 
+/// A current desktop Chrome, for `build_http_client`.
+const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+
 fn build_http_client(timeout: Duration) -> ApiResult<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(timeout)
@@ -417,7 +420,11 @@ fn build_http_client(timeout: Duration) -> ApiResult<reqwest::Client> {
                 attempt.follow()
             }
         }))
-        .user_agent(concat!("tapago/", env!("CARGO_PKG_VERSION")))
+        // OneDrive answers anonymous share links with 403 to clients that
+        // don't look like a browser (the same link opens fine in a private
+        // window), so the server presents itself as one when fetching the
+        // spreadsheets people track by link.
+        .user_agent(BROWSER_USER_AGENT)
         // OneDrive/SharePoint anonymous links set a cookie mid-redirect and
         // expect it back on the next hop.
         .cookie_store(true)
