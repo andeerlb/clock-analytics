@@ -413,7 +413,7 @@ export default function PendingChangesTab() {
       {deleteShiftTarget && (
         <ConfirmModal
           title="Excluir este turno?"
-          message={`O turno${deleteShiftTarget.who ? ` de ${formatPersonName(deleteShiftTarget.who)}` : ""} saiu da planilha e vai ser excluído do PontoScan também.`}
+          message={`O turno${deleteShiftTarget.who ? ` de ${formatPersonName(deleteShiftTarget.who)}` : ""} saiu da planilha e vai ser excluído do Tá Pago também.`}
           confirmLabel={deleting ? "Excluindo..." : "Excluir turno"}
           confirmDisabled={deleting}
           onConfirm={handleDeleteShift}

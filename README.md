@@ -1,6 +1,6 @@
-# PontoScan
+# Tá Pago
 
-A web app for a small team (Google login) that ingests Brazilian "Espelho Ponto" (timesheet) PDF exports and payment spreadsheets, parses punch data per employee/day, and analyzes it. It started as a Tauri desktop app; the desktop version has been retired and everything now runs on a small server.
+Tá Pago (formerly PontoScan) is a web app for a small team (Google login) that ingests Brazilian "Espelho Ponto" (timesheet) PDF exports and payment spreadsheets, parses punch data per employee/day, and analyzes it. It started as a Tauri desktop app; the desktop version has been retired and everything now runs on a small server.
 
 ## Features
 

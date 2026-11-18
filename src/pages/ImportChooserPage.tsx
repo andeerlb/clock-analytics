@@ -103,7 +103,7 @@ export default function ImportChooserPage() {
 
   return (
     <div>
-      <PageHeader title="Importar dados" subtitle="Escolha o que você quer trazer para o PontoScan." />
+      <PageHeader title="Importar dados" subtitle="Escolha o que você quer trazer para o Tá Pago." />
 
       <div className="choice-grid">
         {choices.length === 0 && <p className="muted">Seu perfil não permite importar nada. Peça a um admin para mudar seu perfil.</p>}

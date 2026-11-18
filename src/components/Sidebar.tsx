@@ -14,7 +14,7 @@ function MenuIcon({ path, size = 17, className }: { path: string; size?: number;
 }
 
 const ICONS = {
-  brand: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2",
+  brand: "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM3 9h18M9 3v18",
   toggle: "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM9 3v18",
   import: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M12 18v-6M9 15l3-3 3 3",
   companies: "M3 21h18M5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16M9 8h1M14 8h1M9 12h1M14 12h1M9 16h1M14 16h1",
@@ -123,7 +123,7 @@ export default function Sidebar() {
     <nav className={collapsed ? "app-nav collapsed" : "app-nav"}>
       <div className="app-brand">
         <MenuIcon path={ICONS.brand} size={18} className="app-nav-label" />
-        <span className="app-brand-name app-nav-label">PontoScan</span>
+        <span className="app-brand-name app-nav-label">Tá Pago</span>
         <button
           type="button"
           className="app-nav-toggle"

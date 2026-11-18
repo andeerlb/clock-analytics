@@ -110,7 +110,7 @@ function SignInScreen({ notice, busy, onSignIn }: { notice: SignInNotice | null;
           <span className="signin-brand-mark">
             <SheetMark />
           </span>
-          PontoScan
+          Tá Pago
         </span>
         <h1 id="signin-title">
           {denied ? (

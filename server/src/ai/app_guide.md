@@ -1,10 +1,10 @@
-# Guia do PontoScan
+# Guia do Tá Pago
 
-O PontoScan é um aplicativo web, usado no navegador depois de entrar com uma conta autorizada, para importar espelhos de ponto (PDF) e planilhas de pagamento de turnos, conferir e registrar pagamentos. Os dados ficam guardados no servidor do PontoScan e são os mesmos para toda a equipe. Os textos entre aspas são os rótulos exatos da tela.
+O Tá Pago é um aplicativo web, usado no navegador depois de entrar com uma conta autorizada, para importar espelhos de ponto (PDF) e planilhas de pagamento de turnos, conferir e registrar pagamentos. Os dados ficam guardados no servidor do Tá Pago e são os mesmos para toda a equipe. Os textos entre aspas são os rótulos exatos da tela.
 
 ## Navegação
 
-Barra lateral, de cima para baixo. Em "Operação": "Importar", "Cartão Ponto", "Pagamentos", "Análises". Em "Cadastros": "Empresas", "Clientes", "Colaboradores", "Funções". No rodapé da barra: "Verificação automática" e "Configurações". O botão ao lado do nome PontoScan, no topo, fecha e abre a barra, que fica só com os ícones quando fechada e guarda o último estado.
+Barra lateral, de cima para baixo. Em "Operação": "Importar", "Cartão Ponto", "Pagamentos", "Análises". Em "Cadastros": "Empresas", "Clientes", "Colaboradores", "Funções". No rodapé da barra: "Verificação automática" e "Configurações". O botão ao lado do nome Tá Pago, no topo, fecha e abre a barra, que fica só com os ícones quando fechada e guarda o último estado.
 
 O ícone de "Verificação automática" tem uma bolinha de status (passe o mouse para ver o texto): "Verificando agora", "Falha na verificação", "Atualização encontrada", "Configuradas" ou "Nenhuma configurada".
 
