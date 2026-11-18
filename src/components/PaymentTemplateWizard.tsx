@@ -633,9 +633,12 @@ export default function PaymentTemplateWizard({
     return sheet;
   }
 
-  /** Every sheet of group `key` adopts the answers of group `sourceKey` ("Usar as mesmas respostas de"). */
+  /** Every sheet of group `key` joins group `sourceKey` and uses its answers ("Mesmas respostas que outra aba"); its own answers are dropped. */
   function mergeGroupInto(key: string, sourceKey: string) {
     if (key === sourceKey) return;
+    const joining = membersOf(key);
+    // Joining a group by hand undoes an earlier "responder separado".
+    setSeparatedSheets((prev) => new Set([...prev].filter((s) => !joining.includes(s))));
     setSheetGroupOf((prev) => {
       const next = { ...prev };
       for (const s of sheets) if ((next[s] ?? s) === key) next[s] = sourceKey;
@@ -773,7 +776,10 @@ export default function PaymentTemplateWizard({
     const labels = groupFieldLabels[key] ?? {};
     const mappedMax = Math.max(-1, ...Object.keys(groupMapping[key] ?? {}).map(Number));
     // Older templates saved "" (or a stray space) when the column had no name.
-    return Array.from({ length: Math.max(mappedMax + 6, 12) }, (_, i) => ({ index: i, header: labels[i]?.trim() || null }));
+    // Without a sample the letter is what identifies a column; the saved name
+    // is only a hint (old templates saved whatever the first row held, often
+    // a data value like a store name). Older ones also saved "" for none.
+    return Array.from({ length: Math.max(mappedMax + 6, 12) }, (_, i) => ({ index: i, header: null, savedName: labels[i]?.trim() || null }));
   }
 
   /** First value under column `col` in the group's sample sheet, for "ex. em ABA: ...". */
@@ -1457,11 +1463,11 @@ export default function PaymentTemplateWizard({
               </div>
             )}
 
-            {tabKey && fileKind !== "csv" && Object.keys(groupMapping[tabKey] ?? {}).length === 0 && includedGroupKeys.length > 1 && (
+            {tabKey && fileKind !== "csv" && includedGroupKeys.length > 1 && (
               <div className="tmap-q">
                 <label>
-                  Copiar respostas
-                  <small>de outra aba</small>
+                  Juntar
+                  <small>com outra aba</small>
                 </label>
                 <OptionPicker
                   single
@@ -2176,7 +2182,8 @@ function columnOf(mapping: Record<number, PaymentTargetField>, field: PaymentTar
   return entry ? Number(entry[0]) : null;
 }
 
-type GroupColumn = { index: number; header: string | null };
+/** `header`: the column's name in the sample file. `savedName`: the name kept in a saved template, shown only as a hint. */
+type GroupColumn = { index: number; header: string | null; savedName?: string | null };
 
 /** A column chooser in the app's picker style: the column's name, its letter on the right. */
 function ColumnPicker({
@@ -2199,7 +2206,11 @@ function ColumnPicker({
   const options: PickerOption[] = [
     ...(noneLabel ? [{ id: "none", label: noneLabel }] : []),
     ...columns.map((c) => {
-      const parts = [c.header ? `coluna ${columnLetter(c.index)}` : null, usedBy[c.index] ? `já é ${usedBy[c.index]}` : null];
+      const parts = [
+        c.header ? `coluna ${columnLetter(c.index)}` : null,
+        c.savedName ? `“${c.savedName}”` : null,
+        usedBy[c.index] ? `já é ${usedBy[c.index]}` : null,
+      ];
       return {
         id: String(c.index),
         label: c.header ?? `Coluna ${columnLetter(c.index)}`,
