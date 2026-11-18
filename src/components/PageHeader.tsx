@@ -1,6 +1,7 @@
 import { ArrowLeft } from "lucide-react";
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+import { useReadOnly } from "./AreaRoute";
 
 /**
  * The standard top of every page: an optional square "voltar" button stuck
@@ -12,6 +13,9 @@ import { useNavigate } from "react-router-dom";
  * - `backTo`: always goes to that route (a fixed parent, e.g. "/import").
  * - `backFallback`: goes back one history entry when there is one, else to
  *   this route — for pages reachable from more than one parent.
+ *
+ * In an area the profile can only view (see `AreaRoute`), a "Somente
+ * visualização" tag shows next to the title.
  *
  * Actions convention: the page's main action is a regular (filled) button;
  * secondary actions are `className="outline"`; the least important ones
@@ -36,6 +40,7 @@ export default function PageHeader({
   backLabel?: string;
 }) {
   const navigate = useNavigate();
+  const readOnly = useReadOnly();
   const hasBack = backTo !== undefined || backFallback !== undefined;
 
   function goBack() {
@@ -58,6 +63,11 @@ export default function PageHeader({
             </button>
           )}
           <h2>{title}</h2>
+          {readOnly && (
+            <span className="page-head-readonly" title="Seu perfil permite ver esta área, mas não alterar">
+              Somente visualização
+            </span>
+          )}
         </div>
         {subtitle && <p className="page-head-subtitle">{subtitle}</p>}
         {tags && tags.length > 0 && (

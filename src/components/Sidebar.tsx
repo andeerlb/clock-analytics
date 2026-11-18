@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import SidebarAccount from "./SidebarAccount";
+import { useAccess } from "../contexts/AuthContext";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
+import type { Area } from "../lib/access";
 
 function MenuIcon({ path, size = 17, className }: { path: string; size?: number; className?: string }) {
   return (
@@ -24,25 +26,29 @@ const ICONS = {
   analytics: "M3 3v18h18M8 17v-5M13 17V7M18 17v-8",
   remote: "M21 12a9 9 0 0 0-15-6.7L3 8M3 3v5h5M3 12a9 9 0 0 0 15 6.7L21 16M21 21v-5h-5",
   settings: "M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4",
+  users: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM19 8v6M22 11h-6",
 };
+
+/** "Importar" opens the chooser, useful to anyone who can import something. */
+const IMPORT_AREAS: Area[] = ["espelhos", "pagamentos", "cadastros"];
 
 const NAV_GROUPS = [
   {
     title: "Operação",
     items: [
-      { to: "/import", label: "Importar", icon: ICONS.import, end: false },
-      { to: "/", label: "Cartão Ponto", icon: ICONS.timesheet, end: true },
-      { to: "/payments", label: "Pagamentos", icon: ICONS.payments, end: false },
-      { to: "/analytics", label: "Análises", icon: ICONS.analytics, end: false },
+      { to: "/import", label: "Importar", icon: ICONS.import, end: false, area: null },
+      { to: "/", label: "Cartão Ponto", icon: ICONS.timesheet, end: true, area: "espelhos" as Area },
+      { to: "/payments", label: "Pagamentos", icon: ICONS.payments, end: false, area: "pagamentos" as Area },
+      { to: "/analytics", label: "Análises", icon: ICONS.analytics, end: false, area: "analises" as Area },
     ],
   },
   {
     title: "Cadastros",
     items: [
-      { to: "/companies", label: "Empresas", icon: ICONS.companies, end: false },
-      { to: "/clients", label: "Clientes", icon: ICONS.clients, end: false },
-      { to: "/employees", label: "Colaboradores", icon: ICONS.employees, end: false },
-      { to: "/roles", label: "Funções", icon: ICONS.roles, end: false },
+      { to: "/companies", label: "Empresas", icon: ICONS.companies, end: false, area: "cadastros" as Area },
+      { to: "/clients", label: "Clientes", icon: ICONS.clients, end: false, area: "cadastros" as Area },
+      { to: "/employees", label: "Colaboradores", icon: ICONS.employees, end: false, area: "cadastros" as Area },
+      { to: "/roles", label: "Funções", icon: ICONS.roles, end: false, area: "cadastros" as Area },
     ],
   },
 ];
@@ -79,6 +85,8 @@ const REMOTE_STATUS_META: Record<RemoteStatus, { label: string; color: string; p
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(readSavedCollapsed);
   const { remoteUpdates, trackedFiles, reimportConfigs, checking, tickError } = useRemoteFileUpdates();
+  const { canView, canEdit, canManageUsers } = useAccess();
+  const visible = (to: string, area: Area | null) => (area ? canView(area) : to === "/import" && IMPORT_AREAS.some(canEdit));
 
   // No single countdown makes sense anymore — a URL can have several
   // reimport configs, each on its own schedule (see the Verificação
@@ -129,7 +137,9 @@ export default function Sidebar() {
       </div>
 
       <div className="app-nav-links">
-        {NAV_GROUPS.map((group) => (
+        {NAV_GROUPS.map((group) => ({ ...group, items: group.items.filter((item) => visible(item.to, item.area)) }))
+          .filter((group) => group.items.length > 0)
+          .map((group) => (
           <div key={group.title} className="app-nav-group">
             <span className="app-nav-group-title app-nav-label">{group.title}</span>
             <span className="app-nav-group-rule" aria-hidden="true" />
@@ -144,6 +154,7 @@ export default function Sidebar() {
       </div>
 
       <div className="app-nav-footer">
+        {canView("verificacao") && (
         <NavLink to="/remote-updates/imports" className={navLinkClass} title={collapsed ? `Verificação automática: ${statusLabel}` : statusLabel} aria-label="Verificação automática">
           <span style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
             <MenuIcon path={ICONS.remote} className={checking ? "spin" : undefined} />
@@ -164,11 +175,21 @@ export default function Sidebar() {
           </span>
           <span className="app-nav-label">Verificação automática</span>
         </NavLink>
+        )}
 
-        <NavLink to="/settings" className={navLinkClass} title={collapsed ? "Configurações" : undefined} aria-label="Configurações">
-          <MenuIcon path={ICONS.settings} />
-          <span className="app-nav-label">Configurações</span>
-        </NavLink>
+        {canManageUsers && (
+          <NavLink to="/users" className={navLinkClass} title={collapsed ? "Usuários e perfis" : undefined} aria-label="Usuários e perfis">
+            <MenuIcon path={ICONS.users} />
+            <span className="app-nav-label">Usuários e perfis</span>
+          </NavLink>
+        )}
+
+        {canView("configuracoes") && (
+          <NavLink to="/settings" className={navLinkClass} title={collapsed ? "Configurações" : undefined} aria-label="Configurações">
+            <MenuIcon path={ICONS.settings} />
+            <span className="app-nav-label">Configurações</span>
+          </NavLink>
+        )}
 
         <SidebarAccount collapsed={collapsed} />
       </div>

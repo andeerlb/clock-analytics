@@ -2,12 +2,16 @@ import { ArrowRight, Banknote, FileText, RefreshCw, Users, type LucideIcon } fro
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
+import { useAccess } from "../contexts/AuthContext";
+import type { Area } from "../lib/access";
 import { listAllLatestShiftDiffs, listImportFiles } from "../lib/db";
 import { parseSqliteDateTime, safeDecodeFileName } from "../lib/format";
 import type { ImportFileRow, ImportStatus, ImportType } from "../lib/types";
 
 interface Choice {
   to: string;
+  /** Importing needs "Editar" here. */
+  area: Area;
   importType: ImportType;
   title: string;
   description: string;
@@ -20,6 +24,7 @@ interface Choice {
 const CHOICES: Choice[] = [
   {
     to: "/import/timesheet",
+    area: "espelhos",
     importType: "timesheet",
     title: "Espelhos de ponto",
     description: "Extraia as marcações dos espelhos gerados pelo seu provedor de ponto.",
@@ -29,6 +34,7 @@ const CHOICES: Choice[] = [
   },
   {
     to: "/import/payments",
+    area: "pagamentos",
     importType: "payment",
     title: "Pagamentos",
     description: "Aplique um template à planilha e associe cada linha a um colaborador.",
@@ -38,6 +44,7 @@ const CHOICES: Choice[] = [
   },
   {
     to: "/import/employees",
+    area: "cadastros",
     importType: "employee",
     title: "Colaboradores",
     description: "Cadastre ou atualize colaboradores a partir de uma planilha.",
@@ -70,10 +77,13 @@ export default function ImportChooserPage() {
   const navigate = useNavigate();
   const [lastByType, setLastByType] = useState<Partial<Record<ImportType, ImportFileRow | null>>>({});
   const [pendingCount, setPendingCount] = useState(0);
+  const { canEdit, canView } = useAccess();
+  const choices = CHOICES.filter((choice) => canEdit(choice.area));
+  const seesPending = canView("verificacao") || canView("pagamentos") || canView("analises");
 
   useEffect(() => {
     let cancelled = false;
-    for (const choice of CHOICES) {
+    for (const choice of CHOICES.filter((c) => canEdit(c.area))) {
       listImportFiles({ importType: choice.importType, search: "", page: 0, pageSize: 1 })
         .then(({ rows }) => {
           if (!cancelled) setLastByType((prev) => ({ ...prev, [choice.importType]: rows[0] ?? null }));
@@ -81,7 +91,7 @@ export default function ImportChooserPage() {
         .catch(() => {});
     }
     // Same count as the floating "atualizações pendentes" card.
-    listAllLatestShiftDiffs()
+    if (seesPending) listAllLatestShiftDiffs()
       .then((rows) => {
         if (!cancelled) setPendingCount(rows.filter((r) => r.dismissedAt === null).length);
       })
@@ -96,7 +106,8 @@ export default function ImportChooserPage() {
       <PageHeader title="Importar dados" subtitle="Escolha o que você quer trazer para o PontoScan." />
 
       <div className="choice-grid">
-        {CHOICES.map((choice) => {
+        {choices.length === 0 && <p className="muted">Seu perfil não permite importar nada. Peça a um admin para mudar seu perfil.</p>}
+        {choices.map((choice) => {
           const Icon = choice.icon;
           const last = lastByType[choice.importType];
           return (

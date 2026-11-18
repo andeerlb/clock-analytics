@@ -1,6 +1,7 @@
 import { ArrowRight, ChevronDown, Loader2, Lock, MessageCircle, PanelTop, Plus, SquarePen, ArrowUp, X } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useAccess } from "../contexts/AuthContext";
 import { applyPaymentsFiltersSnapshot, useLibraryFilters, usePaymentsFilters, type LibraryFilters, type PaymentsFilters } from "../contexts/FiltersContext";
 import { aiAsk, aiStatus, type AiAmbiguity, type AiAnswer, type AiScreenLink } from "../lib/api";
 import { formatDateSlash } from "../lib/format";
@@ -236,7 +237,8 @@ function toIds(ids: number[]): Set<string> {
   return new Set(ids.map(String));
 }
 
-const AiAssistantContext = createContext<{ askAboutShift: (target: AiShiftTarget) => void } | null>(null);
+/** `canUseAi`: the profile may use the assistant; "ask about this shift" buttons hide otherwise. */
+const AiAssistantContext = createContext<{ askAboutShift: (target: AiShiftTarget) => void; canUseAi: boolean } | null>(null);
 
 export function useAiAssistant() {
   const value = useContext(AiAssistantContext);
@@ -252,6 +254,7 @@ export function useAiAssistant() {
  * must never be interpreted as HTML.
  */
 export function AiAssistantProvider({ children }: { children: ReactNode }) {
+  const { canUseAi } = useAccess();
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const paymentsFilters = usePaymentsFilters();
@@ -402,11 +405,12 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
   }
 
   const askAboutShift = useCallback((target: AiShiftTarget) => {
+    if (!canUseAi) return;
     setShift(target);
     setDraft("Por que existe mais de um turno para este colaborador neste dia?");
     setOpen(true);
   }, []);
-  const contextValue = useMemo(() => ({ askAboutShift }), [askAboutShift]);
+  const contextValue = useMemo(() => ({ askAboutShift, canUseAi }), [askAboutShift, canUseAi]);
 
   async function submit(question: string, target: AiShiftTarget | null, screenForAi: string | null, choices: Record<string, number | null>) {
     const run = ++currentRun.current;
@@ -710,7 +714,7 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
           </div>
         )}
       </div>
-      {!open && (
+      {!open && canUseAi && (
         <button
           type="button"
           className="ai-launcher"

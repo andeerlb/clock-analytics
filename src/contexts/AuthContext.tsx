@@ -1,11 +1,14 @@
 import { onAuthStateChanged, signInWithPopup, signOut as firebaseSignOut, type User } from "firebase/auth";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { auth, AUTH_MODE, googleProvider } from "../lib/firebase";
-import { api, ApiError, setAuthFailureHandler, setAuthTokenProvider } from "../lib/http";
+import { canEdit, canView, type Access, type Area } from "../lib/access";
+import { api, ApiError, setAuthFailureHandler, setAuthTokenProvider, setPermissionDeniedHandler } from "../lib/http";
 
 export interface SignedInUser {
   email: string;
   name: string;
+  /** Profile and permissions, from the server. */
+  access: Access;
 }
 
 /** Why the person is looking at the sign-in screen, if it's not a plain first visit. */
@@ -71,8 +74,9 @@ function nameFromEmail(email: string): string {
     .join(" ");
 }
 
-function toSignedInUser(email: string, user: User | null): SignedInUser {
-  return { email, name: user?.displayName?.trim() || nameFromEmail(email) || email };
+function toSignedInUser(access: Access, user: User | null): SignedInUser {
+  const email = access.email;
+  return { email, name: user?.displayName?.trim() || nameFromEmail(email) || email, access };
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -88,12 +92,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Survives the sign-out that follows a denied login, so the screen can still show which e-mail was refused.
   const pendingNotice = useRef<SignInNotice | null>(null);
 
-  /** Asks the server whether this login may use the system (token valid + e-mail on the allowlist). */
+  /** Asks the server whether this login may use the system (token valid + e-mail registered) and what it may do. */
   const verify = useCallback(async (user: User | null) => {
     try {
-      const me = await api.get<{ email: string }>("/me");
+      const me = await api.get<Access>("/me");
       pendingNotice.current = null;
-      setState({ status: "ready", user: toSignedInUser(me.email, user), expired: false, signingIn: false });
+      setState({ status: "ready", user: toSignedInUser(me, user), expired: false, signingIn: false });
     } catch (error) {
       if (error instanceof ApiError && error.status === 403 && user?.email) {
         pendingNotice.current = { kind: "denied", email: user.email };
@@ -138,12 +142,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!current.expired) setState({ ...current, expired: true });
         return;
       }
-      // 403 mid-session: this e-mail was taken off the allowlist.
+      // 403 mid-session: this e-mail was removed from "Usuários e perfis".
       pendingNotice.current = { kind: "denied", email: current.user.email };
       if (auth) void firebaseSignOut(auth);
     });
     return () => setAuthFailureHandler(() => {});
   }, []);
+
+  /** Re-reads the profile: an admin may have changed it while this tab was open. */
+  const refreshAccess = useCallback(async () => {
+    const current = stateRef.current;
+    if (current.status !== "ready") return;
+    try {
+      const me = await api.get<Access>("/me");
+      const latest = stateRef.current;
+      if (latest.status === "ready") setState({ ...latest, user: { ...latest.user, access: me } });
+    } catch {
+      // A 401/403 here is already handled by the auth failure handler.
+    }
+  }, []);
+
+  useEffect(() => {
+    setPermissionDeniedHandler(() => void refreshAccess());
+    function onFocus() {
+      if (document.visibilityState === "visible") void refreshAccess();
+    }
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      setPermissionDeniedHandler(() => {});
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [refreshAccess]);
 
   const signIn = useCallback(() => {
     if (!auth) return;
@@ -169,4 +198,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(() => ({ state, signIn, signOut }), [state, signIn, signOut]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+/**
+ * What the signed-in person may do — for shaping screens (the server checks
+ * every request on its own). Only valid inside the signed-in app.
+ */
+export function useAccess() {
+  const { state } = useAuth();
+  if (state.status !== "ready") throw new Error("useAccess sem login");
+  const access = state.user.access;
+  return {
+    access,
+    canView: (area: Area) => canView(access, area),
+    canEdit: (area: Area) => canEdit(access, area),
+    canExport: access.isAdmin || access.permissions.export,
+    canUseAi: access.isAdmin || access.permissions.ai,
+    canManageUsers: access.isAdmin || access.permissions.users,
+  };
 }

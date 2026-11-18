@@ -1,6 +1,7 @@
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import "./App.css";
 import { AiAssistantProvider } from "./components/AiAssistant";
+import AreaRoute, { AccessDenied } from "./components/AreaRoute";
 import AuthGate from "./components/AuthGate";
 import PendingChangesTab from "./components/PendingChangesTab";
 import Sidebar from "./components/Sidebar";
@@ -30,50 +31,62 @@ import RemoteUpdatesPage from "./pages/RemoteUpdatesPage";
 import RoleFormPage from "./pages/RoleFormPage";
 import RolesPage from "./pages/RolesPage";
 import SettingsPage from "./pages/SettingsPage";
+import UsersPage from "./pages/UsersPage";
+import { useAccess } from "./contexts/AuthContext";
 import AnalyticsPage from "./pages/AnalyticsPage";
 
+/** "Usuários e perfis": only for profiles that manage users. */
+function UsersRoute() {
+  const { canManageUsers } = useAccess();
+  return canManageUsers ? <UsersPage /> : <AccessDenied title="Você não tem acesso a Usuários e perfis" />;
+}
+
 function AppShell() {
+  const { canView } = useAccess();
+  // The "atualizações pendentes" card reads the automatic check's results.
+  const followsRemoteChecks = canView("verificacao") || canView("pagamentos") || canView("analises");
   return (
     <div className="app-shell">
       <Sidebar />
       <main className="app-content">
         <Routes>
-          <Route path="/" element={<LibraryPage />} />
-          <Route path="/companies" element={<CompaniesPage />} />
-          <Route path="/companies/new" element={<CompanyFormPage />} />
-          <Route path="/companies/:id" element={<CompanyFormPage />} />
-          <Route path="/clients" element={<ClientsPage />} />
-          <Route path="/clients/new" element={<ClientFormPage />} />
-          <Route path="/clients/:id" element={<ClientFormPage />} />
-          <Route path="/employees" element={<EmployeesPage />} />
-          <Route path="/employees/new" element={<EmployeeFormPage />} />
-          <Route path="/employees/:id" element={<EmployeeFormPage />} />
-          <Route path="/roles" element={<RolesPage />} />
-          <Route path="/roles/new" element={<RoleFormPage />} />
-          <Route path="/roles/:id" element={<RoleFormPage />} />
+          <Route path="/" element={<AreaRoute area="espelhos"><LibraryPage /></AreaRoute>} />
+          <Route path="/companies" element={<AreaRoute area="cadastros"><CompaniesPage /></AreaRoute>} />
+          <Route path="/companies/new" element={<AreaRoute area="cadastros" needEdit><CompanyFormPage /></AreaRoute>} />
+          <Route path="/companies/:id" element={<AreaRoute area="cadastros"><CompanyFormPage /></AreaRoute>} />
+          <Route path="/clients" element={<AreaRoute area="cadastros"><ClientsPage /></AreaRoute>} />
+          <Route path="/clients/new" element={<AreaRoute area="cadastros" needEdit><ClientFormPage /></AreaRoute>} />
+          <Route path="/clients/:id" element={<AreaRoute area="cadastros"><ClientFormPage /></AreaRoute>} />
+          <Route path="/employees" element={<AreaRoute area="cadastros"><EmployeesPage /></AreaRoute>} />
+          <Route path="/employees/new" element={<AreaRoute area="cadastros" needEdit><EmployeeFormPage /></AreaRoute>} />
+          <Route path="/employees/:id" element={<AreaRoute area="cadastros"><EmployeeFormPage /></AreaRoute>} />
+          <Route path="/roles" element={<AreaRoute area="cadastros"><RolesPage /></AreaRoute>} />
+          <Route path="/roles/new" element={<AreaRoute area="cadastros" needEdit><RoleFormPage /></AreaRoute>} />
+          <Route path="/roles/:id" element={<AreaRoute area="cadastros"><RoleFormPage /></AreaRoute>} />
           <Route path="/import" element={<ImportChooserPage />} />
-          <Route path="/import/timesheet" element={<ImportTimesheetPage />} />
-          <Route path="/import/payments" element={<ImportPaymentsPage />} />
-          <Route path="/import/payments/templates" element={<PaymentTemplatesPage />} />
-          <Route path="/remote-updates/imports" element={<RemoteUpdatesPage />} />
-          <Route path="/import/employees" element={<ImportEmployeesPage />} />
-          <Route path="/import/employees/templates" element={<EmployeeTemplatesPage />} />
-          <Route path="/employee/:importId" element={<EmployeeDetailPage />} />
-          <Route path="/payments" element={<PaymentsPage />} />
-          <Route path="/analytics" element={<AnalyticsPage />} />
-          <Route path="/payments/export-templates" element={<PaymentExportTemplatesPage />} />
-          <Route path="/payments/export-templates/new" element={<PaymentExportTemplateEditorPage />} />
-          <Route path="/payments/export-templates/:id" element={<PaymentExportTemplateEditorPage />} />
+          <Route path="/users" element={<UsersRoute />} />
+          <Route path="/import/timesheet" element={<AreaRoute area="espelhos" needEdit><ImportTimesheetPage /></AreaRoute>} />
+          <Route path="/import/payments" element={<AreaRoute area="pagamentos" needEdit><ImportPaymentsPage /></AreaRoute>} />
+          <Route path="/import/payments/templates" element={<AreaRoute area="pagamentos"><PaymentTemplatesPage /></AreaRoute>} />
+          <Route path="/remote-updates/imports" element={<AreaRoute area="verificacao"><RemoteUpdatesPage /></AreaRoute>} />
+          <Route path="/import/employees" element={<AreaRoute area="cadastros" needEdit><ImportEmployeesPage /></AreaRoute>} />
+          <Route path="/import/employees/templates" element={<AreaRoute area="cadastros"><EmployeeTemplatesPage /></AreaRoute>} />
+          <Route path="/employee/:importId" element={<AreaRoute area="espelhos"><EmployeeDetailPage /></AreaRoute>} />
+          <Route path="/payments" element={<AreaRoute area="pagamentos"><PaymentsPage /></AreaRoute>} />
+          <Route path="/analytics" element={<AreaRoute area="analises"><AnalyticsPage /></AreaRoute>} />
+          <Route path="/payments/export-templates" element={<AreaRoute area="pagamentos"><PaymentExportTemplatesPage /></AreaRoute>} />
+          <Route path="/payments/export-templates/new" element={<AreaRoute area="pagamentos" needEdit><PaymentExportTemplateEditorPage /></AreaRoute>} />
+          <Route path="/payments/export-templates/:id" element={<AreaRoute area="pagamentos"><PaymentExportTemplateEditorPage /></AreaRoute>} />
           {/* Both template kinds are managed on the single `/payments/export-templates`
               screen now — this old URL just redirects there. The PDF editor keeps
               its own `pdf-templates/new|:id` paths below. */}
           <Route path="/payments/pdf-templates" element={<Navigate to="/payments/export-templates" replace />} />
-          <Route path="/payments/pdf-templates/new" element={<PaymentPdfTemplateEditorPage />} />
-          <Route path="/payments/pdf-templates/:id" element={<PaymentPdfTemplateEditorPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/payments/pdf-templates/new" element={<AreaRoute area="pagamentos" needEdit><PaymentPdfTemplateEditorPage /></AreaRoute>} />
+          <Route path="/payments/pdf-templates/:id" element={<AreaRoute area="pagamentos"><PaymentPdfTemplateEditorPage /></AreaRoute>} />
+          <Route path="/settings" element={<AreaRoute area="configuracoes"><SettingsPage /></AreaRoute>} />
         </Routes>
       </main>
-      <PendingChangesTab />
+      {followsRemoteChecks && <PendingChangesTab />}
     </div>
   );
 }
@@ -87,7 +100,7 @@ function App() {
             <Routes>
               {/* "Conferência" opens in its own browser tab (see
                   `openReconciliationWindow`), with none of the app shell. */}
-              <Route path="/payments/reconciliation" element={<PaymentReconciliationWindowPage />} />
+              <Route path="/payments/reconciliation" element={<AreaRoute area="pagamentos"><PaymentReconciliationWindowPage /></AreaRoute>} />
               <Route
                 path="*"
                 element={

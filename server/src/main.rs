@@ -1,4 +1,5 @@
 mod ai;
+mod access;
 mod auth;
 mod domain;
 mod config;
@@ -30,11 +31,24 @@ pub struct AppState {
     pub data_dir: Arc<std::path::PathBuf>,
     /// Verificação automática: what is being checked right now.
     pub remote_checks: Arc<remote_checks::Runtime>,
+    /// `PONTOSCAN_ALLOWED_EMAILS` (or the dev user): always Admin, listed as
+    /// fixed on "Usuários e perfis".
+    pub initial_admins: Arc<Vec<String>>,
 }
 
 impl AppState {
     pub fn new(db: SqlitePool, data_dir: std::path::PathBuf, timezone: chrono_tz::Tz) -> Self {
-        AppState { db, data_dir: Arc::new(data_dir), remote_checks: Arc::new(remote_checks::Runtime::new(timezone)) }
+        AppState {
+            db,
+            data_dir: Arc::new(data_dir),
+            remote_checks: Arc::new(remote_checks::Runtime::new(timezone)),
+            initial_admins: Arc::new(Vec::new()),
+        }
+    }
+
+    pub fn with_initial_admins(mut self, emails: Vec<String>) -> Self {
+        self.initial_admins = Arc::new(emails);
+        self
     }
 
     #[cfg(test)]
@@ -46,7 +60,10 @@ impl AppState {
 }
 
 pub fn app(config: &Config, state: AppState, auth: Arc<Authenticator>) -> Router {
+    let state = state.with_initial_admins(config.auth.initial_admins());
+    // Layers run bottom-up: who is calling (auth), then what they may do (access).
     let api = routes::protected()
+        .route_layer(middleware::from_fn_with_state(state.clone(), access::authorize))
         .route_layer(middleware::from_fn_with_state(auth, auth::require_auth))
         .route("/health", get(routes::health))
         .route("/version", get(routes::version))

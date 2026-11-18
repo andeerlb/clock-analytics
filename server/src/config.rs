@@ -79,6 +79,16 @@ impl Config {
 }
 
 impl AuthConfig {
+    /// Always Admin, whatever "Usuários e perfis" says, so nobody gets locked out.
+    pub fn initial_admins(&self) -> Vec<String> {
+        let mut emails: Vec<String> = match self {
+            AuthConfig::Firebase { allowed_emails, .. } => allowed_emails.iter().cloned().collect(),
+            AuthConfig::DevBypass { email } => vec![email.clone()],
+        };
+        emails.sort();
+        emails
+    }
+
     fn from_env() -> Result<Self, ConfigError> {
         if let Some(email) = var("PONTOSCAN_DEV_USER_EMAIL") {
             if cfg!(debug_assertions) {

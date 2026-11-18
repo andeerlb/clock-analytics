@@ -12,6 +12,7 @@ import {
   type ReimportConfigInput,
   type TrackedPaymentUrl,
 } from "../lib/db";
+import { useAccess } from "./AuthContext";
 import { rpc } from "../lib/http";
 import { resolveReimportConfigLabel, resolveReimportPeriod } from "../lib/format";
 
@@ -130,6 +131,10 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
   const [serverChecking, setServerChecking] = useState<Set<number>>(new Set());
   const [forcing, setForcing] = useState<Set<number>>(new Set());
   const busyRef = useRef(false);
+  // Its status shows on Verificação, Pagamentos and Análises: a profile with
+  // none of them doesn't follow it (the server would refuse every poll).
+  const { canView } = useAccess();
+  const follows = canView("verificacao") || canView("pagamentos") || canView("analises");
 
   const refreshTrackedState = useCallback(async () => {
     try {
@@ -149,6 +154,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
   }, []);
 
   useEffect(() => {
+    if (!follows) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     async function poll() {
@@ -165,7 +171,7 @@ export function RemoteFileUpdatesProvider({ children }: { children: ReactNode })
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [refreshTrackedState]);
+  }, [refreshTrackedState, follows]);
 
   /** Runs a server-side check and waits for it, showing `ids` as in progress meanwhile. */
   const runForced = useCallback(
