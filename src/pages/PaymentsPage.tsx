@@ -551,19 +551,21 @@ export default function PaymentsPage() {
       if (grouped) {
         const { rows, total } = await listPaymentShiftSummaries(query);
         if (ticket !== tableRequest.current) return;
-        setSummaries((prev) => {
-          const seen = new Set(prev.map((r) => groupKey(r.employeeId, r.competencia)));
-          return [...prev, ...rows.filter((r) => !seen.has(groupKey(r.employeeId, r.competencia)))];
-        });
-        setSummariesTotal(total);
+        const seen = new Set(summariesRef.current.map((r) => groupKey(r.employeeId, r.competencia)));
+        const fresh = rows.filter((r) => !seen.has(groupKey(r.employeeId, r.competencia)));
+        setSummaries((prev) => [...prev, ...fresh]);
+        // A page with nothing new would ask for the same page again forever
+        // (the "load more" effect re-fires while the sentinel is in view):
+        // stop at what's loaded.
+        setSummariesTotal(fresh.length === 0 ? summariesRef.current.length : total);
       } else {
         const { rows, total } = await listPaymentShiftsFlat(query);
         if (ticket !== tableRequest.current) return;
-        setFlatRows((prev) => {
-          const seen = new Set(prev.map((r) => r.id));
-          return [...prev, ...rows.filter((r) => !seen.has(r.id))];
-        });
-        setFlatTotal(total);
+        const seen = new Set(flatRowsRef.current.map((r) => r.id));
+        const fresh = rows.filter((r) => !seen.has(r.id));
+        setFlatRows((prev) => [...prev, ...fresh]);
+        // Same guard as above: no new rows means stop, not ask again.
+        setFlatTotal(fresh.length === 0 ? flatRowsRef.current.length : total);
         ensureRulesLoaded(rows.map((r) => ({ clientId: r.clientId, companyId: r.companyId })));
         refreshShiftDiffs(rows.map((r) => r.id));
       }
