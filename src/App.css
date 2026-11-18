@@ -7507,6 +7507,14 @@ button.settings-button:disabled {
   color: var(--danger);
 }
 
+.settings-text-ok {
+  color: var(--success);
+}
+
+.settings-text-warn {
+  color: var(--warning);
+}
+
 .settings-text-strong {
   color: var(--text);
 }

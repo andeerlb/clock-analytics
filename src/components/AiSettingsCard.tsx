@@ -1,49 +1,52 @@
 import { KeyRound, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
-import { aiClearApiKey, aiSetApiKey, aiStatus } from "../lib/api";
+import { aiClearApiKey, aiSetApiKey, aiStatus, type AiStatus } from "../lib/api";
 import ConfirmModal from "./ConfirmModal";
 
-export type AiConnection = "claude-code" | "api-key" | "none";
+export type AiConnection = "api-key" | "none";
+
+/** "dd/mm/aaaa às hh:mm" in the viewer's time zone. */
+function formatSavedAt(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const day = date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+  const time = date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  return `${day} às ${time}`;
+}
 
 /**
- * Configurações → "Assistente com IA": how the assistant is connected and
- * the optional Anthropic API key. The saved key is never read back into
- * the UI. Reports how it's connected so the section list can flag it.
+ * Configurações → "Assistente com IA": the Anthropic API key the whole team
+ * shares. Any signed-in user can save or replace it; the server keeps it and
+ * never sends it back, only who saved it, when and its last 4 characters.
+ * Reports whether there is a key so the section list can flag it.
  */
 export default function AiSettingsCard({ onConnectionChange }: { onConnectionChange?: (connection: AiConnection) => void }) {
-  const [claudeCode, setClaudeCode] = useState(false);
-  const [hasKey, setHasKey] = useState(false);
-  const [loaded, setLoaded] = useState(false);
+  const [status, setStatus] = useState<AiStatus | null>(null);
   const [apiKey, setApiKey] = useState("");
-  const [addingKey, setAddingKey] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     aiStatus()
-      .then((status) => {
-        setClaudeCode(status.claudeCode);
-        setHasKey(status.apiKey);
-      })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoaded(true));
+      .then(setStatus)
+      .catch((e) => setError(String(e)));
   }, []);
 
-  const connection: AiConnection = claudeCode ? "claude-code" : hasKey ? "api-key" : "none";
+  const hasKey = status?.apiKey ?? false;
+  const connection: AiConnection = hasKey ? "api-key" : "none";
   useEffect(() => {
-    if (loaded) onConnectionChange?.(connection);
+    if (status) onConnectionChange?.(connection);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connection, loaded]);
+  }, [connection, status]);
 
-  async function run(action: () => Promise<void>, keyPresent: boolean) {
+  async function run(action: () => Promise<void>) {
     setBusy(true);
     setError(null);
     try {
       await action();
-      setHasKey(keyPresent);
+      setStatus(await aiStatus());
       setApiKey("");
-      setAddingKey(false);
       setConfirmRemove(false);
     } catch (e) {
       setError(String(e));
@@ -52,17 +55,9 @@ export default function AiSettingsCard({ onConnectionChange }: { onConnectionCha
     }
   }
 
-  let title = "Não conectado";
-  let detail = "Entre no Claude Code deste computador ou adicione uma chave de API da Anthropic abaixo.";
-  let pill = <span className="settings-pill settings-pill-warn">Desligado</span>;
-  if (claudeCode) {
-    title = "Conectado pelo Claude Code";
-    detail = "Usa o login do Claude Code deste computador. O uso entra no limite do seu plano; em planos pessoais, confira a opção “Help improve Claude” em claude.ai.";
-    pill = <span className="settings-pill settings-pill-ok">Pronto</span>;
-  } else if (hasKey) {
-    title = "Conectado pela chave de API";
-    detail = "O uso é cobrado na sua conta da Anthropic.";
-    pill = <span className="settings-pill settings-pill-ok">Pronto</span>;
+  function save() {
+    if (!apiKey.trim() || busy) return;
+    void run(() => aiSetApiKey(apiKey));
   }
 
   return (
@@ -73,10 +68,14 @@ export default function AiSettingsCard({ onConnectionChange }: { onConnectionCha
             <Sparkles size={16} />
           </span>
           <div className="settings-item-text">
-            <div className="settings-item-title">{loaded ? title : "Verificando..."}</div>
-            {loaded && <div className="settings-item-desc">{detail}</div>}
+            <div className="settings-item-title">{status ? (hasKey ? "Conectado pela chave de API" : "Não conectado") : "Verificando..."}</div>
+            {status && (
+              <div className="settings-item-desc">
+                {hasKey ? "O uso é cobrado na conta da Anthropic dona da chave." : "Cadastre uma chave de API da Anthropic abaixo para ligar o assistente."}
+              </div>
+            )}
           </div>
-          {loaded && pill}
+          {status && (hasKey ? <span className="settings-pill settings-pill-ok">Pronto</span> : <span className="settings-pill settings-pill-warn">Desligado</span>)}
         </div>
 
         <div className="settings-item">
@@ -84,7 +83,7 @@ export default function AiSettingsCard({ onConnectionChange }: { onConnectionCha
             <div className="settings-item-title">O que é enviado à Anthropic</div>
             <div className="settings-item-desc">
               Locais, funções, datas, valores e observações, com nomes e documentos reconhecidos ocultados. Nome, CPF, PIX, matrícula, clientes, empresas e arquivos
-              ficam no computador. O assistente só consulta; não altera nada.
+              ficam no servidor. O assistente só consulta; não altera nada.
             </div>
           </div>
         </div>
@@ -95,40 +94,48 @@ export default function AiSettingsCard({ onConnectionChange }: { onConnectionCha
           </span>
           <div className="settings-item-text">
             <div className="settings-item-title">Chave de API da Anthropic</div>
-            <div className="settings-item-desc">
-              {hasKey ? "Salva no cofre de senhas do sistema. Ela não é mostrada de novo." : claudeCode ? "Opcional: o Claude Code já está conectado." : "Use se não tiver o Claude Code. O uso é cobrado na sua conta."}
-            </div>
+            {status && (
+              <div className={`settings-item-desc ${hasKey ? "settings-text-ok" : "settings-text-warn"}`}>
+                {hasKey ? (
+                  <>
+                    ✓ Chave cadastrada por {status.savedBy ?? "alguém da equipe"}
+                    {status.savedAt && ` em ${formatSavedAt(status.savedAt)}`}
+                    {status.keyLast4 && ` (termina em …${status.keyLast4})`}
+                  </>
+                ) : (
+                  "O assistente está desligado: falta a chave da Anthropic."
+                )}
+              </div>
+            )}
           </div>
-          {hasKey ? (
+          {hasKey && (
             <button type="button" className="settings-button settings-button-danger" disabled={busy} onClick={() => setConfirmRemove(true)}>
               Remover chave
             </button>
-          ) : (
-            !addingKey && (
-              <button type="button" className="settings-button" onClick={() => setAddingKey(true)}>
-                Adicionar chave
-              </button>
-            )
           )}
-          {!hasKey && addingKey && (
-            <div className="settings-inline-form">
-              <input
-                type="password"
-                aria-label="Chave de API da Anthropic"
-                placeholder="sk-ant-..."
-                autoComplete="off"
-                autoFocus
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-              />
-              <button type="button" className="settings-button" onClick={() => setAddingKey(false)}>
-                Cancelar
-              </button>
-              <button type="button" className="settings-button settings-button-primary" disabled={busy || !apiKey.trim()} onClick={() => run(() => aiSetApiKey(apiKey), true)}>
-                {busy ? "Salvando..." : "Salvar chave"}
-              </button>
-            </div>
-          )}
+          <form
+            className="settings-inline-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              save();
+            }}
+          >
+            <input
+              type="password"
+              aria-label="Chave de API da Anthropic"
+              placeholder={hasKey ? "Colar uma chave nova (substitui a atual)" : "Colar a chave (sk-ant-...)"}
+              autoComplete="off"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+            />
+            <button type="submit" className="settings-button settings-button-primary" disabled={busy || !apiKey.trim()}>
+              {busy ? "Salvando..." : "Salvar chave"}
+            </button>
+          </form>
+          <div className="settings-item-desc" style={{ width: "100%" }}>
+            A chave vale para toda a equipe e fica guardada no servidor, fora do banco e dos backups. Depois de salva ela não aparece de novo, nem para quem cadastrou.
+            Os nomes de colaboradores, clientes e empresas continuam indo para a IA como códigos, como no desktop.
+          </div>
         </div>
       </div>
       {error && <div className="error-box settings-error">{error}</div>}
@@ -136,10 +143,10 @@ export default function AiSettingsCard({ onConnectionChange }: { onConnectionCha
       {confirmRemove && (
         <ConfirmModal
           title="Remover a chave de API?"
-          message={claudeCode ? "O assistente continua funcionando pelo Claude Code." : "Sem a chave, o assistente para de responder até você entrar no Claude Code ou adicionar outra."}
+          message="Sem a chave, o assistente para de responder para toda a equipe até alguém cadastrar outra."
           confirmLabel={busy ? "Removendo..." : "Remover chave"}
           confirmDisabled={busy}
-          onConfirm={() => run(aiClearApiKey, false)}
+          onConfirm={() => run(aiClearApiKey)}
           onCancel={() => setConfirmRemove(false)}
         />
       )}

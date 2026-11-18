@@ -1601,6 +1601,7 @@ dependencies = [
  "http-body-util",
  "infer",
  "jsonwebtoken",
+ "libsqlite3-sys",
  "regex",
  "reqwest",
  "serde",

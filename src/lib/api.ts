@@ -256,17 +256,30 @@ export function isReconciliationWindowOpen(): Promise<boolean> {
   return Promise.resolve(reconciliationTab !== null && !reconciliationTab.closed);
 }
 
-/** How the assistant can reach Claude. The installed Claude Code wins when both are present. */
-export function aiStatus(): Promise<{ claudeCode: boolean; apiKey: boolean }> {
-  return invoke("ai_status");
+/** The team's Anthropic key, as the server describes it. The key itself never comes back. */
+export interface AiStatus {
+  /** Whether a key is saved; without one the assistant is off. */
+  apiKey: boolean;
+  /** E-mail of whoever saved the current key. */
+  savedBy: string | null;
+  /** When it was saved (ISO 8601, UTC). */
+  savedAt: string | null;
+  /** Last 4 characters of the key, to tell keys apart. */
+  keyLast4: string | null;
 }
 
+/** Whether the assistant has a key (one for the whole team, kept on the server). */
+export function aiStatus(): Promise<AiStatus> {
+  return rpc("aiStatus");
+}
+
+/** Saves or replaces the team's key; the server records who saved it. */
 export function aiSetApiKey(apiKey: string): Promise<void> {
-  return invoke("ai_set_api_key", { apiKey });
+  return rpc("aiSetApiKey", { apiKey });
 }
 
 export function aiClearApiKey(): Promise<void> {
-  return invoke("ai_clear_api_key");
+  return rpc("aiClearApiKey");
 }
 
 export interface AiAskRequest {
@@ -286,7 +299,7 @@ export interface AiAmbiguity {
   candidates: { id: number; name: string }[];
 }
 
-/** A button under an answer that opens a screen, filtered or on one record. Already validated on the Rust side. */
+/** A button under an answer that opens a screen, filtered or on one record. Already validated on the server. */
 export interface AiScreenLink {
   label: string;
   screen: string;
@@ -315,7 +328,10 @@ export type AiAskOutcome =
   | { kind: "answer"; answer: AiAnswer; conversation: unknown[]; links: AiScreenLink[] }
   | { kind: "needsChoice"; ambiguities: AiAmbiguity[] };
 
-/** Read-only question to the assistant — see `ai_investigation.rs`. */
+/**
+ * Read-only question to the assistant — see `server/src/ai/investigation.rs`.
+ * Can take a few minutes; the answer comes back in one piece.
+ */
 export function aiAsk(request: AiAskRequest): Promise<AiAskOutcome> {
-  return invoke("ai_ask", { request });
+  return rpc("aiAsk", { request });
 }
