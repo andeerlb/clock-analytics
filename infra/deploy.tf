@@ -32,13 +32,17 @@ resource "google_project_service" "deploy_apis" {
   disable_on_destroy = false
 }
 
+# `project` is explicit on the pool and its provider: without it, moving to
+# another project kept the pool recorded in the state under the old one.
 resource "google_iam_workload_identity_pool" "github" {
+  project                   = var.project_id
   workload_identity_pool_id = "github"
   display_name              = "GitHub Actions"
   depends_on                = [google_project_service.deploy_apis]
 }
 
 resource "google_iam_workload_identity_pool_provider" "github" {
+  project                            = var.project_id
   workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
   workload_identity_pool_provider_id = "github-actions"
   display_name                       = "GitHub Actions OIDC"
