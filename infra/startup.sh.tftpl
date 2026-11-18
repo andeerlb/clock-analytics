@@ -1,0 +1,171 @@
+#!/bin/bash
+# PontoScan VM bootstrap — GCE runs this on every boot, so every step is
+# idempotent. Rendered by OpenTofu (infra/main.tf): values in dollar-brace
+# form below are filled in by templatefile(); plain $VARS are bash.
+#
+# After a `tofu apply` that changes it, rerun without rebooting with:
+#   sudo google_metadata_script_runner startup
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+LITESTREAM_VERSION=0.3.13
+DB_DIR=/var/lib/pontoscan
+DB_PATH=$DB_DIR/pontoscan.db
+
+# --- swap: 1 GB of RAM is tight; 1 GB of swap absorbs peaks (PDF imports) ---
+if [ ! -f /swapfile ]; then
+  fallocate -l 1G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+swapon -a
+
+# --- packages (installed once; the marker is written only if all succeed) ---
+if [ ! -f /var/lib/pontoscan-packages-installed ]; then
+  apt-get update
+  apt-get install -y poppler-utils sqlite3 curl gnupg debian-keyring debian-archive-keyring apt-transport-https
+
+  # Caddy, from its official repository: HTTPS with automatic Let's Encrypt.
+  curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o /etc/apt/sources.list.d/caddy-stable.list
+  apt-get update
+  apt-get install -y caddy
+
+  # Litestream: continuous SQLite backup to Cloud Storage.
+  curl -fsSL -o /tmp/litestream.deb "https://github.com/benbjohnson/litestream/releases/download/v$LITESTREAM_VERSION/litestream-v$LITESTREAM_VERSION-linux-amd64.deb"
+  dpkg -i /tmp/litestream.deb
+  rm -f /tmp/litestream.deb
+
+  touch /var/lib/pontoscan-packages-installed
+fi
+
+# --- user and folders ---
+id pontoscan >/dev/null 2>&1 || useradd --system --home-dir "$DB_DIR" --shell /usr/sbin/nologin pontoscan
+install -d -o pontoscan -g pontoscan -m 750 "$DB_DIR"
+install -d -m 755 /opt/pontoscan          # the deploy puts pontoscan-server here
+install -d -o root -g pontoscan -m 750 /etc/pontoscan
+
+# --- server configuration (rewritten every boot from the OpenTofu values) ---
+cat > /etc/pontoscan/server.env <<'EOF'
+PONTOSCAN_BIND=127.0.0.1:8787
+PONTOSCAN_DB_PATH=/var/lib/pontoscan/pontoscan.db
+FIREBASE_PROJECT_ID=${firebase_project_id}
+PONTOSCAN_ALLOWED_EMAILS=${allowed_emails}
+PONTOSCAN_CORS_ORIGINS=${cors_origins}
+RUST_LOG=info,tower_http=info,sqlx=warn
+EOF
+chown root:pontoscan /etc/pontoscan/server.env
+chmod 640 /etc/pontoscan/server.env
+
+# --- Litestream ---
+cat > /etc/litestream.yml <<'EOF'
+dbs:
+  - path: /var/lib/pontoscan/pontoscan.db
+    replicas:
+      - url: gcs://${backup_bucket}/pontoscan.db
+EOF
+chmod 644 /etc/litestream.yml
+
+# Runs as the same user as the server: if it ran as root, the -wal/-shm
+# files it touches could end up root-owned and lock the server out.
+install -d /etc/systemd/system/litestream.service.d
+cat > /etc/systemd/system/litestream.service.d/pontoscan.conf <<'EOF'
+[Unit]
+After=pontoscan.service
+
+[Service]
+User=pontoscan
+Group=pontoscan
+EOF
+
+# --- the server itself ---
+cat > /etc/systemd/system/pontoscan.service <<'EOF'
+[Unit]
+Description=PontoScan web server
+After=network-online.target
+Wants=network-online.target
+# Skipped (not failed) until the first deploy copies the binary in.
+ConditionPathExists=/opt/pontoscan/pontoscan-server
+
+[Service]
+User=pontoscan
+Group=pontoscan
+EnvironmentFile=/etc/pontoscan/server.env
+WorkingDirectory=/var/lib/pontoscan
+# A brand-new VM (or a recreated disk) starts from the latest backup.
+ExecStartPre=/usr/bin/litestream restore -config /etc/litestream.yml -if-db-not-exists -if-replica-exists /var/lib/pontoscan/pontoscan.db
+ExecStart=/opt/pontoscan/pontoscan-server
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/pontoscan
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# --- DuckDNS: keeps ${domain} pointing at this VM's current IP ---
+cat > /etc/pontoscan/duckdns.env <<'EOF'
+DUCKDNS_SUBDOMAIN=${duckdns_subdomain}
+DUCKDNS_TOKEN=${duckdns_token}
+EOF
+chown root:root /etc/pontoscan/duckdns.env
+chmod 600 /etc/pontoscan/duckdns.env
+
+cat > /usr/local/bin/duckdns-update <<'EOF'
+#!/bin/sh
+set -eu
+. /etc/pontoscan/duckdns.env
+# Empty ip= lets DuckDNS use the address the request came from.
+resp=$(curl -fsS --max-time 20 "https://www.duckdns.org/update?domains=$DUCKDNS_SUBDOMAIN&token=$DUCKDNS_TOKEN&ip=")
+[ "$resp" = "OK" ] || { echo "DuckDNS respondeu: $resp" >&2; exit 1; }
+EOF
+chmod 700 /usr/local/bin/duckdns-update
+
+cat > /etc/systemd/system/duckdns-update.service <<'EOF'
+[Unit]
+Description=Atualiza o IP no DuckDNS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/duckdns-update
+EOF
+
+cat > /etc/systemd/system/duckdns-update.timer <<'EOF'
+[Unit]
+Description=Atualiza o IP no DuckDNS a cada 5 minutos
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# --- Caddy: HTTPS in front of the server ---
+cat > /etc/caddy/Caddyfile <<'EOF'
+${domain} {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8787
+}
+EOF
+
+# --- start everything ---
+systemctl daemon-reload
+# Point the name at this IP before Caddy asks Let's Encrypt for a certificate.
+systemctl start duckdns-update.service || echo "aviso: primeira atualização do DuckDNS falhou; o timer tenta de novo" >&2
+systemctl enable --now duckdns-update.timer
+systemctl enable pontoscan.service litestream.service
+systemctl restart pontoscan.service || true   # no-op until the first deploy
+systemctl restart litestream.service || true
+systemctl enable caddy
+systemctl reload-or-restart caddy
+
+echo "pontoscan bootstrap ok"

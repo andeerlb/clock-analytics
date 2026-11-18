@@ -1,0 +1,6 @@
+# State and real variables contain the DuckDNS token — never commit them.
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+.terraform/
+crash.log
