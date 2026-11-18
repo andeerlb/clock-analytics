@@ -1,18 +1,12 @@
-import { isTauri } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { AlertTriangle } from "lucide-react";
-import { useEffect, useState } from "react";
-import { HashRouter, Navigate, Link, Route, Routes } from "react-router-dom";
+import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import "./App.css";
 import { AiAssistantProvider } from "./components/AiAssistant";
 import AuthGate from "./components/AuthGate";
 import PendingChangesTab from "./components/PendingChangesTab";
-import Modal from "./components/Modal";
 import Sidebar from "./components/Sidebar";
 import { AuthProvider } from "./contexts/AuthContext";
 import { FiltersProvider } from "./contexts/FiltersContext";
 import { RemoteFileUpdatesProvider } from "./contexts/RemoteFileUpdatesContext";
-import { checkPopplerStatus, clearDatabaseImportResult, takeDatabaseImportResult, type DatabaseImportResult } from "./lib/api";
 import ClientFormPage from "./pages/ClientFormPage";
 import ClientsPage from "./pages/ClientsPage";
 import CompaniesPage from "./pages/CompaniesPage";
@@ -38,52 +32,11 @@ import RolesPage from "./pages/RolesPage";
 import SettingsPage from "./pages/SettingsPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
 
-/**
- * "Conferência" on `PaymentsPage` (`open_reconciliation_window`) opens a
- * second OS window running this exact same app bundle — the only thing that
- * tells the two apart is the window's own label, set in Rust. That window
- * gets none of the normal app shell (`Sidebar`/routes/
- * `RemoteFileUpdatesProvider`): it's a focused single-purpose surface, not a
- * second copy of the whole app. `FiltersProvider` is the one thing it still
- * needs, since `PaymentReconciliationWindowPage` reads/writes
- * `usePaymentsFilters()`.
- */
-// In the browser (web version) there is no Tauri window to ask — and
-// `getCurrentWindow()` throws there, which would blank the whole app.
-const IS_RECONCILIATION_WINDOW = isTauri() && getCurrentWindow().label === "reconciliation";
-
-function AppShell({ popplerMissing, importResult, clearImportResult }: { popplerMissing: boolean; importResult: DatabaseImportResult | null; clearImportResult: () => void }) {
+function AppShell() {
   return (
     <div className="app-shell">
       <Sidebar />
       <main className="app-content">
-        {importResult && (
-          <Modal onClose={() => {}} closeOnEscape={false} closeOnBackdrop={false} width="36rem">
-            <h3 style={{ marginTop: 0 }}>{importResult.success ? "Restauração concluída" : "Restauração não realizada"}</h3>
-            <div className={importResult.success ? "success-box" : "error-box"}>{importResult.message}</div>
-            <div style={{ display: "grid", gap: "0.4rem", margin: "1rem 0" }}>
-              {importResult.events.map((event) => (
-                <div key={`${event.label}-${event.occurredAt}`} style={{ display: "flex", justifyContent: "space-between", gap: "1rem", padding: "0.5rem 0.65rem", background: "var(--sidebar-bg)", borderRadius: 6 }}>
-                  <span>{importResult.success ? "✓" : "•"} {event.label}</span><code>{event.occurredAt}</code>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: "flex", justifyContent: "flex-end" }}><button type="button" onClick={clearImportResult}>Concluir</button></div>
-          </Modal>
-        )}
-        {popplerMissing && (
-          <div className="error-box" style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-            <AlertTriangle size={18} style={{ flexShrink: 0 }} />
-            <span>
-              Não foi possível encontrar as ferramentas do Poppler (pdftotext, pdfinfo etc.),
-              necessárias para importar e exportar PDFs. Vá em{" "}
-              <Link to="/settings" style={{ color: "inherit", textDecoration: "underline" }}>
-                Configurações
-              </Link>{" "}
-              para ajustar a pasta onde elas estão instaladas.
-            </span>
-          </div>
-        )}
         <Routes>
           <Route path="/" element={<LibraryPage />} />
           <Route path="/companies" element={<CompaniesPage />} />
@@ -126,56 +79,21 @@ function AppShell({ popplerMissing, importResult, clearImportResult }: { poppler
 }
 
 function App() {
-  const [popplerMissing, setPopplerMissing] = useState(false);
-  const [importResult, setImportResult] = useState<DatabaseImportResult | null>(null);
-
-  useEffect(() => {
-    checkPopplerStatus()
-      .then((status) => setPopplerMissing(!status.allFound))
-      .catch(() => setPopplerMissing(false));
-  }, []);
-
-  useEffect(() => {
-    if (IS_RECONCILIATION_WINDOW) return;
-    takeDatabaseImportResult().then((result) => {
-      if (!result) return;
-      try {
-        const before = JSON.parse(localStorage.getItem("database-import-events") ?? "[]");
-        result.events = [...before, ...result.events];
-      } catch { /* malformed transient state is safe to ignore */ }
-      setImportResult(result);
-    }).catch(() => {});
-  }, []);
-
-  if (IS_RECONCILIATION_WINDOW) {
-    return (
-      <FiltersProvider>
-        <PaymentReconciliationWindowPage />
-      </FiltersProvider>
-    );
-  }
-
   return (
     <AuthProvider>
       <AuthGate>
         <HashRouter>
           <FiltersProvider>
             <Routes>
-              {/* Web: "Conferência" opens in its own browser tab (see
-                  `openReconciliationWindow`), with none of the app shell —
-                  the same focused surface the desktop's second window was. */}
+              {/* "Conferência" opens in its own browser tab (see
+                  `openReconciliationWindow`), with none of the app shell. */}
               <Route path="/payments/reconciliation" element={<PaymentReconciliationWindowPage />} />
               <Route
                 path="*"
                 element={
                   <RemoteFileUpdatesProvider>
                     <AiAssistantProvider>
-                      <AppShell popplerMissing={popplerMissing} importResult={importResult} clearImportResult={() => {
-                        clearDatabaseImportResult().then(() => {
-                          localStorage.removeItem("database-import-events");
-                          setImportResult(null);
-                        }).catch(() => {});
-                      }} />
+                      <AppShell />
                     </AiAssistantProvider>
                   </RemoteFileUpdatesProvider>
                 }

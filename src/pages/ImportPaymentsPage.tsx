@@ -31,7 +31,7 @@ import type { EmployeeFormNavState } from "./EmployeeFormPage";
 import type { RoleFormNavState } from "./RoleFormPage";
 import {
   applyPaymentTemplate,
-  deletePaths,
+  deleteImportedFiles,
   downloadPaymentFileFromUrl,
   hashPaymentFile,
   listDirFiles,
@@ -495,7 +495,7 @@ export default function ImportPaymentsPage() {
         next.delete(path);
         return next;
       });
-      deletePaths([path]).catch(() => {});
+      deleteImportedFiles([path]).catch(() => {});
     }
   }
 
@@ -1716,7 +1716,7 @@ export default function ImportPaymentsPage() {
       const urlDownloadedPaths = fileResults.map((r) => r.path).filter((p) => urlSourceByPath.has(p));
       if (urlDownloadedPaths.length > 0) {
         try {
-          await deletePaths(urlDownloadedPaths);
+          await deleteImportedFiles(urlDownloadedPaths);
         } catch {
           // Best-effort — the shifts are already saved either way, not
           // worth surfacing an error over a leftover temp file.

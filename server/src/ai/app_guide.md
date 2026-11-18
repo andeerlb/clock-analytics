@@ -1,6 +1,6 @@
 # Guia do PontoScan
 
-O PontoScan é um aplicativo de computador para importar espelhos de ponto (PDF) e planilhas de pagamento de turnos, conferir e registrar pagamentos. Tudo fica guardado localmente neste computador. Os textos entre aspas são os rótulos exatos da tela.
+O PontoScan é um aplicativo web, usado no navegador depois de entrar com uma conta autorizada, para importar espelhos de ponto (PDF) e planilhas de pagamento de turnos, conferir e registrar pagamentos. Os dados ficam guardados no servidor do PontoScan e são os mesmos para toda a equipe. Os textos entre aspas são os rótulos exatos da tela.
 
 ## Navegação
 
@@ -27,7 +27,7 @@ Caminho: "Importar" → "Espelho de ponto".
 1. Escolha "Cliente". Se não houver nenhum, é preciso cadastrar antes em "Clientes". Os colaboradores importados ficam vinculados a ele.
 2. "Empresa" é preenchida sozinha se o cliente tiver só uma; se tiver mais de uma, escolha.
 3. "Provedor" é o sistema de ponto que gerou o PDF. Hoje só o formato Coalize é suportado.
-4. Adicione os PDFs: arraste para a área, ou use "Procurar arquivos" (arquivos individuais ou "Pasta inteira"). Um PDF pode conter vários colaboradores, um por página.
+4. Adicione os PDFs: arraste para a área, ou use "Procurar arquivos" (arquivos individuais ou "Pasta inteira"); os arquivos são enviados ao servidor. Um PDF pode conter vários colaboradores, um por página.
 5. Clique em "Processar N PDF(s)".
 6. Em "Pré-visualização da Importação", revise, marque o que quer salvar e clique em "Salvar".
 
@@ -39,7 +39,7 @@ Status na pré-visualização:
 
 Arquivo já importado: o app reconhece pelo conteúdo do arquivo, não pelo nome nem pela pasta. Renomear o PDF não engana a verificação. Ele aparece como "Já importado" e fica de fora; para processar de novo clique em "Reprocessar" (fica "Será reprocessado"; "Cancelar" desfaz).
 
-PDFs protegidos por senha não funcionam. Uma cópia do PDF original fica guardada neste computador.
+PDFs protegidos por senha não funcionam. Uma cópia do PDF original fica guardada no servidor.
 
 "Histórico" (canto superior) abre "Histórico de importações", com busca por nome do arquivo e selos "Sucesso", "Com alertas" ou "Falha", mais a mensagem do problema. É onde se veem os arquivos com erro. O registro só é criado ao clicar em "Salvar", e inclui todos os arquivos daquele lote, até os que falharam. Se o processamento for cancelado, nada entra no histórico.
 
@@ -48,8 +48,8 @@ PDFs protegidos por senha não funcionam. Uma cópia do PDF original fica guarda
 Caminho: "Cartão Ponto". Lista os espelhos importados, com colaborador, empresa, período e data de importação.
 
 - "Filtros": "Colaborador", "Período" (começa no mês atual), "Status no período", "Empresa", "Cliente". "Aplicar filtros" confirma; "Limpar filtros" zera e aplica na hora.
-- Botão "PDF": abre o PDF daquele colaborador, com opções "Baixar" e "Ver no explorador de arquivos".
-- "Gerar zip": cria um zip com os PDFs de todos os registros que batem com os filtros (não só da página), em pastas por empresa e cliente. O seletor ao lado define "Um PDF por colaborador" ou "Um PDF por cliente" (junta todos num consolidado). Registros sem cliente vinculado ficam de fora.
+- Botão "PDF": abre o PDF daquele colaborador, com a opção "Baixar".
+- "Gerar zip": baixa um zip com os PDFs de todos os registros que batem com os filtros (não só da página), em pastas por empresa e cliente. O seletor ao lado define "Um PDF por colaborador" ou "Um PDF por cliente" (junta todos num consolidado). Registros sem cliente vinculado ficam de fora.
 - Clicar no nome do colaborador abre o "Cartão de Ponto" detalhado.
 
 Detalhe do cartão: totais ("Total Trabalhado", "Horas Extras", "Faltas", "Atrasos", "Saldo do Banco") e uma linha por dia do período, com colunas de entrada e saída. O filtro de dias ("Sem marcação", "Marcação pendente", "Marcação completa", "Horas extras", "Horas faltas", "Horas de atraso", "Horas regulares", "Finais de semana", "Com intervalo") só muda o que é exibido; os totais não mudam. Com alguma opção desmarcada, aparecem os dias que atendem a pelo menos uma das marcadas. "Ver arquivo" abre o PDF (a dica da tela de importação chama isso de "Ver relatório original").
@@ -110,25 +110,24 @@ Um arquivo pode ter várias configurações ("Adicionar configuração"), cada u
 - "Template": escolhido ao criar; para trocar, remova e crie de novo.
 - "Intervalo (min)": de quanto em quanto tempo verificar. Mínimo 1; o padrão é 5.
 - "Modo": "Fixo" usa um "Período Selecionado"; "Relativo a hoje" usa "Início (dias atrás)" e "Fim (dias atrás)". "Período efetivo aplicável" mostra o resultado.
-- "Atualizar registros automaticamente": desligado, a verificação só avisa e nada muda nos turnos. Ligado, as mudanças encontradas são aplicadas direto, sem revisão.
-- "Sobrescrever edições manuais" e "Sobrescrever turnos já pagos": só valem com a opção acima ligada. Dizem se a aplicação automática pode alterar turnos corrigidos à mão ou já pagos. Numa configuração nova, a primeira vem ligada e a segunda desligada.
+- A verificação só avisa: nada muda nos turnos sozinho. Cada mudança encontrada espera alguém aceitar em "Atualizações pendentes" ou reprocessar o arquivo.
 - "Manter registros atualizados manualmente": usada quando a reimportação passa pela tela de importação ("Reprocessar agora"), com o mesmo efeito da opção de lá.
 
 Botões: "Salvar configurações", "Reprocessar agora" (abre "Importar pagamentos" já preenchido e processa, mesmo sem mudança detectada), "Forçar verificação" (só esta configuração), "Ativar"/"Desativar", "Remover".
 
 "HISTÓRICO RECENTE" mostra barras das últimas verificações; clique em uma para ver os detalhes, ou em "Ver histórico completo". Resultados: "Mudou", "Sem mudança", "Indeterminado", "Erro".
 
-As verificações só acontecem com o app aberto; para mantê-las com a janela fechada, ligue "Minimizar na bandeja ao fechar". Quando uma mudança real é encontrada e a janela não está em foco, o sistema mostra uma notificação (se a permissão foi concedida).
+As verificações rodam no servidor, nos intervalos configurados, mesmo com ninguém usando o aplicativo.
 
 ## Atualizações pendentes
 
-Quando a verificação encontra algo, aparece um cartão flutuante "N atualização(ões) pendente(s)". Clique para abrir o painel "Atualizações pendentes", ou arraste para mudar de lugar. O cartão não aparece na própria tela "Verificação automática", que tem os mesmos detalhes por verificação. O painel se divide em "Pendentes" e "Aplicadas automaticamente", agrupado por arquivo e configuração.
+Quando a verificação encontra algo, aparece um cartão flutuante "N atualização(ões) pendente(s)". Clique para abrir o painel "Atualizações pendentes", ou arraste para mudar de lugar. O cartão não aparece na própria tela "Verificação automática", que tem os mesmos detalhes por verificação. O painel se divide em "Pendentes" e "Aplicadas sozinho" (mudanças aplicadas sozinhas pela versão antiga, de computador), agrupado por arquivo e configuração.
 
 Tipos de aviso:
 - Campos alterados (antes → depois): "Aceitar e atualizar" baixa o arquivo de novo e aplica a mudança naquele turno. Aceitar é uma decisão manual: vale mesmo para turno editado à mão ou já pago.
-- "Possível novo turno": linha nova na planilha. Use "Reprocessar agora" para importar. Com atualização automática aparece "Criado automaticamente".
+- "Possível novo turno": linha nova na planilha. Use "Reprocessar agora" para importar.
 - Colaborador ou empresa/cliente não identificado: a linha tem data válida, mas não foi associada a ninguém. Ajuste o cadastro ou os apelidos e reprocesse.
-- Turno não encontrado na leitura mais recente: pode ter saído da planilha. "Marcar como excluído" remove o turno. Com atualização automática aparece "Excluído automaticamente".
+- Turno não encontrado na leitura mais recente: pode ter saído da planilha. "Marcar como excluído" remove o turno.
 - Erro: falha ao baixar ou ler o arquivo, ou template removido.
 
 "Visto" (também "Visto neste grupo" e "Visto em todos") apenas reconhece o aviso, sem resolver nada: ele deixa de contar no cartão, mas continua consultável. Se uma verificação futura encontrar exatamente a mesma coisa, ela continua silenciosa; se algo mudar, é um aviso novo. "Reprocessar agora" também marca como visto.
@@ -153,11 +152,11 @@ Fazer pagamento: abre "Fazer pagamento" com dados do turno, "Chaves PIX" do cola
 
 "Ver histórico": mostra os estados anteriores (status, dados, valor), do mais recente ao mais antigo. Fica desabilitado se o turno nunca foi alterado.
 
-Linha amarela: há mudança pendente encontrada pela verificação. Enquanto isso o turno não pode ser editado, pago nem removido; o menu oferece "Revisar alteração" e "Ver histórico". Na revisão aparecem "Campos alterados" e "Aceitar e atualizar", ou "Marcar como excluído". Linha azulada: houve mudança já aplicada automaticamente.
+Linha amarela: há mudança pendente encontrada pela verificação. Enquanto isso o turno não pode ser editado, pago nem removido; o menu oferece "Revisar alteração" e "Ver histórico". Na revisão aparecem "Campos alterados" e "Aceitar e atualizar", ou "Marcar como excluído". Linha azulada: houve mudança aplicada sozinha pela versão antiga do aplicativo, de computador.
 
 ## Conferência de Pagamentos
 
-Caminho: "Pagamentos" → botão "Conferência". Abre em janela própria, para comparar os turnos pagos com o extrato do banco. Começa com os filtros atuais de "Pagamentos"; depois disso, os filtros das duas janelas são independentes, mas os dados se atualizam entre elas. O topo mostra "N pendente(s) de conferência" ou "Tudo conferido".
+Caminho: "Pagamentos" → botão "Conferência". Abre em uma nova aba do navegador, para comparar os turnos pagos com o extrato do banco. Começa com os filtros atuais de "Pagamentos"; depois disso, os filtros das duas abas são independentes, mas os dados se atualizam entre elas. O topo mostra "N pendente(s) de conferência" ou "Tudo conferido".
 
 Ações só em turnos "Pago", pelo clique direito ou teclado (↑/↓ navegar, Enter confirmar, Delete marcar erro, Backspace desfazer):
 - "Confirmar": só registra que conferiu; a linha fica verde e o turno não muda.
@@ -195,7 +194,7 @@ Todos ficam em "Pagamentos" e consideram os filtros aplicados e todos os turnos 
 
 - "Exportar": escolha "Excel" ou "PDF" e um template; "Exportar Excel"/"Exportar PDF" gera o arquivo. "Gerenciar templates" abre "Templates de exportação".
 - "Relatório por valor" e "Relatório por turno": PDFs de layout fixo, sem template.
-- Depois de gerar: "Abrir PDF" e "Abrir no explorador".
+- O arquivo gerado é baixado pelo navegador.
 
 Se aparecer "Os turnos encontrados ainda não têm um valor de pagamento definido", é preciso configurar uma regra de valor ou informar o valor em cada turno. Os templates de Excel e PDF também ignoram turnos com valor exatamente zero.
 
@@ -230,7 +229,7 @@ Caminho: "Colaboradores" → "Novo colaborador", ou clique no nome. Busca por no
 - "Clientes e empresas vinculados": cada vínculo tem matrícula própria. É preciso manter ao menos um.
 - "Chaves PIX": pode haver várias, de tipos "CPF", "CNPJ", "Telefone", "E-mail", "Aleatória" ou "Outro". O tipo é detectado na importação e pode ser corrigido aqui. Elas aparecem para copiar em "Fazer pagamento".
 - "Possíveis nomes" (apelidos): outras grafias do nome que podem aparecer nas planilhas. Valem junto com o nome cadastrado na busca durante a importação. Um mesmo nome só pode estar vinculado a um colaborador por vez.
-- "Excluir colaborador": permanente, apaga turnos, cartões de ponto, chaves PIX e apelidos. É preciso digitar o nome para confirmar. Se ele já recebeu pagamentos, há um segundo aviso ("Excluir mesmo assim"), e uma cópia do banco é salva antes na pasta `backups/` dos dados do app.
+- "Excluir colaborador": permanente, apaga turnos, cartões de ponto, chaves PIX e apelidos. É preciso digitar o nome para confirmar. Se ele já recebeu pagamentos, há um segundo aviso ("Excluir mesmo assim"), e o banco tem backup contínuo no servidor.
 
 ## Funções
 
@@ -248,44 +247,34 @@ Os totais usam o mesmo valor mostrado em "Pagamentos": turnos pendentes entram p
 
 ## Configurações
 
-Caminho: "Configurações".
+Caminho: "Configurações". No topo há uma busca (Ctrl K) que filtra as opções.
 
-- "Geral" → "Minimizar na bandeja ao fechar": o botão de fechar só esconde a janela, e o app continua rodando no ícone da bandeja, mantendo as verificações automáticas. Clique no ícone ou em "Abrir PontoScan" para voltar; "Sair" encerra de verdade. O ícone muda e o texto dele avisa quando há arquivos com mudança ou erro.
-- "Ferramentas de PDF (Poppler)": veja a seção seguinte.
-- "Armazenamento": tamanho de "Banco de dados", "Arquivos importados" e "Total". Clique nos dois primeiros para ver o detalhe.
-- "Manutenção":
-  - "Compactar banco de dados": recupera espaço de registros apagados, sem remover dados.
-  - "Remover originais redundantes": apaga o PDF original de lote quando todas as páginas já foram salvas por colaborador.
-  - "Abrir pasta de dados": abre a pasta do banco e dos PDFs.
-  - "Exportar banco de dados": salva uma cópia completa do banco num arquivo `.db`, sem mudar nada no app.
-- "Sobre": versão, "Procurar atualização" e "Ver no GitHub".
+- "Geral" → "Versão": a versão em uso. A web se atualiza sozinha; se algo parecer estranho depois de uma atualização, recarregue a página.
+- "Dados":
+  - "Espaço usado": tamanho do banco de dados e dos arquivos importados, no servidor. Clique em cada parte para ver o que ocupa mais espaço.
+  - "Remover originais repetidos": apaga o PDF original de lote quando todas as páginas já foram salvas por colaborador. Cada colaborador continua com a própria página.
+  - "Compactar o banco": recupera espaço de registros apagados, sem remover dados.
+  - "Baixar uma cópia do banco": baixa um arquivo `.db` com tudo, sem mudar nada no app.
+- "Integrações" → "Assistente com IA": a chave da Anthropic da equipe (veja "Assistente").
 
-### Zona de risco: "Apagar tudo"
+### Zona de risco: "Apagar histórico e arquivos"
 
-Sempre apaga o histórico de importações e todos os PDFs salvos. Antes de apagar, opcionalmente mantém:
-- "Manter empresas", "Manter clientes", "Manter colaboradores". Manter colaboradores exige manter clientes e empresas; manter clientes exige manter empresas.
-- "Manter turnos de pagamento atualizados manualmente (...)": exige manter colaboradores. Preserva apenas turnos com edição manual de dados. Um turno só pago ou revertido, sem nenhum campo corrigido à mão, não é preservado.
-- "Manter templates de pagamento" e "Manter templates de colaboradores": ligadas por padrão.
+Assistente em três passos. Sempre apaga o histórico de importações e todos os arquivos importados. No passo "O que manter" dá para manter:
+- "Empresas", "Clientes", "Colaboradores". Manter colaboradores mantém clientes e empresas; manter clientes mantém empresas.
+- "Turnos de pagamento editados à mão" (pagos, voltados para pendente ou com valor corrigido): exige manter colaboradores.
+- "Modelos de pagamento" e "Modelos de colaboradores": ligados por padrão.
 
-Backup: "Banco" e "PDFs" (ligados por padrão) geram um zip antes de apagar, e o app pergunta onde salvar. É preciso digitar APAGAR TUDO.
+No passo "Backup", "Banco de dados" e "Arquivos importados" (ligados por padrão) geram um `.zip` que o navegador baixa antes de apagar. No último passo é preciso digitar APAGAR TUDO.
 
-### Zona de risco: "Importar banco de dados"
-
-Substitui todo o banco atual pelo arquivo `.db` escolhido. É preciso digitar SUBSTITUIR BANCO. O arquivo é validado e o app mostra "Banco pronto para restauração", com contagem de 30 segundos até reiniciar; dá para usar "Reiniciar agora" ou "Cancelar importação". Se houver erro, o banco atual é mantido. Depois de reiniciar, o app mostra "Restauração concluída" ou "Restauração não realizada".
+Não existe mais a opção de substituir o banco por outro arquivo: restaurar um banco é uma tarefa de manutenção no servidor.
 
 ## Poppler (ferramentas de PDF)
 
-Importar e exportar PDFs depende de quatro ferramentas: pdfinfo, pdftotext, pdfseparate e pdfunite. Elas não vêm com o app. Se faltar alguma, aparece um aviso no topo com link para "Configurações".
-
-- Linux (Debian/Ubuntu): `sudo apt-get install poppler-utils`.
-- macOS: `brew install poppler`.
-- Windows: não é suportado atualmente.
-
-Em "Configurações" → "Ferramentas de PDF (Poppler)" cada ferramenta aparece como encontrada ou "não encontrado". Se o app não achar sozinho, informe a pasta em "Pasta dos binários do Poppler (opcional)" (ou "Escolher pasta") e clique em "Salvar e testar".
+Importar e exportar PDFs depende de quatro ferramentas: pdfinfo, pdftotext, pdfseparate e pdfunite. Elas ficam instaladas no servidor; quem usa o aplicativo não instala nada nem configura nada. Se faltar alguma, a importação de PDFs mostra erro, e só quem administra o servidor resolve.
 
 ## Atualizações do app
 
-Ao abrir, o app procura versão nova e, se houver, mostra "Nova versão disponível" com "Atualizar agora" (baixa, instala e reinicia) ou "Depois". Também dá para checar em "Configurações" → "Sobre" → "Procurar atualização". A atualização automática pode falhar em instalações .deb ou .rpm; nesse caso aparece "Abrir no GitHub" para baixar manualmente.
+O aplicativo é atualizado no servidor; não há nada para baixar nem instalar. Basta recarregar a página para usar a versão mais nova.
 
 ## Por que o app faz isso
 
@@ -293,7 +282,7 @@ Ao abrir, o app procura versão nova e, se houver, mostra "Nova versão disponí
 
 **Por que minha correção manual não foi sobrescrita?** Com "Manter registros atualizados manualmente" ligado, um turno cujos dados foram corrigidos à mão não pode ser reprocessado na importação. Mesmo que a correção tenha mudado data, local, função ou horário, o app reconhece pelo histórico que é o mesmo turno e não cria um segundo. Desligue a opção na tela de importação (ou na configuração, em "Verificação automática") para permitir. A ajuda da tela cita também turnos revertidos, mas "Voltar para pendente" sozinho não protege: só protege se algum campo já tiver sido corrigido à mão.
 
-**Por que não consigo editar um turno pago?** O registro pago é o histórico do que foi realmente pago, então fica congelado: sem edição direta e sem reprocessamento pela importação, independentemente de qualquer opção. Para corrigir, use "Voltar para pendente", edite e pague de novo; o registro pago anterior continua no histórico. As únicas exceções são decisões explícitas: "Aceitar e atualizar" numa mudança detectada, ou "Sobrescrever turnos já pagos" ligado com atualização automática.
+**Por que não consigo editar um turno pago?** O registro pago é o histórico do que foi realmente pago, então fica congelado: sem edição direta e sem reprocessamento pela importação, independentemente de qualquer opção. Para corrigir, use "Voltar para pendente", edite e pague de novo; o registro pago anterior continua no histórico. A única exceção é uma decisão explícita: "Aceitar e atualizar" numa mudança detectada.
 
 **Por que cada ação cria um registro novo?** Pagar, reverter, editar e reprocessar não apagam o estado anterior; criam uma nova versão ligada a ele, e é isso que aparece em "Ver histórico".
 
@@ -301,6 +290,6 @@ Ao abrir, o app procura versão nova e, se houver, mostra "Nova versão disponí
 
 ## Assistente
 
-O ícone redondo no canto inferior direito abre o assistente em um painel fixo ao lado da tela, em qualquer tela. Dentro do campo de pergunta, um rótulo mostra a tela e os filtros usados como base; clicando nele dá para ver os detalhes e escolher "Não usar esta tela", e a pergunta passa a valer para todos os dados. A borda esquerda do painel pode ser arrastada para aumentar ou diminuir a largura. Ele também abre pelo botão direito em um turno de "Pagamentos", na opção "Perguntar à IA". Ele só responde e não altera nenhum dado. Ele funciona sozinho quando o Claude Code está instalado e logado no computador, e o uso entra no limite do plano da pessoa. Sem isso, é preciso cadastrar uma chave de API da Anthropic em "Configurações", no cartão "Assistente com IA", e o uso é cobrado nessa conta.
+O ícone redondo no canto inferior direito abre o assistente em um painel fixo ao lado da tela, em qualquer tela. Dentro do campo de pergunta, um rótulo mostra a tela e os filtros usados como base; clicando nele dá para ver os detalhes e escolher "Não usar esta tela", e a pergunta passa a valer para todos os dados. A borda esquerda do painel pode ser arrastada para aumentar ou diminuir a largura. Ele também abre pelo botão direito em um turno de "Pagamentos", na opção "Perguntar à IA". Ele só responde e não altera nenhum dado. Ele precisa de uma chave de API da Anthropic, cadastrada em "Configurações", no cartão "Assistente com IA", por qualquer pessoa logada. A chave vale para toda a equipe, fica guardada no servidor e não aparece de novo depois de salva; o uso é cobrado na conta da Anthropic dona da chave.
 
-O app guarda tudo neste computador, mas o assistente é a exceção: para responder, ele consulta o banco e envia os resultados à Anthropic. Nome, CPF, PIX e matrícula dos colaboradores, clientes, empresas e arquivos não são enviados; locais, funções, datas, valores e observações são, com nomes e documentos reconhecidos ocultados. Se um primeiro nome servir para mais de um colaborador, o assistente pergunta quem é antes de enviar. Quando a resposta leva a algum lugar do aplicativo, aparece um botão abaixo dela que vai direto até lá. Em "Pagamentos" e "Cartão Ponto", o botão abre a tela já com os filtros aplicados, substituindo os filtros que estavam lá. "Nova conversa" limpa o histórico do chat.
+O app guarda tudo no servidor dele, mas o assistente é a exceção: para responder, ele consulta o banco e envia os resultados à Anthropic. Nome, CPF, PIX e matrícula dos colaboradores, clientes, empresas e arquivos não são enviados; locais, funções, datas, valores e observações são, com nomes e documentos reconhecidos ocultados. Se um primeiro nome servir para mais de um colaborador, o assistente pergunta quem é antes de enviar. Quando a resposta leva a algum lugar do aplicativo, aparece um botão abaixo dela que vai direto até lá. Em "Pagamentos" e "Cartão Ponto", o botão abre a tela já com os filtros aplicados, substituindo os filtros que estavam lá. "Nova conversa" limpa o histórico do chat.

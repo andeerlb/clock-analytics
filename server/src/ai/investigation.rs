@@ -2,10 +2,9 @@
 //! data through the Claude API. It only ever answers. Nothing it does can
 //! change the database.
 //!
-//! Lives on the Rust side, not in the webview, so the API key never reaches
-//! JavaScript after being saved and the model can only reach what's here.
-//! Runs on a logged-in Claude Code when there is one (`ai_claude_code`),
-//! otherwise on the Claude API with a saved key.
+//! Ported from the desktop app (`ai_investigation.rs`). Lives on the server,
+//! so the team's API key never reaches the browser after being saved (see
+//! `super` for where it's kept) and the model can only reach what's here.
 //!
 //! The model writes its own SELECTs against the live database, and imported
 //! files end up in the results, so anything it runs is treated as untrusted.
@@ -29,15 +28,12 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteRow};
 use sqlx::{Column, Connection, Row, SqliteConnection, ValueRef};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{c_char, c_int, c_void, CStr};
-use std::path::PathBuf;
 use std::ptr::{null_mut, NonNull};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_sql::{DbInstances, DbPool};
+use sqlx::SqlitePool;
 
-use crate::ai_claude_code;
-use crate::db::DB_URL;
+use crate::error::{ApiError, ApiResult};
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 pub(crate) const MODEL: &str = "claude-opus-5-5";
@@ -53,10 +49,13 @@ const MAX_SCREEN_CHARS: usize = 1_000;
 const MAX_SQL_CHARS: usize = 5_000;
 const QUERY_TIME_LIMIT: Duration = Duration::from_secs(5);
 const API_ATTEMPTS: u32 = 3;
-const KEYRING_SERVICE: &str = "com.andeerlb.pontoscan";
-const KEYRING_USER: &str = "anthropic-api-key";
-const PROGRESS_EVENT: &str = "ai-assistant-progress";
-const APP_GUIDE: &str = include_str!("ai_app_guide.md");
+const APP_GUIDE: &str = include_str!("app_guide.md");
+
+/// A failure the person can act on, shown as-is in the chat (the desktop's
+/// `Err(String)`).
+fn user(message: &str) -> ApiError {
+    ApiError::BadRequest(message.to_string())
+}
 
 /// Repeated with every question: instructions given once at the start tend
 /// to lose force as a conversation gets longer.
@@ -295,19 +294,19 @@ impl Scrubber {
     }
 }
 
-pub(crate) async fn load_scrubber(conn: &mut SqliteConnection) -> Result<Scrubber, String> {
+pub(crate) async fn load_scrubber(conn: &mut SqliteConnection) -> ApiResult<Scrubber> {
     let rows = sqlx::query(
         "SELECT name, id FROM employees WHERE name <> ''
          UNION ALL SELECT alias, employee_id FROM employee_aliases WHERE alias <> ''",
     )
     .fetch_all(&mut *conn)
     .await
-    .map_err(|e| e.to_string())?;
+    ?;
     Ok(Scrubber::new(rows.iter().map(|row| (row.get::<String, _>(0), row.get::<i64, _>(1)))))
 }
 
 /// Swaps the opaque references back to real names, locally, for display.
-async fn reveal(conn: &mut SqliteConnection, text: &str) -> Result<String, String> {
+async fn reveal(conn: &mut SqliteConnection, text: &str) -> ApiResult<String> {
     let pattern = Regex::new(r"\b(FUNC|CLI|EMP|ARQ)_(\d+)\b").expect("valid regex");
     let mut names: HashMap<String, String> = HashMap::new();
     let references: HashSet<(String, i64)> = pattern
@@ -321,7 +320,7 @@ async fn reveal(conn: &mut SqliteConnection, text: &str) -> Result<String, Strin
             "EMP" => "SELECT name FROM companies WHERE id = ?1",
             _ => "SELECT file_name FROM source_files WHERE id = ?1",
         };
-        let row = sqlx::query(sql).bind(id).fetch_optional(&mut *conn).await.map_err(|e| e.to_string())?;
+        let row = sqlx::query(sql).bind(id).fetch_optional(&mut *conn).await?;
         if let Some(row) = row {
             names.insert(format!("{kind}_{id}"), row.get::<String, _>(0));
         }
@@ -407,7 +406,7 @@ fn split_answer(text: &str) -> AnswerParts {
     AnswerParts { conclusion, facts, body, hypothesis, tips }
 }
 
-async fn reveal_answer(conn: &mut SqliteConnection, parts: AnswerParts) -> Result<AnswerParts, String> {
+async fn reveal_answer(conn: &mut SqliteConnection, parts: AnswerParts) -> ApiResult<AnswerParts> {
     let conclusion = match parts.conclusion {
         Some(text) => Some(reveal(conn, &text).await?),
         None => None,
@@ -510,10 +509,10 @@ fn split_links(text: &str) -> (String, Vec<ScreenLink>) {
     (pattern.replace_all(text, "").trim().to_string(), links)
 }
 
-async fn all_exist(conn: &mut SqliteConnection, table: &str, ids: &[i64]) -> Result<bool, String> {
+async fn all_exist(conn: &mut SqliteConnection, table: &str, ids: &[i64]) -> ApiResult<bool> {
     let sql = format!("SELECT 1 FROM {table} WHERE id = ?1");
     for id in ids {
-        if sqlx::query(&sql).bind(id).fetch_optional(&mut *conn).await.map_err(|e| e.to_string())?.is_none() {
+        if sqlx::query(&sql).bind(id).fetch_optional(&mut *conn).await?.is_none() {
             return Ok(false);
         }
     }
@@ -521,7 +520,7 @@ async fn all_exist(conn: &mut SqliteConnection, table: &str, ids: &[i64]) -> Res
 }
 
 fn valid_date(value: &Option<String>) -> bool {
-    value.as_deref().map_or(true, |date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok())
+    value.as_deref().is_none_or(|date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok())
 }
 
 fn has_filters(link: &ScreenLink) -> bool {
@@ -536,7 +535,7 @@ fn has_filters(link: &ScreenLink) -> bool {
 }
 
 /// Only a shift the payment dialog would actually accept.
-async fn payable_shift_exists(conn: &mut SqliteConnection, shift_id: i64) -> Result<bool, String> {
+async fn payable_shift_exists(conn: &mut SqliteConnection, shift_id: i64) -> ApiResult<bool> {
     let found = sqlx::query(
         "SELECT 1 FROM payment_shifts
          WHERE id = ?1 AND deleted_at IS NULL AND status IN ('pendente', 'erro')
@@ -545,11 +544,11 @@ async fn payable_shift_exists(conn: &mut SqliteConnection, shift_id: i64) -> Res
     .bind(shift_id)
     .fetch_optional(&mut *conn)
     .await
-    .map_err(|e| e.to_string())?;
+    ?;
     Ok(found.is_some())
 }
 
-async fn validate_link(conn: &mut SqliteConnection, link: &ScreenLink) -> Result<bool, String> {
+async fn validate_link(conn: &mut SqliteConnection, link: &ScreenLink) -> ApiResult<bool> {
     if link.label.trim().is_empty() {
         return Ok(false);
     }
@@ -576,7 +575,7 @@ async fn validate_link(conn: &mut SqliteConnection, link: &ScreenLink) -> Result
     let shape_ok = link.statuses.iter().all(|status| allowed_statuses.contains(&status.as_str()))
         && valid_date(&link.period_start)
         && valid_date(&link.period_end)
-        && link.period_start.as_deref().zip(link.period_end.as_deref()).map_or(true, |(start, end)| start <= end)
+        && link.period_start.as_deref().zip(link.period_end.as_deref()).is_none_or(|(start, end)| start <= end)
         // That screen has no role or place filter, and its period is required.
         && (!library || (link.role_ids.is_empty() && link.locals.is_empty() && link.period_start.is_some() && link.period_end.is_some()));
     if !shape_ok {
@@ -584,7 +583,7 @@ async fn validate_link(conn: &mut SqliteConnection, link: &ScreenLink) -> Result
     }
     for local in &link.locals {
         let found = sqlx::query("SELECT 1 FROM payment_shifts WHERE local = ?1 LIMIT 1").bind(local).fetch_optional(&mut *conn).await;
-        if found.map_err(|e| e.to_string())?.is_none() {
+        if found?.is_none() {
             return Ok(false);
         }
     }
@@ -595,7 +594,7 @@ async fn validate_link(conn: &mut SqliteConnection, link: &ScreenLink) -> Result
 }
 
 /// The buttons that survive validation, with real names in their labels.
-async fn finish_links(conn: &mut SqliteConnection, links: Vec<ScreenLink>) -> Result<Vec<ScreenLink>, String> {
+async fn finish_links(conn: &mut SqliteConnection, links: Vec<ScreenLink>) -> ApiResult<Vec<ScreenLink>> {
     let mut valid = Vec::new();
     for mut link in links {
         if validate_link(conn, &link).await? {
@@ -668,15 +667,15 @@ pub(crate) struct GuardedDb {
 }
 
 /// Locks `conn` down for model-written SQL. See the module docs.
-pub(crate) async fn guard(mut conn: SqliteConnection) -> Result<GuardedDb, String> {
+pub(crate) async fn guard(mut conn: SqliteConnection) -> ApiResult<GuardedDb> {
     let deadline = Arc::new(Mutex::new(Instant::now() + QUERY_TIME_LIMIT));
-    let mut handle = conn.lock_handle().await.map_err(|e| e.to_string())?;
+    let mut handle = conn.lock_handle().await?;
     let raw: NonNull<sqlite3> = handle.as_raw_handle();
     // SAFETY: `raw` is this connection's live handle, held exclusively through
     // `handle` for the call, and `authorize` is a plain function with no context.
     let status = unsafe { sqlite3_set_authorizer(raw.as_ptr(), Some(authorize), null_mut()) };
     if status != SQLITE_OK {
-        return Err("Não foi possível proteger a conexão com o banco.".to_string());
+        return Err(ApiError::Internal("Não foi possível proteger a conexão com o banco.".to_string()));
     }
     let shared = Arc::clone(&deadline);
     handle.set_progress_handler(10_000, move || shared.lock().map(|limit| Instant::now() < *limit).unwrap_or(false));
@@ -722,7 +721,7 @@ pub(crate) async fn run_sql(db: &mut GuardedDb, scrubber: &Scrubber, sql: &str) 
 }
 
 /// The schema as the model sees it: blocked columns are simply absent.
-async fn schema_text(conn: &mut SqliteConnection) -> Result<String, String> {
+async fn schema_text(conn: &mut SqliteConnection) -> ApiResult<String> {
     let rows = sqlx::query(
         r"SELECT m.name, p.name FROM sqlite_master m JOIN pragma_table_info(m.name) p
           WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.name NOT LIKE '\_sqlx%' ESCAPE '\'
@@ -730,7 +729,7 @@ async fn schema_text(conn: &mut SqliteConnection) -> Result<String, String> {
     )
     .fetch_all(&mut *conn)
     .await
-    .map_err(|e| e.to_string())?;
+    ?;
     let mut tables: Vec<(String, Vec<String>)> = Vec::new();
     for row in &rows {
         let (table, column): (String, String) = (row.get(0), row.get(1));
@@ -797,8 +796,8 @@ fn api_error_message(status: u16, body: &[u8]) -> String {
     }
 }
 
-async fn call_api(client: &reqwest::Client, api_key: &str, body: &Value) -> Result<Value, String> {
-    let payload = serde_json::to_vec(body).map_err(|e| e.to_string())?;
+async fn call_api(client: &reqwest::Client, api_key: &str, body: &Value) -> ApiResult<Value> {
+    let payload = serde_json::to_vec(body).map_err(|e| ApiError::Internal(e.to_string()))?;
     let mut last_error = String::new();
     for attempt in 0..API_ATTEMPTS {
         if attempt > 0 {
@@ -816,21 +815,24 @@ async fn call_api(client: &reqwest::Client, api_key: &str, body: &Value) -> Resu
         let response = match response {
             Ok(response) => response,
             Err(_) => {
-                last_error = "Não foi possível conectar à API. Verifique sua internet.".to_string();
+                last_error = "Não foi possível conectar à API da Anthropic. Tente de novo em instantes.".to_string();
                 continue;
             }
         };
         let status = response.status().as_u16();
-        let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+        let Ok(bytes) = response.bytes().await else {
+            last_error = "Não foi possível conectar à API da Anthropic. Tente de novo em instantes.".to_string();
+            continue;
+        };
         if (200..300).contains(&status) {
-            return serde_json::from_slice(&bytes).map_err(|e| e.to_string());
+            return serde_json::from_slice(&bytes).map_err(|e| ApiError::Internal(format!("resposta inválida da API: {e}")));
         }
         last_error = api_error_message(status, &bytes);
         if status != 429 && status < 500 {
             break;
         }
     }
-    Err(last_error)
+    Err(ApiError::BadRequest(last_error))
 }
 
 fn final_text(response: &Value) -> String {
@@ -841,63 +843,6 @@ fn final_text(response: &Value) -> String {
         .filter_map(|b| b["text"].as_str())
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn get_api_key() -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| e.to_string())?;
-    match entry.get_password() {
-        Ok(key) => Ok(Some(key)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("Não foi possível ler o cofre de senhas do sistema: {e}")),
-    }
-}
-
-/// The keyring talks to the OS synchronously, so it can't run on an async
-/// worker thread.
-async fn blocking<T: Send + 'static>(task: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
-    tauri::async_runtime::spawn_blocking(task).await.map_err(|e| e.to_string())?
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AiStatus {
-    claude_code: bool,
-    api_key: bool,
-}
-
-#[tauri::command]
-pub async fn ai_status() -> Result<AiStatus, String> {
-    let claude_code = ai_claude_code::available().await.is_some();
-    // An unreadable credential store isn't an error when Claude Code works,
-    // and saving a key reports it when it matters.
-    let api_key = blocking(|| Ok(get_api_key().ok().flatten().is_some())).await?;
-    Ok(AiStatus { claude_code, api_key })
-}
-
-#[tauri::command]
-pub async fn ai_set_api_key(api_key: String) -> Result<(), String> {
-    let api_key = api_key.trim().to_string();
-    if api_key.is_empty() {
-        return Err("Informe a chave de API.".to_string());
-    }
-    blocking(move || {
-        keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
-            .and_then(|entry| entry.set_password(&api_key))
-            .map_err(|e| format!("Não foi possível salvar no cofre de senhas do sistema: {e}"))
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn ai_clear_api_key() -> Result<(), String> {
-    blocking(|| {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| e.to_string())?;
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(e.to_string()),
-        }
-    })
-    .await
 }
 
 #[derive(Debug, Deserialize)]
@@ -913,12 +858,13 @@ pub struct ShiftContext {
 pub struct AskRequest {
     /// What the previous answer returned, opaque to the UI and already
     /// pseudonymized: the API transcript, which must come back unmodified,
-    /// thinking blocks and all, or one `claudeCodeSession` entry per question.
+    /// thinking blocks and all.
     conversation: Vec<Value>,
     question: String,
     /// Screen and active filters, or `None` when the user turned that off.
     screen: Option<String>,
     shift: Option<ShiftContext>,
+    #[serde(default)]
     name_choices: HashMap<String, Option<i64>>,
 }
 
@@ -929,45 +875,19 @@ pub enum AskOutcome {
     NeedsChoice { ambiguities: Vec<Ambiguity> },
 }
 
-/// The file the app's own pool has open, asked of SQLite itself: on Linux
-/// the app's config and data dirs differ and both can hold a `pontoscan.db`.
-async fn live_database_path(db_instances: &State<'_, DbInstances>) -> Result<String, String> {
-    let instances = db_instances.0.read().await;
-    let DbPool::Sqlite(pool) = instances.get(DB_URL).ok_or("Banco de dados ainda não foi aberto.")?;
-    let row = sqlx::query("PRAGMA database_list").fetch_one(pool).await.map_err(|e| e.to_string())?;
-    Ok(row.get::<String, _>("file"))
+/// The file the server's own pool has open, asked of SQLite itself, so the
+/// assistant reads exactly the database the rest of the server writes.
+async fn live_database_path(pool: &SqlitePool) -> ApiResult<String> {
+    let row = sqlx::query("PRAGMA database_list").fetch_one(pool).await?;
+    let file: String = row.get("file");
+    if file.is_empty() {
+        return Err(ApiError::Internal("o banco não é um arquivo, então o assistente não tem como abri-lo só para leitura".into()));
+    }
+    Ok(file)
 }
 
 fn question_count(conversation: &[Value]) -> usize {
-    conversation
-        .iter()
-        .filter(|m| (m["role"] == "user" && m["content"].is_string()) || m["claudeCodeSession"].is_string())
-        .count()
-}
-
-fn claude_code_session(conversation: &[Value]) -> Option<&str> {
-    conversation.last()?["claudeCodeSession"].as_str()
-}
-
-enum Engine {
-    ClaudeCode(PathBuf),
-    ApiKey(String),
-}
-
-/// Claude Code when it's installed and logged in, otherwise the saved key. A
-/// conversation stays on the engine it started with: their histories differ.
-async fn choose_engine(conversation: &[Value]) -> Result<Engine, String> {
-    let on_claude_code = claude_code_session(conversation).is_some();
-    if conversation.is_empty() || on_claude_code {
-        if let Some(executable) = ai_claude_code::available().await {
-            return Ok(Engine::ClaudeCode(executable));
-        }
-        if on_claude_code {
-            return Err("O Claude Code não está mais disponível. Inicie uma nova conversa.".to_string());
-        }
-    }
-    let api_key = blocking(get_api_key).await?;
-    api_key.map(Engine::ApiKey).ok_or_else(|| "Faça login no Claude Code ou cadastre uma chave de API em Configurações.".to_string())
+    conversation.iter().filter(|m| m["role"] == "user" && m["content"].is_string()).count()
 }
 
 /// Turns the typed question into what's sent, or the names to ask about first.
@@ -975,14 +895,14 @@ async fn prepare_question(
     trusted: &mut SqliteConnection,
     scrubber: &Scrubber,
     request: &AskRequest,
-) -> Result<Result<String, Vec<Ambiguity>>, String> {
+) -> ApiResult<Result<String, Vec<Ambiguity>>> {
     let scrubbed = match &request.shift {
         Some(shift) => {
             let name: String = sqlx::query_scalar("SELECT name FROM employees WHERE id = ?1")
                 .bind(shift.employee_id)
-                .fetch_one(&mut *trusted)
-                .await
-                .map_err(|e| e.to_string())?;
+                .fetch_optional(&mut *trusted)
+                .await?
+                .ok_or_else(|| ApiError::NotFound("Colaborador não encontrado.".into()))?;
             scrubber.scrub_for_subject(&request.question, shift.employee_id, &name)
         }
         None => scrubber.scrub(&request.question),
@@ -1000,58 +920,31 @@ async fn prepare_question(
     Ok(Ok(format!("{screen}{selected}\n\n{question}\n\n{TURN_REMINDER}").trim_start().to_string()))
 }
 
-#[tauri::command]
-pub async fn ai_ask(app: AppHandle, db_instances: State<'_, DbInstances>, request: AskRequest) -> Result<AskOutcome, String> {
+/// One question to the assistant. `api_key` is the team key; the caller
+/// (`super::ai_ask`) refuses the question when there is none.
+pub(crate) async fn ask(pool: &SqlitePool, api_key: &str, request: AskRequest) -> ApiResult<AskOutcome> {
     if question_count(&request.conversation) >= MAX_QUESTIONS {
-        return Err("Esta conversa ficou longa demais. Inicie uma nova.".to_string());
+        return Err(user("Esta conversa ficou longa demais. Inicie uma nova."));
     }
-    let engine = choose_engine(&request.conversation).await?;
-    let db_path = live_database_path(&db_instances).await?;
+    let db_path = live_database_path(pool).await?;
     let options = SqliteConnectOptions::new().filename(&db_path).read_only(true);
-    let mut trusted = SqliteConnection::connect_with(&options).await.map_err(|e| e.to_string())?;
-    let result = ask(&app, engine, &db_path, &options, &mut trusted, request).await;
+    let mut trusted = SqliteConnection::connect_with(&options).await?;
+    let result = answer(api_key, &options, &mut trusted, request).await;
     let _ = trusted.close().await;
     result
 }
 
-async fn ask(
-    app: &AppHandle,
-    engine: Engine,
-    db_path: &str,
-    options: &SqliteConnectOptions,
-    trusted: &mut SqliteConnection,
-    request: AskRequest,
-) -> Result<AskOutcome, String> {
+async fn answer(api_key: &str, options: &SqliteConnectOptions, trusted: &mut SqliteConnection, request: AskRequest) -> ApiResult<AskOutcome> {
     let scrubber = load_scrubber(trusted).await?;
     let content = match prepare_question(trusted, &scrubber, &request).await? {
         Ok(content) => content,
         Err(ambiguities) => return Ok(AskOutcome::NeedsChoice { ambiguities }),
     };
     let system = system_prompt(&schema_text(trusted).await?);
-    let progress = |label: &str| {
-        let _ = app.emit(PROGRESS_EVENT, label);
-    };
-    progress("Pensando");
 
     let mut conversation = request.conversation;
-    let text = match engine {
-        Engine::ApiKey(api_key) => {
-            conversation.push(json!({ "role": "user", "content": content }));
-            ask_api(&progress, &api_key, options, &scrubber, &system, &mut conversation).await?
-        }
-        Engine::ClaudeCode(executable) => {
-            // An empty folder of its own: Claude Code reads project files from
-            // where it runs, and `--resume` looks sessions up by this path.
-            let work_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("assistant");
-            std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
-            let server_exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            let resume = claude_code_session(&conversation).map(str::to_string);
-            let reply =
-                ai_claude_code::ask(&progress, &executable, &server_exe, &work_dir, db_path, &system, &content, resume.as_deref()).await?;
-            conversation.push(json!({ "claudeCodeSession": reply.session_id }));
-            reply.text
-        }
-    };
+    conversation.push(json!({ "role": "user", "content": content }));
+    let text = ask_api(api_key, options, &scrubber, &system, &mut conversation).await?;
     let (text, links) = split_links(&text);
     let answer = reveal_answer(trusted, split_answer(&text)).await?;
     let links = finish_links(trusted, links).await?;
@@ -1059,13 +952,12 @@ async fn ask(
 }
 
 async fn ask_api(
-    progress: &(dyn Fn(&str) + Send + Sync),
     api_key: &str,
     options: &SqliteConnectOptions,
     scrubber: &Scrubber,
     system: &str,
     messages: &mut Vec<Value>,
-) -> Result<String, String> {
+) -> ApiResult<String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(300))
         // reqwest only strips its own auth headers on a redirect, not
@@ -1073,28 +965,36 @@ async fn ask_api(
         .redirect(reqwest::redirect::Policy::none())
         .user_agent(concat!("pontoscan/", env!("CARGO_PKG_VERSION")))
         .build()
-        .map_err(|e| e.to_string())?;
-    let mut db = guard(SqliteConnection::connect_with(options).await.map_err(|e| e.to_string())?).await?;
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let mut db = guard(SqliteConnection::connect_with(options).await?).await?;
+    let result = tool_loop(&client, api_key, &mut db, scrubber, system, messages).await;
+    let _ = db.conn.close().await;
+    result
+}
 
+async fn tool_loop(
+    client: &reqwest::Client,
+    api_key: &str,
+    db: &mut GuardedDb,
+    scrubber: &Scrubber,
+    system: &str,
+    messages: &mut Vec<Value>,
+) -> ApiResult<String> {
     for turn in 0..MAX_TURNS {
-        if turn > 0 {
-            progress("Analisando os resultados");
-        }
-        let response = call_api(&client, api_key, &request_body(system, messages, turn + 1 < MAX_TURNS)).await?;
+        let response = call_api(client, api_key, &request_body(system, messages, turn + 1 < MAX_TURNS)).await?;
         // Appended unmodified: thinking and fallback blocks must be echoed
         // back exactly as received.
         let content = response["content"].clone();
         match response["stop_reason"].as_str().unwrap_or_default() {
             "tool_use" => {
                 messages.push(json!({ "role": "assistant", "content": content }));
-                progress("Consultando os dados");
                 let mut results = Vec::new();
                 for block in content.as_array().map(Vec::as_slice).unwrap_or_default() {
                     if block["type"] != "tool_use" {
                         continue;
                     }
                     let outcome = match block["name"].as_str() {
-                        Some("run_sql") => run_sql(&mut db, scrubber, block["input"]["sql"].as_str().unwrap_or_default()).await,
+                        Some("run_sql") => run_sql(db, scrubber, block["input"]["sql"].as_str().unwrap_or_default()).await,
                         other => Err(format!("Ferramenta desconhecida: {other:?}")),
                     };
                     results.push(match outcome {
@@ -1105,23 +1005,23 @@ async fn ask_api(
                 messages.push(json!({ "role": "user", "content": results }));
             }
             "pause_turn" => messages.push(json!({ "role": "assistant", "content": content })),
-            "refusal" => return Err("O modelo recusou esta solicitação. Tente reformular a pergunta.".to_string()),
-            "max_tokens" => return Err("A resposta ficou longa demais e foi interrompida. Tente uma pergunta mais específica.".to_string()),
+            "refusal" => return Err(user("O modelo recusou esta solicitação. Tente reformular a pergunta.")),
+            "max_tokens" => return Err(user("A resposta ficou longa demais e foi interrompida. Tente uma pergunta mais específica.")),
             _ => {
                 let text = final_text(&response);
                 if text.trim().is_empty() {
-                    return Err("O modelo não devolveu nenhuma resposta.".to_string());
+                    return Err(user("O modelo não devolveu nenhuma resposta."));
                 }
                 messages.push(json!({ "role": "assistant", "content": content }));
                 return Ok(text);
             }
         }
     }
-    Err("A consulta não terminou dentro do limite de etapas.".to_string())
+    Err(user("A consulta não terminou dentro do limite de etapas."))
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
 
     fn scrubber() -> Scrubber {
@@ -1191,164 +1091,151 @@ pub(crate) mod tests {
         assert_eq!(scrubber().resolve_partial_names("rua São João", &picked).unwrap(), "rua São João");
     }
 
-    /// Every query runs against the real schema, built from the real migrations.
-    async fn database() -> SqliteConnection {
-        let mut conn = SqliteConnection::connect("sqlite::memory:").await.unwrap();
-        for migration in crate::db::migrations() {
-            sqlx::raw_sql(migration.sql).execute(&mut conn).await.unwrap_or_else(|e| panic!("migration {}: {e}", migration.version));
-        }
-        sqlx::raw_sql(
-            "INSERT INTO companies (id, name, cnpj) VALUES (1, 'Empresa', '1');
-             INSERT INTO clients (id, name, cnpj) VALUES (2, 'Cliente', '2');
-             INSERT INTO employees (id, name, cpf) VALUES (3, 'João da Silva', '12345678909');
-             INSERT INTO employee_pix_keys (employee_id, key_value, key_type) VALUES (3, 'chave-secreta', 'random');
-             INSERT INTO source_files (id, file_name, file_hash, page_count, source_url, import_type) VALUES (5, 'marco.xlsx', 'h', 1, 'https://share/secret', 'payment');
-             INSERT INTO payment_shifts (id, employee_id, client_id, company_id, source_file_id, local, work_date, status, extra_data)
-               VALUES (10, 3, 2, 1, 5, 'Posto de João da Silva', '2026-03-03', 'pendente', '{\"A\":\"extra-secreto\"}');
-             INSERT INTO payment_shifts (id, employee_id, client_id, company_id, local, work_date, status, previous_shift_id)
-               VALUES (11, 3, 2, 1, 'Posto', '2026-03-03', 'pago', 10);",
-        )
-        .execute(&mut conn)
-        .await
-        .unwrap();
-        conn
+    const FIXTURES: &str = "INSERT INTO companies (id, name, cnpj) VALUES (1, 'Empresa', '1');
+         INSERT INTO clients (id, name, cnpj) VALUES (2, 'Cliente', '2');
+         INSERT INTO employees (id, name, cpf) VALUES (3, 'João da Silva', '12345678909');
+         INSERT INTO employee_pix_keys (employee_id, key_value, key_type) VALUES (3, 'chave-secreta', 'random');
+         INSERT INTO source_files (id, file_name, file_hash, page_count, source_url, import_type) VALUES (5, 'marco.xlsx', 'h', 1, 'https://share/secret', 'payment');
+         INSERT INTO payment_shifts (id, employee_id, client_id, company_id, source_file_id, local, work_date, status, extra_data)
+           VALUES (10, 3, 2, 1, 5, 'Posto de João da Silva', '2026-03-03', 'pendente', '{\"A\":\"extra-secreto\"}');
+         INSERT INTO payment_shifts (id, employee_id, client_id, company_id, local, work_date, status, previous_shift_id)
+           VALUES (11, 3, 2, 1, 'Posto', '2026-03-03', 'pago', 10);";
+
+    /// A database file built by the server's own `db::connect` (the real
+    /// migrations) with the fixtures in, and the pool that has it open. The
+    /// assistant opens its connections by path, so it's a file, not `:memory:`.
+    pub(crate) async fn database_pool() -> (SqlitePool, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("pontoscan-ai-test-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("pontoscan.db");
+        let pool = crate::db::connect(&path).await.unwrap();
+        sqlx::raw_sql(FIXTURES).execute(&pool).await.unwrap();
+        (pool, path)
     }
 
-    pub(crate) async fn fixtures() -> (GuardedDb, Scrubber, SqliteConnection) {
+    /// Every query runs against the real schema, built from the real migrations.
+    async fn database() -> SqliteConnection {
+        let (pool, path) = database_pool().await;
+        pool.close().await;
+        SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path)).await.unwrap()
+    }
+
+    async fn fixtures() -> (GuardedDb, Scrubber, SqliteConnection) {
         let mut trusted = database().await;
         let scrubber = load_scrubber(&mut trusted).await.unwrap();
         (guard(database().await).await.unwrap(), scrubber, trusted)
     }
 
-    #[test]
-    fn free_queries_work_and_text_cells_are_scrubbed() {
-        tauri::async_runtime::block_on(async {
-            let (mut db, scrubber, _) = fixtures().await;
-            let sql = "SELECT id, employee_id, local, amount FROM payment_shifts WHERE id = 10;";
-            let result = run_sql(&mut db, &scrubber, sql).await.unwrap();
-            assert_eq!(result["columns"], json!(["id", "employee_id", "local", "amount"]));
-            assert_eq!(result["rows"], json!([[10, 3, "Posto de FUNC_3", null]]));
-            assert_eq!(result["truncated"], false);
-        });
+    #[tokio::test]
+    async fn free_queries_work_and_text_cells_are_scrubbed() {
+        let (mut db, scrubber, _) = fixtures().await;
+        let sql = "SELECT id, employee_id, local, amount FROM payment_shifts WHERE id = 10;";
+        let result = run_sql(&mut db, &scrubber, sql).await.unwrap();
+        assert_eq!(result["columns"], json!(["id", "employee_id", "local", "amount"]));
+        assert_eq!(result["rows"], json!([[10, 3, "Posto de FUNC_3", null]]));
+        assert_eq!(result["truncated"], false);
     }
 
-    #[test]
-    fn joins_aggregates_ctes_and_trailing_comments_are_allowed() {
-        tauri::async_runtime::block_on(async {
-            let (mut db, scrubber, _) = fixtures().await;
-            let head = "SELECT COUNT(*) AS n FROM payment_shifts ps JOIN employees e ON e.id = ps.employee_id
-                        WHERE ps.id NOT IN (SELECT previous_shift_id FROM payment_shifts WHERE previous_shift_id IS NOT NULL) -- atuais";
-            assert_eq!(run_sql(&mut db, &scrubber, head).await.unwrap()["rows"], json!([[1]]));
-            let cte = "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 3) SELECT x FROM n";
-            assert_eq!(run_sql(&mut db, &scrubber, cte).await.unwrap()["rows"], json!([[1], [2], [3]]));
-        });
+    #[tokio::test]
+    async fn joins_aggregates_ctes_and_trailing_comments_are_allowed() {
+        let (mut db, scrubber, _) = fixtures().await;
+        let head = "SELECT COUNT(*) AS n FROM payment_shifts ps JOIN employees e ON e.id = ps.employee_id
+                    WHERE ps.id NOT IN (SELECT previous_shift_id FROM payment_shifts WHERE previous_shift_id IS NOT NULL) -- atuais";
+        assert_eq!(run_sql(&mut db, &scrubber, head).await.unwrap()["rows"], json!([[1]]));
+        let cte = "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 3) SELECT x FROM n";
+        assert_eq!(run_sql(&mut db, &scrubber, cte).await.unwrap()["rows"], json!([[1], [2], [3]]));
     }
 
-    #[test]
-    fn personal_columns_are_refused_however_the_sql_is_written() {
-        tauri::async_runtime::block_on(async {
-            let (mut db, scrubber, _) = fixtures().await;
-            for sql in [
-                "SELECT cpf FROM employees",
-                "SELECT name FROM employees",
-                "SELECT * FROM employees",
-                "SELECT id FROM employees WHERE cpf LIKE '123%'",
-                "SELECT x FROM (SELECT name AS x FROM employees)",
-                "WITH t AS (SELECT cpf AS x FROM employees) SELECT x FROM t",
-                "SELECT id FROM payment_shifts ORDER BY extra_data",
-                "SELECT key_value FROM employee_pix_keys",
-                "SELECT file_name, source_url FROM source_files",
-                "SELECT e.name FROM payment_shifts ps JOIN employees e ON e.id = ps.employee_id",
-            ] {
-                assert!(run_sql(&mut db, &scrubber, sql).await.is_err(), "should be refused: {sql}");
+    #[tokio::test]
+    async fn personal_columns_are_refused_however_the_sql_is_written() {
+        let (mut db, scrubber, _) = fixtures().await;
+        for sql in [
+            "SELECT cpf FROM employees",
+            "SELECT name FROM employees",
+            "SELECT * FROM employees",
+            "SELECT id FROM employees WHERE cpf LIKE '123%'",
+            "SELECT x FROM (SELECT name AS x FROM employees)",
+            "WITH t AS (SELECT cpf AS x FROM employees) SELECT x FROM t",
+            "SELECT id FROM payment_shifts ORDER BY extra_data",
+            "SELECT key_value FROM employee_pix_keys",
+            "SELECT file_name, source_url FROM source_files",
+            "SELECT e.name FROM payment_shifts ps JOIN employees e ON e.id = ps.employee_id",
+        ] {
+            assert!(run_sql(&mut db, &scrubber, sql).await.is_err(), "should be refused: {sql}");
+        }
+    }
+
+    #[tokio::test]
+    async fn anything_but_reading_is_refused_even_on_a_writable_connection() {
+        let (mut db, _, _) = fixtures().await;
+        for sql in [
+            "DELETE FROM payment_shifts",
+            "UPDATE payment_shifts SET amount = 0",
+            "DROP TABLE employees",
+            "ATTACH DATABASE '/tmp/x.db' AS x",
+            "PRAGMA writable_schema = 1",
+            "SELECT load_extension('x')",
+        ] {
+            assert!(sqlx::query(sql).execute(&mut db.conn).await.is_err(), "should be refused: {sql}");
+        }
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payment_shifts").fetch_one(&mut db.conn).await.unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn a_runaway_query_is_stopped_by_the_time_limit() {
+        let (mut db, scrubber, _) = fixtures().await;
+        let sql = "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n) SELECT COUNT(*) FROM n";
+        let started = Instant::now();
+        assert!(run_sql(&mut db, &scrubber, sql).await.is_err());
+        assert!(started.elapsed() < QUERY_TIME_LIMIT * 2);
+        assert!(run_sql(&mut db, &scrubber, "SELECT 1 AS ok").await.is_ok(), "connection stays usable");
+    }
+
+    #[tokio::test]
+    async fn large_results_are_capped() {
+        let (mut db, scrubber, _) = fixtures().await;
+        let sql = "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 500) SELECT x FROM n";
+        let result = run_sql(&mut db, &scrubber, sql).await.unwrap();
+        assert_eq!(result["rows"].as_array().unwrap().len(), MAX_ROWS);
+        assert_eq!(result["truncated"], true);
+    }
+
+    #[tokio::test]
+    async fn schema_shown_to_the_model_omits_blocked_columns() {
+        let mut conn = database().await;
+        let schema = schema_text(&mut conn).await.unwrap();
+        assert!(schema.lines().any(|l| l == "employees: id"), "{schema}");
+        assert!(schema.lines().any(|l| l.starts_with("roles:") && l.contains("name")));
+        assert!(schema.lines().any(|l| l.starts_with("payment_shifts:") && l.contains("work_date")));
+        for blocked in BLOCKED_COLUMNS {
+            assert!(!schema.split(|c: char| !c.is_alphanumeric() && c != '_').any(|w| w == *blocked), "{blocked}: {schema}");
+        }
+    }
+
+    #[tokio::test]
+    async fn every_column_that_looks_personal_is_blocked() {
+        let mut conn = database().await;
+        let rows = sqlx::query("SELECT m.name, p.name FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE m.type = 'table'")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap();
+        let looks_personal = Regex::new(r"(cpf|cnpj|pix|matricula|phone|email|url|path|^key_value$|employee_name|extra_data)").unwrap();
+        // Check-state columns about a tracked file, which hold no address or identity.
+        let cleared = ["source_url_check_diffs.check_log_id"];
+        for row in &rows {
+            let (table, column): (String, String) = (row.get(0), row.get(1));
+            let qualified = format!("{table}.{column}");
+            if looks_personal.is_match(&column) && !cleared.contains(&qualified.as_str()) {
+                assert!(!column_allowed(&table, &column), "new personal-looking column not blocked: {qualified}");
             }
-        });
+        }
     }
 
-    #[test]
-    fn anything_but_reading_is_refused_even_on_a_writable_connection() {
-        tauri::async_runtime::block_on(async {
-            let (mut db, _, _) = fixtures().await;
-            for sql in [
-                "DELETE FROM payment_shifts",
-                "UPDATE payment_shifts SET amount = 0",
-                "DROP TABLE employees",
-                "ATTACH DATABASE '/tmp/x.db' AS x",
-                "PRAGMA writable_schema = 1",
-                "SELECT load_extension('x')",
-            ] {
-                assert!(sqlx::query(sql).execute(&mut db.conn).await.is_err(), "should be refused: {sql}");
-            }
-            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payment_shifts").fetch_one(&mut db.conn).await.unwrap();
-            assert_eq!(count, 2);
-        });
-    }
-
-    #[test]
-    fn a_runaway_query_is_stopped_by_the_time_limit() {
-        tauri::async_runtime::block_on(async {
-            let (mut db, scrubber, _) = fixtures().await;
-            let sql = "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n) SELECT COUNT(*) FROM n";
-            let started = Instant::now();
-            assert!(run_sql(&mut db, &scrubber, sql).await.is_err());
-            assert!(started.elapsed() < QUERY_TIME_LIMIT * 2);
-            assert!(run_sql(&mut db, &scrubber, "SELECT 1 AS ok").await.is_ok(), "connection stays usable");
-        });
-    }
-
-    #[test]
-    fn large_results_are_capped() {
-        tauri::async_runtime::block_on(async {
-            let (mut db, scrubber, _) = fixtures().await;
-            let sql = "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 500) SELECT x FROM n";
-            let result = run_sql(&mut db, &scrubber, sql).await.unwrap();
-            assert_eq!(result["rows"].as_array().unwrap().len(), MAX_ROWS);
-            assert_eq!(result["truncated"], true);
-        });
-    }
-
-    #[test]
-    fn schema_shown_to_the_model_omits_blocked_columns() {
-        tauri::async_runtime::block_on(async {
-            let mut conn = database().await;
-            let schema = schema_text(&mut conn).await.unwrap();
-            assert!(schema.lines().any(|l| l == "employees: id"), "{schema}");
-            assert!(schema.lines().any(|l| l.starts_with("roles:") && l.contains("name")));
-            assert!(schema.lines().any(|l| l.starts_with("payment_shifts:") && l.contains("work_date")));
-            for blocked in BLOCKED_COLUMNS {
-                assert!(!schema.split(|c: char| !c.is_alphanumeric() && c != '_').any(|w| w == *blocked), "{blocked}: {schema}");
-            }
-        });
-    }
-
-    #[test]
-    fn every_column_that_looks_personal_is_blocked() {
-        tauri::async_runtime::block_on(async {
-            let mut conn = database().await;
-            let rows = sqlx::query("SELECT m.name, p.name FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE m.type = 'table'")
-                .fetch_all(&mut conn)
-                .await
-                .unwrap();
-            let looks_personal = Regex::new(r"(cpf|cnpj|pix|matricula|phone|email|url|path|^key_value$|employee_name|extra_data)").unwrap();
-            // Check-state columns about a tracked file, which hold no address or identity.
-            let cleared = ["source_url_check_diffs.check_log_id"];
-            for row in &rows {
-                let (table, column): (String, String) = (row.get(0), row.get(1));
-                let qualified = format!("{table}.{column}");
-                if looks_personal.is_match(&column) && !cleared.contains(&qualified.as_str()) {
-                    assert!(!column_allowed(&table, &column), "new personal-looking column not blocked: {qualified}");
-                }
-            }
-        });
-    }
-
-    #[test]
-    fn reveal_restores_real_names_and_keeps_unknown_references() {
-        tauri::async_runtime::block_on(async {
-            let mut conn = database().await;
-            let text = reveal(&mut conn, "FUNC_3 em CLI_2/EMP_1, arquivo ARQ_5, e FUNC_999").await.unwrap();
-            assert_eq!(text, "João da Silva em Cliente/Empresa, arquivo marco.xlsx, e FUNC_999");
-        });
+    #[tokio::test]
+    async fn reveal_restores_real_names_and_keeps_unknown_references() {
+        let mut conn = database().await;
+        let text = reveal(&mut conn, "FUNC_3 em CLI_2/EMP_1, arquivo ARQ_5, e FUNC_999").await.unwrap();
+        assert_eq!(text, "João da Silva em Cliente/Empresa, arquivo marco.xlsx, e FUNC_999");
     }
 
     #[test]
@@ -1379,14 +1266,12 @@ pub(crate) mod tests {
         assert_eq!(split_answer(&format!("<vale_olhar>{}</vale_olhar>", json!(many))).tips.len(), MAX_TIPS);
     }
 
-    #[test]
-    fn suggestions_get_real_names() {
-        tauri::async_runtime::block_on(async {
-            let mut conn = database().await;
-            let parts = split_answer("<vale_olhar>[{\"note\":\"FUNC_3 tem erro\",\"question\":\"Por que FUNC_3 tem erro?\"}]</vale_olhar>");
-            let revealed = reveal_answer(&mut conn, parts).await.unwrap();
-            assert_eq!(revealed.tips[0].question, "Por que João da Silva tem erro?");
-        });
+    #[tokio::test]
+    async fn suggestions_get_real_names() {
+        let mut conn = database().await;
+        let parts = split_answer("<vale_olhar>[{\"note\":\"FUNC_3 tem erro\",\"question\":\"Por que FUNC_3 tem erro?\"}]</vale_olhar>");
+        let revealed = reveal_answer(&mut conn, parts).await.unwrap();
+        assert_eq!(revealed.tips[0].question, "Por que João da Silva tem erro?");
     }
 
     #[test]
@@ -1422,87 +1307,79 @@ pub(crate) mod tests {
         serde_json::from_value(value).unwrap()
     }
 
-    #[test]
-    fn only_links_the_screen_can_really_show_are_kept() {
-        tauri::async_runtime::block_on(async {
-            let mut conn = database().await;
-            for (valid, value) in [
-                (true, json!({ "label": "V", "screen": "payments", "employeeIds": [3], "statuses": ["pago"], "locals": ["Posto"] })),
-                (true, json!({ "label": "V", "screen": "library", "employeeIds": [3], "periodStart": "2026-03-01", "periodEnd": "2026-03-31", "statuses": ["no-punch"] })),
-                (true, json!({ "label": "V", "screen": "settings" })),
-                (true, json!({ "label": "V", "screen": "employee", "recordId": 3 })),
-                (true, json!({ "label": "V", "screen": "client", "recordId": 2 })),
-                (true, json!({ "label": "V", "screen": "employee_pix", "recordId": 3 })),
-                (false, json!({ "label": "V", "screen": "employee_pix", "recordId": 999 })),
-                (false, json!({ "label": "V", "screen": "pay_shift", "recordId": 10 })),
-                (false, json!({ "label": "V", "screen": "pay_shift", "recordId": 11 })),
-                (false, json!({ "label": "V", "screen": "pay_shift", "recordId": 999 })),
-                (false, json!({ "label": "V", "screen": "pay_shift" })),
-                (false, json!({ "label": "V", "screen": "employee", "recordId": 999 })),
-                (false, json!({ "label": "V", "screen": "employee" })),
-                (false, json!({ "label": "V", "screen": "employee", "recordId": 3, "statuses": ["pago"] })),
-                (false, json!({ "label": "V", "screen": "settings", "recordId": 3 })),
-                (false, json!({ "label": "V", "screen": "settings", "employeeIds": [3] })),
-                (false, json!({ "label": "V", "screen": "payments", "recordId": 3 })),
-                (false, json!({ "label": "V", "screen": "/etc/passwd" })),
-                (false, json!({ "label": " ", "screen": "payments" })),
-                (false, json!({ "label": "V", "screen": "payments", "employeeIds": [999] })),
-                (false, json!({ "label": "V", "screen": "payments", "clientIds": [999] })),
-                (false, json!({ "label": "V", "screen": "payments", "statuses": ["overtime"] })),
-                (false, json!({ "label": "V", "screen": "payments", "locals": ["Não existe"] })),
-                (false, json!({ "label": "V", "screen": "payments", "periodStart": "03/2026" })),
-                (false, json!({ "label": "V", "screen": "payments", "periodStart": "2026-04-01", "periodEnd": "2026-03-01" })),
-                (false, json!({ "label": "V", "screen": "library", "employeeIds": [3] })),
-                (false, json!({ "label": "V", "screen": "library", "periodStart": "2026-03-01", "periodEnd": "2026-03-31", "statuses": ["pago"] })),
-                (false, json!({ "label": "V", "screen": "library", "periodStart": "2026-03-01", "periodEnd": "2026-03-31", "locals": ["Posto"] })),
-            ] {
-                assert_eq!(validate_link(&mut conn, &link(value.clone())).await.unwrap(), valid, "{value}");
-            }
-        });
+    #[tokio::test]
+    async fn only_links_the_screen_can_really_show_are_kept() {
+        let mut conn = database().await;
+        for (valid, value) in [
+            (true, json!({ "label": "V", "screen": "payments", "employeeIds": [3], "statuses": ["pago"], "locals": ["Posto"] })),
+            (true, json!({ "label": "V", "screen": "library", "employeeIds": [3], "periodStart": "2026-03-01", "periodEnd": "2026-03-31", "statuses": ["no-punch"] })),
+            (true, json!({ "label": "V", "screen": "settings" })),
+            (true, json!({ "label": "V", "screen": "employee", "recordId": 3 })),
+            (true, json!({ "label": "V", "screen": "client", "recordId": 2 })),
+            (true, json!({ "label": "V", "screen": "employee_pix", "recordId": 3 })),
+            (false, json!({ "label": "V", "screen": "employee_pix", "recordId": 999 })),
+            (false, json!({ "label": "V", "screen": "pay_shift", "recordId": 10 })),
+            (false, json!({ "label": "V", "screen": "pay_shift", "recordId": 11 })),
+            (false, json!({ "label": "V", "screen": "pay_shift", "recordId": 999 })),
+            (false, json!({ "label": "V", "screen": "pay_shift" })),
+            (false, json!({ "label": "V", "screen": "employee", "recordId": 999 })),
+            (false, json!({ "label": "V", "screen": "employee" })),
+            (false, json!({ "label": "V", "screen": "employee", "recordId": 3, "statuses": ["pago"] })),
+            (false, json!({ "label": "V", "screen": "settings", "recordId": 3 })),
+            (false, json!({ "label": "V", "screen": "settings", "employeeIds": [3] })),
+            (false, json!({ "label": "V", "screen": "payments", "recordId": 3 })),
+            (false, json!({ "label": "V", "screen": "/etc/passwd" })),
+            (false, json!({ "label": " ", "screen": "payments" })),
+            (false, json!({ "label": "V", "screen": "payments", "employeeIds": [999] })),
+            (false, json!({ "label": "V", "screen": "payments", "clientIds": [999] })),
+            (false, json!({ "label": "V", "screen": "payments", "statuses": ["overtime"] })),
+            (false, json!({ "label": "V", "screen": "payments", "locals": ["Não existe"] })),
+            (false, json!({ "label": "V", "screen": "payments", "periodStart": "03/2026" })),
+            (false, json!({ "label": "V", "screen": "payments", "periodStart": "2026-04-01", "periodEnd": "2026-03-01" })),
+            (false, json!({ "label": "V", "screen": "library", "employeeIds": [3] })),
+            (false, json!({ "label": "V", "screen": "library", "periodStart": "2026-03-01", "periodEnd": "2026-03-31", "statuses": ["pago"] })),
+            (false, json!({ "label": "V", "screen": "library", "periodStart": "2026-03-01", "periodEnd": "2026-03-31", "locals": ["Posto"] })),
+        ] {
+            assert_eq!(validate_link(&mut conn, &link(value.clone())).await.unwrap(), valid, "{value}");
+        }
     }
 
-    #[test]
-    fn only_a_current_unpaid_shift_can_be_paid_from_a_link() {
-        tauri::async_runtime::block_on(async {
-            let mut conn = database().await;
-            sqlx::raw_sql(
-                "INSERT INTO payment_shifts (id, employee_id, client_id, company_id, local, work_date, status) VALUES (20, 3, 2, 1, 'Posto', '2026-03-04', 'pendente'), (21, 3, 2, 1, 'Posto', '2026-03-04', 'erro');
-                 INSERT INTO payment_shifts (id, employee_id, client_id, company_id, local, work_date, status, deleted_at) VALUES (22, 3, 2, 1, 'Posto', '2026-03-04', 'pendente', '2026-03-05');",
-            )
-            .execute(&mut conn)
-            .await
-            .unwrap();
-            for (expected, id) in [(true, 20), (true, 21), (false, 22)] {
-                let pay = link(json!({ "label": "Pagar", "screen": "pay_shift", "recordId": id }));
-                assert_eq!(validate_link(&mut conn, &pay).await.unwrap(), expected, "turno {id}");
-            }
-        });
+    #[tokio::test]
+    async fn only_a_current_unpaid_shift_can_be_paid_from_a_link() {
+        let mut conn = database().await;
+        sqlx::raw_sql(
+            "INSERT INTO payment_shifts (id, employee_id, client_id, company_id, local, work_date, status) VALUES (20, 3, 2, 1, 'Posto', '2026-03-04', 'pendente'), (21, 3, 2, 1, 'Posto', '2026-03-04', 'erro');
+             INSERT INTO payment_shifts (id, employee_id, client_id, company_id, local, work_date, status, deleted_at) VALUES (22, 3, 2, 1, 'Posto', '2026-03-04', 'pendente', '2026-03-05');",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        for (expected, id) in [(true, 20), (true, 21), (false, 22)] {
+            let pay = link(json!({ "label": "Pagar", "screen": "pay_shift", "recordId": id }));
+            assert_eq!(validate_link(&mut conn, &pay).await.unwrap(), expected, "turno {id}");
+        }
     }
 
-    #[test]
-    fn link_labels_get_real_names() {
-        tauri::async_runtime::block_on(async {
-            let mut conn = database().await;
-            let links = finish_links(&mut conn, vec![link(json!({ "label": "Turnos de FUNC_3", "screen": "payments", "employeeIds": [3] }))]).await.unwrap();
-            assert_eq!(links[0].label, "Turnos de João da Silva");
-        });
+    #[tokio::test]
+    async fn link_labels_get_real_names() {
+        let mut conn = database().await;
+        let links = finish_links(&mut conn, vec![link(json!({ "label": "Turnos de FUNC_3", "screen": "payments", "employeeIds": [3] }))]).await.unwrap();
+        assert_eq!(links[0].label, "Turnos de João da Silva");
     }
 
-    #[test]
-    fn every_question_carries_the_reminder_after_the_users_text() {
-        tauri::async_runtime::block_on(async {
-            let mut conn = database().await;
-            let scrubber = load_scrubber(&mut conn).await.unwrap();
-            let request = AskRequest {
-                conversation: vec![],
-                question: "quantos turnos?".to_string(),
-                screen: None,
-                shift: None,
-                name_choices: HashMap::new(),
-            };
-            let content = prepare_question(&mut conn, &scrubber, &request).await.unwrap().unwrap();
-            assert_eq!(content, format!("quantos turnos?\n\n{TURN_REMINDER}"));
-        });
+    #[tokio::test]
+    async fn every_question_carries_the_reminder_after_the_users_text() {
+        let mut conn = database().await;
+        let scrubber = load_scrubber(&mut conn).await.unwrap();
+        let request = AskRequest {
+            conversation: vec![],
+            question: "quantos turnos?".to_string(),
+            screen: None,
+            shift: None,
+            name_choices: HashMap::new(),
+        };
+        let content = prepare_question(&mut conn, &scrubber, &request).await.unwrap().unwrap();
+        assert_eq!(content, format!("quantos turnos?\n\n{TURN_REMINDER}"));
     }
 
     #[test]
@@ -1516,18 +1393,52 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn claude_code_conversations_count_and_resume_from_the_latest_session() {
-        let conversation = [json!({ "claudeCodeSession": "a" }), json!({ "claudeCodeSession": "b" })];
-        assert_eq!(question_count(&conversation), 2);
-        assert_eq!(claude_code_session(&conversation), Some("b"));
-        assert_eq!(claude_code_session(&[json!({ "role": "user", "content": "x" })]), None);
-        assert_eq!(claude_code_session(&[]), None);
-    }
-
-    #[test]
     fn last_turn_disables_tools() {
         assert_eq!(request_body("s", &[], true)["tool_choice"]["type"], "auto");
         assert_eq!(request_body("s", &[], false)["tool_choice"]["type"], "none");
         assert_eq!(tool_definitions()[0]["strict"], true);
+    }
+
+    fn request(question: &str, conversation: Vec<Value>) -> AskRequest {
+        serde_json::from_value(json!({ "conversation": conversation, "question": question, "screen": null, "shift": null, "nameChoices": {} })).unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_database_path_comes_from_the_servers_own_pool() {
+        let (pool, path) = database_pool().await;
+        let live = live_database_path(&pool).await.unwrap();
+        assert_eq!(std::path::Path::new(&live).canonicalize().unwrap(), path.canonicalize().unwrap());
+        // `:memory:` has no file a read-only connection could open.
+        assert!(live_database_path(&crate::db::test_pool().await).await.is_err());
+    }
+
+    /// Runs `ask` end to end up to the point a request would leave: an
+    /// ambiguous first name stops it before the key is ever used.
+    #[tokio::test]
+    async fn an_ambiguous_name_is_asked_about_before_anything_is_sent() {
+        let (pool, _) = database_pool().await;
+        sqlx::raw_sql("INSERT INTO employees (id, name, cpf) VALUES (4, 'João Pereira', '98765432100')").execute(&pool).await.unwrap();
+        let outcome = ask(&pool, "chave-que-nunca-e-usada", request("o João faltou ontem?", vec![])).await.unwrap();
+        let AskOutcome::NeedsChoice { ambiguities } = outcome else { panic!("should ask who João is first") };
+        assert_eq!(ambiguities[0].candidates.iter().map(|c| c.id).collect::<Vec<_>>(), [3, 4]);
+    }
+
+    #[tokio::test]
+    async fn a_conversation_past_the_question_limit_is_refused() {
+        let (pool, _) = database_pool().await;
+        let long: Vec<Value> = (0..MAX_QUESTIONS).map(|i| json!({ "role": "user", "content": format!("pergunta {i}") })).collect();
+        let error = ask(&pool, "chave-que-nunca-e-usada", request("mais uma?", long)).await.unwrap_err();
+        assert_eq!(error.to_string(), "Esta conversa ficou longa demais. Inicie uma nova.");
+    }
+
+    #[tokio::test]
+    async fn the_guarded_connection_opened_by_path_is_read_only_and_guarded() {
+        let (pool, path) = database_pool().await;
+        let options = SqliteConnectOptions::new().filename(&path).read_only(true);
+        let mut db = guard(SqliteConnection::connect_with(&options).await.unwrap()).await.unwrap();
+        let scrubber = load_scrubber(&mut pool.acquire().await.unwrap()).await.unwrap();
+        assert!(run_sql(&mut db, &scrubber, "SELECT id FROM payment_shifts").await.is_ok());
+        assert!(run_sql(&mut db, &scrubber, "SELECT name FROM employees").await.is_err());
+        assert!(sqlx::query("DELETE FROM payment_shifts").execute(&mut db.conn).await.is_err());
     }
 }

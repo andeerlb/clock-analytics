@@ -1,4 +1,3 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChevronDown, ChevronRight, ExternalLink, FileSpreadsheet, Plus, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
@@ -24,6 +23,11 @@ import {
 import { formatDateAbbrevYY, formatDateTimeAbbrevYY, formatPersonName, parseSqliteDateTime, resolveReimportConfigLabel, resolveReimportPeriod } from "../lib/format";
 import { acceptShiftChange } from "../lib/remoteCheckDiff";
 import type { PaymentTemplateListRow } from "../lib/types";
+
+/** Opens the spreadsheet's link in a new browser tab. */
+function openUrl(url: string) {
+  window.open(url, "_blank", "noopener,noreferrer");
+}
 
 const INTERVAL_CHOICES = [1, 5, 15, 30, 60];
 const HISTORY_SIZE = 10;

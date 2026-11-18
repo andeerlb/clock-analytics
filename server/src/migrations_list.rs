@@ -1,10 +1,10 @@
 // Every migration, in the order it is applied (the order matters: 71001
-// runs between 71 and 72). Shared via `include!` by the desktop app
-// (src-tauri/src/db.rs) and the web server (server/src/db.rs), so both
-// apply exactly the same SQL under the same versions.
+// runs between 71 and 72). Read by server/src/db.rs via `include!`. The
+// versions and SQL are the desktop app's, so its databases open here as
+// already migrated.
 //
-// To add a migration: create migrations/NNNN_name.sql AND append a line
-// here. Never edit or reorder an existing line or .sql file.
+// To add a migration: create server/migrations/NNNN_name.sql AND append a
+// line here. Never edit or reorder an existing line or .sql file.
 migration_list! {
     (1, "create core schema", "0001_init.sql"),
     (2, "track imported files for duplicate detection", "0002_import_files.sql"),

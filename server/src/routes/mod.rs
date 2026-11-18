@@ -19,6 +19,7 @@ pub mod companies;
 pub mod employees;
 pub mod payments;
 pub mod roles;
+pub mod storage;
 pub mod timesheets;
 
 /// Everything here sits behind `auth::require_auth`.
@@ -32,8 +33,10 @@ pub fn protected() -> Router<AppState> {
         .merge(timesheets::router())
         .merge(payments::router())
         .merge(analytics::router())
+        .merge(storage::router())
         .merge(crate::remote_checks::router())
         .merge(crate::files::router())
+        .merge(crate::ai::router())
 }
 
 /// What a handler answered, as the JSON the browser would have received.

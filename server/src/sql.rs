@@ -138,7 +138,7 @@ pub fn last_insert_id_of(n: usize) -> Value {
     serde_json::json!({ "$lastInsertId": n })
 }
 
-/// `runWriteBatch` (src-tauri/src/db_batch.rs): every statement in one
+/// The desktop's `runWriteBatch`: every statement in one
 /// transaction — all apply, or on the first error none do. A tripped
 /// `expect_changes` guard becomes a 409 with its message.
 pub async fn run_batch(pool: &SqlitePool, statements: Vec<BatchStatement>) -> ApiResult<Vec<ExecResult>> {

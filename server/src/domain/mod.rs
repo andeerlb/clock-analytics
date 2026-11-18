@@ -1,5 +1,5 @@
-//! Pure domain code carried over unchanged from the desktop app
-//! (src-tauri/src): timesheet parsers, Poppler wrappers, spreadsheet
+//! Pure domain code carried over unchanged from the old desktop app:
+//! timesheet parsers, Poppler wrappers, spreadsheet
 //! reading, file authorship and report ZIPs. Nothing here knows about HTTP.
 #![allow(dead_code)]
 

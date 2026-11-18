@@ -16,12 +16,15 @@ serde = { version = "1", features = ["derive"] }
 # order the frontend sent, byte-for-byte what the desktop app wrote.
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
-# Same sqlx line the desktop app uses (via tauri-plugin-sql), so the
-# migrations (src-tauri/src/migrations_list.rs) produce identical checksums and a
-# database exported from the desktop app opens here without a migration
-# mismatch.
+# Same sqlx line the desktop app used (via tauri-plugin-sql), so the
+# migrations (src/migrations_list.rs) produce identical checksums and a
+# database from the desktop app opens here without a migration mismatch.
+# Don't bump the minor version without checking that.
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "json"] }
 futures-core = "0.3"
+# The assistant's SQLite authorizer (`ai/investigation.rs`): the same
+# libsqlite3-sys sqlx 0.8 links, so this adds no second SQLite.
+libsqlite3-sys = { version = "0.30", default-features = false }
 # Firebase ID tokens are RS256 JWTs signed by Google; v9 uses ring, so no
 # aws-lc / cmake toolchain is needed to build the server.
 jsonwebtoken = "9"

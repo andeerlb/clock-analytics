@@ -160,7 +160,7 @@ pub(crate) async fn list_tracked_impl(state: &AppState) -> ApiResult<Vec<Value>>
      ) sf
      LEFT JOIN source_url_settings sus ON sus.source_url = sf.source_url
      LEFT JOIN (
-       SELECT *, ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY checked_at DESC) AS rn
+       SELECT *, ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY checked_at DESC, id DESC) AS rn
        FROM source_url_check_log
      ) log ON log.source_url = sf.source_url AND log.rn = 1
      WHERE sf.rn = 1 AND COALESCE(sus.tracking_enabled, 0) = 1
@@ -425,7 +425,7 @@ async fn list_url_check_log_for_config(State(state): State<AppState>, Json(args)
              ORDER BY (d.config_id IS NULL) ASC LIMIT 1) AS errorDismissedAt
      FROM source_url_check_log l
      JOIN source_url_check_log_configs jc ON jc.check_log_id = l.id AND jc.config_id = $1
-     ORDER BY l.checked_at DESC
+     ORDER BY l.checked_at DESC, l.id DESC
      LIMIT $2 OFFSET $3",
         &params![args.config_id, args.limit, args.offset],
     )

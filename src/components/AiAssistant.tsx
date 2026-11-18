@@ -1,4 +1,3 @@
-import { listen } from "../lib/events";
 import { ArrowRight, ChevronDown, Loader2, Lock, MessageCircle, PanelTop, Plus, SquarePen, ArrowUp, X } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -28,7 +27,7 @@ interface PendingQuestion {
   choices: Record<string, number | null>;
 }
 
-/** Must match `PLAIN_SCREENS` in ai_investigation.rs. */
+/** Must match `PLAIN_SCREENS` in server/src/ai/investigation.rs. */
 const PLAIN_ROUTES: Record<string, string> = {
   employees: "/employees",
   companies: "/companies",
@@ -269,7 +268,6 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
   const [useScreen, setUseScreen] = useState(true);
   const [pending, setPending] = useState<PendingQuestion | null>(null);
   const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [unseenAnswer, setUnseenAnswer] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
@@ -343,7 +341,7 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
     setUnseenAnswer(false);
     inputRef.current?.focus({ preventScroll: true });
     aiStatus()
-      .then((status) => setReady(status.claudeCode || status.apiKey))
+      .then((status) => setReady(status.apiKey))
       .catch((e) => setError(String(e)));
     // Also re-checked on navigation, to pick up a key just saved in Configurações.
   }, [open, rendered, pathname]);
@@ -352,13 +350,6 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [messages, running, pending, error]);
 
-  useEffect(() => {
-    if (!running) return;
-    const unlisten = listen<string>("ai-assistant-progress", (event) => setProgress(event.payload));
-    return () => {
-      void unlisten.then((stop) => stop());
-    };
-  }, [running]);
 
   useEffect(() => {
     if (!contextOpen) return;
@@ -420,7 +411,6 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
   async function submit(question: string, target: AiShiftTarget | null, screenForAi: string | null, choices: Record<string, number | null>) {
     const run = ++currentRun.current;
     setRunning(true);
-    setProgress("Iniciando");
     setError(null);
     setPending(null);
     try {
@@ -575,7 +565,7 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
                 )}
                 {ready === false && (
                   <p className="ai-muted">
-                    Para usar o assistente, faça login no Claude Code neste computador ou cadastre uma chave de API em{" "}
+                    Para usar o assistente, cadastre uma chave de API da Anthropic em{" "}
                     <Link to="/settings">Configurações</Link>.
                   </p>
                 )}
@@ -643,7 +633,8 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
                 )}
                 {running && (
                   <p className="ai-muted" role="status">
-                    {progress}...
+                    {/* The server answers in one piece, so there are no intermediate steps to show. */}
+                    Pensando...
                   </p>
                 )}
                 {error && <div className="ai-error">{error}</div>}

@@ -8,19 +8,19 @@ use sqlx::migrate::{Migration, MigrationSource, MigrationType, Migrator};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
 
-/// Builds the list from the desktop app's `migrations_list.rs` — same
-/// versions, same SQL, same order. sqlx stores a checksum of each
-/// migration's SQL, so a `pontoscan.db` exported from the desktop app is
-/// recognized here as already migrated instead of failing with "previously
-/// applied but has been modified".
+/// Builds the list from `migrations_list.rs`: the same versions, SQL and
+/// order the desktop app used. sqlx stores a checksum of each migration's
+/// SQL, so a `pontoscan.db` from the desktop app is recognized here as
+/// already migrated instead of failing with "previously applied but has
+/// been modified". Never edit an applied migration.
 macro_rules! migration_list {
     ($(($version:expr, $description:expr, $file:literal)),* $(,)?) => {
-        vec![$(($version, $description, include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../src-tauri/migrations/", $file)))),*]
+        vec![$(($version, $description, include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations/", $file)))),*]
     };
 }
 
 fn migration_specs() -> Vec<(i64, &'static str, &'static str)> {
-    include!("../../src-tauri/src/migrations_list.rs")
+    include!("migrations_list.rs")
 }
 
 /// Same conversion tauri-plugin-sql does (`MigrationList::resolve`), kept in

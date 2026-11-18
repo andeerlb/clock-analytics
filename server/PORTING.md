@@ -1,5 +1,8 @@
 # Portando o desktop para o servidor
 
+> O app desktop (Tauri) foi removido: tudo já roda no servidor. Este guia fica
+> como referência das convenções usadas no port (RPC, SQL, arquivos).
+
 Guia para levar uma função de `src/lib/db.ts`, ou um comando Tauri de
 `src/lib/api.ts`, para o servidor. O objetivo é **fidelidade**: mesmas regras,
 mesmo SQL, mesmas mensagens e mesmo formato de dados. As telas não devem perceber

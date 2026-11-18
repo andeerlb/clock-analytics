@@ -327,6 +327,11 @@ async fn run_one(state: &AppState, t: &TrackedPaymentUrl, configs: &[ReimportCon
 
 /// `logUrlCheckResult`: one check attempt plus the configs it evaluated, then
 /// prunes the URL's log to the last 200 entries. Returns the new log id.
+///
+/// The pruning breaks ties on `id` (the desktop ordered by `checked_at`
+/// alone): two checks in the same second (a "Conferir agora" landing on a
+/// scheduled one) could otherwise prune the row just inserted, and saving
+/// its diffs then failed on the foreign key.
 async fn log_url_check_result(
     state: &AppState,
     source_url: &str,
@@ -359,7 +364,7 @@ async fn log_url_check_result(
      WHERE check_log_id IN (
        SELECT id FROM source_url_check_log
        WHERE source_url = $1
-         AND id NOT IN (SELECT id FROM source_url_check_log WHERE source_url = $1 ORDER BY checked_at DESC LIMIT $2)
+         AND id NOT IN (SELECT id FROM source_url_check_log WHERE source_url = $1 ORDER BY checked_at DESC, id DESC LIMIT $2)
      )",
         &params![source_url, MAX_CHECK_LOG_ENTRIES_PER_URL],
     )
@@ -370,7 +375,7 @@ async fn log_url_check_result(
      WHERE check_log_id IN (
        SELECT id FROM source_url_check_log
        WHERE source_url = $1
-         AND id NOT IN (SELECT id FROM source_url_check_log WHERE source_url = $1 ORDER BY checked_at DESC LIMIT $2)
+         AND id NOT IN (SELECT id FROM source_url_check_log WHERE source_url = $1 ORDER BY checked_at DESC, id DESC LIMIT $2)
      )",
         &params![source_url, MAX_CHECK_LOG_ENTRIES_PER_URL],
     )
@@ -380,7 +385,7 @@ async fn log_url_check_result(
         "DELETE FROM source_url_check_log
      WHERE source_url = $1
        AND id NOT IN (
-         SELECT id FROM source_url_check_log WHERE source_url = $1 ORDER BY checked_at DESC LIMIT $2
+         SELECT id FROM source_url_check_log WHERE source_url = $1 ORDER BY checked_at DESC, id DESC LIMIT $2
        )",
         &params![source_url, MAX_CHECK_LOG_ENTRIES_PER_URL],
     )
@@ -698,6 +703,7 @@ mod tests {
         assert_eq!(list_check_log_config_ids(&state, third).await.unwrap(), vec![config_id]);
     }
 
+    /// All 205 checks land in the same second: the newest must always survive.
     #[tokio::test]
     async fn the_log_keeps_the_last_200_checks_per_url() {
         let state = AppState::for_tests().await;

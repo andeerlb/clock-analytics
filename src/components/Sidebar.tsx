@@ -1,10 +1,7 @@
-import type { Update } from "@tauri-apps/plugin-updater";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import SidebarAccount from "./SidebarAccount";
-import UpdateModal from "./UpdateModal";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
-import { checkForUpdate } from "../lib/updateCheck";
 
 function MenuIcon({ path, size = 17, className }: { path: string; size?: number; className?: string }) {
   return (
@@ -80,24 +77,8 @@ const REMOTE_STATUS_META: Record<RemoteStatus, { label: string; color: string; p
 };
 
 export default function Sidebar() {
-  const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
-  const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [collapsed, setCollapsed] = useState(readSavedCollapsed);
   const { remoteUpdates, trackedFiles, reimportConfigs, checking, tickError } = useRemoteFileUpdates();
-
-  // Passive check on launch — found means "surface it immediately" (no
-  // separate click needed to see the modal), not just a badge waiting to be
-  // noticed.
-  useEffect(() => {
-    checkForUpdate()
-      .then((update) => {
-        if (update) {
-          setAvailableUpdate(update);
-          setShowUpdateModal(true);
-        }
-      })
-      .catch(() => {});
-  }, []);
 
   // No single countdown makes sense anymore — a URL can have several
   // reimport configs, each on its own schedule (see the Verificação
@@ -192,15 +173,6 @@ export default function Sidebar() {
         <SidebarAccount collapsed={collapsed} />
       </div>
 
-      {showUpdateModal && availableUpdate && (
-        <UpdateModal
-          update={availableUpdate}
-          onClose={() => {
-            setShowUpdateModal(false);
-            setAvailableUpdate(null);
-          }}
-        />
-      )}
     </nav>
   );
 }
