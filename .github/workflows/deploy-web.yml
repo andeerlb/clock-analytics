@@ -9,7 +9,14 @@ name: Deploy web
 #      new screens never go live before the API they call.
 #
 # Authentication is keyless (Workload Identity Federation, infra/deploy.tf):
-# nothing secret is stored in GitHub. None of the values below are secrets.
+# nothing secret is stored in GitHub. Every project-specific value comes from
+# the variables of the `production` environment (Settings → Environments →
+# production → Variables), so moving to another Google Cloud/Firebase project
+# means changing those variables, not this file. None of them are secrets:
+#   GCP_PROJECT, WIF_PROVIDER, DEPLOY_SA, RELEASES_BUCKET, API_URL
+#     → printed by `tofu output github_variables` (infra/)
+#   FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_APP_ID
+#     → Firebase console → Configurações do projeto → Seus apps → app Web
 
 on:
   push:
@@ -24,17 +31,27 @@ concurrency:
   group: deploy-web
   cancel-in-progress: false
 
-env:
-  GCP_PROJECT: clock-analytics-b123c
-  WIF_PROVIDER: projects/667650515882/locations/global/workloadIdentityPools/github/providers/github-actions
-  DEPLOY_SA: github-deploy@clock-analytics-b123c.iam.gserviceaccount.com
-  RELEASES_BUCKET: clock-analytics-b123c-tapago-releases
-  API_URL: https://tapago.duckdns.org
-
 jobs:
   server:
     runs-on: ubuntu-24.04 # same Ubuntu as the VM, so the binary's glibc matches
+    environment: production
+    env:
+      GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+      WIF_PROVIDER: ${{ vars.WIF_PROVIDER }}
+      DEPLOY_SA: ${{ vars.DEPLOY_SA }}
+      RELEASES_BUCKET: ${{ vars.RELEASES_BUCKET }}
     steps:
+      - name: Check the environment variables
+        run: |
+          missing=""
+          for name in GCP_PROJECT WIF_PROVIDER DEPLOY_SA RELEASES_BUCKET; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Faltam variáveis no environment production do GitHub:$missing (veja o topo deste arquivo)"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
@@ -66,7 +83,28 @@ jobs:
   web:
     needs: server
     runs-on: ubuntu-24.04
+    environment: production
+    env:
+      GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+      WIF_PROVIDER: ${{ vars.WIF_PROVIDER }}
+      DEPLOY_SA: ${{ vars.DEPLOY_SA }}
+      API_URL: ${{ vars.API_URL }}
     steps:
+      - name: Check the environment variables
+        env:
+          FIREBASE_API_KEY: ${{ vars.FIREBASE_API_KEY }}
+          FIREBASE_AUTH_DOMAIN: ${{ vars.FIREBASE_AUTH_DOMAIN }}
+          FIREBASE_APP_ID: ${{ vars.FIREBASE_APP_ID }}
+        run: |
+          missing=""
+          for name in GCP_PROJECT WIF_PROVIDER DEPLOY_SA API_URL FIREBASE_API_KEY FIREBASE_AUTH_DOMAIN FIREBASE_APP_ID; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Faltam variáveis no environment production do GitHub:$missing (veja o topo deste arquivo)"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -78,7 +116,13 @@ jobs:
         run: yarn install --frozen-lockfile
 
       - name: Build
-        run: yarn build # uses .env.production
+        env:
+          VITE_FIREBASE_API_KEY: ${{ vars.FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ vars.FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ vars.GCP_PROJECT }}
+          VITE_FIREBASE_APP_ID: ${{ vars.FIREBASE_APP_ID }}
+          VITE_API_URL: ${{ vars.API_URL }}
+        run: yarn build
 
       - name: Wait for the VM to run this commit
         run: |
