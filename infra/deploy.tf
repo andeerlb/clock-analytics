@@ -13,7 +13,7 @@
 variable "github_repository" {
   description = "Repositório (dono/nome) cujo GitHub Actions pode fazer deploy."
   type        = string
-  default     = "andeerlb/clock-analytics"
+  default     = "andeerlb/tapago"
 }
 
 variable "deploy_refs" {
