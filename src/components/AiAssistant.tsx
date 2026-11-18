@@ -1,4 +1,4 @@
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "../lib/events";
 import { ArrowRight, ChevronDown, Loader2, Lock, MessageCircle, PanelTop, Plus, SquarePen, ArrowUp, X } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";

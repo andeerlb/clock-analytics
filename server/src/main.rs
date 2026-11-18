@@ -1,8 +1,11 @@
 mod auth;
+mod domain;
 mod config;
 mod db;
 mod error;
+mod files;
 mod routes;
+mod sql;
 
 use std::sync::Arc;
 
@@ -21,6 +24,21 @@ use crate::config::Config;
 #[derive(Clone)]
 pub struct AppState {
     pub db: SqlitePool,
+    /// Root for every file the server stores or serves; see `files.rs`.
+    pub data_dir: Arc<std::path::PathBuf>,
+}
+
+impl AppState {
+    pub fn new(db: SqlitePool, data_dir: std::path::PathBuf) -> Self {
+        AppState { db, data_dir: Arc::new(data_dir) }
+    }
+
+    #[cfg(test)]
+    pub async fn for_tests() -> Self {
+        let dir = std::env::temp_dir().join(format!("pontoscan-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        AppState::new(db::test_pool().await, dir.canonicalize().unwrap())
+    }
 }
 
 pub fn app(config: &Config, state: AppState, auth: Arc<Authenticator>) -> Router {
@@ -69,8 +87,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let pool = db::connect(&config.db_path).await?;
     tracing::info!(db = %config.db_path.display(), "banco aberto e migrations aplicadas");
 
+    std::fs::create_dir_all(&config.data_dir)?;
+    let data_dir = config.data_dir.canonicalize()?;
+    files::spawn_upload_cleanup(data_dir.clone());
+
     let auth = Arc::new(Authenticator::new(&config.auth));
-    let app = app(&config, AppState { db: pool.clone() }, auth);
+    let app = app(&config, AppState::new(pool.clone(), data_dir), auth);
 
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(addr = %config.bind, "servidor no ar");
@@ -107,13 +129,13 @@ mod tests {
     use tower::ServiceExt;
 
     fn config(auth: AuthConfig) -> Config {
-        Config { bind: "127.0.0.1:0".parse().unwrap(), db_path: "unused".into(), static_dir: None, cors_origins: vec![], auth }
+        Config { bind: "127.0.0.1:0".parse().unwrap(), db_path: "unused".into(), data_dir: "unused".into(), static_dir: None, cors_origins: vec![], auth }
     }
 
     async fn firebase_app() -> Router {
         let auth = AuthConfig::Firebase { project_id: "p".into(), allowed_emails: HashSet::from(["a@b.com".to_owned()]) };
         let cfg = config(auth);
-        app(&cfg, AppState { db: db::test_pool().await }, Arc::new(Authenticator::new(&cfg.auth)))
+        app(&cfg, AppState::for_tests().await, Arc::new(Authenticator::new(&cfg.auth)))
     }
 
     #[tokio::test]
@@ -133,7 +155,7 @@ mod tests {
     #[tokio::test]
     async fn dev_bypass_reaches_the_handlers_end_to_end() {
         let cfg = config(AuthConfig::DevBypass { email: "dev@local".into() });
-        let app = app(&cfg, AppState { db: db::test_pool().await }, Arc::new(Authenticator::new(&cfg.auth)));
+        let app = app(&cfg, AppState::for_tests().await, Arc::new(Authenticator::new(&cfg.auth)));
 
         let create = Request::post("/api/companies")
             .header("content-type", "application/json")

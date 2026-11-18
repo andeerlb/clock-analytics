@@ -33,19 +33,16 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** Sends a request with the login token; throws `ApiError` with the server's message on failure. */
+async function send(method: string, path: string, body?: BodyInit, contentType?: string): Promise<Response> {
   const headers: Record<string, string> = {};
   const token = await tokenProvider();
   if (token) headers.Authorization = `Bearer ${token}`;
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (contentType) headers["Content-Type"] = contentType;
 
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}/api${path}`, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    response = await fetch(`${API_BASE}/api${path}`, { method, headers, body });
   } catch {
     throw new ApiError("Não foi possível falar com o servidor. Verifique sua conexão.", 0);
   }
@@ -61,7 +58,16 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     if (response.status === 401 || response.status === 403) authFailureHandler(response.status);
     throw new ApiError(message, response.status);
   }
+  return response;
+}
 
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const response = await send(
+    method,
+    path,
+    body === undefined ? undefined : JSON.stringify(body),
+    body === undefined ? undefined : "application/json",
+  );
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
@@ -73,3 +79,34 @@ export const api = {
   patch: <T>(path: string, body?: unknown) => request<T>("PATCH", path, body),
   delete: <T>(path: string) => request<T>("DELETE", path),
 };
+
+/**
+ * Calls a server function that replaced a `db.ts` / Tauri-command function:
+ * `POST /api/rpc/<name>` with the original function's arguments as one
+ * object, keyed by their parameter names. See server/PORTING.md.
+ */
+export function rpc<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+  return request<T>("POST", `/rpc/${name}`, args);
+}
+
+export interface UploadedFile {
+  /** Server path — what the old path-based functions now receive. */
+  path: string;
+  fileName: string;
+  size: number;
+}
+
+/** Uploads files to the server (all into one folder) and returns their server paths, in order. */
+export async function uploadFiles(files: File[]): Promise<UploadedFile[]> {
+  if (files.length === 0) return [];
+  const form = new FormData();
+  for (const file of files) form.append("file", file, file.name);
+  const response = await send("POST", "/files/upload", form);
+  return (await response.json()) as UploadedFile[];
+}
+
+/** Bytes of a file stored on the server (e.g. an imported PDF for the viewer). */
+export async function fetchServerFile(path: string): Promise<ArrayBuffer> {
+  const response = await send("GET", `/files/content?path=${encodeURIComponent(path)}`);
+  return response.arrayBuffer();
+}

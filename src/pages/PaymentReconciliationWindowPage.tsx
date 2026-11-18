@@ -1,4 +1,4 @@
-import { emit, listen } from "@tauri-apps/api/event";
+import { emit, listen } from "../lib/events";
 import { useEffect, useState } from "react";
 import PaymentReconciliationScreen from "../components/PaymentReconciliationScreen";
 import { SidePanelSlotContext } from "../components/SidePanel";

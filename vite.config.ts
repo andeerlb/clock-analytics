@@ -30,8 +30,9 @@ export default defineConfig(() => ({
     },
     // Web version: in `yarn dev` the API lives on the local `server/`
     // (cargo run, default 127.0.0.1:8787) and is reached same-origin.
+    // PONTOSCAN_API_PROXY lets several local servers run side by side.
     proxy: {
-      "/api": "http://127.0.0.1:8787",
+      "/api": process.env.PONTOSCAN_API_PROXY ?? "http://127.0.0.1:8787",
     },
   },
 }));

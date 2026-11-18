@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { pickAndUpload } from "./files";
+import { api, fetchServerFile } from "./http";
 import type {
   FileHash,
   FileParseResult,
@@ -34,9 +35,9 @@ export function openAppDataDir(): Promise<void> {
   return invoke("open_app_data_dir");
 }
 
-/** Raw bytes of a PDF, for the in-app viewer to render. */
+/** Raw bytes of a PDF stored on the server, for the in-app viewer to render. */
 export async function readPdfBytes(path: string): Promise<ArrayBuffer> {
-  return invoke("read_pdf_bytes", { path });
+  return fetchServerFile(path);
 }
 
 /** Copies the PDF at `sourcePath` to `destPath` — the viewer's "Baixar" action. */
@@ -44,50 +45,41 @@ export function copyPdfTo(sourcePath: string, destPath: string): Promise<void> {
   return invoke("copy_pdf_to", { sourcePath, destPath });
 }
 
-/** Opens the native file picker, restricted to PDFs, multi-select on. */
+/** Lets the user choose PDFs, uploads them, and resolves with their server paths (empty if cancelled). */
 export async function pickPdfFiles(): Promise<string[]> {
-  const selection = await open({
-    multiple: true,
-    filters: [{ name: "PDF", extensions: ["pdf"] }],
-  });
-  if (!selection) return [];
-  return Array.isArray(selection) ? selection : [selection];
+  return pickAndUpload({ accept: [".pdf"], multiple: true, extensions: ["pdf"] });
 }
 
-/** Opens the native folder picker — the "Pasta inteira" alternative to multi-file selection. */
+/**
+ * The "Pasta inteira" option: the user chooses a folder, its files are
+ * uploaded into one server folder, and that folder's server path is
+ * returned — `listDirFiles` then lists it, same as on the desktop.
+ */
 export async function pickFolder(): Promise<string | null> {
-  const selection = await open({ directory: true, multiple: false });
-  return typeof selection === "string" ? selection : null;
+  const paths = await pickAndUpload({ directory: true, extensions: ["pdf", "csv", "xlsx", "xls", "ods"] });
+  if (paths.length === 0) return null;
+  return paths[0].replace(/[\\/][^\\/]*$/, "");
 }
 
-/** Immediate files (not subfolders) inside `dir` whose extension matches one of `extensions` (no leading dot, e.g. "pdf"). */
+/** Immediate files inside `dir` (a folder returned by `pickFolder`) whose extension matches one of `extensions` (no leading dot, e.g. "pdf"). */
 export function listDirFiles(dir: string, extensions: string[]): Promise<string[]> {
-  return invoke("list_dir_files", { dir, extensions });
+  return api.post<string[]>("/files/list", { dir, extensions });
 }
 
-/** Opens the native file picker, restricted to payroll spreadsheet formats, single-select — for the template wizard's sample file. */
+/** Lets the user choose one payroll spreadsheet (the template wizard's sample file) and uploads it. */
 export async function pickPaymentFile(): Promise<string | null> {
-  const selection = await open({
-    multiple: false,
-    filters: [{ name: "Planilha de pagamentos", extensions: ["csv", "xlsx", "xls", "ods"] }],
-  });
-  return typeof selection === "string" ? selection : null;
+  const paths = await pickAndUpload({ accept: [".csv", ".xlsx", ".xls", ".ods"], extensions: ["csv", "xlsx", "xls", "ods"] });
+  return paths[0] ?? null;
 }
 
 /**
  * Multi-select — for actually importing (one template can be applied to
  * several files at once). Unlike `pickPaymentFile`, filtered to a single
  * format: the template chosen for this import already fixes its expected
- * file format, so there's no "which format is this" left to figure out
- * like there is when first building a template from a sample file.
+ * file format.
  */
 export async function pickPaymentFiles(extensions: string[]): Promise<string[]> {
-  const selection = await open({
-    multiple: true,
-    filters: [{ name: "Planilha de pagamentos", extensions }],
-  });
-  if (!selection) return [];
-  return Array.isArray(selection) ? selection : [selection];
+  return pickAndUpload({ accept: extensions.map((e) => `.${e}`), multiple: true, extensions });
 }
 
 export interface PaymentFileHash {

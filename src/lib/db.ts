@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
+import { emit } from "./events";
 import Database from "@tauri-apps/plugin-sql";
 import { overtimeMinutesForDay, sumIntervalMinutes } from "./analysis";
 import { normalizeCnpj, normalizeCpf, parseTimeToMinutes } from "./format";

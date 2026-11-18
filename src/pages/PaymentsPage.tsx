@@ -11,7 +11,7 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "../lib/events";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Avatar from "../components/Avatar";

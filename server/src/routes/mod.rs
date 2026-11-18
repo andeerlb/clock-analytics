@@ -5,11 +5,25 @@ use serde_json::{json, Value};
 use crate::auth::AuthUser;
 use crate::AppState;
 
+pub mod analytics;
+pub mod clients;
 pub mod companies;
+pub mod employees;
+pub mod payments;
+pub mod roles;
+pub mod timesheets;
 
 /// Everything here sits behind `auth::require_auth`.
 pub fn protected() -> Router<AppState> {
-    Router::new().route("/me", get(me)).merge(companies::router())
+    Router::new().route("/me", get(me))
+        .merge(companies::router())
+        .merge(clients::router())
+        .merge(roles::router())
+        .merge(employees::router())
+        .merge(timesheets::router())
+        .merge(payments::router())
+        .merge(analytics::router())
+        .merge(crate::files::router())
 }
 
 /// Who the server thinks is signed in — the frontend uses it to confirm the

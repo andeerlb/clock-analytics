@@ -8,6 +8,9 @@ use std::path::PathBuf;
 pub struct Config {
     pub bind: SocketAddr,
     pub db_path: PathBuf,
+    /// Where uploaded and imported files live (`imports/`, `uploads/`).
+    /// Defaults to the database's own folder.
+    pub data_dir: PathBuf,
     /// Folder holding the built frontend (`dist/`). `None` = API only (the
     /// usual setup when the frontend is served by Firebase Hosting).
     pub static_dir: Option<PathBuf>,
@@ -47,12 +50,15 @@ impl Config {
             .map_err(|e| ConfigError(format!("PONTOSCAN_BIND inválido: {e}")))?;
 
         let db_path = var("PONTOSCAN_DB_PATH").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("data/pontoscan.db"));
+        let data_dir = var("PONTOSCAN_DATA_DIR").map(PathBuf::from).unwrap_or_else(|| {
+            db_path.parent().filter(|p| !p.as_os_str().is_empty()).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
+        });
         let static_dir = var("PONTOSCAN_STATIC_DIR").map(PathBuf::from);
         let cors_origins = var("PONTOSCAN_CORS_ORIGINS")
             .map(|v| v.split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect())
             .unwrap_or_default();
 
-        Ok(Config { bind, db_path, static_dir, cors_origins, auth: AuthConfig::from_env()? })
+        Ok(Config { bind, db_path, data_dir, static_dir, cors_origins, auth: AuthConfig::from_env()? })
     }
 }
 
