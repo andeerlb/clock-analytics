@@ -1952,23 +1952,7 @@ export async function listLatestFieldDiffsForShifts(shiftIds: number[]): Promise
  * itself; see `PendingChangesTab`), so the full history stays browsable.
  */
 export async function listAllLatestShiftDiffs(): Promise<CheckDiffRow[]> {
-  const db = await getDb();
-  const rows = await db.select<CheckDiffRowRaw[]>(
-    `SELECT d.id, d.check_log_id AS checkLogId, l.source_url AS sourceUrl, d.config_id AS configId, d.config_label AS configLabel,
-            d.change_kind AS changeKind, d.matched_shift_id AS matchedShiftId, d.employee_id AS employeeId,
-            d.employee_name AS employeeName, d.work_date AS workDate, d.local, d.role,
-            d.schedule_start_minutes AS scheduleStartMinutes, d.schedule_end_minutes AS scheduleEndMinutes,
-            d.sheet_name AS sheetName, d.row_number AS rowNumber, d.column_letter AS columnLetter,
-            d.field_name AS fieldName, d.old_value AS oldValue, d.new_value AS newValue, d.message, d.applied,
-            d.dismissed_at AS dismissedAt, jc.period_start AS periodStart, jc.period_end AS periodEnd,
-            d.saved_by AS savedBy, d.saved_at AS savedAt
-     FROM source_url_check_diffs d
-     JOIN source_url_check_log l ON l.id = d.check_log_id
-     LEFT JOIN source_url_check_log_configs jc ON jc.check_log_id = d.check_log_id AND jc.config_id = d.config_id
-     WHERE l.id = (SELECT MAX(l2.id) FROM source_url_check_log l2 WHERE l2.source_url = l.source_url)
-     ORDER BY d.id DESC`,
-  );
-  return rows.map(parseCheckDiffRow);
+  return rpc<CheckDiffRow[]>("listAllLatestShiftDiffs");
 }
 
 /**
@@ -1986,53 +1970,7 @@ export async function listAllLatestShiftDiffs(): Promise<CheckDiffRow[]> {
  */
 export async function dismissCheckDiffs(ids: number[]): Promise<void> {
   if (ids.length === 0) return;
-  const db = await getDb();
-  const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
-  await db.execute(`UPDATE source_url_check_diffs SET dismissed_at = datetime('now') WHERE id IN (${placeholders})`, ids);
-
-  const rows = await db.select<
-    {
-      sourceUrl: string;
-      changeKind: CheckDiffKind;
-      configId: number | null;
-      employeeId: number | null;
-      employeeName: string | null;
-      workDate: string | null;
-      local: string | null;
-      role: string | null;
-      scheduleStartMinutes: number | null;
-      scheduleEndMinutes: number | null;
-      sheetName: string | null;
-      rowNumber: number | null;
-      fieldName: string | null;
-      oldValue: string | null;
-      newValue: string | null;
-      message: string | null;
-    }[]
-  >(
-    `SELECT l.source_url AS sourceUrl, d.change_kind AS changeKind, d.config_id AS configId,
-            d.employee_id AS employeeId, d.employee_name AS employeeName, d.work_date AS workDate,
-            d.local, d.role, d.schedule_start_minutes AS scheduleStartMinutes,
-            d.schedule_end_minutes AS scheduleEndMinutes, d.sheet_name AS sheetName, d.row_number AS rowNumber,
-            d.field_name AS fieldName, d.old_value AS oldValue, d.new_value AS newValue, d.message
-     FROM source_url_check_diffs d
-     JOIN source_url_check_log l ON l.id = d.check_log_id
-     WHERE d.id IN (${placeholders})`,
-    ids,
-  );
-  for (const r of rows) {
-    const fingerprint = diffContentFingerprint(r);
-    const existing = await db.select<{ id: number }[]>(
-      `SELECT id FROM dismissed_diff_fingerprints WHERE source_url = $1 AND fingerprint = $2 LIMIT 1`,
-      [r.sourceUrl, fingerprint],
-    );
-    if (existing.length === 0) {
-      await db.execute(`INSERT INTO dismissed_diff_fingerprints (source_url, fingerprint) VALUES ($1, $2)`, [
-        r.sourceUrl,
-        fingerprint,
-      ]);
-    }
-  }
+  return rpc<void>("dismissCheckDiffs", { ids });
 }
 
 /** Records the remote signature a deep check (download+parse+diff) just ran against, and what it actually found (`result`) — so `RemoteFileUpdatesContext.runChecks` doesn't repeat that work every tick while the user hasn't reimported yet, and a later "changed"-per-header check against the same signature can log the SAME diff-driven verdict instead of re-asserting the raw header result. */
@@ -3754,14 +3692,7 @@ function scheduleTimeConditionSql(filter: ScheduleTimeFilter, params: (string | 
  * lookup table.
  */
 export async function listDistinctPaymentShiftLocals(): Promise<string[]> {
-  const db = await getDb();
-  const rows = await db.select<{ local: string }[]>(
-    `SELECT DISTINCT ps.local AS local
-     FROM payment_shifts ps
-     WHERE ${HEAD_SHIFT_CONDITION} AND ps.local <> ''
-     ORDER BY ps.local`,
-  );
-  return rows.map((r) => r.local);
+  return rpc<string[]>("listDistinctPaymentShiftLocals");
 }
 
 /** SQL twin of `shiftDurationMinutes` (start == end is a full 24h, not 0) — needs both schedule columns non-null. */
@@ -4032,8 +3963,6 @@ export interface PaymentShiftReportRow {
   shiftPeriod: ShiftPeriod | null;
 }
 
-type PaymentShiftReportRowRaw = Omit<PaymentShiftReportRow, "extraData"> & { extraData: string | null };
-
 /**
  * Every *current* shift matching the Pagamentos list's filters, flat (no
  * grouping/pagination) — the data behind "Gerar PDF" and "Conferência de
@@ -4045,29 +3974,7 @@ type PaymentShiftReportRowRaw = Omit<PaymentShiftReportRow, "extraData"> & { ext
 export async function listPaymentShiftsForReport(
   query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
 ): Promise<PaymentShiftReportRow[]> {
-  if (query.statuses.length === 0 || query.shiftPeriods.length === 0) return [];
-
-  const db = await getDb();
-  const params: (string | number)[] = [];
-  const conditions = buildPaymentShiftRowConditions(query, params);
-
-  const rows = await db.select<PaymentShiftReportRowRaw[]>(
-    `SELECT ps.id, e.id AS employeeId, e.name AS employeeName, c.id AS companyId, c.name AS companyName,
-            cl.id AS clientId, cl.name AS clientName,
-            ps.work_date AS workDate, ps.local, COALESCE(r.name, '') AS role, ps.role_id AS roleId,
-            ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
-            ps.status, ps.amount, ps.imported_at AS importedAt, ps.extra_data AS extraData,
-            ${shiftPeriodSelectSql()} AS shiftPeriod
-     FROM payment_shifts ps
-     JOIN employees e ON e.id = ps.employee_id
-     JOIN clients cl ON cl.id = ps.client_id
-     JOIN companies c ON c.id = ps.company_id
-     LEFT JOIN roles r ON r.id = ps.role_id
-     WHERE ${conditions.join(" AND ")}
-     ORDER BY ps.work_date, ps.local, e.name`,
-    params,
-  );
-  return rows.map((r) => ({ ...r, extraData: r.extraData ? JSON.parse(r.extraData) : null }));
+  return rpc<PaymentShiftReportRow[]>("listPaymentShiftsForReport", { query });
 }
 
 /**
@@ -4083,35 +3990,7 @@ export async function listPaymentShiftsForReportPage(
   page: number,
   pageSize: number,
 ): Promise<PagedResult<PaymentShiftReportRow>> {
-  if (query.statuses.length === 0 || query.shiftPeriods.length === 0) return { rows: [], total: 0 };
-
-  const db = await getDb();
-  const params: (string | number)[] = [];
-  const conditions = buildPaymentShiftRowConditions(query, params);
-  const from = `FROM payment_shifts ps
-    JOIN employees e ON e.id = ps.employee_id
-    JOIN clients cl ON cl.id = ps.client_id
-    JOIN companies c ON c.id = ps.company_id
-    LEFT JOIN roles r ON r.id = ps.role_id`;
-  const whereClause = `WHERE ${conditions.join(" AND ")}`;
-
-  const countRows = await db.select<{ count: number }[]>(`SELECT COUNT(*) AS count ${from} ${whereClause}`, params);
-  const total = countRows[0]?.count ?? 0;
-
-  const rows = await db.select<PaymentShiftReportRowRaw[]>(
-    `SELECT ps.id, e.id AS employeeId, e.name AS employeeName, c.id AS companyId, c.name AS companyName,
-            cl.id AS clientId, cl.name AS clientName,
-            ps.work_date AS workDate, ps.local, COALESCE(r.name, '') AS role, ps.role_id AS roleId,
-            ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
-            ps.status, ps.amount, ps.imported_at AS importedAt, ps.extra_data AS extraData,
-            ${shiftPeriodSelectSql()} AS shiftPeriod
-     ${from}
-     ${whereClause}
-     ORDER BY ps.work_date, ps.local, e.name
-     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-    [...params, pageSize, page * pageSize],
-  );
-  return { rows: rows.map((r) => ({ ...r, extraData: r.extraData ? JSON.parse(r.extraData) : null })), total };
+  return rpc<PagedResult<PaymentShiftReportRow>>("listPaymentShiftsForReportPage", { query, page, pageSize });
 }
 
 /**
@@ -4125,24 +4004,7 @@ export async function listPaymentShiftsForReportPage(
 export async function countPaymentShiftsPendingAudit(
   query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
 ): Promise<number> {
-  if (query.statuses.length === 0 || query.shiftPeriods.length === 0) return 0;
-
-  const db = await getDb();
-  const params: (string | number)[] = [];
-  const conditions = buildPaymentShiftRowConditions(query, params);
-  conditions.push("ps.status = 'pago'");
-
-  const countRows = await db.select<{ count: number }[]>(
-    `SELECT COUNT(*) AS count
-     FROM payment_shifts ps
-     JOIN employees e ON e.id = ps.employee_id
-     JOIN clients cl ON cl.id = ps.client_id
-     JOIN companies c ON c.id = ps.company_id
-     LEFT JOIN payment_audits pa ON pa.payment_shift_id = ps.id
-     WHERE ${conditions.join(" AND ")} AND pa.id IS NULL`,
-    params,
-  );
-  return countRows[0]?.count ?? 0;
+  return rpc<number>("countPaymentShiftsPendingAudit", { query });
 }
 
 export interface PaymentShiftFlatRow extends PaymentShiftRow {
