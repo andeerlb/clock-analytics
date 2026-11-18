@@ -14,10 +14,10 @@ export default defineConfig(() => ({
       ignored: ["**/server/**"],
     },
     // In `yarn dev` the API lives on the local `server/` (cargo run, default
-    // 127.0.0.1:8787) and is reached same-origin. PONTOSCAN_API_PROXY lets
+    // 127.0.0.1:8787) and is reached same-origin. TAPAGO_API_PROXY lets
     // several local servers run side by side.
     proxy: {
-      "/api": process.env.PONTOSCAN_API_PROXY ?? "http://127.0.0.1:8787",
+      "/api": process.env.TAPAGO_API_PROXY ?? "http://127.0.0.1:8787",
     },
   },
 }));

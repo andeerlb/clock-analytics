@@ -221,7 +221,7 @@ export function addRecentPaymentFile(path: string): Promise<void> {
 /** Hash route of the standalone "Conferência de Pagamentos" tab (see `App.tsx`). */
 const RECONCILIATION_ROUTE = "/payments/reconciliation";
 /** Browser window name of that tab — `window.open` with it reuses an already-open one instead of opening a second. */
-const RECONCILIATION_WINDOW_NAME = "pontoscan-reconciliation";
+const RECONCILIATION_WINDOW_NAME = "tapago-reconciliation";
 let reconciliationTab: Window | null = null;
 
 /** "Destacar" on "Conferência de Pagamentos" — opens (or refocuses) it in its own browser tab. */

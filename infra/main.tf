@@ -1,7 +1,7 @@
 locals {
   firebase_project_id = var.firebase_project_id != "" ? var.firebase_project_id : var.project_id
   domain              = "${var.duckdns_subdomain}.duckdns.org"
-  backup_bucket       = "${var.project_id}-pontoscan-backups"
+  backup_bucket       = "${var.project_id}-tapago-backups"
   cors_origins = concat(
     ["https://${local.firebase_project_id}.web.app", "https://${local.firebase_project_id}.firebaseapp.com"],
     var.extra_cors_origins,
@@ -25,13 +25,13 @@ resource "google_project_service" "apis" {
 # rules that open SSH and RDP to the whole internet.
 
 resource "google_compute_network" "main" {
-  name                    = "pontoscan"
+  name                    = "tapago"
   auto_create_subnetworks = false
   depends_on              = [google_project_service.apis]
 }
 
 resource "google_compute_subnetwork" "main" {
-  name          = "pontoscan-${var.region}"
+  name          = "tapago-${var.region}"
   network       = google_compute_network.main.id
   region        = var.region
   ip_cidr_range = "10.10.0.0/24"
@@ -40,11 +40,11 @@ resource "google_compute_subnetwork" "main" {
 # HTTPS for the API, plus HTTP so Caddy can answer Let's Encrypt and
 # redirect plain-HTTP visitors.
 resource "google_compute_firewall" "web" {
-  name          = "pontoscan-allow-web"
+  name          = "tapago-allow-web"
   network       = google_compute_network.main.id
   direction     = "INGRESS"
   source_ranges = ["0.0.0.0/0"]
-  target_tags   = ["pontoscan-web"]
+  target_tags   = ["tapago-web"]
   allow {
     protocol = "tcp"
     ports    = ["80", "443"]
@@ -53,11 +53,11 @@ resource "google_compute_firewall" "web" {
 
 # SSH only from Google's IAP range (gcloud compute ssh --tunnel-through-iap).
 resource "google_compute_firewall" "iap_ssh" {
-  name          = "pontoscan-allow-iap-ssh"
+  name          = "tapago-allow-iap-ssh"
   network       = google_compute_network.main.id
   direction     = "INGRESS"
   source_ranges = ["35.235.240.0/20"]
-  target_tags   = ["pontoscan-web"]
+  target_tags   = ["tapago-web"]
   allow {
     protocol = "tcp"
     ports    = ["22"]
@@ -91,8 +91,8 @@ resource "google_storage_bucket" "backups" {
 # --- VM -----------------------------------------------------------------------
 
 resource "google_service_account" "vm" {
-  account_id   = "pontoscan-vm"
-  display_name = "PontoScan VM"
+  account_id   = "tapago-vm"
+  display_name = "Tá Pago VM"
 }
 
 resource "google_storage_bucket_iam_member" "vm_backups" {
@@ -102,10 +102,10 @@ resource "google_storage_bucket_iam_member" "vm_backups" {
 }
 
 resource "google_compute_instance" "server" {
-  name         = "pontoscan"
+  name         = "tapago"
   machine_type = "e2-micro" # Always Free
   zone         = var.zone
-  tags         = ["pontoscan-web"]
+  tags         = ["tapago-web"]
 
   allow_stopping_for_update = true
 

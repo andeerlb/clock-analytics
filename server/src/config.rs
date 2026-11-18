@@ -15,7 +15,7 @@ pub struct Config {
     /// usual setup when the frontend is served by Firebase Hosting).
     pub static_dir: Option<PathBuf>,
     /// Origins allowed to call the API from a browser, e.g.
-    /// `https://pontoscan.web.app`. Empty = same-origin only.
+    /// `https://tapago.web.app`. Empty = same-origin only.
     pub cors_origins: Vec<String>,
     /// The team's time zone: "today" for the automatic check's relative
     /// períodos (the desktop used the computer's own clock).
@@ -37,7 +37,7 @@ pub enum AuthConfig {
     },
     /// Local development only (debug builds): every request is treated as
     /// this user, no token needed. `admin`: an initial admin, unless
-    /// PONTOSCAN_ALLOWED_EMAILS is also set and doesn't list it (to try a
+    /// TAPAGO_ALLOWED_EMAILS is also set and doesn't list it (to try a
     /// profile registered on "Usuários e perfis").
     DevBypass { email: String, admin: bool },
 }
@@ -52,28 +52,28 @@ fn var(name: &str) -> Option<String> {
 
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
-        let bind = var("PONTOSCAN_BIND")
+        let bind = var("TAPAGO_BIND")
             .unwrap_or_else(|| "127.0.0.1:8787".into())
             .parse()
-            .map_err(|e| ConfigError(format!("PONTOSCAN_BIND inválido: {e}")))?;
+            .map_err(|e| ConfigError(format!("TAPAGO_BIND inválido: {e}")))?;
 
-        let db_path = var("PONTOSCAN_DB_PATH").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("data/pontoscan.db"));
-        let data_dir = var("PONTOSCAN_DATA_DIR").map(PathBuf::from).unwrap_or_else(|| {
+        let db_path = var("TAPAGO_DB_PATH").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("data/tapago.db"));
+        let data_dir = var("TAPAGO_DATA_DIR").map(PathBuf::from).unwrap_or_else(|| {
             db_path.parent().filter(|p| !p.as_os_str().is_empty()).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
         });
-        let static_dir = var("PONTOSCAN_STATIC_DIR").map(PathBuf::from);
-        let cors_origins = var("PONTOSCAN_CORS_ORIGINS")
+        let static_dir = var("TAPAGO_STATIC_DIR").map(PathBuf::from);
+        let cors_origins = var("TAPAGO_CORS_ORIGINS")
             .map(|v| v.split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect())
             .unwrap_or_default();
 
-        let timezone = var("PONTOSCAN_TIMEZONE")
+        let timezone = var("TAPAGO_TIMEZONE")
             .unwrap_or_else(|| "America/Sao_Paulo".into())
             .parse()
-            .map_err(|e| ConfigError(format!("PONTOSCAN_TIMEZONE inválido: {e}")))?;
-        let remote_checks = match var("PONTOSCAN_REMOTE_CHECKS").map(|v| v.to_lowercase()).as_deref() {
+            .map_err(|e| ConfigError(format!("TAPAGO_TIMEZONE inválido: {e}")))?;
+        let remote_checks = match var("TAPAGO_REMOTE_CHECKS").map(|v| v.to_lowercase()).as_deref() {
             None | Some("on") => true,
             Some("off") => false,
-            Some(other) => return Err(ConfigError(format!("PONTOSCAN_REMOTE_CHECKS deve ser on ou off, não {other}."))),
+            Some(other) => return Err(ConfigError(format!("TAPAGO_REMOTE_CHECKS deve ser on ou off, não {other}."))),
         };
 
         Ok(Config { bind, db_path, data_dir, static_dir, cors_origins, timezone, remote_checks, auth: AuthConfig::from_env()? })
@@ -93,25 +93,25 @@ impl AuthConfig {
     }
 
     fn from_env() -> Result<Self, ConfigError> {
-        if let Some(email) = var("PONTOSCAN_DEV_USER_EMAIL") {
+        if let Some(email) = var("TAPAGO_DEV_USER_EMAIL") {
             if cfg!(debug_assertions) {
                 let email = email.to_lowercase();
-                let admin = var("PONTOSCAN_ALLOWED_EMAILS").is_none_or(|list| list.split(',').any(|e| e.trim().eq_ignore_ascii_case(&email)));
+                let admin = var("TAPAGO_ALLOWED_EMAILS").is_none_or(|list| list.split(',').any(|e| e.trim().eq_ignore_ascii_case(&email)));
                 return Ok(AuthConfig::DevBypass { email, admin });
             }
             // A release binary must never run without real auth, even if the
             // variable leaked into its environment.
             return Err(ConfigError(
-                "PONTOSCAN_DEV_USER_EMAIL só é aceito em build de desenvolvimento; remova-o do ambiente de produção.".into(),
+                "TAPAGO_DEV_USER_EMAIL só é aceito em build de desenvolvimento; remova-o do ambiente de produção.".into(),
             ));
         }
 
         let project_id = var("FIREBASE_PROJECT_ID").ok_or_else(|| ConfigError("FIREBASE_PROJECT_ID não definido.".into()))?;
-        let allowed_emails: HashSet<String> = var("PONTOSCAN_ALLOWED_EMAILS")
+        let allowed_emails: HashSet<String> = var("TAPAGO_ALLOWED_EMAILS")
             .map(|v| v.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect())
             .unwrap_or_default();
         if allowed_emails.is_empty() {
-            return Err(ConfigError("PONTOSCAN_ALLOWED_EMAILS vazio: ninguém conseguiria entrar.".into()));
+            return Err(ConfigError("TAPAGO_ALLOWED_EMAILS vazio: ninguém conseguiria entrar.".into()));
         }
         Ok(AuthConfig::Firebase { project_id, allowed_emails })
     }

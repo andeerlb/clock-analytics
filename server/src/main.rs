@@ -31,7 +31,7 @@ pub struct AppState {
     pub data_dir: Arc<std::path::PathBuf>,
     /// Verificação automática: what is being checked right now.
     pub remote_checks: Arc<remote_checks::Runtime>,
-    /// `PONTOSCAN_ALLOWED_EMAILS` (or the dev user): always Admin, listed as
+    /// `TAPAGO_ALLOWED_EMAILS` (or the dev user): always Admin, listed as
     /// fixed on "Usuários e perfis".
     pub initial_admins: Arc<Vec<String>>,
 }
@@ -53,7 +53,7 @@ impl AppState {
 
     #[cfg(test)]
     pub async fn for_tests() -> Self {
-        let dir = std::env::temp_dir().join(format!("pontoscan-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("tapago-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         AppState::new(db::test_pool().await, dir.canonicalize().unwrap(), chrono_tz::America::Sao_Paulo)
     }
@@ -118,7 +118,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         remote_checks::spawn_scheduler(state.clone());
         tracing::info!(timezone = %config.timezone, "verificação automática ligada");
     } else {
-        tracing::warn!("verificação automática desligada (PONTOSCAN_REMOTE_CHECKS=off)");
+        tracing::warn!("verificação automática desligada (TAPAGO_REMOTE_CHECKS=off)");
     }
     let app = app(&config, state, auth);
 

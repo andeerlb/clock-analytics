@@ -83,7 +83,7 @@ resource "google_project_iam_member" "deploy_roles" {
 # --- Releases: CI drops the server binary here; the VM pulls it ---------------
 
 resource "google_storage_bucket" "releases" {
-  name                        = "${var.project_id}-pontoscan-releases"
+  name                        = "${var.project_id}-tapago-releases"
   location                    = upper(var.region)
   storage_class               = "STANDARD"
   uniform_bucket_level_access = true

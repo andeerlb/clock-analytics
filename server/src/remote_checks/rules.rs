@@ -46,7 +46,7 @@ pub struct PeriodSpec {
 }
 
 /// `resolveReimportPeriod`. `today` is the team's local date (the desktop
-/// used the computer's own clock; the server uses `PONTOSCAN_TIMEZONE`).
+/// used the computer's own clock; the server uses `TAPAGO_TIMEZONE`).
 pub fn resolve_reimport_period(config: &PeriodSpec, today: NaiveDate) -> (Option<String>, Option<String>) {
     if config.date_mode == "fixed" {
         return (config.period_start.clone(), config.period_end.clone());

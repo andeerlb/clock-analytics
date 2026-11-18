@@ -1,5 +1,5 @@
 #!/bin/bash
-# PontoScan VM bootstrap — GCE runs this on every boot, so every step is
+# Tá Pago VM bootstrap — GCE runs this on every boot, so every step is
 # idempotent. Rendered by OpenTofu (infra/main.tf): values in dollar-brace
 # form below are filled in by templatefile(); plain $VARS are bash.
 #
@@ -9,8 +9,8 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 LITESTREAM_VERSION=0.3.13
-DB_DIR=/var/lib/pontoscan
-DB_PATH=$DB_DIR/pontoscan.db
+DB_DIR=/var/lib/tapago
+DB_PATH=$DB_DIR/tapago.db
 
 # --- swap: 1 GB of RAM is tight; 1 GB of swap absorbs peaks (PDF imports) ---
 if [ ! -f /swapfile ]; then
@@ -22,7 +22,7 @@ fi
 swapon -a
 
 # --- packages (installed once; the marker is written only if all succeed) ---
-if [ ! -f /var/lib/pontoscan-packages-installed ]; then
+if [ ! -f /var/lib/tapago-packages-installed ]; then
   apt-get update
   apt-get install -y poppler-utils sqlite3 curl gnupg debian-keyring debian-archive-keyring apt-transport-https
 
@@ -37,89 +37,89 @@ if [ ! -f /var/lib/pontoscan-packages-installed ]; then
   dpkg -i /tmp/litestream.deb
   rm -f /tmp/litestream.deb
 
-  touch /var/lib/pontoscan-packages-installed
+  touch /var/lib/tapago-packages-installed
 fi
 
 # --- user and folders ---
-id pontoscan >/dev/null 2>&1 || useradd --system --home-dir "$DB_DIR" --shell /usr/sbin/nologin pontoscan
-install -d -o pontoscan -g pontoscan -m 750 "$DB_DIR"
-install -d -m 755 /opt/pontoscan          # the deploy puts pontoscan-server here
-install -d -o root -g pontoscan -m 750 /etc/pontoscan
+id tapago >/dev/null 2>&1 || useradd --system --home-dir "$DB_DIR" --shell /usr/sbin/nologin tapago
+install -d -o tapago -g tapago -m 750 "$DB_DIR"
+install -d -m 755 /opt/tapago          # the deploy puts tapago-server here
+install -d -o root -g tapago -m 750 /etc/tapago
 
 # --- server configuration (rewritten every boot from the OpenTofu values) ---
-cat > /etc/pontoscan/server.env <<'EOF'
-PONTOSCAN_BIND=127.0.0.1:8787
-PONTOSCAN_DB_PATH=/var/lib/pontoscan/pontoscan.db
+cat > /etc/tapago/server.env <<'EOF'
+TAPAGO_BIND=127.0.0.1:8787
+TAPAGO_DB_PATH=/var/lib/tapago/tapago.db
 FIREBASE_PROJECT_ID=${firebase_project_id}
-PONTOSCAN_ALLOWED_EMAILS=${allowed_emails}
-PONTOSCAN_CORS_ORIGINS=${cors_origins}
+TAPAGO_ALLOWED_EMAILS=${allowed_emails}
+TAPAGO_CORS_ORIGINS=${cors_origins}
 RUST_LOG=info,tower_http=info,sqlx=warn
 EOF
-chown root:pontoscan /etc/pontoscan/server.env
-chmod 640 /etc/pontoscan/server.env
+chown root:tapago /etc/tapago/server.env
+chmod 640 /etc/tapago/server.env
 
 # --- Litestream ---
 cat > /etc/litestream.yml <<'EOF'
 dbs:
-  - path: /var/lib/pontoscan/pontoscan.db
+  - path: /var/lib/tapago/tapago.db
     replicas:
-      - url: gcs://${backup_bucket}/pontoscan.db
+      - url: gcs://${backup_bucket}/tapago.db
 EOF
 chmod 644 /etc/litestream.yml
 
 # Runs as the same user as the server: if it ran as root, the -wal/-shm
 # files it touches could end up root-owned and lock the server out.
 install -d /etc/systemd/system/litestream.service.d
-cat > /etc/systemd/system/litestream.service.d/pontoscan.conf <<'EOF'
+cat > /etc/systemd/system/litestream.service.d/tapago.conf <<'EOF'
 [Unit]
-After=pontoscan.service
+After=tapago.service
 
 [Service]
-User=pontoscan
-Group=pontoscan
+User=tapago
+Group=tapago
 EOF
 
 # --- the server itself ---
-cat > /etc/systemd/system/pontoscan.service <<'EOF'
+cat > /etc/systemd/system/tapago.service <<'EOF'
 [Unit]
-Description=PontoScan web server
+Description=Tá Pago web server
 After=network-online.target
 Wants=network-online.target
 # Skipped (not failed) until the first deploy copies the binary in.
-ConditionPathExists=/opt/pontoscan/pontoscan-server
+ConditionPathExists=/opt/tapago/tapago-server
 
 [Service]
-User=pontoscan
-Group=pontoscan
-EnvironmentFile=/etc/pontoscan/server.env
-WorkingDirectory=/var/lib/pontoscan
+User=tapago
+Group=tapago
+EnvironmentFile=/etc/tapago/server.env
+WorkingDirectory=/var/lib/tapago
 # A brand-new VM (or a recreated disk) starts from the latest backup.
-ExecStartPre=/usr/bin/litestream restore -config /etc/litestream.yml -if-db-not-exists -if-replica-exists /var/lib/pontoscan/pontoscan.db
-ExecStart=/opt/pontoscan/pontoscan-server
+ExecStartPre=/usr/bin/litestream restore -config /etc/litestream.yml -if-db-not-exists -if-replica-exists /var/lib/tapago/tapago.db
+ExecStart=/opt/tapago/tapago-server
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/var/lib/pontoscan
+ReadWritePaths=/var/lib/tapago
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
 # --- DuckDNS: keeps ${domain} pointing at this VM's current IP ---
-cat > /etc/pontoscan/duckdns.env <<'EOF'
+cat > /etc/tapago/duckdns.env <<'EOF'
 DUCKDNS_SUBDOMAIN=${duckdns_subdomain}
 DUCKDNS_TOKEN=${duckdns_token}
 EOF
-chown root:root /etc/pontoscan/duckdns.env
-chmod 600 /etc/pontoscan/duckdns.env
+chown root:root /etc/tapago/duckdns.env
+chmod 600 /etc/tapago/duckdns.env
 
 cat > /usr/local/bin/duckdns-update <<'EOF'
 #!/bin/sh
 set -eu
-. /etc/pontoscan/duckdns.env
+. /etc/tapago/duckdns.env
 # Empty ip= lets DuckDNS use the address the request came from.
 resp=$(curl -fsS --max-time 20 "https://www.duckdns.org/update?domains=$DUCKDNS_SUBDOMAIN&token=$DUCKDNS_TOKEN&ip=")
 [ "$resp" = "OK" ] || { echo "DuckDNS respondeu: $resp" >&2; exit 1; }
@@ -150,16 +150,16 @@ WantedBy=timers.target
 EOF
 
 # --- Deploy: pull a new server binary when CI publishes one ---
-# GitHub Actions only writes gs://${releases_bucket}/pontoscan-server; this
+# GitHub Actions only writes gs://${releases_bucket}/tapago-server; this
 # timer notices the new object generation, verifies its MD5, swaps it in,
 # restarts the service and rolls back if /api/health doesn't answer.
-cat > /usr/local/bin/pontoscan-update <<'EOF'
+cat > /usr/local/bin/tapago-update <<'EOF'
 #!/bin/bash
 set -euo pipefail
 BUCKET=${releases_bucket}
-OBJECT=pontoscan-server
-BIN=/opt/pontoscan/pontoscan-server
-STATE=/var/lib/pontoscan-deploy
+OBJECT=tapago-server
+BIN=/opt/tapago/tapago-server
+STATE=/var/lib/tapago-deploy
 install -d -m 700 "$STATE"
 
 TOKEN=$(curl -fsS -H "Metadata-Flavor: Google" \
@@ -186,7 +186,7 @@ chmod 755 "$BIN.new"
 
 [ -f "$BIN" ] && cp -p "$BIN" "$BIN.prev"
 mv "$BIN.new" "$BIN"
-systemctl restart pontoscan.service
+systemctl restart tapago.service
 
 for _ in $(seq 1 30); do
   if curl -fsS --max-time 2 http://127.0.0.1:8787/api/health >/dev/null 2>&1; then
@@ -203,26 +203,26 @@ echo "a versão $GENERATION não respondeu; voltando para a anterior" >&2
 echo "failed-$GENERATION" > "$STATE/generation"
 if [ -f "$BIN.prev" ]; then
   mv "$BIN.prev" "$BIN"
-  systemctl restart pontoscan.service
+  systemctl restart tapago.service
 fi
 exit 1
 EOF
-chmod 755 /usr/local/bin/pontoscan-update
+chmod 755 /usr/local/bin/tapago-update
 
-cat > /etc/systemd/system/pontoscan-update.service <<'EOF'
+cat > /etc/systemd/system/tapago-update.service <<'EOF'
 [Unit]
-Description=Instala a versão nova do servidor PontoScan, se houver
+Description=Instala a versão nova do servidor Tá Pago, se houver
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/pontoscan-update
+ExecStart=/usr/local/bin/tapago-update
 EOF
 
-cat > /etc/systemd/system/pontoscan-update.timer <<'EOF'
+cat > /etc/systemd/system/tapago-update.timer <<'EOF'
 [Unit]
-Description=Procura versão nova do servidor PontoScan a cada minuto
+Description=Procura versão nova do servidor Tá Pago a cada minuto
 
 [Timer]
 OnBootSec=1min
@@ -245,11 +245,11 @@ systemctl daemon-reload
 # Point the name at this IP before Caddy asks Let's Encrypt for a certificate.
 systemctl start duckdns-update.service || echo "aviso: primeira atualização do DuckDNS falhou; o timer tenta de novo" >&2
 systemctl enable --now duckdns-update.timer
-systemctl enable --now pontoscan-update.timer
-systemctl enable pontoscan.service litestream.service
-systemctl restart pontoscan.service || true   # no-op until the first deploy
+systemctl enable --now tapago-update.timer
+systemctl enable tapago.service litestream.service
+systemctl restart tapago.service || true   # no-op until the first deploy
 systemctl restart litestream.service || true
 systemctl enable caddy
 systemctl reload-or-restart caddy
 
-echo "pontoscan bootstrap ok"
+echo "tapago bootstrap ok"

@@ -968,7 +968,7 @@ async fn ask_api(
         // reqwest only strips its own auth headers on a redirect, not
         // `x-api-key`, and this API has no reason to redirect.
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent(concat!("pontoscan/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("tapago/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let mut db = guard(SqliteConnection::connect_with(options).await?).await?;
@@ -1110,8 +1110,8 @@ mod tests {
     /// migrations) with the fixtures in, and the pool that has it open. The
     /// assistant opens its connections by path, so it's a file, not `:memory:`.
     pub(crate) async fn database_pool() -> (SqlitePool, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!("pontoscan-ai-test-{}", uuid::Uuid::new_v4()));
-        let path = dir.join("pontoscan.db");
+        let dir = std::env::temp_dir().join(format!("tapago-ai-test-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("tapago.db");
         let pool = crate::db::connect(&path).await.unwrap();
         sqlx::raw_sql(FIXTURES).execute(&pool).await.unwrap();
         (pool, path)

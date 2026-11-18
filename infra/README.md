@@ -4,12 +4,12 @@ Cria no Google Cloud, tudo dentro do Always Free:
 
 - **VM e2-micro** em `us-east1` (Ubuntu 24.04, disco padrão de 30 GB, 1 GB de swap) com:
   - **Caddy**: HTTPS automático (Let's Encrypt) em `https://<subdomínio>.duckdns.org`, repassando para o servidor;
-  - **serviço `pontoscan`**: o servidor Rust (`server/`). Fica parado até o primeiro deploy copiar o binário;
+  - **serviço `tapago`**: o servidor Rust (`server/`). Fica parado até o primeiro deploy copiar o binário;
   - **Litestream**: backup contínuo do SQLite para o Cloud Storage. Uma VM nova restaura o último backup sozinha;
   - **DuckDNS**: um timer atualiza o IP a cada 5 minutos;
   - Poppler (`pdftotext` etc.).
 - **Rede própria**: abre só as portas 80/443. O SSH entra só pelo IAP do Google (a porta 22 não fica aberta para a internet).
-- **Bucket** de backups (`<projeto>-pontoscan-backups`), protegido contra `tofu destroy`.
+- **Bucket** de backups (`<projeto>-tapago-backups`), protegido contra `tofu destroy`.
 
 ## Antes de começar (uma vez)
 
@@ -37,7 +37,7 @@ No fim aparecem `api_url`, `external_ip` e o comando de SSH. O primeiro boot lev
 de 2 a 4 minutos instalando pacotes. Para acompanhar:
 
 ```sh
-gcloud compute ssh pontoscan --zone us-east1-b --tunnel-through-iap -- sudo journalctl -u google-startup-scripts -f
+gcloud compute ssh tapago --zone us-east1-b --tunnel-through-iap -- sudo journalctl -u google-startup-scripts -f
 ```
 
 Até o primeiro deploy do servidor, `https://<subdomínio>.duckdns.org` responde
@@ -48,8 +48,8 @@ Até o primeiro deploy do servidor, `https://<subdomínio>.duckdns.org` responde
 Cada push no ramo `web` dispara `.github/workflows/deploy-web.yml`, que:
 
 1. roda os testes do servidor, compila e manda o binário para o bucket
-   `<projeto>-pontoscan-releases`;
-2. a VM confere esse bucket a cada minuto (timer `pontoscan-update`), instala o binário
+   `<projeto>-tapago-releases`;
+2. a VM confere esse bucket a cada minuto (timer `tapago-update`), instala o binário
    novo, reinicia o serviço e **volta para a versão anterior sozinha** se a nova não
    responder em 30 segundos;
 3. o workflow espera `https://<subdomínio>.duckdns.org/api/version` mostrar o commit novo
@@ -62,7 +62,7 @@ conta de deploy só pode escrever no bucket de versões e publicar no Hosting.
 Para ver o que a VM fez:
 
 ```sh
-gcloud compute ssh pontoscan --zone us-east1-b --tunnel-through-iap -- sudo journalctl -u pontoscan-update -u pontoscan -n 50
+gcloud compute ssh tapago --zone us-east1-b --tunnel-through-iap -- sudo journalctl -u tapago-update -u tapago -n 50
 ```
 
 ## Mudar algo depois
@@ -71,7 +71,7 @@ Edite `terraform.tfvars` (por exemplo, para adicionar um e-mail) e rode `tofu ap
 é atualizada sem ser recriada. Para aplicar a configuração nova sem reiniciar:
 
 ```sh
-gcloud compute ssh pontoscan --zone us-east1-b --tunnel-through-iap -- sudo google_metadata_script_runner startup
+gcloud compute ssh tapago --zone us-east1-b --tunnel-through-iap -- sudo google_metadata_script_runner startup
 ```
 
 ## Cuidados

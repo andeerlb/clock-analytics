@@ -36,7 +36,7 @@ const LEEWAY_SECS: u64 = 60;
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub email: String,
-    /// Listed in `PONTOSCAN_ALLOWED_EMAILS` (or the dev user): always Admin.
+    /// Listed in `TAPAGO_ALLOWED_EMAILS` (or the dev user): always Admin.
     pub initial_admin: bool,
 }
 
@@ -234,7 +234,7 @@ mod tests {
     // Throwaway 2048-bit RSA key pair, generated only for these tests.
     const PRIVATE_PEM: &[u8] = include_bytes!("../tests/fixtures/test_rsa_private.pem");
     const PUBLIC_PEM: &[u8] = include_bytes!("../tests/fixtures/test_rsa_public.pem");
-    const PROJECT: &str = "pontoscan-test";
+    const PROJECT: &str = "tapago-test";
 
     fn now() -> u64 {
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
