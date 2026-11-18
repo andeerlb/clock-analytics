@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp, Pencil, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import OptionPicker from "./OptionPicker";
+import { IdentifierOrderSection, moveIdentifier } from "./TemplateWizardParts";
 import type { ClientRow, CompanyRow } from "../lib/db";
 import {
   PAYMENT_SHIFT_STATUS_LABELS,
@@ -283,11 +284,6 @@ export default function PaymentTemplateDetails({
   }
 
   const order = effectiveIdentifierOrder(identifierOrder, mappedIdentifiers);
-  function moveIdentifier(i: number, dir: -1 | 1) {
-    const next = [...order];
-    [next[i], next[i + dir]] = [next[i + dir], next[i]];
-    onIdentifierOrder([...next, ...identifierOrder.filter((f) => !next.includes(f))]);
-  }
 
   const kinds = fileKind === "csv" ? ["CSV"] : Array.from(new Set([fileKind, ...acceptedFileKinds])).filter(Boolean).map((k) => k!.toUpperCase());
 
@@ -415,34 +411,11 @@ export default function PaymentTemplateDetails({
         </button>
       </section>
 
-      <section className="tdet-section">
-        <h3>Como achar o colaborador?</h3>
-        {order.length === 1 ? (
-          <p className="tdet-once">
-            Pelo <b>{PAYMENT_TARGET_FIELD_LABELS[order[0]]}</b>, a única coluna de colaborador respondida em Colunas.
-          </p>
-        ) : (
-          <>
-            <p className="tdet-sub">Tenta na ordem e para no primeiro que encontrar alguém. Maiúsculas não importam.</p>
-            <div className="tdet-ids">
-              {order.map((f, i) => (
-                <div key={f} className="tdet-id">
-                  <span className="vr-num">{i + 1}</span>
-                  <span className="tdet-id-text">
-                    {i === 0 ? "Procurar pelo" : "Se não achar, pelo"} <b>{PAYMENT_TARGET_FIELD_LABELS[f]}</b>
-                  </span>
-                  <button type="button" className="vr-icon" aria-label="Subir" title="Subir" disabled={i === 0} onClick={() => moveIdentifier(i, -1)}>
-                    <ChevronUp size={14} />
-                  </button>
-                  <button type="button" className="vr-icon" aria-label="Descer" title="Descer" disabled={i === order.length - 1} onClick={() => moveIdentifier(i, 1)}>
-                    <ChevronDown size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </section>
+      <IdentifierOrderSection
+        title="Como achar o colaborador?"
+        order={order}
+        onMove={(i, dir) => onIdentifierOrder(moveIdentifier(identifierOrder, order, i, dir))}
+      />
 
       <section className="tdet-section">
         <h3>Status do turno</h3>

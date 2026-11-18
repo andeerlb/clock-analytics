@@ -1,81 +1,63 @@
-import {
-  CheckCircle2,
-  CheckSquare,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  ChevronUp,
-  FileText,
-  FolderOpen,
-  Info,
-  Link2,
-  ListOrdered,
-  Pencil,
-  Plus,
-  RefreshCw,
-  Square,
-  Table2,
-  Trash2,
-  UploadCloud,
-  X,
-} from "lucide-react";
-import { useEffect, useState, type DragEvent } from "react";
-import Modal, { useModalClose } from "./Modal";
-
-/** Header X, routed through `useModalClose` instead of the raw `onClose` prop so it plays the same animated exit `Modal` already uses for Escape/backdrop. */
-function CloseButton() {
-  const requestClose = useModalClose();
-  return (
-    <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={requestClose} aria-label="Fechar">
-      <X size={18} />
-    </button>
-  );
-}
-import {
-  addRecentPaymentFile,
-  downloadPaymentFileFromUrl,
-  listRecentPaymentFiles,
-  listSpreadsheetSheets,
-  pickPaymentFile,
-  previewSpreadsheet,
-} from "../lib/api";
+import { X } from "lucide-react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
+import { READ_ONLY_TITLE } from "./AreaRoute";
+import OptionPicker from "./OptionPicker";
+import { ColumnQuestion, type GroupColumn } from "./TemplateColumns";
+import { IdentifierOrderSection, moveIdentifier, SampleFileStep, SheetsStep, WizardDrawer } from "./TemplateWizardParts";
+import { effectiveIdentifierOrder, identifierOrderFromSaved } from "./PaymentTemplateDetails";
+import { downloadPaymentFileFromUrl, listSpreadsheetSheets, pickPaymentFile, previewSpreadsheet } from "../lib/api";
 import { createEmployeeTemplate, updateEmployeeTemplate, type EmployeeTemplateInput } from "../lib/db";
-import { columnLetter, fileNameFromPath } from "../lib/format";
 import { uploadDropped } from "../lib/files";
+import { columnLetter, fileNameFromPath } from "../lib/format";
 import {
-  EMPLOYEE_TARGET_FIELDS,
+  checkEmployeeSheet,
+  dataRowsOf,
+  employeeHeaderRow,
+  guessEmployeeMapping,
+  headerSignature,
+  headersOf,
+  looksLikeEmployeeSheet,
+} from "../lib/templateMapping";
+import {
   EMPLOYEE_TARGET_FIELD_LABELS,
   type EmployeeTargetField,
   type EmployeeTemplateGroup,
   type EmployeeTemplateRow,
-  type IdentifierAttempt,
   type IdentifierField,
   type PaymentFileKind,
 } from "../lib/types";
 
-const IDENTIFIER_FIELDS: IdentifierField[] = ["cpf", "matricula", "nome"];
-
-/** Unlike payment templates' 3-tentativa default, an employee template starts with just CPF — matrícula/nome are opt-in per template instead of always pre-populated. */
-const DEFAULT_EMPLOYEE_IDENTIFIER_PRIORITY: IdentifierAttempt[] = [{ fields: ["cpf"], caseInsensitive: true }];
-
 /**
- * A file is only ever used transiently, to help build the mapping — it's
- * never persisted. Creating a template always starts from a real file, so
- * it always has all three steps; editing an already-saved template works
- * directly off the saved configuration, with no file involved at all, so
- * the "Arquivo" step doesn't apply there.
+ * Builds a colaboradores template the same way the payment one is built:
+ * Arquivo → Abas → Colunas ("Onde está cada informação?", prefilled from
+ * the column names) → Conferir (each sheet read on its real rows) →
+ * Detalhes (name, how an existing person is found, accepted formats).
+ * Editing a saved template has no sample file: Abas → Colunas → Detalhes.
+ * The header row isn't asked: it's spotted in the sample file (the row
+ * with the most column names) and saved per group, so the import skips it.
  */
-type WizardStep = "file" | "mapping" | "details";
+
+type WizardStep = "file" | "sheets" | "answers" | "check" | "details";
 const STEP_LABEL_TEXT: Record<WizardStep, string> = {
   file: "Arquivo",
-  mapping: "Mapeamento",
+  sheets: "Abas",
+  answers: "Colunas",
+  check: "Conferir",
   details: "Detalhes",
 };
 
-/** Stand-in group key for csv, which has no sheets to key groups off of — there's always exactly one implicit group. */
+/** Stand-in group key for csv, which has no sheets — there's always exactly one implicit group. */
 const CSV_GROUP_KEY = "__csv__";
+const FILE_EXTENSIONS = ["csv", "xlsx", "xls", "ods"];
+const PREVIEW_ROWS = 500;
+const IDENTIFIER_FIELDS: IdentifierField[] = ["cpf", "matricula", "nome"];
 
-const SAMPLE_ROW_COUNT = 10;
+const QUESTIONS: { field: EmployeeTargetField; hint: string }[] = [
+  { field: "nome", hint: "nome completo" },
+  { field: "cpf", hint: "com ou sem pontos" },
+  { field: "matricula", hint: "código interno" },
+  { field: "pix", hint: "chave para pagamento" },
+];
 
 const DELIMITER_OPTIONS = [
   { value: ",", label: "Vírgula (,)" },
@@ -84,1368 +66,15 @@ const DELIMITER_OPTIONS = [
   { value: "|", label: "Barra vertical (|)" },
 ];
 
+/** An employee template starts by finding people by CPF, then matrícula, then nome — narrowed to the columns it answers. */
+const DEFAULT_ORDER: IdentifierField[] = ["cpf", "matricula", "nome"];
+
 function fileKindFromPath(path: string): PaymentFileKind {
   const ext = path.split(".").pop()?.toLowerCase();
   if (ext === "csv") return "csv";
   if (ext === "ods") return "ods";
   if (ext === "xls") return "xls";
   return "xlsx";
-}
-
-export default function EmployeeTemplateWizard({
-  target,
-  onClose,
-  onSaved,
-  readOnly = false,
-}: {
-  /** `null` keeps the wizard unmounted/closed; `"new"` starts a blank template; a row edits it. */
-  target: EmployeeTemplateRow | "new" | null;
-  onClose: () => void;
-  onSaved: () => void;
-  /** View-only profile: the steps can be browsed, but every field is disabled and there's no Salvar. */
-  readOnly?: boolean;
-}) {
-  const [stepIndex, setStepIndex] = useState(0);
-
-  // `filePath !== null` doubles as "a real file is backing this session" —
-  // always true partway through creating a new template (the "Arquivo"
-  // step requires one before you can advance), always false while editing
-  // an existing one (there's no "Arquivo" step there at all, see
-  // `WizardStep`), so it's a reliable switch between the live grid and the
-  // abstract, file-less column editor in the "Mapeamento" step below.
-  const [filePath, setFilePath] = useState<string | null>(null);
-  const [fileKind, setFileKind] = useState<PaymentFileKind | null>(null);
-  /** Every format an import accepts for this template, beyond `fileKind` itself (see "Formatos aceitos" in the Detalhes step) — xlsx/xls/ods can be freely combined, but never with csv. */
-  const [acceptedFileKinds, setAcceptedFileKinds] = useState<Set<PaymentFileKind>>(new Set());
-  const [sheets, setSheets] = useState<string[]>([]);
-  const [activeSheet, setActiveSheet] = useState<string | null>(null);
-  const [editingSheetName, setEditingSheetName] = useState<string | null>(null);
-  const [editingSheetNameDraft, setEditingSheetNameDraft] = useState("");
-  const [includedSheets, setIncludedSheets] = useState<Set<string>>(new Set());
-  const [delimiter, setDelimiter] = useState<string | null>(null);
-  const [rows, setRows] = useState<string[][]>([]);
-
-  // Every sheet starts as its own standalone group (its own mapping);
-  // `sheetGroupOf[sheet]` names which sheet's config it actually uses once
-  // merged with another via the "estas abas usam o mesmo mapeamento de X"
-  // checklist.
-  const [sheetGroupOf, setSheetGroupOf] = useState<Record<string, string>>({});
-  const [groupMapping, setGroupMapping] = useState<Record<string, Record<number, EmployeeTargetField>>>({});
-  // Cosmetic header hint per mapped column — captured from the live grid
-  // when a file is present, or carried straight over from the saved
-  // template's `headerLabel` when editing without one. Never used for
-  // matching, only to help a human recognize which column is which.
-  const [groupFieldLabels, setGroupFieldLabels] = useState<Record<string, Record<number, string | null>>>({});
-  // 1-indexed physical row where each group's header/title ends — rows up
-  // to and including it are skipped at import time (see
-  // ImportEmployeesPage.tsx). `null`/absent means no header row marked.
-  const [groupHeaderRow, setGroupHeaderRow] = useState<Record<string, number | null>>({});
-  // How many blank columns past the last already-mapped one are revealed in
-  // the file-less grid (editing mode) — lets you map a brand new column by
-  // picking a field for it, same interaction as the live grid's header
-  // select, just without real data underneath. Reset per active group.
-  const [extraColumns, setExtraColumns] = useState(0);
-  // Which column's select was last focused — purely a visual highlight
-  // (tinted header + column, small pencil icon) so it's obvious which
-  // column you're currently mapping in a wide table.
-  const [focusedColumn, setFocusedColumn] = useState<number | null>(null);
-
-  const [name, setName] = useState("");
-  const [identifierAttempts, setIdentifierAttempts] = useState<IdentifierAttempt[]>(
-    DEFAULT_EMPLOYEE_IDENTIFIER_PRIORITY,
-  );
-
-  const [loadingPreview, setLoadingPreview] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const [recentFiles, setRecentFiles] = useState<string[]>([]);
-  const [dragOver, setDragOver] = useState(false);
-  const [urlInput, setUrlInput] = useState("");
-  const [urlDownloading, setUrlDownloading] = useState(false);
-  const [urlError, setUrlError] = useState<string | null>(null);
-
-  const isEditing = target !== null && target !== "new";
-  const steps: WizardStep[] = isEditing ? ["mapping", "details"] : ["file", "mapping", "details"];
-  const currentStep = steps[stepIndex];
-
-  useEffect(() => {
-    if (target === null) return;
-    setStepIndex(0);
-    setError(null);
-    setBusy(false);
-
-    if (target === "new") {
-      setFilePath(null);
-      setFileKind(null);
-      setAcceptedFileKinds(new Set());
-      setSheets([]);
-      setActiveSheet(null);
-      setEditingSheetName(null);
-      setEditingSheetNameDraft("");
-      setIncludedSheets(new Set());
-      setDelimiter(null);
-      setRows([]);
-      setSheetGroupOf({});
-      setGroupMapping({});
-      setGroupFieldLabels({});
-      setGroupHeaderRow({});
-      setExtraColumns(0);
-      setName("");
-      setIdentifierAttempts(DEFAULT_EMPLOYEE_IDENTIFIER_PRIORITY.map((a) => ({ ...a, fields: [...a.fields] })));
-      return;
-    }
-
-    setFilePath(null);
-    setFileKind(target.fileKind);
-    setAcceptedFileKinds(new Set(target.acceptedFileKinds));
-    setDelimiter(target.delimiter);
-    setName(target.name);
-    setIdentifierAttempts(target.identifierPriority.map((a) => ({ ...a, fields: [...a.fields] })));
-    hydrateFromTemplate(target);
-  }, [target]);
-
-
-  useEffect(() => {
-    if (!target) return;
-    listRecentPaymentFiles().then(setRecentFiles);
-  }, [target]);
-
-  // Drag-and-drop on the Arquivo step's dropzone: the dropped file is
-  // uploaded to the server and then loaded like a picked one.
-  function handleDragOver(e: DragEvent) {
-    e.preventDefault();
-    setDragOver(true);
-  }
-
-  async function handleDrop(e: DragEvent) {
-    e.preventDefault();
-    setDragOver(false);
-    if (e.dataTransfer.files.length === 0) return;
-    try {
-      const [path] = await uploadDropped(e.dataTransfer, ["csv", "xlsx", "xls", "ods"]);
-      if (!path) {
-        setError("Formato de arquivo não suportado. Use CSV, XLSX, XLS ou ODS.");
-        return;
-      }
-      await selectFile(path);
-    } catch (err) {
-      setError(String(err instanceof Error ? err.message : err));
-    }
-  }
-
-  /** Which group a sheet's mapping should be read from — csv always has exactly one, implicit group. */
-  function groupKeyOf(sheetName: string | null): string {
-    if (fileKind === "csv" || sheetName === null) return CSV_GROUP_KEY;
-    return sheetGroupOf[sheetName] ?? sheetName;
-  }
-
-  /** Rebuilds the wizard's grouping/mapping state straight from a saved template — no file, no I/O. */
-  function hydrateFromTemplate(t: EmployeeTemplateRow) {
-    const newSheetGroupOf: Record<string, string> = {};
-    const newGroupMapping: Record<string, Record<number, EmployeeTargetField>> = {};
-    const newGroupFieldLabels: Record<string, Record<number, string | null>> = {};
-    const newGroupHeaderRow: Record<string, number | null> = {};
-    const sheetNames: string[] = [];
-
-    for (const group of t.groups) {
-      const repKey = group.sheetNames[0] ?? group.excludedSheetNames[0] ?? CSV_GROUP_KEY;
-      const m: Record<number, EmployeeTargetField> = {};
-      const labels: Record<number, string | null> = {};
-      for (const fm of group.fieldMappings) {
-        const index = letterToIndex(fm.columnLetter);
-        if (index !== null) {
-          m[index] = fm.targetField;
-          labels[index] = fm.headerLabel;
-        }
-      }
-      newGroupMapping[repKey] = m;
-      newGroupFieldLabels[repKey] = labels;
-      newGroupHeaderRow[repKey] = group.headerRow;
-      for (const s of group.sheetNames) {
-        newSheetGroupOf[s] = repKey;
-        sheetNames.push(s);
-      }
-      for (const s of group.excludedSheetNames) {
-        newSheetGroupOf[s] = s;
-        sheetNames.push(s);
-      }
-    }
-
-    setSheets(sheetNames);
-    setSheetGroupOf(newSheetGroupOf);
-    setGroupMapping(newGroupMapping);
-    setGroupFieldLabels(newGroupFieldLabels);
-    setGroupHeaderRow(newGroupHeaderRow);
-    setIncludedSheets(new Set(t.groups.flatMap((g) => g.sheetNames)));
-    setActiveSheet(sheetNames[0] ?? null);
-    setEditingSheetName(null);
-    setEditingSheetNameDraft("");
-    setRows([]);
-    setExtraColumns(0);
-  }
-
-  async function loadFile(path: string) {
-    setLoadingPreview(true);
-    setError(null);
-    try {
-      const sheetNames = await listSpreadsheetSheets(path);
-      const firstSheet = sheetNames[0] ?? null;
-      setSheets(sheetNames);
-      setActiveSheet(firstSheet);
-      setEditingSheetName(null);
-      setEditingSheetNameDraft("");
-      // Everything starts included — flagging the few sheets that don't
-      // belong is less work than hand-picking every roster sheet in a
-      // large workbook.
-      setIncludedSheets(new Set(sheetNames));
-      setSheetGroupOf({});
-      setGroupMapping({});
-      setGroupFieldLabels({});
-      setGroupHeaderRow({});
-      setExtraColumns(0);
-      const preview = await previewSpreadsheet(path, firstSheet, null, 50);
-      setRows(preview.rows);
-      setDelimiter(preview.delimiter);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoadingPreview(false);
-    }
-  }
-
-  async function refetchRows(sheet: string | null, delim: string | null) {
-    if (!filePath) return;
-    setLoadingPreview(true);
-    setError(null);
-    try {
-      const preview = await previewSpreadsheet(filePath, sheet, delim, 50);
-      setRows(preview.rows);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoadingPreview(false);
-    }
-  }
-
-  /** Common path for picking via dialog, dropping, or clicking a recent file — always the same load + recent-list bookkeeping. */
-  async function selectFile(path: string) {
-    setError(null);
-    setFilePath(path);
-    const kind = fileKindFromPath(path);
-    setFileKind(kind);
-    setAcceptedFileKinds(new Set([kind]));
-    await loadFile(path);
-    addRecentPaymentFile(path)
-      .then(() => listRecentPaymentFiles())
-      .then(setRecentFiles)
-      .catch(() => {});
-  }
-
-  /** "Baixar por URL" in the Arquivo step — same direct-download-link download `Importar Pagamentos`'s URL tab uses, just to get a sample file for the mapping instead of an actual import. The downloaded copy's local path already carries the right extension (see `download_payment_file_from_url` in commands.rs), so `selectFile` picks it up exactly like a locally-chosen file from here on. */
-  async function handleDownloadFromUrl() {
-    const targetUrl = urlInput.trim();
-    if (!targetUrl) return;
-    setUrlError(null);
-    setUrlDownloading(true);
-    try {
-      const result = await downloadPaymentFileFromUrl(targetUrl);
-      await selectFile(result.path);
-    } catch (e) {
-      setUrlError(String(e instanceof Error ? e.message : e));
-    } finally {
-      setUrlDownloading(false);
-    }
-  }
-
-  async function handlePickFile() {
-    const path = await pickPaymentFile();
-    if (!path) return;
-    await selectFile(path);
-  }
-
-  // Just switches which sheet's config is being looked at — the mapping is
-  // derived from whichever group that sheet belongs to, so revisiting an
-  // already-configured sheet shows its real config instead of resetting
-  // it.
-  function handleSheetClick(sheetName: string) {
-    if (sheetName === activeSheet) return;
-    setEditingSheetName(null);
-    setEditingSheetNameDraft("");
-    setActiveSheet(sheetName);
-    setExtraColumns(0);
-    setFocusedColumn(null);
-    refetchRows(sheetName, delimiter);
-  }
-
-  function startEditingSheetName(sheetName: string) {
-    setEditingSheetName(sheetName);
-    setEditingSheetNameDraft(sheetName);
-    setActiveSheet(sheetName);
-  }
-
-  /** Includes or excludes a single sheet from the import — independent of whatever it's mirroring, since that's just where its mapping comes from, not a shared identity. */
-  function toggleSheetIncluded(sheet: string) {
-    setIncludedSheets((prev) => {
-      const next = new Set(prev);
-      if (next.has(sheet)) next.delete(sheet);
-      else next.add(sheet);
-      return next;
-    });
-  }
-
-  function selectAllSheets() {
-    setIncludedSheets(new Set(sheets));
-  }
-
-  function deselectAllSheets() {
-    setIncludedSheets(new Set());
-  }
-
-  function renameSheet(oldName: string, rawNewName: string) {
-    const newName = rawNewName.trim();
-    if (!newName || newName === oldName) {
-      setEditingSheetName(null);
-      setEditingSheetNameDraft("");
-      return;
-    }
-    if (sheets.includes(newName)) {
-      setError(`Já existe uma aba chamada "${newName}".`);
-      setEditingSheetName(oldName);
-      setEditingSheetNameDraft(oldName);
-      return;
-    }
-
-    setError(null);
-    setSheets((prev) => prev.map((sheet) => (sheet === oldName ? newName : sheet)));
-    setIncludedSheets((prev) => {
-      const next = new Set(prev);
-      if (next.has(oldName)) {
-        next.delete(oldName);
-        next.add(newName);
-      }
-      return next;
-    });
-    setSheetGroupOf((prev) => {
-      const next: Record<string, string> = {};
-      for (const [sheet, groupKey] of Object.entries(prev)) {
-        const renamedSheet = sheet === oldName ? newName : sheet;
-        const renamedGroupKey = groupKey === oldName ? newName : groupKey;
-        next[renamedSheet] = renamedGroupKey;
-      }
-      if (!prev[oldName]) next[newName] = newName;
-      return next;
-    });
-    setGroupMapping((prev) => {
-      if (!(oldName in prev)) return prev;
-      const next = { ...prev };
-      if (newName !== oldName) {
-        next[newName] = next[oldName] ?? {};
-        delete next[oldName];
-      }
-      return next;
-    });
-    setGroupFieldLabels((prev) => {
-      if (!(oldName in prev)) return prev;
-      const next = { ...prev };
-      if (newName !== oldName) {
-        next[newName] = next[oldName] ?? {};
-        delete next[oldName];
-      }
-      return next;
-    });
-    setGroupHeaderRow((prev) => {
-      if (!(oldName in prev)) return prev;
-      const next = { ...prev };
-      if (newName !== oldName) {
-        next[newName] = next[oldName] ?? null;
-        delete next[oldName];
-      }
-      return next;
-    });
-    if (activeSheet === oldName) {
-      setActiveSheet(newName);
-    }
-    setEditingSheetName(null);
-    setEditingSheetNameDraft("");
-  }
-
-  function addNewSheet() {
-    const baseName = "Nova aba";
-    let suffix = 1;
-    let sheetName = baseName;
-    while (sheets.includes(sheetName)) {
-      suffix += 1;
-      sheetName = `${baseName} ${suffix}`;
-    }
-    setSheets((prev) => [...prev, sheetName]);
-    setSheetGroupOf((prev) => ({ ...prev, [sheetName]: sheetName }));
-    setGroupMapping((prev) => ({ ...prev, [sheetName]: {} }));
-    setGroupFieldLabels((prev) => ({ ...prev, [sheetName]: {} }));
-    setGroupHeaderRow((prev) => ({ ...prev, [sheetName]: null }));
-    setIncludedSheets((prev) => new Set(prev).add(sheetName));
-    setActiveSheet(sheetName);
-    setEditingSheetName(null);
-    setEditingSheetNameDraft("");
-    setExtraColumns(0);
-  }
-
-  /** "Espelhar mapeamento": the active sheet (and anyone already sharing its mapping) adopts `sourceSheet`'s mapping instead of its own. */
-  function mirrorActiveSheet(sourceSheet: string) {
-    if (!activeSheet) return;
-    const activeKey = groupKeyOf(activeSheet);
-    const sourceKey = groupKeyOf(sourceSheet);
-    if (sourceKey === activeKey) return;
-
-    // `groupKeyOf` only follows one hop, so if the active sheet was itself
-    // anchoring other sheets, repointing just it would strand them
-    // pointing at a key that's no longer self-referential. Repoint every
-    // sheet that currently resolves to activeKey in one pass instead.
-    setSheetGroupOf((prev) => {
-      const next = { ...prev };
-      for (const s of sheets) {
-        if ((next[s] ?? s) === activeKey) next[s] = sourceKey;
-      }
-      return next;
-    });
-  }
-
-  /** Splits the active sheet back out into its own independent mapping, keeping whatever it was mirroring as a starting point (used by the "própria" option, and implicitly by any manual edit — see `setColumnMapping`). */
-  function detachActiveSheet() {
-    if (!activeSheet) return;
-    const sourceKey = groupKeyOf(activeSheet);
-    if (sourceKey === activeSheet) return;
-    setSheetGroupOf((prev) => ({ ...prev, [activeSheet]: activeSheet }));
-    setGroupMapping((prev) => ({ ...prev, [activeSheet]: { ...(prev[sourceKey] ?? {}) } }));
-    setGroupFieldLabels((prev) => ({ ...prev, [activeSheet]: { ...(prev[sourceKey] ?? {}) } }));
-    setGroupHeaderRow((prev) => ({ ...prev, [activeSheet]: prev[sourceKey] ?? null }));
-  }
-
-  function handleDelimiterChange(newDelimiter: string) {
-    setDelimiter(newDelimiter);
-    // Column boundaries just shifted, so whatever mapping was set for the
-    // csv's one implicit group no longer means anything.
-    setGroupMapping((prev) => ({ ...prev, [CSV_GROUP_KEY]: {} }));
-    setGroupFieldLabels((prev) => ({ ...prev, [CSV_GROUP_KEY]: {} }));
-    refetchRows(activeSheet, newDelimiter);
-  }
-
-  function setColumnMapping(colIndex: number, field: EmployeeTargetField | "", headerLabel?: string | null) {
-    const sourceKey = groupKeyOf(activeSheet);
-    // Editing while mirroring another sheet's mapping forks it into the
-    // active sheet's own independent group first — the mirrored sheet
-    // keeps its mapping untouched, only the active one changes. Below,
-    // reading from `sourceKey` and writing to `targetKey` in the same
-    // pass is what makes that fork carry over the mirrored values instead
-    // of starting the active sheet from a blank mapping.
-    const isMirroring = activeSheet !== null && fileKind !== "csv" && sourceKey !== activeSheet;
-    const targetKey = isMirroring ? activeSheet : sourceKey;
-
-    if (isMirroring) {
-      setSheetGroupOf((prev) => ({ ...prev, [activeSheet]: activeSheet }));
-    }
-
-    setGroupMapping((prev) => {
-      const current = { ...(prev[sourceKey] ?? {}) };
-      if (!field) {
-        delete current[colIndex];
-      } else {
-        // PIX is intentionally repeatable: one employee can have several
-        // keys spread across multiple source columns. Identity fields stay
-        // one-column-only as before.
-        if (field !== "pix") {
-          for (const k of Object.keys(current)) {
-            const idx = Number(k);
-            if (idx !== colIndex && current[idx] === field) delete current[idx];
-          }
-        }
-        current[colIndex] = field;
-      }
-      return { ...prev, [targetKey]: current };
-    });
-    setGroupFieldLabels((prev) => {
-      const current = { ...(prev[sourceKey] ?? {}) };
-      if (!field) {
-        delete current[colIndex];
-      } else if (headerLabel !== undefined) {
-        current[colIndex] = headerLabel;
-      }
-      return { ...prev, [targetKey]: current };
-    });
-  }
-
-  /** Marks (or clears) which physical row is the active group's last header/title row — forks off a mirrored mapping first, same as `setColumnMapping`, since this is also a per-group edit. */
-  function setHeaderRow(value: number | null) {
-    const sourceKey = groupKeyOf(activeSheet);
-    const isMirroring = activeSheet !== null && fileKind !== "csv" && sourceKey !== activeSheet;
-    const targetKey = isMirroring ? activeSheet : sourceKey;
-
-    if (isMirroring) {
-      setSheetGroupOf((prev) => ({ ...prev, [activeSheet]: activeSheet }));
-      setGroupMapping((prev) => ({ ...prev, [activeSheet]: { ...(prev[sourceKey] ?? {}) } }));
-      setGroupFieldLabels((prev) => ({ ...prev, [activeSheet]: { ...(prev[sourceKey] ?? {}) } }));
-    }
-
-    setGroupHeaderRow((prev) => ({ ...prev, [targetKey]: value }));
-  }
-
-  function isGroupMappingValid(key: string): boolean {
-    const fields = new Set(Object.values(groupMapping[key] ?? {}));
-    return identifierAttempts.some(
-      (attempt) => attempt.fields.length > 0 && attempt.fields.every((field) => fields.has(field)),
-    );
-  }
-
-  function addIdentifierAttempt() {
-    setIdentifierAttempts((prev) => [...prev, { fields: [], caseInsensitive: true }]);
-  }
-
-  function removeIdentifierAttempt(index: number) {
-    setIdentifierAttempts((prev) => prev.filter((_, i) => i !== index));
-  }
-
-  /** `fileKind` itself is never toggled off here — the checkbox for it is disabled-checked in the UI, this only ever runs for the other xlsx/xls/ods kinds. */
-  function toggleAcceptedFileKind(kind: PaymentFileKind) {
-    setAcceptedFileKinds((prev) => {
-      const next = new Set(prev);
-      if (next.has(kind)) next.delete(kind);
-      else next.add(kind);
-      return next;
-    });
-  }
-
-  function toggleIdentifierField(index: number, field: IdentifierField) {
-    setIdentifierAttempts((prev) =>
-      prev.map((attempt, i) =>
-        i === index
-          ? {
-              ...attempt,
-              fields: attempt.fields.includes(field)
-                ? attempt.fields.filter((f) => f !== field)
-                : [...attempt.fields, field],
-            }
-          : attempt,
-      ),
-    );
-  }
-
-  function toggleIdentifierCaseInsensitive(index: number) {
-    setIdentifierAttempts((prev) =>
-      prev.map((attempt, i) => (i === index ? { ...attempt, caseInsensitive: !attempt.caseInsensitive } : attempt)),
-    );
-  }
-
-  function moveIdentifierAttempt(index: number, direction: -1 | 1) {
-    setIdentifierAttempts((prev) => {
-      const target = index + direction;
-      if (target < 0 || target >= prev.length) return prev;
-      const next = [...prev];
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
-  }
-
-  const isIdentifierPriorityValid =
-    identifierAttempts.length > 0 && identifierAttempts.every((a) => a.fields.length > 0);
-
-  const activeGroupKey = groupKeyOf(activeSheet);
-  const mapping = groupMapping[activeGroupKey] ?? {};
-  const activeHeaderRow = groupHeaderRow[activeGroupKey] ?? null;
-
-  const colCount = rows.reduce((max, r) => Math.max(max, r.length), 0);
-  const columns = Array.from({ length: colCount }, (_, i) => i);
-  // Best-effort cosmetic hint for the mapping grid's column labels — not a
-  // "real" header, just whatever the first row happens to contain.
-  const firstRowHint = rows[0] ?? [];
-  const sampleRows = rows.slice(0, SAMPLE_ROW_COUNT);
-
-  // Same grid, no live data: the file-less editing mode only knows about
-  // already-mapped columns, plus however many blank ones `extraColumns`
-  // has revealed past the last mapped one — picking a field for a blank
-  // one is how a new column gets mapped, exactly like clicking a live
-  // grid's header select.
-  const mappedMaxIndex = Math.max(-1, ...Object.keys(mapping).map(Number));
-  const noFileColumns = Array.from({ length: mappedMaxIndex + 1 + extraColumns }, (_, i) => i);
-
-  // Every group among the sheets actually being imported — csv always has
-  // just the one implicit group.
-  const includedGroupKeys =
-    fileKind === "csv"
-      ? [CSV_GROUP_KEY]
-      : Array.from(new Set(sheets.filter((s) => includedSheets.has(s)).map((s) => groupKeyOf(s))));
-
-  const allGroupKeys =
-    fileKind === "csv" ? [CSV_GROUP_KEY] : Array.from(new Set(sheets.map((s) => groupKeyOf(s))));
-
-  // Every other included sheet — candidates for "espelhar mapeamento"
-  // (including whichever one the active sheet currently mirrors, if any,
-  // so that value shows up selected in the dropdown below).
-  const mirrorOptions = sheets.filter((s) => s !== activeSheet && includedSheets.has(s));
-  const mirroringSheet = activeSheet && activeGroupKey !== activeSheet ? activeGroupKey : "";
-
-  /** Validates the current step and either advances or blocks with an explanation — an attempt to advance always gets a reaction, not just a silently-disabled button. */
-  function handleAdvance() {
-    setError(null);
-    if (currentStep === "file" && filePath === null) {
-      setError("Selecione um arquivo antes de avançar.");
-      return;
-    }
-    if (currentStep === "mapping") {
-      if (sheets.length > 0 && includedSheets.size === 0) {
-        setError("Selecione ao menos uma aba para importar.");
-        return;
-      }
-      if (includedGroupKeys.length === 0) {
-        setError("Nenhuma configuração de colunas para mapear.");
-        return;
-      }
-      // The attempts themselves are configured on the next step. Their
-      // compatibility with every included group is validated on Save.
-    }
-    setStepIndex((s) => s + 1);
-  }
-
-  async function handleSave() {
-    if (!fileKind || !name.trim()) return;
-    const invalidKey = includedGroupKeys.find((key) => !isGroupMappingValid(key));
-    if (invalidKey) {
-      setError(`"${invalidKey}": nenhuma tentativa de identificação configurada possui todos os campos mapeados nesta aba.`);
-      setStepIndex(steps.indexOf("mapping"));
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const editing = target !== null && target !== "new" ? target : null;
-
-      const groups: EmployeeTemplateGroup[] = allGroupKeys.map((key) => {
-        const sheetNames = fileKind === "csv" ? [] : sheets.filter((s) => includedSheets.has(s) && groupKeyOf(s) === key);
-        const excludedSheetNames = fileKind === "csv" ? [] : sheets.filter((s) => !includedSheets.has(s) && groupKeyOf(s) === key);
-        const m = groupMapping[key] ?? {};
-        const labels = groupFieldLabels[key] ?? {};
-        const fieldMappings = Object.entries(m).map(([indexStr, targetField]) => {
-          const index = Number(indexStr);
-          return {
-            columnLetter: columnLetter(index),
-            targetField,
-            headerLabel: labels[index] ?? null,
-          };
-        });
-        return { sheetNames, excludedSheetNames, fieldMappings, headerRow: groupHeaderRow[key] ?? null };
-      });
-
-      const input: EmployeeTemplateInput = {
-        name: name.trim(),
-        fileKind,
-        acceptedFileKinds: Array.from(new Set([fileKind, ...acceptedFileKinds])),
-        delimiter: fileKind === "csv" ? delimiter : null,
-        identifierPriority: identifierAttempts,
-        groups,
-      };
-
-      if (editing) {
-        await updateEmployeeTemplate(editing.id, input);
-      } else {
-        await createEmployeeTemplate(input);
-      }
-
-      onSaved();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (!target) return null;
-
-  return (
-    <Modal fullScreen zIndex={100} onClose={onClose}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "0.8rem 1.2rem",
-          background: "var(--card-bg)",
-          borderBottom: "1px solid var(--border)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <strong style={{ fontSize: "0.95rem" }}>
-          {isEditing ? (readOnly ? "Template de colaboradores" : "Editar template de colaboradores") : "Novo template de colaboradores"}
-        </strong>
-        <CloseButton />
-      </div>
-
-      <div className="wizard-steps" onClick={(e) => e.stopPropagation()}>
-        {steps.map((s, i) => (
-          <span key={s} className={`wizard-step${i === stepIndex ? " active" : i < stepIndex ? " done" : ""}`}>
-            {i + 1}. {STEP_LABEL_TEXT[s]}
-          </span>
-        ))}
-      </div>
-
-      <div
-        style={{ flex: 1, overflow: "auto", padding: "1.5rem", background: "var(--bg)", display: "flex", flexDirection: "column", minHeight: 0 }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {error && <div className="error-box" style={{ marginBottom: "1rem" }}>{error}</div>}
-
-        {/* `display: contents` keeps the steps' flex layout; `disabled` still reaches every field inside. */}
-        <fieldset disabled={readOnly} style={{ display: "contents" }}>
-
-        {currentStep === "file" && (
-          <div className="details-layout">
-            <div className="details-main">
-              <div>
-                <h2 className="file-step-title">Importar arquivo fonte</h2>
-                <p className="glass-panel-desc" style={{ marginBottom: 0 }}>
-                  Selecione um arquivo para servir de base para o mapeamento deste template.
-                </p>
-              </div>
-
-              {filePath && (
-                <div className="glass-panel file-status-card">
-                  <div className="file-status-icon">
-                    <CheckCircle2 size={26} />
-                  </div>
-                  <div className="file-status-info">
-                    <p className="file-status-label">Arquivo carregado</p>
-                    <div className="file-status-name">
-                      <Table2 size={16} />
-                      {fileNameFromPath(filePath)}
-                    </div>
-                  </div>
-                  <button type="button" className="glow-button" onClick={handlePickFile}>
-                    <RefreshCw size={14} />
-                    Trocar arquivo
-                  </button>
-                </div>
-              )}
-
-              <div
-                className={`file-dropzone${dragOver ? " drag-over" : ""}`}
-                onClick={handlePickFile}
-                onDragOver={handleDragOver}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={handleDrop}
-                role="button"
-                tabIndex={0}
-              >
-                <div className="file-dropzone-icon">
-                  <UploadCloud size={28} />
-                </div>
-                <h3>Arraste e solte um arquivo aqui</h3>
-                <p className="glass-panel-desc">
-                  Ou clique para navegar. O arquivo será usado só para montar o mapeamento agora —
-                  não é guardado; depois de salvo, o template só armazena a configuração de
-                  colunas.
-                </p>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handlePickFile();
-                  }}
-                >
-                  <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-                  Selecionar arquivo
-                </button>
-              </div>
-
-              <div className="glass-panel" style={{ marginTop: "1rem" }}>
-                <h4 className="glass-panel-heading" style={{ fontSize: "0.85rem" }}>
-                  <Link2 size={16} />
-                  Ou baixar por URL
-                </h4>
-                <p className="glass-panel-desc">
-                  Link de download direto e anônimo (sem exigir login) para um arquivo Excel
-                  (.xlsx/.xls) ou OpenDocument (.ods).
-                </p>
-                <div style={{ display: "flex", gap: "0.5rem" }}>
-                  <input
-                    type="url"
-                    className="glass-input"
-                    placeholder="https://exemplo.com/arquivo.xlsx"
-                    value={urlInput}
-                    onChange={(e) => setUrlInput(e.target.value)}
-                    disabled={urlDownloading}
-                    style={{ flex: 1 }}
-                  />
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={handleDownloadFromUrl}
-                    disabled={!urlInput.trim() || urlDownloading}
-                  >
-                    {urlDownloading ? "Baixando..." : "Baixar arquivo"}
-                  </button>
-                </div>
-                {urlError && (
-                  <div className="error-box" style={{ marginTop: "0.6rem" }}>
-                    {urlError}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <aside className="details-sidebar">
-              <div className="glass-panel">
-                <h4 className="glass-panel-heading">
-                  <Info size={16} />
-                  Guia de preparação
-                </h4>
-                <p className="glass-panel-desc">Formatos suportados:</p>
-                <div className="file-format-pills">
-                  {["CSV", "XLSX", "XLS", "ODS"].map((f) => (
-                    <span key={f} className="file-format-pill">
-                      .{f}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              {recentFiles.length > 0 && (
-                <div className="glass-panel">
-                  <h4 className="glass-panel-heading" style={{ fontSize: "0.85rem" }}>
-                    Arquivos recentes
-                  </h4>
-                  <div className="recent-files-list">
-                    {recentFiles.map((p) => (
-                      <button key={p} type="button" className="recent-file-item" onClick={() => selectFile(p)}>
-                        <FileText size={16} />
-                        <span className="recent-file-name">{fileNameFromPath(p)}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </aside>
-          </div>
-        )}
-
-        {currentStep === "mapping" && (
-          <div style={{ display: "flex", gap: "1.2rem", alignItems: "stretch", minHeight: 0, flex: 1 }}>
-            {sheets.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", flex: "0 0 256px", minHeight: 0, alignSelf: "stretch" }}>
-                <aside className="mapping-sidebar">
-                  <div className="mapping-sidebar-header">
-                    <strong>{sheets.length === 1 ? "Aba do arquivo" : "Mapeamento por aba"}</strong>
-                    <p className="muted">
-                      {sheets.length === 1 ? "Aba carregada neste template" : "Selecione a aba para configurar"}
-                    </p>
-                    {sheets.length > 1 && (
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.4rem", marginTop: "0.65rem" }}>
-                        <button type="button" className="outline" onClick={selectAllSheets} disabled={includedSheets.size === sheets.length} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "0.3rem", padding: "0.38rem 0.4rem", fontSize: "0.7rem", whiteSpace: "nowrap" }}>
-                          <CheckSquare size={12} />
-                          Selecionar todas
-                        </button>
-                        <button type="button" className="outline" onClick={deselectAllSheets} disabled={includedSheets.size === 0} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "0.3rem", padding: "0.38rem 0.4rem", fontSize: "0.7rem", whiteSpace: "nowrap" }}>
-                          <Square size={12} />
-                          Desmarcar todas
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  <nav className="mapping-sidebar-nav">
-                    {sheets.map((s) => {
-                      const included = includedSheets.has(s);
-                      const groupKey = groupKeyOf(s);
-                      const mirroring = groupKey !== s ? groupKey : null;
-                      const isEditing = editingSheetName === s;
-                      return (
-                        <button
-                          key={s}
-                          type="button"
-                          className={`mapping-sidebar-item${s === activeSheet ? " active" : ""}${included ? "" : " excluded"}`}
-                          onClick={() => handleSheetClick(s)}
-                          onDoubleClick={() => startEditingSheetName(s)}
-                        >
-                          <span
-                            className="mapping-sidebar-check"
-                            role="checkbox"
-                            aria-checked={included}
-                            aria-label={included ? `Remover "${s}" da importação` : `Incluir "${s}" na importação`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleSheetIncluded(s);
-                            }}
-                          >
-                            {included ? <CheckSquare size={14} /> : <Square size={14} />}
-                          </span>
-                          <span className="mapping-sidebar-label">
-                            {isEditing ? (
-                              <input
-                                autoFocus
-                                type="text"
-                                value={editingSheetNameDraft}
-                                onChange={(e) => setEditingSheetNameDraft(e.target.value)}
-                                onBlur={() => renameSheet(s, editingSheetNameDraft)}
-                                onClick={(e) => e.stopPropagation()}
-                                onDoubleClick={(e) => e.stopPropagation()}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    renameSheet(s, editingSheetNameDraft);
-                                  } else if (e.key === "Escape") {
-                                    e.preventDefault();
-                                    setEditingSheetName(null);
-                                    setEditingSheetNameDraft("");
-                                  }
-                                }}
-                                style={{ width: "100%" }}
-                              />
-                            ) : (
-                              s
-                            )}
-                            {mirroring && <span className="mapping-sidebar-mirroring"> → {mirroring}</span>}
-                          </span>
-                          {included && !isGroupMappingValid(groupKey) && (
-                            <span className="mapping-sidebar-warn" title="Nenhuma tentativa de identificação possui todos os seus campos mapeados">
-                              •
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </nav>
-                </aside>
-
-                <div style={{ display: "flex", justifyContent: "center", marginTop: "0.6rem" }}>
-                  <button type="button" className="ghost" onClick={addNewSheet}>
-                    <Plus size={12} style={{ marginRight: "0.25rem" }} />
-                    Adicionar aba
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="wizard-instructions">
-                <h4>
-                  <Info size={16} />
-                  Instruções de mapeamento
-                </h4>
-                <p>
-                  Para cada coluna da planilha, escolha na lista qual campo do sistema ela
-                  representa — ou deixe como "Ignorar" se a coluna não for usada. Se outra aba já
-                  tem a mesma estrutura, use "Espelhar mapeamento" abaixo em vez de mapear tudo de
-                  novo.
-                </p>
-              </div>
-
-              {fileKind === "csv" && (
-                <div className="field" style={{ maxWidth: "16rem", marginBottom: "0.9rem" }}>
-                  <label>Delimitador</label>
-                  <select value={delimiter ?? ","} onChange={(e) => handleDelimiterChange(e.target.value)}>
-                    {DELIMITER_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {sheets.length > 1 && (
-                <div className="mapping-mirror-toolbar">
-                  <span className="mapping-mirror-toolbar-label">Espelhar mapeamento:</span>
-                  <select
-                    value={mirroringSheet}
-                    onChange={(e) => {
-                      if (e.target.value) mirrorActiveSheet(e.target.value);
-                      else detachActiveSheet();
-                    }}
-                  >
-                    <option value="">Própria (não espelhada)</option>
-                    {mirrorOptions.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {!filePath ? (
-                <>
-                  <div className="field" style={{ maxWidth: "22rem", marginBottom: "0.9rem" }}>
-                    <label htmlFor="header-row">Linha do cabeçalho</label>
-                    <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                      <input
-                        id="header-row"
-                        type="number"
-                        min={1}
-                        value={activeHeaderRow ?? ""}
-                        onChange={(e) => setHeaderRow(e.target.value ? Math.max(1, Number(e.target.value)) : null)}
-                        placeholder="Nenhuma"
-                        style={{ width: "6rem" }}
-                      />
-                      {activeHeaderRow !== null && (
-                        <button
-                          type="button"
-                          className="ghost"
-                          style={{ padding: "0.3rem" }}
-                          onClick={() => setHeaderRow(null)}
-                          aria-label="Remover marcação de cabeçalho"
-                          title="Remover marcação de cabeçalho"
-                        >
-                          <X size={14} />
-                        </button>
-                      )}
-                    </div>
-                    <p className="field-hint">
-                      Sem um arquivo de exemplo carregado não é possível clicar na linha — informe o
-                      número diretamente. Linhas até esta (inclusive) são ignoradas ao importar.
-                    </p>
-                  </div>
-                  <div className="spreadsheet-grid-scroll">
-                  <table className="spreadsheet-grid">
-                    <thead>
-                      <tr>
-                        <th className="corner">#</th>
-                        {noFileColumns.map((c) => {
-                          const field = mapping[c];
-                          const label = groupFieldLabels[activeGroupKey]?.[c];
-                          const focused = c === focusedColumn;
-                          return (
-                            <th
-                              key={c}
-                              className={`mapping-header${field ? " is-mapped" : ""}${focused ? " focused" : ""}`}
-                            >
-                              <span className="header-label">
-                                {columnLetter(c)}
-                                {label ? ` — ${label}` : ""}
-                                {focused && <Pencil size={12} />}
-                              </span>
-                              <select
-                                value={field ?? ""}
-                                onFocus={() => setFocusedColumn(c)}
-                                onChange={(e) => setColumnMapping(c, e.target.value as EmployeeTargetField | "")}
-                              >
-                                <option value="">Ignorar</option>
-                                {EMPLOYEE_TARGET_FIELDS.map((f) => (
-                                  <option key={f} value={f}>
-                                    {EMPLOYEE_TARGET_FIELD_LABELS[f]}
-                                  </option>
-                                ))}
-                              </select>
-                            </th>
-                          );
-                        })}
-                        <th className="corner">
-                          <button
-                            type="button"
-                            className="ghost"
-                            style={{ padding: "0.2rem" }}
-                            onClick={() => setExtraColumns((n) => n + 1)}
-                            title="Adicionar coluna"
-                            aria-label="Adicionar coluna"
-                          >
-                            <Plus size={14} />
-                          </button>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td
-                          className="row-gutter muted"
-                          colSpan={noFileColumns.length + 2}
-                          style={{ fontStyle: "italic" }}
-                        >
-                          Editando a configuração já salva — sem dados de exemplo.
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p className="field-hint" style={{ marginBottom: "0.9rem" }}>
-                    {activeHeaderRow !== null ? (
-                      <>
-                        Cabeçalho até a linha {activeHeaderRow} — linhas até ela são ignoradas ao
-                        importar.{" "}
-                        <button
-                          type="button"
-                          className="ghost"
-                          style={{ padding: "0 0.3rem" }}
-                          onClick={() => setHeaderRow(null)}
-                        >
-                          Remover marcação
-                        </button>
-                      </>
-                    ) : (
-                      "Clique no número de uma linha na tabela abaixo para marcar onde o cabeçalho termina."
-                    )}
-                  </p>
-                  {loadingPreview && <p className="muted">Carregando...</p>}
-                  {!loadingPreview && rows.length === 0 && <p className="muted">Nenhuma linha encontrada.</p>}
-                  {!loadingPreview && rows.length > 0 && (
-                    <div className="spreadsheet-grid-scroll">
-                      <table className="spreadsheet-grid">
-                        <thead>
-                          <tr>
-                            <th className="corner">#</th>
-                            {columns.map((c) => {
-                              const field = mapping[c];
-                              const focused = c === focusedColumn;
-                              return (
-                                <th
-                                  key={c}
-                                  className={`mapping-header${field ? " is-mapped" : ""}${focused ? " focused" : ""}`}
-                                >
-                                  <span className="header-label">
-                                    {columnLetter(c)} — {firstRowHint[c] || "(vazio)"}
-                                    {focused && <Pencil size={12} />}
-                                  </span>
-                                  <select
-                                    value={field ?? ""}
-                                    onFocus={() => setFocusedColumn(c)}
-                                    onChange={(e) =>
-                                      setColumnMapping(
-                                        c,
-                                        e.target.value as EmployeeTargetField | "",
-                                        firstRowHint[c] ?? null,
-                                      )
-                                    }
-                                  >
-                                    <option value="">Ignorar</option>
-                                    {EMPLOYEE_TARGET_FIELDS.map((f) => (
-                                      <option key={f} value={f}>
-                                        {EMPLOYEE_TARGET_FIELD_LABELS[f]}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </th>
-                              );
-                            })}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {sampleRows.map((row, i) => {
-                            const rowNumber = i + 1;
-                            const isHeaderRow = rowNumber === activeHeaderRow;
-                            const isBeforeHeader = activeHeaderRow !== null && rowNumber <= activeHeaderRow;
-                            return (
-                              <tr key={i} className={isBeforeHeader ? "row-header-skip" : undefined}>
-                                <td
-                                  className={`row-gutter row-gutter-clickable${isHeaderRow ? " row-gutter-active" : ""}`}
-                                  onClick={() => setHeaderRow(isHeaderRow ? null : rowNumber)}
-                                  title={
-                                    isHeaderRow
-                                      ? "Linha marcada como cabeçalho — clique para desmarcar"
-                                      : "Clique para marcar esta linha como cabeçalho"
-                                  }
-                                >
-                                  {rowNumber}
-                                </td>
-                                {columns.map((c) => (
-                                  <td key={c} className={c === focusedColumn ? "col-focused" : undefined}>
-                                    {row[c] ?? ""}
-                                  </td>
-                                ))}
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        )}
-
-        {currentStep === "details" && (
-          <div className="details-layout">
-            <aside className="details-sidebar">
-              <div className="glass-panel">
-                <div className="field-code">
-                  <label htmlFor="template-name">Nome do template</label>
-                  <input
-                    id="template-name"
-                    className="glass-input"
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Ex.: Colaboradores — Cliente X"
-                  />
-                </div>
-                <div className="field-code">
-                  <label>Formatos aceitos</label>
-                  {fileKind === "csv" ? (
-                    <p className="glass-panel-desc" style={{ margin: 0 }}>
-                      CSV — um arquivo de texto delimitado não pode ser combinado com planilhas.
-                    </p>
-                  ) : (
-                    <>
-                      <p className="glass-panel-desc" style={{ margin: "0 0 0.4rem" }}>
-                        Este template foi montado com um arquivo {fileKind?.toUpperCase()}. Um arquivo Excel
-                        (XLSX/XLS) ou ODS com as mesmas colunas é lido exatamente do mesmo jeito — marque
-                        abaixo se, além de {fileKind?.toUpperCase()}, este template também deve aceitar
-                        algum dos outros na hora de importar.
-                      </p>
-                      {(["xlsx", "xls", "ods"] as PaymentFileKind[]).map((k) => (
-                        <label key={k} className="field-code-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={k === fileKind || acceptedFileKinds.has(k)}
-                            disabled={k === fileKind}
-                            onChange={() => toggleAcceptedFileKind(k)}
-                          />
-                          {k.toUpperCase()}
-                        </label>
-                      ))}
-                    </>
-                  )}
-                </div>
-              </div>
-            </aside>
-
-            <div className="details-main">
-              <section className="glass-panel">
-                <h3 className="glass-panel-heading">
-                  <ListOrdered size={18} />
-                  Prioridade de identificação
-                </h3>
-                <p className="glass-panel-desc">
-                  Cada tentativa é um conjunto de campos que precisam bater juntos, no mesmo
-                  colaborador — tentadas em ordem, a primeira que encontrar um colaborador já
-                  cadastrado vence. Pelo menos uma tentativa é obrigatória.
-                </p>
-
-                {identifierAttempts.map((attempt, i) => (
-                  <div key={i} className="chain-row">
-                    {i > 0 && <div className="chain-connector" />}
-                    <div className="logic-card identifier-attempt">
-                      <div className={`chain-num${i === 0 ? " first" : ""}`}>{i + 1}</div>
-                      <div className="identifier-attempt-fields">
-                        {IDENTIFIER_FIELDS.map((f) => (
-                          <label
-                            key={f}
-                            className={`identifier-field-pill${attempt.fields.includes(f) ? " checked" : ""}`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={attempt.fields.includes(f)}
-                              onChange={() => toggleIdentifierField(i, f)}
-                            />
-                            {EMPLOYEE_TARGET_FIELD_LABELS[f]}
-                          </label>
-                        ))}
-                        <label className="field-code-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={attempt.caseInsensitive}
-                            onChange={() => toggleIdentifierCaseInsensitive(i)}
-                          />
-                          Ignorar maiúsculas/minúsculas
-                        </label>
-                      </div>
-                      <div className="logic-card-actions">
-                        <button
-                          type="button"
-                          className="ghost"
-                          style={{ padding: "0.3rem" }}
-                          onClick={() => moveIdentifierAttempt(i, -1)}
-                          disabled={i === 0}
-                          aria-label="Mover para cima"
-                          title="Mover para cima"
-                        >
-                          <ChevronUp size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost"
-                          style={{ padding: "0.3rem" }}
-                          onClick={() => moveIdentifierAttempt(i, 1)}
-                          disabled={i === identifierAttempts.length - 1}
-                          aria-label="Mover para baixo"
-                          title="Mover para baixo"
-                        >
-                          <ChevronDown size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost"
-                          style={{ padding: "0.3rem" }}
-                          onClick={() => removeIdentifierAttempt(i)}
-                          aria-label="Remover tentativa"
-                          title="Remover tentativa"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-
-                {identifierAttempts.length === 0 && (
-                  <p className="field-hint" style={{ marginTop: "0.6rem" }}>
-                    Nenhuma tentativa cadastrada — pelo menos uma é obrigatória para salvar.
-                  </p>
-                )}
-
-                <button
-                  type="button"
-                  className="glow-button"
-                  style={{ marginTop: "1rem" }}
-                  onClick={addIdentifierAttempt}
-                >
-                  <Plus size={14} />
-                  Adicionar tentativa
-                </button>
-              </section>
-            </div>
-          </div>
-        )}
-        </fieldset>
-      </div>
-
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          padding: "0.8rem 1.2rem",
-          background: "var(--card-bg)",
-          borderTop: "1px solid var(--border)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          type="button"
-          className="outline"
-          onClick={() => setStepIndex((s) => s - 1)}
-          disabled={stepIndex === 0 || busy}
-        >
-          <ChevronLeft size={15} style={{ marginRight: "0.3rem" }} />
-          Voltar
-        </button>
-        {stepIndex < steps.length - 1 ? (
-          <button type="button" onClick={handleAdvance} disabled={busy}>
-            Avançar
-            <ChevronRight size={15} style={{ marginLeft: "0.3rem" }} />
-          </button>
-        ) : readOnly ? (
-          <span />
-        ) : (
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={busy || !name.trim() || !isIdentifierPriorityValid}
-          >
-            {busy ? "Salvando..." : "Salvar"}
-          </button>
-        )}
-      </div>
-    </Modal>
-  );
 }
 
 function letterToIndex(letter: string): number | null {
@@ -1457,4 +86,866 @@ function letterToIndex(letter: string): number | null {
     n = n * 26 + (code + 1);
   }
   return n - 1;
+}
+
+function columnOf(mapping: Record<number, EmployeeTargetField>, field: EmployeeTargetField): number | null {
+  const entry = Object.entries(mapping).find(([, f]) => f === field);
+  return entry ? Number(entry[0]) : null;
+}
+
+const fieldLabel = (f: EmployeeTargetField) => EMPLOYEE_TARGET_FIELD_LABELS[f];
+
+export default function EmployeeTemplateWizard({
+  target,
+  onClose,
+  onSaved,
+  readOnly = false,
+}: {
+  /** `null` keeps the wizard closed; `"new"` starts a blank template; a row edits it. */
+  target: EmployeeTemplateRow | "new" | null;
+  onClose: () => void;
+  onSaved: () => void;
+  /** View-only profile: the steps can be browsed, but there's no Salvar. */
+  readOnly?: boolean;
+}) {
+  const [stepIndex, setStepIndex] = useState(0);
+  const [filePath, setFilePath] = useState<string | null>(null);
+  const [fileKind, setFileKind] = useState<PaymentFileKind | null>(null);
+  const [acceptedFileKinds, setAcceptedFileKinds] = useState<Set<PaymentFileKind>>(new Set());
+  const [sheets, setSheets] = useState<string[]>([]);
+  const [includedSheets, setIncludedSheets] = useState<Set<string>>(new Set());
+  const [delimiter, setDelimiter] = useState<string | null>(null);
+  const [sheetRows, setSheetRows] = useState<Record<string, string[][]>>({});
+
+  // Same grouping as the payment wizard: `sheetGroupOf[sheet]` names the
+  // sheet whose answers it uses (itself when it answers alone).
+  const [sheetGroupOf, setSheetGroupOf] = useState<Record<string, string>>({});
+  const [groupMapping, setGroupMapping] = useState<Record<string, Record<number, EmployeeTargetField>>>({});
+  const [groupFieldLabels, setGroupFieldLabels] = useState<Record<string, Record<number, string | null>>>({});
+  /** The saved header row per group (1-indexed), used when there's no sample file to spot it in. */
+  const [groupHeaderRow, setGroupHeaderRow] = useState<Record<string, number | null>>({});
+  const [shareAnswers, setShareAnswers] = useState(true);
+  const [separatedSheets, setSeparatedSheets] = useState<Set<string>>(new Set());
+  const [answersTab, setAnswersTab] = useState<string | null>(null);
+  const [openCheck, setOpenCheck] = useState<string | null>(null);
+
+  const [name, setName] = useState("");
+  const [identifierOrder, setIdentifierOrder] = useState<IdentifierField[]>(DEFAULT_ORDER);
+
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const isEditing = target !== null && target !== "new";
+  const steps: WizardStep[] = [
+    ...(isEditing ? [] : ["file" as const]),
+    ...(fileKind === "csv" ? [] : ["sheets" as const]),
+    "answers",
+    ...(isEditing ? [] : ["check" as const]),
+    "details",
+  ];
+  const currentStep = steps[stepIndex];
+
+  useEffect(() => {
+    if (target === null) return;
+    setStepIndex(0);
+    setError(null);
+    setBusy(false);
+    setFilePath(null);
+    resetMapping([]);
+    if (target === "new") {
+      setFileKind(null);
+      setAcceptedFileKinds(new Set());
+      setDelimiter(null);
+      setName("");
+      setIdentifierOrder(DEFAULT_ORDER);
+      return;
+    }
+    setFileKind(target.fileKind);
+    setAcceptedFileKinds(new Set(target.acceptedFileKinds));
+    setDelimiter(target.delimiter);
+    setName(target.name);
+    setIdentifierOrder(identifierOrderFromSaved(target.identifierPriority));
+    hydrate(target);
+  }, [target]);
+
+  // Nothing floats over the wizard (see `body.wizard-open` in App.css).
+  useEffect(() => {
+    if (!target) return;
+    document.body.classList.add("wizard-open");
+    return () => document.body.classList.remove("wizard-open");
+  }, [target]);
+
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (error) bodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }, [error]);
+
+  function resetMapping(sheetNames: string[]) {
+    setSheets(sheetNames);
+    setIncludedSheets(new Set());
+    setSheetRows({});
+    setSheetGroupOf({});
+    setGroupMapping({});
+    setGroupFieldLabels({});
+    setGroupHeaderRow({});
+    setShareAnswers(true);
+    setSeparatedSheets(new Set());
+    setAnswersTab(null);
+    setOpenCheck(null);
+  }
+
+  function hydrate(t: EmployeeTemplateRow) {
+    const groupOf: Record<string, string> = {};
+    const mapping: Record<string, Record<number, EmployeeTargetField>> = {};
+    const labels: Record<string, Record<number, string | null>> = {};
+    const headerRows: Record<string, number | null> = {};
+    const names: string[] = [];
+    for (const g of t.groups) {
+      const key = g.sheetNames[0] ?? g.excludedSheetNames[0] ?? CSV_GROUP_KEY;
+      const m: Record<number, EmployeeTargetField> = {};
+      const l: Record<number, string | null> = {};
+      for (const fm of g.fieldMappings) {
+        const index = letterToIndex(fm.columnLetter);
+        if (index !== null) {
+          m[index] = fm.targetField;
+          l[index] = fm.headerLabel;
+        }
+      }
+      mapping[key] = m;
+      labels[key] = l;
+      headerRows[key] = g.headerRow;
+      for (const s of g.sheetNames) {
+        groupOf[s] = key;
+        names.push(s);
+      }
+      for (const s of g.excludedSheetNames) {
+        groupOf[s] = s;
+        headerRows[s] = g.headerRow;
+        names.push(s);
+      }
+    }
+    setSheets(names);
+    setSheetGroupOf(groupOf);
+    setGroupMapping(mapping);
+    setGroupFieldLabels(labels);
+    setGroupHeaderRow(headerRows);
+    setIncludedSheets(new Set(t.groups.flatMap((g) => g.sheetNames)));
+  }
+
+  /** Fresh answers for a just-loaded file, like the payment wizard: prefilled per sheet, identical sheets together, non-roster sheets unchecked. */
+  function prefill(sheetNames: string[], rowsBySheet: Record<string, string[][]>) {
+    const keys = sheetNames.length > 0 ? sheetNames : [CSV_GROUP_KEY];
+    const groupOf: Record<string, string> = {};
+    const mapping: Record<string, Record<number, EmployeeTargetField>> = {};
+    const labels: Record<string, Record<number, string | null>> = {};
+    const anchorBySignature = new Map<string, string>();
+    for (const key of keys) {
+      const rows = rowsBySheet[key] ?? [];
+      const signature = sheetNames.length > 0 ? headerSignature(rows) : null;
+      const anchor = signature ? anchorBySignature.get(signature) : undefined;
+      if (anchor) {
+        groupOf[key] = anchor;
+        continue;
+      }
+      if (signature) anchorBySignature.set(signature, key);
+      groupOf[key] = key;
+      const m = guessEmployeeMapping(rows);
+      const headers = headersOf(rows);
+      mapping[key] = m;
+      labels[key] = Object.fromEntries(Object.keys(m).map((i) => [Number(i), headers[Number(i)] || null]));
+    }
+    setSheetGroupOf(sheetNames.length > 0 ? groupOf : {});
+    setGroupMapping(mapping);
+    setGroupFieldLabels(labels);
+    setIncludedSheets(new Set(sheetNames.filter((s) => looksLikeEmployeeSheet(rowsBySheet[s] ?? []))));
+  }
+
+  async function loadFile(path: string) {
+    setLoadingPreview(true);
+    setError(null);
+    try {
+      const sheetNames = await listSpreadsheetSheets(path);
+      resetMapping(sheetNames);
+      const keys = sheetNames.length > 0 ? sheetNames : [CSV_GROUP_KEY];
+      const previews = await Promise.all(keys.map((k) => previewSpreadsheet(path, k === CSV_GROUP_KEY ? null : k, null, PREVIEW_ROWS)));
+      const rowsBySheet = Object.fromEntries(keys.map((k, i) => [k, previews[i].rows]));
+      setSheetRows(rowsBySheet);
+      setDelimiter(previews[0]?.delimiter ?? null);
+      prefill(sheetNames, rowsBySheet);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoadingPreview(false);
+    }
+  }
+
+  async function selectFile(path: string) {
+    setError(null);
+    setFilePath(path);
+    const kind = fileKindFromPath(path);
+    setFileKind(kind);
+    setAcceptedFileKinds(new Set([kind]));
+    await loadFile(path);
+  }
+
+  async function handlePickFile() {
+    const path = await pickPaymentFile();
+    if (path) await selectFile(path);
+  }
+
+  async function handleDrop(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    const ext = file.name.split(".").pop()?.toLowerCase();
+    if (!ext || !FILE_EXTENSIONS.includes(ext)) {
+      setError("Formato de arquivo não suportado. Use CSV, XLSX, XLS ou ODS.");
+      return;
+    }
+    try {
+      const [path] = await uploadDropped(e.dataTransfer, FILE_EXTENSIONS);
+      if (path) await selectFile(path);
+    } catch (err) {
+      setError(String(err instanceof Error ? err.message : err));
+    }
+  }
+
+  async function handleDownload(url: string) {
+    const result = await downloadPaymentFileFromUrl(url);
+    await selectFile(result.path);
+  }
+
+  async function handleDelimiterChange(next: string) {
+    if (!filePath) return;
+    setDelimiter(next);
+    setLoadingPreview(true);
+    try {
+      const preview = await previewSpreadsheet(filePath, null, next, PREVIEW_ROWS);
+      const rowsBySheet = { [CSV_GROUP_KEY]: preview.rows };
+      setSheetRows(rowsBySheet);
+      prefill([], rowsBySheet);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoadingPreview(false);
+    }
+  }
+
+  /* ---------- sheets and groups ---------- */
+
+  function groupKeyOf(sheet: string): string {
+    if (fileKind === "csv") return CSV_GROUP_KEY;
+    return sheetGroupOf[sheet] ?? sheet;
+  }
+
+  function membersOf(key: string): string[] {
+    return sheets.filter((s) => groupKeyOf(s) === key);
+  }
+
+  function toggleSheet(sheet: string) {
+    setIncludedSheets((prev) => {
+      const next = new Set(prev);
+      if (next.has(sheet)) next.delete(sheet);
+      else next.add(sheet);
+      return next;
+    });
+  }
+
+  function renameSheet(oldName: string, raw: string): boolean {
+    const newName = raw.trim();
+    if (!newName || newName === oldName) return true;
+    if (sheets.includes(newName)) {
+      setError(`Já existe uma aba chamada "${newName}".`);
+      return false;
+    }
+    setError(null);
+    const swap = (s: string) => (s === oldName ? newName : s);
+    const renameKeys = <T,>(rec: Record<string, T>) => Object.fromEntries(Object.entries(rec).map(([k, v]) => [swap(k), v]));
+    setSheets((prev) => prev.map(swap));
+    setIncludedSheets((prev) => new Set([...prev].map(swap)));
+    setSheetGroupOf((prev) => Object.fromEntries(Object.entries(prev).map(([k, v]) => [swap(k), swap(v)])));
+    setGroupMapping(renameKeys);
+    setGroupFieldLabels(renameKeys);
+    setGroupHeaderRow(renameKeys);
+    setSheetRows(renameKeys);
+    setSeparatedSheets((prev) => new Set([...prev].map(swap)));
+    if (answersTab === oldName) setAnswersTab(newName);
+    return true;
+  }
+
+  function addSheet(): string {
+    let n = 1;
+    let sheet = "Nova aba";
+    while (sheets.includes(sheet)) sheet = `Nova aba ${++n}`;
+    setSheets((prev) => [...prev, sheet]);
+    setSheetGroupOf((prev) => ({ ...prev, [sheet]: sheet }));
+    setGroupMapping((prev) => ({ ...prev, [sheet]: {} }));
+    setGroupFieldLabels((prev) => ({ ...prev, [sheet]: {} }));
+    setIncludedSheets((prev) => new Set(prev).add(sheet));
+    return sheet;
+  }
+
+  /** Takes `sheet` out of its group with a copy of the group's answers; returns the key it answers under afterwards. */
+  function detachSheet(sheet: string): string {
+    const key = groupKeyOf(sheet);
+    const others = membersOf(key).filter((s) => s !== sheet);
+    if (others.length === 0) return key;
+    const newKey = key === sheet ? others[0] : sheet;
+    const moving = key === sheet ? others : [sheet];
+    setSheetGroupOf((prev) => {
+      const next = { ...prev };
+      for (const s of moving) next[s] = newKey;
+      return next;
+    });
+    setGroupMapping((prev) => ({ ...prev, [newKey]: { ...(prev[key] ?? {}) } }));
+    setGroupFieldLabels((prev) => ({ ...prev, [newKey]: { ...(prev[key] ?? {}) } }));
+    setGroupHeaderRow((prev) => ({ ...prev, [newKey]: prev[key] ?? null }));
+    return sheet;
+  }
+
+  function removeSheet(sheet: string) {
+    detachSheet(sheet);
+    setSheets((prev) => prev.filter((s) => s !== sheet));
+    setIncludedSheets((prev) => {
+      const next = new Set(prev);
+      next.delete(sheet);
+      return next;
+    });
+    setSheetGroupOf((prev) => {
+      const { [sheet]: _gone, ...rest } = prev;
+      return rest;
+    });
+    setSheetRows((prev) => {
+      const { [sheet]: _gone, ...rest } = prev;
+      return rest;
+    });
+  }
+
+  function mergeGroupInto(key: string, sourceKey: string) {
+    if (key === sourceKey) return;
+    const joining = membersOf(key);
+    setSeparatedSheets((prev) => new Set([...prev].filter((s) => !joining.includes(s))));
+    setSheetGroupOf((prev) => {
+      const next = { ...prev };
+      for (const s of sheets) if ((next[s] ?? s) === key) next[s] = sourceKey;
+      return next;
+    });
+    setAnswersTab(sourceKey);
+  }
+
+  function splitFromTab(key: string, sheet: string) {
+    const remaining = membersOf(key).filter((s) => s !== sheet);
+    detachSheet(sheet);
+    setSeparatedSheets((prev) => new Set(prev).add(sheet));
+    if (key === sheet && remaining.length > 0) setAnswersTab(remaining[0]);
+  }
+
+  function similarSheetClasses(pool: string[]): string[][] {
+    const bySignature = new Map<string, string[]>();
+    for (const s of pool) {
+      const signature = headerSignature(sheetRows[s] ?? []);
+      if (!signature) continue;
+      bySignature.set(signature, [...(bySignature.get(signature) ?? []), s]);
+    }
+    return [...bySignature.values()].filter((c) => c.length > 1);
+  }
+
+  function applyShareAnswers(share: boolean) {
+    setShareAnswers(share);
+    const groupOf = { ...sheetGroupOf };
+    const mapping = { ...groupMapping };
+    const labels = { ...groupFieldLabels };
+    for (const cls of similarSheetClasses(sheets)) {
+      if (share) {
+        const members = cls.filter((s) => !separatedSheets.has(s));
+        if (members.length < 2) continue;
+        const anchor = groupKeyOf(members[0]);
+        for (const s of members) groupOf[s] = anchor;
+      } else {
+        for (const s of cls) {
+          const key = groupKeyOf(s);
+          if (key === s) continue;
+          groupOf[s] = s;
+          mapping[s] = { ...(groupMapping[key] ?? {}) };
+          labels[s] = { ...(groupFieldLabels[key] ?? {}) };
+        }
+      }
+    }
+    setSheetGroupOf(groupOf);
+    setGroupMapping(mapping);
+    setGroupFieldLabels(labels);
+  }
+
+  /* ---------- answers ---------- */
+
+  function sampleSheetOf(key: string): string | null {
+    const pool = fileKind === "csv" ? [CSV_GROUP_KEY] : membersOf(key);
+    const included = pool.filter((s) => fileKind === "csv" || includedSheets.has(s));
+    return [...included, ...pool].find((s) => (sheetRows[s] ?? []).length > 0) ?? null;
+  }
+
+  function columnsOfGroup(key: string): GroupColumn[] {
+    const sample = sampleSheetOf(key);
+    if (sample) {
+      const rows = sheetRows[sample];
+      const headers = headersOf(rows);
+      const width = rows.reduce((max, r) => Math.max(max, r.length), headers.length);
+      return Array.from({ length: width }, (_, i) => ({ index: i, header: headers[i] || null }));
+    }
+    const labels = groupFieldLabels[key] ?? {};
+    const mappedMax = Math.max(-1, ...Object.keys(groupMapping[key] ?? {}).map(Number));
+    return Array.from({ length: Math.max(mappedMax + 6, 12) }, (_, i) => ({ index: i, header: null, savedName: labels[i]?.trim() || null }));
+  }
+
+  function exampleOf(key: string, col: number): { sheet: string; value: string } | null {
+    const sample = sampleSheetOf(key);
+    if (!sample) return null;
+    const value = dataRowsOf(sheetRows[sample]).map((r) => (r[col] ?? "").trim()).find(Boolean);
+    return value ? { sheet: sample === CSV_GROUP_KEY ? "no arquivo" : `em ${sample}`, value } : null;
+  }
+
+  function setAnswer(key: string, field: EmployeeTargetField, col: number | null) {
+    const header = col === null ? null : (columnsOfGroup(key).find((c) => c.index === col)?.header ?? null);
+    const current = groupMapping[key] ?? {};
+    setGroupMapping((prev) => {
+      const m = { ...(prev[key] ?? {}) };
+      for (const k of Object.keys(m)) if (m[Number(k)] === field) delete m[Number(k)];
+      if (col !== null) m[col] = field;
+      return { ...prev, [key]: m };
+    });
+    setGroupFieldLabels((prev) => {
+      const l = { ...(prev[key] ?? {}) };
+      for (const k of Object.keys(current)) if (current[Number(k)] === field) delete l[Number(k)];
+      if (col !== null) l[col] = header;
+      return { ...prev, [key]: l };
+    });
+  }
+
+  function groupLabel(key: string): string {
+    if (fileKind === "csv") return filePath ? fileNameFromPath(filePath) : "Arquivo";
+    const members = membersOf(key).filter((s) => includedSheets.has(s));
+    const names = members.length > 0 ? members : membersOf(key);
+    return names.length > 1 ? `${names[0]} e mais ${names.length - 1}` : (names[0] ?? key);
+  }
+
+  const includedGroupKeys =
+    fileKind === "csv" ? [CSV_GROUP_KEY] : Array.from(new Set(sheets.filter((s) => includedSheets.has(s)).map(groupKeyOf)));
+  const allGroupKeys = fileKind === "csv" ? [CSV_GROUP_KEY] : Array.from(new Set(sheets.map(groupKeyOf)));
+
+  /** A group needs at least one column that identifies the person. */
+  function isGroupValid(key: string): boolean {
+    const m = groupMapping[key] ?? {};
+    return IDENTIFIER_FIELDS.some((f) => columnOf(m, f) !== null);
+  }
+  const pendingGroups = includedGroupKeys.filter((k) => !isGroupValid(k));
+  const tabKey = answersTab && includedGroupKeys.includes(answersTab) ? answersTab : (includedGroupKeys[0] ?? null);
+  const similarIncluded = filePath && fileKind !== "csv" ? similarSheetClasses(sheets.filter((s) => includedSheets.has(s))) : [];
+  const sharing = (key: string) => membersOf(key).filter((s) => includedSheets.has(s));
+
+  const checks = (fileKind === "csv" ? [CSV_GROUP_KEY] : sheets.filter((s) => includedSheets.has(s))).map((sheet) => {
+    const rows = sheetRows[sheet] ?? [];
+    const key = fileKind === "csv" ? CSV_GROUP_KEY : groupKeyOf(sheet);
+    return {
+      sheet,
+      key,
+      label: sheet === CSV_GROUP_KEY ? groupLabel(key) : sheet,
+      shared: fileKind !== "csv" && membersOf(key).length > 1,
+      result: rows.length > 0 ? checkEmployeeSheet(rows, groupMapping[key] ?? {}) : null,
+    };
+  });
+  const badChecks = checks.filter((c) => c.result?.problem);
+  const people = checks.reduce((n, c) => n + (c.result && !c.result.problem ? c.result.people : 0), 0);
+
+  const mappedIdentifiers = IDENTIFIER_FIELDS.filter((f) => includedGroupKeys.some((k) => columnOf(groupMapping[k] ?? {}, f) !== null));
+  const order = effectiveIdentifierOrder(identifierOrder, mappedIdentifiers);
+
+  function answerSeparately(sheet: string, shared: boolean) {
+    let key = groupKeyOf(sheet);
+    if (shared) {
+      key = detachSheet(sheet);
+      setSeparatedSheets((prev) => new Set(prev).add(sheet));
+    }
+    setAnswersTab(key);
+    setOpenCheck(null);
+    setStepIndex(steps.indexOf("answers"));
+  }
+
+  function stepSummary(step: WizardStep): string {
+    switch (step) {
+      case "file":
+        return filePath ? fileNameFromPath(filePath) : "escolha uma planilha";
+      case "sheets":
+        return `${includedSheets.size} de ${sheets.length} ${sheets.length === 1 ? "aba" : "abas"}`;
+      case "answers":
+        if (pendingGroups.length > 0) return "falta responder";
+        return includedGroupKeys.length > 1 ? `${includedGroupKeys.length} grupos respondidos` : "respondido";
+      case "check":
+        if (badChecks.length > 0) return `${badChecks.length} ${badChecks.length === 1 ? "aba com problema" : "abas com problema"}`;
+        return `${people} ${people === 1 ? "colaborador" : "colaboradores"}`;
+      case "details":
+        return name.trim() || "nome";
+    }
+  }
+
+  function handleAdvance() {
+    setError(null);
+    if (currentStep === "file" && !filePath) return;
+    if (currentStep === "sheets" && includedSheets.size === 0) {
+      setError("Marque ao menos uma aba para importar.");
+      return;
+    }
+    if (currentStep === "answers" && pendingGroups.length > 0) {
+      setAnswersTab(pendingGroups[0]);
+      setError(`Falta dizer onde está o Nome, o CPF ou a Matrícula: ${pendingGroups.map(groupLabel).join(", ")}.`);
+      return;
+    }
+    if (currentStep === "check" && badChecks.length > 0) {
+      setError("Resolva as abas com problema (ou desmarque-as em Abas) antes de continuar.");
+      return;
+    }
+    setStepIndex((s) => s + 1);
+  }
+
+  /** The header row to save for group `key`: spotted in its sample sheet, else the saved one. */
+  function headerRowOf(key: string): number | null {
+    const sample = sampleSheetOf(key);
+    if (sample) {
+      const index = employeeHeaderRow(sheetRows[sample]);
+      return index < 0 ? null : index + 1;
+    }
+    return groupHeaderRow[key] ?? null;
+  }
+
+  async function handleSave() {
+    if (!name.trim()) {
+      setError("Dê um nome ao template.");
+      return;
+    }
+    if (!fileKind) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const groups: EmployeeTemplateGroup[] = allGroupKeys.map((key) => {
+        const m = groupMapping[key] ?? {};
+        const labels = groupFieldLabels[key] ?? {};
+        return {
+          sheetNames: fileKind === "csv" ? [] : sheets.filter((s) => includedSheets.has(s) && groupKeyOf(s) === key),
+          excludedSheetNames: fileKind === "csv" ? [] : sheets.filter((s) => !includedSheets.has(s) && groupKeyOf(s) === key),
+          fieldMappings: Object.entries(m).map(([i, targetField]) => ({
+            columnLetter: columnLetter(Number(i)),
+            targetField,
+            headerLabel: labels[Number(i)] ?? null,
+          })),
+          headerRow: headerRowOf(key),
+        };
+      });
+      const input: EmployeeTemplateInput = {
+        name: name.trim(),
+        fileKind,
+        acceptedFileKinds: Array.from(new Set([fileKind, ...acceptedFileKinds])),
+        delimiter: fileKind === "csv" ? delimiter : null,
+        identifierPriority: order.map((f) => ({ fields: [f], caseInsensitive: true })),
+        groups,
+      };
+      if (target !== null && target !== "new") await updateEmployeeTemplate(target.id, input);
+      else await createEmployeeTemplate(input);
+      onSaved();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const title = readOnly ? "Template de colaboradores" : isEditing ? "Editar template de colaboradores" : "Novo template de colaboradores";
+  const kinds = fileKind === "csv" ? ["CSV"] : Array.from(new Set([fileKind, ...acceptedFileKinds])).filter(Boolean).map((k) => k!.toUpperCase());
+
+  return (
+    <WizardDrawer
+      open={target !== null}
+      onClose={onClose}
+      title={title}
+      subtitle={name.trim() || (filePath ? fileNameFromPath(filePath) : "Sem nome")}
+      steps={steps.map((s, i) => ({ key: s, label: STEP_LABEL_TEXT[s], summary: i <= stepIndex || isEditing ? stepSummary(s) : "—" }))}
+      stepIndex={stepIndex}
+      onStep={(i) => {
+        setError(null);
+        setStepIndex(i);
+      }}
+      error={error}
+      bodyRef={bodyRef}
+      onBack={() => {
+        setError(null);
+        setStepIndex((s) => s - 1);
+      }}
+      backDisabled={busy}
+      next={
+        stepIndex < steps.length - 1
+          ? { label: "Continuar", arrow: true, onClick: handleAdvance, disabled: busy || loadingPreview || (currentStep === "file" && !filePath) }
+          : { label: busy ? "Salvando..." : "Salvar template", onClick: handleSave, disabled: readOnly || busy, title: readOnly ? READ_ONLY_TITLE : undefined }
+      }
+    >
+      {currentStep === "file" && (
+        <SampleFileStep
+          filePath={filePath}
+          fileKind={fileKind}
+          loading={loadingPreview}
+          sheets={sheets}
+          onPick={handlePickFile}
+          onDrop={handleDrop}
+          onReset={() => setFilePath(null)}
+          onDownload={handleDownload}
+        />
+      )}
+
+      {currentStep === "sheets" && (
+        <SheetsStep sheets={sheets} included={includedSheets} onToggle={toggleSheet} onRemove={removeSheet} onAdd={addSheet} onRename={renameSheet} />
+      )}
+
+      {currentStep === "answers" && (
+        <div className="tmap">
+          <h2 className="tmap-title">Onde está cada informação?</h2>
+          <p className="tmap-lead">
+            {filePath
+              ? "Já preenchemos pelo nome das colunas. Confira. Basta uma coluna que identifique a pessoa."
+              : "Sem arquivo de exemplo: as colunas aparecem pela letra, com o nome que tinham quando o modelo foi salvo."}
+          </p>
+
+          {fileKind === "csv" && filePath && (
+            <div className="tmap-q">
+              <label>Separador</label>
+              <OptionPicker
+                single
+                showTiles={false}
+                align="left"
+                options={DELIMITER_OPTIONS.map((o) => ({ id: o.value, label: o.label }))}
+                selected={new Set([delimiter ?? ","])}
+                onToggle={handleDelimiterChange}
+                title="Separador das colunas"
+                allPlaceholder="Escolha o separador"
+                searchPlaceholder="Buscar"
+              />
+            </div>
+          )}
+
+          {similarIncluded.length > 0 && (
+            <div className="tmap-ask">
+              <p>
+                {similarIncluded.map((cls, i) => (
+                  <span key={cls[0]}>
+                    {i > 0 && "; "}
+                    As abas <b>{cls.join(", ")}</b>
+                  </span>
+                ))}{" "}
+                têm as mesmas colunas. Usar as mesmas respostas?
+              </p>
+              <div className="tmap-opts">
+                <button type="button" className="tmap-choice" aria-pressed={shareAnswers} onClick={() => applyShareAnswers(true)}>
+                  Sim, responder uma vez
+                </button>
+                <button type="button" className="tmap-choice" aria-pressed={!shareAnswers} onClick={() => applyShareAnswers(false)}>
+                  Não, responder cada uma
+                </button>
+              </div>
+            </div>
+          )}
+
+          {includedGroupKeys.length > 1 && (
+            <div className="tmap-tabs" role="group" aria-label="Abas">
+              {includedGroupKeys.map((key) => (
+                <button key={key} type="button" aria-pressed={key === tabKey} title={sharing(key).join(", ")} onClick={() => setAnswersTab(key)}>
+                  {groupLabel(key)}
+                  {!isGroupValid(key) && <span className="tmap-dot" aria-label="falta responder" />}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {tabKey && fileKind !== "csv" && sharing(tabKey).length > 1 && (
+            <div className="tmap-share">
+              <span className="tmap-share-head">Estas respostas valem para {sharing(tabKey).length} abas · tire uma com ×</span>
+              <div className="tmap-chips">
+                {sharing(tabKey).map((s) => (
+                  <span key={s} className="tmap-chip">
+                    {s}
+                    <button type="button" onClick={() => splitFromTab(tabKey, s)} aria-label={`Responder ${s} separado`} title="Responder separado">
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {tabKey && fileKind !== "csv" && includedGroupKeys.length > 1 && (
+            <div className="tmap-q">
+              <label>
+                Juntar
+                <small>com outra aba</small>
+              </label>
+              <OptionPicker
+                single
+                showTiles={false}
+                align="left"
+                options={includedGroupKeys.filter((k) => k !== tabKey).map((k) => ({ id: k, label: groupLabel(k) }))}
+                selected={new Set()}
+                onToggle={(id) => mergeGroupInto(tabKey, id)}
+                title="Usar as mesmas respostas de"
+                allPlaceholder="Usar as mesmas respostas de..."
+                searchPlaceholder="Buscar aba"
+              />
+            </div>
+          )}
+
+          {tabKey && (
+            <div className="tmap-qs" key={tabKey}>
+              {QUESTIONS.map((q) => (
+                <ColumnQuestion
+                  key={q.field}
+                  label={EMPLOYEE_TARGET_FIELD_LABELS[q.field]}
+                  hint={q.hint}
+                  optional
+                  columns={columnsOfGroup(tabKey)}
+                  mapping={groupMapping[tabKey] ?? {}}
+                  fieldLabel={fieldLabel}
+                  value={columnOf(groupMapping[tabKey] ?? {}, q.field)}
+                  onChange={(col) => setAnswer(tabKey, q.field, col)}
+                  example={(col) => exampleOf(tabKey, col)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {currentStep === "check" && (
+        <div className="tmap">
+          <h2 className="tmap-title">Confere?</h2>
+          <p className="tmap-lead">{fileKind === "csv" ? "Lemos o arquivo com as suas respostas." : "Lemos cada aba com as respostas dela."}</p>
+          <div className="tmap-big">
+            <div className="ok">
+              <b>{people}</b>
+              <span>{people === 1 ? "colaborador" : "colaboradores"}</span>
+            </div>
+            {badChecks.length > 0 && (
+              <div className="bad">
+                <b>{badChecks.length}</b>
+                <span>{badChecks.length === 1 ? "aba com problema" : "abas com problema"}</span>
+              </div>
+            )}
+          </div>
+          <div className="tmap-per">
+            {checks.map((c) => {
+              const problem = c.result?.problem ?? null;
+              const opened = openCheck === c.sheet;
+              return (
+                <div key={c.sheet} className={`tmap-ps${problem ? " bad" : ""}`}>
+                  <div className="tmap-ps-head">
+                    <span className="tmap-ico" aria-hidden="true">
+                      {problem ? "!" : c.result ? "✓" : "–"}
+                    </span>
+                    <b>{c.label}</b>
+                    <span className="tmap-res">
+                      {!c.result
+                        ? "sem dados no arquivo de exemplo"
+                        : problem
+                          ? problem.text
+                          : `${c.result.people} ${c.result.people === 1 ? "colaborador" : "colaboradores"}`}
+                    </span>
+                  </div>
+                  {problem && c.result && (
+                    <>
+                      <div className="tmap-ps-act">
+                        <button type="button" className="tmap-link" onClick={() => setOpenCheck(opened ? null : c.sheet)}>
+                          {opened ? "esconder exemplos" : "ver exemplos"}
+                        </button>
+                        <button type="button" className="tmap-link" onClick={() => answerSeparately(c.sheet, c.shared)}>
+                          {c.shared ? "responder esta aba separado" : "corrigir as respostas"}
+                        </button>
+                      </div>
+                      {opened && (
+                        <div className="tmap-samples">
+                          {c.result.samples.map((r, i) => (
+                            <div key={i} className="tmap-sample-row">
+                              <span>{r.who}</span>
+                              <span className={problem.field === "cpf" ? "off" : undefined}>CPF: “{r.cpf}”</span>
+                              <span />
+                            </div>
+                          ))}
+                          <p className="tmap-hint">
+                            {problem.field === "colaborador"
+                              ? "Nenhuma linha desta aba tem valor nas colunas de Nome, CPF ou Matrícula."
+                              : "A coluna de CPF desta aba não tem CPFs (11 dígitos)."}{" "}
+                            {c.shared ? "Responda esta aba separado para escolher outra coluna." : "Escolha outra coluna em Colunas."}
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {currentStep === "details" && (
+        <div className="tmap">
+          <h2 className="tmap-title">Últimos detalhes</h2>
+          <p className="tmap-lead">Dê um nome e diga como achar quem já está cadastrado.</p>
+
+          <section className="tdet-section">
+            <h3>Nome</h3>
+            <input type="text" className="tdet-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex.: Cadastro mensal — Cliente X" aria-label="Nome do template" />
+          </section>
+
+          <IdentifierOrderSection
+            title="Como achar quem já está cadastrado?"
+            order={order}
+            onMove={(i, dir) => setIdentifierOrder(moveIdentifier(identifierOrder, order, i, dir))}
+          />
+
+          <details className="tdet-more">
+            <summary>Mais opções · aceita {kinds.join(", ")}</summary>
+            <div className="tdet-more-body">
+              {fileKind !== "csv" ? (
+                <div className="tmap-q">
+                  <label>
+                    Também aceitar
+                    <small>mesmas colunas, outro formato</small>
+                  </label>
+                  <div className="tmap-opts">
+                    {(["xlsx", "xls", "ods"] as PaymentFileKind[]).map((k) => (
+                      <button
+                        key={k}
+                        type="button"
+                        className="tmap-choice"
+                        aria-pressed={k === fileKind || acceptedFileKinds.has(k)}
+                        disabled={k === fileKind}
+                        title={k === fileKind ? "O formato do arquivo usado para montar o template" : undefined}
+                        onClick={() =>
+                          setAcceptedFileKinds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(k)) next.delete(k);
+                            else next.add(k);
+                            return next;
+                          })
+                        }
+                      >
+                        {k.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="tdet-sub">Arquivo CSV: não pode ser combinado com planilhas.</p>
+              )}
+              <p className="tdet-sub">A linha com os nomes das colunas (e o que vem acima dela) é pulada na importação.</p>
+            </div>
+          </details>
+        </div>
+      )}
+    </WizardDrawer>
+  );
 }
