@@ -1,6 +1,7 @@
 import { Plus, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useReadOnly } from "../components/AreaRoute";
 import PageHeader from "../components/PageHeader";
 import { listClients, type ClientRow } from "../lib/db";
 import { formatCnpj } from "../lib/format";
@@ -28,6 +29,7 @@ function groupByClient(rows: ClientRow[]): ClientListRow[] {
 
 export default function ClientsPage() {
   const navigate = useNavigate();
+  const readOnly = useReadOnly();
   const [rawClients, setRawClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -47,10 +49,12 @@ export default function ClientsPage() {
         title="Clientes"
         subtitle="O CNPJ do cliente é único: cadastrar o mesmo CNPJ para outra empresa apenas vincula o cliente já existente a ela, em vez de duplicá-lo. Ao importar, selecione o cliente e, se ele estiver vinculado a mais de uma empresa, escolha qual delas."
         actions={
-          <button type="button" onClick={() => navigate("/clients/new")}>
-            <Plus size={15} />
-            Novo cliente
-          </button>
+          !readOnly && (
+            <button type="button" onClick={() => navigate("/clients/new")}>
+              <Plus size={15} />
+              Novo cliente
+            </button>
+          )
         }
       />
 

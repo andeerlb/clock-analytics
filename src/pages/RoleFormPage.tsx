@@ -2,6 +2,7 @@ import { Info, Plus, Tags, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import ConfirmModal from "../components/ConfirmModal";
+import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
 import FormPanel from "../components/FormPanel";
 import PageHeader from "../components/PageHeader";
 import {
@@ -32,6 +33,7 @@ export default function RoleFormPage() {
   const { id } = useParams<{ id: string }>();
   const isEditing = id !== undefined;
   const navigate = useNavigate();
+  const readOnly = useReadOnly();
   const location = useLocation();
   const prefill = !isEditing ? (location.state as RoleFormNavState | null) : null;
 
@@ -144,7 +146,7 @@ export default function RoleFormPage() {
   return (
     <div>
       <PageHeader
-        title={isEditing ? "Editar função" : "Nova função"}
+        title={isEditing ? (readOnly ? "Função" : "Editar função") : "Nova função"}
         backFallback="/roles"
         backLabel="Voltar para Funções"
         subtitle={
@@ -156,7 +158,8 @@ export default function RoleFormPage() {
 
       {error && <div className="error-box">{error}</div>}
 
-      <div className="details-main" style={{ maxWidth: "52rem" }}>
+      {/* View-only profile: everything stays readable, nothing editable. */}
+      <fieldset disabled={readOnly} className="details-main" style={{ maxWidth: "52rem", border: 0, padding: 0, margin: 0 }}>
         {loading ? (
           <p className="muted">Carregando...</p>
         ) : (
@@ -203,9 +206,11 @@ export default function RoleFormPage() {
                 />
               </div>
 
-              <button type="submit" disabled={busy}>
-                {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
-              </button>
+              {!readOnly && (
+                <button type="submit" disabled={busy}>
+                  {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
+                </button>
+              )}
             </form>
           </FormPanel>
         )}
@@ -233,6 +238,8 @@ export default function RoleFormPage() {
                         className="ghost"
                         style={{ padding: "0.3rem" }}
                         onClick={() => handleRemoveAlias(a.id)}
+                        disabled={readOnly}
+                        title={readOnly ? READ_ONLY_TITLE : undefined}
                         aria-label="Remover"
                       >
                         <X size={14} />
@@ -243,23 +250,26 @@ export default function RoleFormPage() {
               </div>
             )}
 
-            <form onSubmit={handleAddAlias} style={{ display: "flex", gap: "0.5rem" }}>
-              <input
-                type="text"
-                value={newAlias}
-                onChange={(e) => setNewAlias(e.target.value)}
-                placeholder="Ex.: Op. de Caixa"
-                style={{ flex: 1 }}
-              />
-              <button type="submit" className="secondary" disabled={aliasBusy || !newAlias.trim()}>
-                <Plus size={14} style={{ marginRight: "0.3rem" }} />
-                Adicionar
-              </button>
-            </form>
+            {readOnly && aliases.length === 0 && <p className="muted">Nenhum outro nome cadastrado.</p>}
+            {!readOnly && (
+              <form onSubmit={handleAddAlias} style={{ display: "flex", gap: "0.5rem" }}>
+                <input
+                  type="text"
+                  value={newAlias}
+                  onChange={(e) => setNewAlias(e.target.value)}
+                  placeholder="Ex.: Op. de Caixa"
+                  style={{ flex: 1 }}
+                />
+                <button type="submit" className="secondary" disabled={aliasBusy || !newAlias.trim()}>
+                  <Plus size={14} style={{ marginRight: "0.3rem" }} />
+                  Adicionar
+                </button>
+              </form>
+            )}
           </FormPanel>
         )}
 
-        {!loading && isEditing && (
+        {!loading && isEditing && !readOnly && (
           <FormPanel
             icon={Trash2}
             title="Excluir função"
@@ -272,7 +282,7 @@ export default function RoleFormPage() {
             </button>
           </FormPanel>
         )}
-      </div>
+      </fieldset>
 
       {deleteConfirmOpen && (
         <ConfirmModal

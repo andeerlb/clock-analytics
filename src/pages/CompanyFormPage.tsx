@@ -1,6 +1,7 @@
 import { Building2, Calculator, Moon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useReadOnly } from "../components/AreaRoute";
 import FormPanel from "../components/FormPanel";
 import NightShiftRuleFields from "../components/NightShiftRuleFields";
 import PageHeader from "../components/PageHeader";
@@ -18,6 +19,7 @@ export default function CompanyFormPage() {
   const { id } = useParams<{ id: string }>();
   const isEditing = id !== undefined;
   const navigate = useNavigate();
+  const readOnly = useReadOnly();
 
   const [name, setName] = useState("");
   const [cnpj, setCnpj] = useState("");
@@ -77,12 +79,12 @@ export default function CompanyFormPage() {
   return (
     <div>
       <PageHeader
-        title={isEditing ? "Editar empresa" : "Nova empresa"}
+        title={isEditing ? (readOnly ? "Empresa" : "Editar empresa") : "Nova empresa"}
         subtitle="Dados da empresa, horário noturno e valor do turno."
         backFallback="/companies"
         backLabel="Voltar para Empresas"
         actions={
-          !loading && (
+          !loading && !readOnly && (
             <>
               {dirty && (
                 <span className="form-dirty">
@@ -103,6 +105,8 @@ export default function CompanyFormPage() {
       {loading ? (
         <p className="muted">Carregando...</p>
       ) : (
+        // View-only profile: everything stays readable, nothing editable.
+        <fieldset disabled={readOnly} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         <form id="company-form" onSubmit={handleSubmit} className="details-main" style={{ maxWidth: "52rem" }}>
           <FormPanel icon={Building2} title="Dados da empresa">
             <div className="form-row-2">
@@ -149,6 +153,7 @@ export default function CompanyFormPage() {
                 if (patch.nightShiftRule !== undefined) setNightShiftRule(patch.nightShiftRule);
               }}
               idPrefix="company"
+              readOnly={readOnly}
             />
           </FormPanel>
 
@@ -157,10 +162,11 @@ export default function CompanyFormPage() {
             title="Valor do turno"
             description="Quanto vale cada turno, de acordo com a função, o local, a data ou o horário e quanto tempo a pessoa trabalhou. Sem nenhuma regra, o valor não é calculado."
           >
-            <PaymentValueRulesEditor valueRules={valueRules} onChange={setValueRules} companyIds={isEditing ? [Number(id)] : undefined} />
+            <PaymentValueRulesEditor valueRules={valueRules} onChange={setValueRules} companyIds={isEditing ? [Number(id)] : undefined} readOnly={readOnly} />
           </FormPanel>
 
         </form>
+        </fieldset>
       )}
     </div>
   );
