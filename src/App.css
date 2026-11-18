@@ -9885,10 +9885,49 @@ button.tmap-choice[aria-pressed="true"] {
   vertical-align: middle;
 }
 
-.tmap-members {
-  margin: 0;
-  font-size: 0.82rem;
-  color: var(--text-muted);
+.tmap-share {
+  display: grid;
+  gap: 8px;
+}
+
+.tmap-share-head {
+  font-size: 0.78rem;
+  color: var(--outline);
+}
+
+.tmap-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tmap-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 4px 3px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--card-bg);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.tmap-chip button {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--outline);
+}
+
+.tmap-chip button:hover {
+  background: var(--surface-container-high);
+  color: var(--text);
 }
 
 .tmap-qs {

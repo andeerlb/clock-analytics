@@ -784,6 +784,20 @@ export default function PaymentTemplateWizard({
     return value ? { sheet: sample === CSV_GROUP_KEY ? "no arquivo" : `em ${sample}`, value } : null;
   }
 
+  /** The included sheets answering with group `key` (the chips under the tabs). */
+  function sharingSheets(key: string): string[] {
+    return membersOf(key).filter((s) => includedSheets.has(s));
+  }
+
+  /** The × on a chip: `sheet` gets its own answers (and its own tab), while the tab stays on the group it left. */
+  function splitFromTab(key: string, sheet: string) {
+    const remaining = membersOf(key).filter((s) => s !== sheet);
+    detachSheet(sheet);
+    setSeparatedSheets((prev) => new Set(prev).add(sheet));
+    // The group was keyed by `sheet` itself: the others now live under a new key.
+    if (key === sheet && remaining.length > 0) setAnswersTab(remaining[0]);
+  }
+
   /** "UNIDADE CENTRO e mais 3" — a group named by the sheets it covers. */
   function groupLabel(key: string): string {
     if (fileKind === "csv") return filePath ? fileNameFromPath(filePath) : "Arquivo";
@@ -1420,19 +1434,27 @@ export default function PaymentTemplateWizard({
               </div>
             )}
 
-            {tabKey && !filePath && fileKind !== "csv" && membersOf(tabKey).length > 1 && (
-              <p className="tmap-members">
-                Vale para{" "}
-                {membersOf(tabKey).map((s, i, all) => (
-                  <span key={s}>
-                    <b>{s}</b>{" "}
-                    <button type="button" className="tmap-link" onClick={() => setAnswersTab(detachSheet(s))}>
-                      separar
-                    </button>
-                    {i < all.length - 1 ? ", " : "."}
-                  </span>
-                ))}
-              </p>
+            {tabKey && fileKind !== "csv" && sharingSheets(tabKey).length > 1 && (
+              <div className="tmap-share">
+                <span className="tmap-share-head">
+                  Estas respostas valem para {sharingSheets(tabKey).length} abas · tire uma com ×
+                </span>
+                <div className="tmap-chips">
+                  {sharingSheets(tabKey).map((s) => (
+                    <span key={s} className="tmap-chip">
+                      {s}
+                      <button
+                        type="button"
+                        onClick={() => splitFromTab(tabKey, s)}
+                        aria-label={`Responder ${s} separado`}
+                        title="Responder separado"
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
             )}
 
             {tabKey && fileKind !== "csv" && Object.keys(groupMapping[tabKey] ?? {}).length === 0 && includedGroupKeys.length > 1 && (
