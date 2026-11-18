@@ -29,7 +29,7 @@ env:
   WIF_PROVIDER: projects/667650515882/locations/global/workloadIdentityPools/github/providers/github-actions
   DEPLOY_SA: github-deploy@clock-analytics-b123c.iam.gserviceaccount.com
   RELEASES_BUCKET: clock-analytics-b123c-pontoscan-releases
-  API_URL: https://pontoscan.duckdns.org
+  API_URL: https://tapago.duckdns.org
 
 jobs:
   server:

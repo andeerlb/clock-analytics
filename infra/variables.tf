@@ -23,7 +23,7 @@ variable "zone" {
 }
 
 variable "duckdns_subdomain" {
-  description = "Só o nome, sem .duckdns.org (ex.: \"pontoscan\")."
+  description = "Só o nome, sem .duckdns.org (ex.: \"tapago\")."
   type        = string
 }
 
