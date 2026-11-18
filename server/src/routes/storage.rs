@@ -182,10 +182,10 @@ mod tests {
     /// A database on disk, like production (`VACUUM INTO` from an in-memory
     /// database writes to memory, not to the file).
     async fn state_on_disk() -> AppState {
-        let dir = std::env::temp_dir().join(format!("pontoscan-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("tapago-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let dir = dir.canonicalize().unwrap();
-        let pool = crate::db::connect(&dir.join("pontoscan.db")).await.unwrap();
+        let pool = crate::db::connect(&dir.join("tapago.db")).await.unwrap();
         AppState::new(pool, dir, chrono_tz::America::Sao_Paulo)
     }
 

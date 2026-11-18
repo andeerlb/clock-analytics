@@ -9,7 +9,7 @@
  */
 type Handler<T> = (event: { event: string; payload: T }) => void;
 
-const CHANNEL = "pontoscan-events";
+const CHANNEL = "tapago-events";
 const local = new EventTarget();
 const channel: BroadcastChannel | null = typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(CHANNEL);
 

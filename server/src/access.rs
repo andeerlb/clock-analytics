@@ -2,7 +2,7 @@
 //!
 //! `auth::require_auth` only proves *who* is calling (a Google account). This
 //! module decides *what* they may do:
-//! - the server's `PONTOSCAN_ALLOWED_EMAILS` are initial admins: always
+//! - the server's `TAPAGO_ALLOWED_EMAILS` are initial admins: always
 //!   allowed everything, never stored in the database, so nobody gets locked
 //!   out;
 //! - everyone else must be in `app_users`, with an `access_profiles` profile:

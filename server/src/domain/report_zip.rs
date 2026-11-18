@@ -57,7 +57,7 @@ pub fn build(entries: &[ReportZipEntry], dest_zip_path: &str, poppler_dir: Optio
 /// used for parsing. Result is written to a temp file the caller is
 /// responsible for cleaning up once it's been read.
 fn merge_pdfs(paths: &[String], poppler_dir: Option<&str>) -> Result<String, String> {
-    let out_path = std::env::temp_dir().join(format!("pontoscan-merged-{}.pdf", uuid::Uuid::new_v4()));
+    let out_path = std::env::temp_dir().join(format!("tapago-merged-{}.pdf", uuid::Uuid::new_v4()));
     let out_path_str = out_path.to_string_lossy().to_string();
 
     let output = Command::new(crate::domain::poppler::resolve("pdfunite", poppler_dir))

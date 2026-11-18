@@ -162,7 +162,7 @@ usa isso para rodar exatamente o mesmo código da tela de importação.
 ```sh
 # cópia do banco real (só leitura do original)
 sqlite3 ~/.config/com.andeerlb.pontoscan/pontoscan.db ".backup '/tmp/<pasta>/pontoscan.db'"
-cd server && PONTOSCAN_REMOTE_CHECKS=off PONTOSCAN_DEV_USER_EMAIL=dev@local PONTOSCAN_DB_PATH=/tmp/<pasta>/pontoscan.db PONTOSCAN_BIND=127.0.0.1:<porta> cargo run
-PONTOSCAN_API_PROXY=http://127.0.0.1:<porta> npx vite --port <porta-vite> --strictPort
+cd server && TAPAGO_REMOTE_CHECKS=off TAPAGO_DEV_USER_EMAIL=dev@local TAPAGO_DB_PATH=/tmp/<pasta>/tapago.db TAPAGO_BIND=127.0.0.1:<porta> cargo run
+TAPAGO_API_PROXY=http://127.0.0.1:<porta> npx vite --port <porta-vite> --strictPort
 ```
 Sem `.env.local` com `VITE_FIREBASE_*`, o app abre sem login.

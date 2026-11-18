@@ -417,7 +417,7 @@ fn build_http_client(timeout: Duration) -> ApiResult<reqwest::Client> {
                 attempt.follow()
             }
         }))
-        .user_agent(concat!("pontoscan/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("tapago/", env!("CARGO_PKG_VERSION")))
         // OneDrive/SharePoint anonymous links set a cookie mid-redirect and
         // expect it back on the next hop.
         .cookie_store(true)

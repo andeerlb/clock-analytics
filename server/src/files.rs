@@ -261,14 +261,14 @@ mod tests {
         let dir = state.data_dir.as_path();
         std::fs::create_dir_all(dir.join("secrets")).unwrap();
         std::fs::write(dir.join("secrets/anthropic-api-key.json"), b"{}").unwrap();
-        std::fs::write(dir.join("pontoscan.db"), b"SQLite format 3").unwrap();
+        std::fs::write(dir.join("tapago.db"), b"SQLite format 3").unwrap();
         std::fs::create_dir_all(dir.join("uploads/x")).unwrap();
         std::fs::write(dir.join("uploads/x/r.zip"), b"PK").unwrap();
 
         assert!(resolve(dir, "secrets/anthropic-api-key.json").is_err());
         assert!(resolve(dir, dir.join("secrets/anthropic-api-key.json").to_str().unwrap()).is_err());
         assert!(resolve(dir, "imports/../secrets/anthropic-api-key.json").is_err());
-        assert!(resolve(dir, "pontoscan.db").is_err());
+        assert!(resolve(dir, "tapago.db").is_err());
         assert!(resolve(dir, "uploads/x/r.zip").is_ok());
 
         let listed = list(State(state.clone()), Json(ListQuery { dir: "secrets".into(), extensions: vec!["json".into()] })).await;

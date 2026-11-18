@@ -10,7 +10,7 @@ output "external_ip" {
 
 output "ssh_command" {
   description = "Como entrar na VM (pelo IAP; a porta 22 não está aberta para a internet)."
-  value       = "gcloud compute ssh pontoscan --zone ${var.zone} --project ${var.project_id} --tunnel-through-iap"
+  value       = "gcloud compute ssh tapago --zone ${var.zone} --project ${var.project_id} --tunnel-through-iap"
 }
 
 output "backup_bucket" {
