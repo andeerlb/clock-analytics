@@ -330,20 +330,22 @@ button.app-nav-toggle:hover {
   text-decoration: none;
 }
 
-/* Groups GitHub + Configurações into their own card at the bottom of the
-   sidebar, set apart from the main nav links above (which flow into it via
-   .app-nav-links' flex: 1) instead of blending straight into the list. */
+/* The foot of the sidebar: Verificação automática and the account card,
+   each a bordered button of its own, set apart from the nav links above
+   (which flow into it via .app-nav-links' flex: 1). */
 .app-nav-footer {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px;
-  border-radius: 12px;
-  background: var(--surface-container);
-  border: 1px solid var(--border-soft);
+  gap: 6px;
 }
 
-.app-nav-footer .app-nav-link:not(.active):hover {
+.app-nav-footer > .app-nav-link {
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-container);
+}
+
+.app-nav-footer > .app-nav-link:not(.active):hover {
   background: var(--surface-variant);
 }
 
@@ -9486,11 +9488,11 @@ tr.virtual-spacer td {
 
 /* ---------- Signed-in account, foot of the sidebar — SidebarAccount.tsx ---------- */
 
+/* The account card at the foot of the sidebar; its menu opens like the
+   app's pickers (`.emp-picker-popover`): the box grows out of the card,
+   upward, anchored to its bottom edge, with the card inside at the bottom. */
 .sidebar-account {
   position: relative;
-  margin-top: 4px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border-soft);
 }
 
 .sidebar-account-trigger {
@@ -9498,17 +9500,18 @@ tr.virtual-spacer td {
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 6px 6px 6px 4px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
+  padding: 8px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-container);
   color: var(--text);
   text-align: left;
   cursor: pointer;
+  box-shadow: none;
 }
 
 .sidebar-account-trigger:hover,
-.sidebar-account-trigger[aria-expanded="true"] {
+.sidebar-account-trigger.current {
   background: var(--surface-variant);
 }
 
@@ -9548,34 +9551,70 @@ tr.virtual-spacer td {
   text-overflow: ellipsis;
 }
 
-.sidebar-account-more {
+.sidebar-account-chevron {
   flex: none;
   color: var(--text-muted);
+  transition: transform 0.18s;
+}
+
+.sidebar-account-chevron.open {
+  transform: rotate(180deg);
 }
 
 .sidebar-account-menu {
   position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
-  width: 220px;
+  bottom: -2px;
+  left: -6px;
+  width: max(calc(100% + 12px), 230px);
   z-index: 50;
-  background: var(--surface-container-high);
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  background: #1c1c20;
+  border: 1px solid #3a3a42;
+  border-radius: 12px;
   padding: 6px;
   display: grid;
   gap: 2px;
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(0, 0, 0, 0.3);
+  animation: emp-picker-grow-up 0.18s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.sidebar-account-menu > * {
+  animation: emp-picker-fade 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-account-menu,
+  .sidebar-account-menu > * {
+    animation: none;
+  }
+}
+
+/* The card again, at the bottom of the box: clicking it closes the menu. */
+.sidebar-account-menu .sidebar-account-trigger {
+  margin-top: 4px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.sidebar-account-menu .sidebar-account-trigger:hover {
+  background: var(--surface-variant);
 }
 
 .sidebar-account-menu-head {
   display: grid;
+  gap: 1px;
   padding: 8px 10px 10px;
   margin-bottom: 4px;
   border-bottom: 1px solid var(--border-soft);
 }
 
-.sidebar-account-menu button {
+.sidebar-account-menu-head em {
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--success);
+}
+
+.sidebar-account-menu button[role="menuitem"] {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -9587,14 +9626,27 @@ tr.virtual-spacer td {
   font-size: 14px;
   text-align: left;
   cursor: pointer;
+  box-shadow: none;
 }
 
-.sidebar-account-menu button:hover {
+.sidebar-account-menu button[role="menuitem"] svg {
+  color: var(--text-muted);
+}
+
+.sidebar-account-menu button[role="menuitem"]:hover,
+.sidebar-account-menu button[role="menuitem"].active {
   background: var(--surface-variant);
 }
 
-.sidebar-account-menu button.danger {
+.sidebar-account-menu button[role="menuitem"].danger,
+.sidebar-account-menu button[role="menuitem"].danger svg {
   color: var(--danger);
+}
+
+.sidebar-account-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border-soft);
 }
 
 .sidebar-account-dev {

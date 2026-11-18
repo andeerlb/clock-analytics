@@ -25,8 +25,6 @@ const ICONS = {
   payments: "M20 7H5a2 2 0 0 1 0-4h13v4M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1M17 14h.01",
   analytics: "M3 3v18h18M8 17v-5M13 17V7M18 17v-8",
   remote: "M21 12a9 9 0 0 0-15-6.7L3 8M3 3v5h5M3 12a9 9 0 0 0 15 6.7L21 16M21 21v-5h-5",
-  settings: "M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4",
-  users: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM19 8v6M22 11h-6",
 };
 
 /** "Importar" opens the chooser, useful to anyone who can import something. */
@@ -85,7 +83,7 @@ const REMOTE_STATUS_META: Record<RemoteStatus, { label: string; color: string; p
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(readSavedCollapsed);
   const { remoteUpdates, trackedFiles, reimportConfigs, checking, tickError } = useRemoteFileUpdates();
-  const { canView, canEdit, canManageUsers } = useAccess();
+  const { canView, canEdit } = useAccess();
   const visible = (to: string, area: Area | null) => (area ? canView(area) : to === "/import" && IMPORT_AREAS.some(canEdit));
 
   // No single countdown makes sense anymore — a URL can have several
@@ -168,27 +166,13 @@ export default function Sidebar() {
                 height: 7,
                 borderRadius: "50%",
                 background: remoteDotColor,
-                border: "1.5px solid var(--sidebar-bg)",
+                border: "1.5px solid var(--surface-container)",
               }}
               aria-label={statusLabel}
             />
           </span>
           <span className="app-nav-label">Verificação automática</span>
         </NavLink>
-        )}
-
-        {canManageUsers && (
-          <NavLink to="/users" className={navLinkClass} title={collapsed ? "Usuários e perfis" : undefined} aria-label="Usuários e perfis">
-            <MenuIcon path={ICONS.users} />
-            <span className="app-nav-label">Usuários e perfis</span>
-          </NavLink>
-        )}
-
-        {canView("configuracoes") && (
-          <NavLink to="/settings" className={navLinkClass} title={collapsed ? "Configurações" : undefined} aria-label="Configurações">
-            <MenuIcon path={ICONS.settings} />
-            <span className="app-nav-label">Configurações</span>
-          </NavLink>
         )}
 
         <SidebarAccount collapsed={collapsed} />
