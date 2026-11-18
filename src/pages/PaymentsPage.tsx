@@ -9,6 +9,7 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
+import { createPortal } from "react-dom";
 import { listen } from "../lib/events";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
@@ -89,8 +90,8 @@ const STATUS_BADGE: Record<PaymentShiftStatus, { className: string; label: strin
   pago: { className: "badge ok", label: "Pago" },
 };
 
-/** Shown in the turno's panel (Dados → Origem) instead of as table columns here — Conferência still offers them. */
-const PANEL_ONLY_COLUMN_IDS = new Set(["importado", "extras"]);
+/** Shown in the turno's panel (Dados → Origem) instead of as a table column here — Conferência still offers it. */
+const PANEL_ONLY_COLUMN_IDS = new Set(["importado"]);
 const PAGE_COLUMNS = FLAT_COLUMNS.filter((c) => !PANEL_ONLY_COLUMN_IDS.has(c.id));
 const PAGE_PICKER_COLUMNS = PAYMENT_PICKER_COLUMNS.filter((c) => !PANEL_ONLY_COLUMN_IDS.has(c.id));
 /** What a fresh install (no saved column preference yet) shows — every column. */
@@ -213,9 +214,66 @@ const ShiftRow = memo(function ShiftRow({
           )}
         </td>
       )}
+      {col("extras") && (
+        <td>
+          <ExtrasCell extras={s.extraData} />
+        </td>
+      )}
     </tr>
   );
 });
+
+/**
+ * The "Extras" column: how many of the file's columns the template left
+ * unmapped on this turno, with an icon; hovering (or focusing) it lists
+ * them. Empty when there's nothing extra. The full list is also in the
+ * turno's panel (Dados → Colunas não mapeadas).
+ */
+function ExtrasCell({ extras }: { extras: Record<string, string> | null }) {
+  // The card is portaled and fixed-positioned: the table's cells and
+  // scroll area clip anything that overflows them.
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const entries = extras ? Object.entries(extras).sort(([a], [b]) => a.length - b.length || a.localeCompare(b)) : [];
+  if (entries.length === 0) return null;
+  const label = (key: string) => (/^[A-Z]+$/i.test(key) ? `Coluna ${key}` : key);
+  const show = (e: { currentTarget: HTMLElement }) => setAnchor(e.currentTarget.getBoundingClientRect());
+  const hide = () => setAnchor(null);
+  const below = anchor ? anchor.bottom + 220 < window.innerHeight : true;
+  return (
+    <span
+      className="extras-cell"
+      tabIndex={0}
+      aria-label={`${entries.length} ${entries.length === 1 ? "coluna não mapeada" : "colunas não mapeadas"}`}
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onFocus={show}
+      onBlur={hide}
+    >
+      <List size={14} aria-hidden="true" />
+      {entries.length}
+      {anchor &&
+        createPortal(
+          <span
+            className="extras-card"
+            role="tooltip"
+            style={{
+              right: Math.max(8, window.innerWidth - anchor.right),
+              ...(below ? { top: anchor.bottom + 6 } : { bottom: window.innerHeight - anchor.top + 6 }),
+            }}
+          >
+            <span className="extras-card-title">Colunas não mapeadas</span>
+            {entries.map(([key, value]) => (
+              <span key={key} className="extras-card-row">
+                <span>{label(key)}</span>
+                <span>{value}</span>
+              </span>
+            ))}
+          </span>,
+          document.body,
+        )}
+    </span>
+  );
+}
 
 /** Relative widths for the flat table's fixed layout — keeps columns from shifting as rows scroll in and out. */
 const FLAT_COLUMN_WEIGHTS: Record<string, number> = {
@@ -229,6 +287,7 @@ const FLAT_COLUMN_WEIGHTS: Record<string, number> = {
   horas: 0.9,
   valor: 1.2,
   status: 1.3,
+  extras: 0.9,
 };
 
 /** Rows drawn above and below the visible ones, so a fast scroll doesn't show blank space. */
