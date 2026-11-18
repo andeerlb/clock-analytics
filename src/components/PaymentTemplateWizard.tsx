@@ -1,19 +1,14 @@
 import {
-  CheckCircle2,
+  Check,
   ChevronLeft,
   ChevronRight,
-  FileText,
-  FolderOpen,
-  Info,
-  Link2,
-  RefreshCw,
   Table2,
   UploadCloud,
   X,
 } from "lucide-react";
-import { useEffect, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { READ_ONLY_TITLE, useReadOnly } from "./AreaRoute";
-import Modal, { useModalClose } from "./Modal";
+import Drawer from "./Drawer";
 import OptionPicker, { type PickerOption } from "./OptionPicker";
 import PaymentTemplateDetails, {
   detailsProblem,
@@ -27,19 +22,8 @@ import PaymentTemplateDetails, {
   type StatusDraft,
 } from "./PaymentTemplateDetails";
 
-/** Header X, routed through `useModalClose` instead of the raw `onClose` prop so it plays the same animated exit `Modal` already uses for Escape/backdrop. */
-function CloseButton() {
-  const requestClose = useModalClose();
-  return (
-    <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={requestClose} aria-label="Fechar">
-      <X size={18} />
-    </button>
-  );
-}
 import {
-  addRecentPaymentFile,
   downloadPaymentFileFromUrl,
-  listRecentPaymentFiles,
   listSpreadsheetSheets,
   pickPaymentFile,
   previewSpreadsheet,
@@ -210,7 +194,6 @@ export default function PaymentTemplateWizard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [recentFiles, setRecentFiles] = useState<string[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [urlDownloading, setUrlDownloading] = useState(false);
@@ -276,9 +259,19 @@ export default function PaymentTemplateWizard({
   }, [target]);
 
 
+  // A blocked "Continuar"/"Salvar" explains itself in the error box at the
+  // top of the content; bring it into view when the step is scrolled down.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (error) bodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }, [error]);
+
+  // Nothing floats over the wizard: the assistant's button and the pending
+  // updates card hide while it's open (see `body.wizard-open` in App.css).
   useEffect(() => {
     if (!target) return;
-    listRecentPaymentFiles().then(setRecentFiles);
+    document.body.classList.add("wizard-open");
+    return () => document.body.classList.remove("wizard-open");
   }, [target]);
 
   /** Drag-and-drop on the Arquivo step's dropzone: the dropped file is uploaded, then handled like a picked one. */
@@ -422,10 +415,6 @@ export default function PaymentTemplateWizard({
     setFileKind(kind);
     setAcceptedFileKinds(new Set([kind]));
     await loadFile(path);
-    addRecentPaymentFile(path)
-      .then(() => listRecentPaymentFiles())
-      .then(setRecentFiles)
-      .catch(() => {});
   }
 
   /** "Baixar por URL" in the Arquivo step — same direct-download-link download `Importar Pagamentos`'s URL tab uses, just to get a sample file for the mapping instead of an actual import. The downloaded copy's local path already carries the right extension (see `download_payment_file_from_url` in commands.rs), so `selectFile` picks it up exactly like a locally-chosen file from here on. */
@@ -939,173 +928,182 @@ export default function PaymentTemplateWizard({
     }
   }
 
-  /** Checklist of other included sheets that can be merged into (or split out of) the active sheet's group. */
-  if (!target) return null;
+  /** The line under each step in the rail: what was answered there. */
+  function stepSummary(step: WizardStep): string {
+    switch (step) {
+      case "file":
+        return filePath ? fileNameFromPath(filePath) : "escolha uma planilha";
+      case "sheets":
+        return `${includedSheets.size} de ${sheets.length} ${sheets.length === 1 ? "aba" : "abas"}`;
+      case "answers":
+        if (pendingGroups.length > 0) return "falta responder";
+        return includedGroupKeys.length > 1 ? `${includedGroupKeys.length} grupos respondidos` : "respondido";
+      case "check": {
+        if (badChecks.length > 0) return `${badChecks.length} ${badChecks.length === 1 ? "aba com problema" : "abas com problema"}`;
+        const shifts = checks.reduce((n, c) => n + (c.result?.shifts ?? 0), 0);
+        return `${shifts} ${shifts === 1 ? "turno certo" : "turnos certos"}`;
+      }
+      case "details": {
+        const destinations = routes.length + (routeFallback.clientId !== null ? 1 : 0);
+        return destinations > 0 ? `${destinations} ${destinations === 1 ? "destino" : "destinos"}` : "nome e destino";
+      }
+    }
+  }
+
+  const title = readOnly ? "Template de pagamento" : isEditing ? "Editar template de pagamento" : "Novo template de pagamento";
 
   return (
-    <Modal fullScreen zIndex={100} onClose={onClose}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "0.8rem 1.2rem",
-          background: "var(--card-bg)",
-          borderBottom: "1px solid var(--border)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <strong style={{ fontSize: "0.95rem" }}>
-          {readOnly ? "Template de pagamento" : isEditing ? "Editar template de pagamento" : "Novo template de pagamento"}
-        </strong>
-        <CloseButton />
-      </div>
-
-      <div className="wizard-steps" onClick={(e) => e.stopPropagation()}>
-        {steps.map((s, i) => (
-          <span key={s} className={`wizard-step${i === stepIndex ? " active" : i < stepIndex ? " done" : ""}`}>
-            {i + 1}. {STEP_LABEL_TEXT[s]}
-          </span>
-        ))}
-      </div>
-
-      <div
-        style={{ flex: 1, overflow: "auto", padding: "1.5rem", background: "var(--bg)", display: "flex", flexDirection: "column", minHeight: 0 }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {error && <div className="error-box" style={{ marginBottom: "1rem" }}>{error}</div>}
-
-        {currentStep === "file" && (
-          <div className="details-layout">
-            <div className="details-main">
-              <div>
-                <h2 className="file-step-title">Importar arquivo fonte</h2>
-                <p className="glass-panel-desc" style={{ marginBottom: 0 }}>
-                  Selecione um arquivo para servir de base para o mapeamento deste template.
-                </p>
-              </div>
-
-              {filePath && (
-                <div className="glass-panel file-status-card">
-                  <div className="file-status-icon">
-                    <CheckCircle2 size={26} />
-                  </div>
-                  <div className="file-status-info">
-                    <p className="file-status-label">Arquivo carregado</p>
-                    <div className="file-status-name">
-                      <Table2 size={16} />
-                      {fileNameFromPath(filePath)}
-                    </div>
-                  </div>
-                  <button type="button" className="glow-button" onClick={handlePickFile}>
-                    <RefreshCw size={14} />
-                    Trocar arquivo
-                  </button>
-                </div>
-              )}
-
-              <div
-                className={`file-dropzone${dragOver ? " drag-over" : ""}`}
-                onClick={handlePickFile}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDragOver(true);
-                }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={handleDrop}
-                role="button"
-                tabIndex={0}
-              >
-                <div className="file-dropzone-icon">
-                  <UploadCloud size={28} />
-                </div>
-                <h3>Arraste e solte um arquivo aqui</h3>
-                <p className="glass-panel-desc">
-                  Ou clique para navegar. O arquivo será usado só para montar o mapeamento agora —
-                  não é guardado; depois de salvo, o template só armazena a configuração de
-                  colunas.
-                </p>
+    <Drawer
+      open={target !== null}
+      onClose={onClose}
+      title={title}
+      icon={Table2}
+      subtitle={name.trim() || (filePath ? fileNameFromPath(filePath) : "Sem nome")}
+      width="min(1040px, calc(100vw - 24px))"
+      className="wz-drawer"
+      closeOnBackdrop={false}
+    >
+      <div className="wz">
+        <aside className="wz-rail">
+          <nav className="wz-steps" aria-label="Passos">
+            {steps.map((s, i) => {
+              const done = i < stepIndex;
+              const current = i === stepIndex;
+              return (
                 <button
+                  key={s}
                   type="button"
-                  className="secondary"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handlePickFile();
+                  className={`wz-step${done ? " done" : ""}${current ? " current" : ""}`}
+                  aria-current={current ? "step" : undefined}
+                  disabled={!done}
+                  onClick={() => {
+                    setError(null);
+                    setStepIndex(i);
                   }}
                 >
-                  <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-                  Selecionar arquivo
+                  <i aria-hidden="true">{done ? <Check size={12} strokeWidth={3} /> : i + 1}</i>
+                  <span>
+                    {STEP_LABEL_TEXT[s]}
+                    <small>{done || current || isEditing ? stepSummary(s) : "—"}</small>
+                  </span>
                 </button>
-              </div>
+              );
+            })}
+          </nav>
+          <div className="wz-rail-foot">
+            <button type="button" className="ghost wz-cancel" onClick={onClose}>
+              Cancelar
+            </button>
+          </div>
+        </aside>
 
-              <div className="glass-panel" style={{ marginTop: "1rem" }}>
-                <h4 className="glass-panel-heading" style={{ fontSize: "0.85rem" }}>
-                  <Link2 size={16} />
-                  Ou baixar por URL
-                </h4>
-                <p className="glass-panel-desc">
-                  Link de download direto e anônimo (sem exigir login) para um arquivo Excel
-                  (.xlsx/.xls) ou OpenDocument (.ods).
-                </p>
-                <div style={{ display: "flex", gap: "0.5rem" }}>
-                  <input
-                    type="url"
-                    className="glass-input"
-                    placeholder="https://exemplo.com/arquivo.xlsx"
-                    value={urlInput}
-                    onChange={(e) => setUrlInput(e.target.value)}
-                    disabled={urlDownloading}
-                    style={{ flex: 1 }}
-                  />
+        <div className="wz-main">
+          <div className="wz-top">
+            Passo {stepIndex + 1} de {steps.length} · {STEP_LABEL_TEXT[currentStep]}
+          </div>
+
+          <div className="wz-body" ref={bodyRef}>
+        {error && <div className="error-box wz-error">{error}</div>}
+
+        {currentStep === "file" && (
+          <div className="tmap">
+            <h2 className="tmap-title">Qual planilha usar de exemplo?</h2>
+            <p className="tmap-lead">Ela serve só para montar o template e não fica guardada.</p>
+
+            {filePath || loadingPreview ? (
+              <div className="tfile-card">
+                <span className="tfile-kind">{(fileKind ?? "").toUpperCase()}</span>
+                <div className="tfile-info">
+                  <b>{filePath ? fileNameFromPath(filePath) : "Planilha"}</b>
+                  {loadingPreview ? (
+                    <>
+                      <span>Lendo a planilha…</span>
+                      <span className="tfile-bar" aria-hidden="true">
+                        <i />
+                      </span>
+                    </>
+                  ) : (
+                    <span>
+                      {fileKind === "csv"
+                        ? "Arquivo CSV"
+                        : `${sheets.length} ${sheets.length === 1 ? "aba encontrada" : "abas encontradas"}`}
+                    </span>
+                  )}
+                </div>
+                {!loadingPreview && (
+                  <button type="button" className="secondary" onClick={() => setFilePath(null)}>
+                    Trocar
+                  </button>
+                )}
+              </div>
+            ) : (
+              <>
+                <div
+                  className={`tfile-drop${dragOver ? " over" : ""}`}
+                  onClick={handlePickFile}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragOver(true);
+                  }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={handleDrop}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      handlePickFile();
+                    }
+                  }}
+                >
+                  <span className="tfile-icon" aria-hidden="true">
+                    <UploadCloud size={20} />
+                  </span>
+                  <div className="tfile-info">
+                    <b>Arraste a planilha aqui</b>
+                    <span>.xlsx, .xls, .ods ou .csv</span>
+                  </div>
                   <button
                     type="button"
                     className="secondary"
-                    onClick={handleDownloadFromUrl}
-                    disabled={!urlInput.trim() || urlDownloading}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handlePickFile();
+                    }}
                   >
-                    {urlDownloading ? "Baixando..." : "Baixar arquivo"}
+                    Escolher arquivo
                   </button>
                 </div>
-                {urlError && (
-                  <div className="error-box" style={{ marginTop: "0.6rem" }}>
-                    {urlError}
-                  </div>
-                )}
-              </div>
-            </div>
 
-            <aside className="details-sidebar">
-              <div className="glass-panel">
-                <h4 className="glass-panel-heading">
-                  <Info size={16} />
-                  Guia de preparação
-                </h4>
-                <p className="glass-panel-desc">Formatos suportados:</p>
-                <div className="file-format-pills">
-                  {["CSV", "XLSX", "XLS", "ODS"].map((f) => (
-                    <span key={f} className="file-format-pill">
-                      .{f}
-                    </span>
-                  ))}
+                <div className="tfile-or">ou pelo link</div>
+                <div className="tfile-url">
+                  <input
+                    type="url"
+                    className="tdet-input"
+                    placeholder="Cole o link de download (OneDrive, Google Drive, …)"
+                    value={urlInput}
+                    onChange={(e) => setUrlInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleDownloadFromUrl();
+                    }}
+                    disabled={urlDownloading}
+                    aria-label="Link da planilha"
+                  />
+                  <button type="button" className="secondary" onClick={handleDownloadFromUrl} disabled={!urlInput.trim() || urlDownloading}>
+                    {urlDownloading ? "Baixando…" : "Baixar"}
+                  </button>
                 </div>
-              </div>
+                {urlError ? <div className="error-box">{urlError}</div> : <p className="tfile-hint">O link precisa abrir o arquivo sem pedir login.</p>}
+              </>
+            )}
 
-              {recentFiles.length > 0 && (
-                <div className="glass-panel">
-                  <h4 className="glass-panel-heading" style={{ fontSize: "0.85rem" }}>
-                    Arquivos recentes
-                  </h4>
-                  <div className="recent-files-list">
-                    {recentFiles.map((p) => (
-                      <button key={p} type="button" className="recent-file-item" onClick={() => selectFile(p)}>
-                        <FileText size={16} />
-                        <span className="recent-file-name">{fileNameFromPath(p)}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </aside>
+            {filePath && !loadingPreview && fileKind !== "csv" && sheets.length > 0 && (
+              <div className="tfile-tabs">
+                {sheets.map((s) => (
+                  <span key={s}>{s}</span>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -1448,57 +1446,48 @@ export default function PaymentTemplateWizard({
             suggestionsFor={suggestionsFor}
           />
         )}
-      </div>
+          </div>
 
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: "1rem",
-          // Room on the right for the assistant's floating button, which
-          // sits above fullscreen surfaces and would cover "Avançar"/"Salvar".
-          padding: "0.8rem 4.8rem 0.8rem 1.2rem",
-          background: "var(--card-bg)",
-          borderTop: "1px solid var(--border)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          type="button"
-          className="outline"
-          onClick={() => setStepIndex((s) => s - 1)}
-          disabled={stepIndex === 0 || busy}
-        >
-          <ChevronLeft size={15} style={{ marginRight: "0.3rem" }} />
-          Voltar
-        </button>
-        <span className="tmap-note">
-          {currentStep === "answers" && pendingGroups.length > 0
-            ? `Falta responder: ${pendingGroups.map(groupLabel).join(", ")}`
-            : currentStep === "check" && badChecks.length > 0
-              ? "Resolva as abas com problema ou desmarque-as"
-              : currentStep === "details"
-                ? (detailsProblem(name, routes, routeFallback) ?? "")
-                : ""}
-        </span>
-        {stepIndex < steps.length - 1 ? (
-          <button type="button" onClick={handleAdvance} disabled={busy || loadingPreview}>
-            Avançar
-            <ChevronRight size={15} style={{ marginLeft: "0.3rem" }} />
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleSave}
-            title={readOnly ? READ_ONLY_TITLE : undefined}
-            disabled={readOnly || busy || detailsProblem(name, routes, routeFallback) !== null}
-          >
-            {busy ? "Salvando..." : "Salvar"}
-          </button>
-        )}
+          <div className="wz-foot">
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                setError(null);
+                setStepIndex((s) => s - 1);
+              }}
+              disabled={stepIndex === 0 || busy}
+              style={stepIndex === 0 ? { visibility: "hidden" } : undefined}
+            >
+              <ChevronLeft size={15} style={{ marginRight: "0.3rem" }} />
+              Voltar
+            </button>
+            <span className="wz-foot-gap" />
+            {stepIndex < steps.length - 1 ? (
+              <button type="button" onClick={handleAdvance} disabled={busy || loadingPreview || (currentStep === "file" && !filePath)}>
+                Continuar
+                <ChevronRight size={15} style={{ marginLeft: "0.3rem" }} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  // Explains what's missing in the error box at the top
+                  // instead of a note beside the button.
+                  const problem = detailsProblem(name, routes, routeFallback);
+                  if (problem) setError(`${problem}.`);
+                  else handleSave();
+                }}
+                title={readOnly ? READ_ONLY_TITLE : undefined}
+                disabled={readOnly || busy}
+              >
+                {busy ? "Salvando..." : "Salvar template"}
+              </button>
+            )}
+          </div>
+        </div>
       </div>
-    </Modal>
+    </Drawer>
   );
 }
 

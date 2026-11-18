@@ -1658,13 +1658,28 @@ tr:last-child td {
   border-top: 1px solid var(--border);
 }
 
+/* Behind every Drawer the page is frosted (iOS-style blur + a light dim),
+   so it stays recognizable without competing with the sheet. Fades in and
+   out with the panel's slide. */
 .drawer-overlay {
   position: fixed;
   inset: 0;
-  background: transparent;
+  background: rgba(8, 8, 10, 0);
+  -webkit-backdrop-filter: blur(0) saturate(100%);
+  backdrop-filter: blur(0) saturate(100%);
+  transition:
+    background 0.22s ease,
+    backdrop-filter 0.22s ease,
+    -webkit-backdrop-filter 0.22s ease;
   z-index: 200;
   display: flex;
   justify-content: flex-end;
+}
+
+.drawer-overlay.drawer-overlay-visible {
+  background: rgba(8, 8, 10, 0.35);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  backdrop-filter: blur(14px) saturate(140%);
 }
 
 /* The app's side sheet (Drawer.tsx): floats 12px from the top, right and
@@ -10332,4 +10347,348 @@ input.tdet-input {
 
 .tdet-section > .vr-new {
   justify-self: start;
+}
+
+/* ---------- Payment template wizard: steps rail ----------
+   The steps sit in a rail on the left, each with what was answered there;
+   the step's content uses the rest of the screen, with its own footer. */
+
+/* The wizard opens in the app's Drawer; its body hosts the rail + content
+   layout edge to edge, and only the content column scrolls. */
+.wz-drawer .drawer-body {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
+.wz {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+}
+
+.wz-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+  padding: 14px 12px;
+  border-right: 1px solid var(--border-softer);
+}
+
+.wz-steps {
+  display: grid;
+  gap: 2px;
+}
+
+button.wz-step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  width: 100%;
+  padding: 9px 8px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  box-shadow: none;
+  color: var(--text-muted);
+  font: inherit;
+  text-align: left;
+}
+
+button.wz-step:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+button.wz-step.done:hover {
+  background: var(--card-bg);
+}
+
+button.wz-step.current {
+  background: var(--card-bg);
+}
+
+.wz-step i {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--outline);
+  font-size: 0.7rem;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.wz-step.done i {
+  border-color: var(--surface-container-high);
+  background: var(--surface-container-high);
+  color: var(--success);
+}
+
+.wz-step.current i {
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--on-accent);
+}
+
+.wz-step span {
+  min-width: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.wz-step.current span {
+  color: var(--text);
+}
+
+.wz-step small {
+  display: block;
+  margin-top: 2px;
+  color: var(--outline);
+  font-size: 0.75rem;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wz-rail-foot {
+  margin-top: auto;
+}
+
+button.wz-cancel {
+  padding-left: 8px;
+}
+
+.wz-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Only on narrow screens, where the rail is hidden. */
+.wz-top {
+  display: none;
+  padding: 12px 18px 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.wz-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 22px 24px 30px;
+}
+
+.wz-error {
+  width: min(680px, 100%);
+  margin: 0 auto 1rem;
+}
+
+.wz-foot-gap {
+  flex: 1;
+}
+
+.wz-foot {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-softer);
+}
+
+body.wizard-open .ai-launcher,
+body.wizard-open .pending-changes-card {
+  display: none !important;
+}
+
+@media (max-width: 760px) {
+  .wz {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .wz-rail {
+    display: none;
+  }
+
+  .wz-top {
+    display: block;
+  }
+}
+
+/* ---------- Payment template wizard: Arquivo ---------- */
+
+.tfile-drop {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  border: 1.5px dashed var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.tfile-drop:hover,
+.tfile-drop.over {
+  border-color: var(--outline);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.tfile-drop:focus-visible {
+  outline: 2px solid var(--outline);
+  outline-offset: 2px;
+}
+
+.tfile-drop > button {
+  margin-left: auto;
+}
+
+.tfile-icon,
+.tfile-kind {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--surface-container-high);
+  color: var(--text-muted);
+}
+
+.tfile-kind {
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.tfile-info {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.tfile-info b {
+  font-size: 0.92rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tfile-info span {
+  color: var(--outline);
+  font-size: 0.8rem;
+}
+
+.tfile-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--card-bg);
+}
+
+span.tfile-bar {
+  display: block;
+  height: 3px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--surface-container-high);
+}
+
+.tfile-bar i {
+  display: block;
+  width: 40%;
+  height: 100%;
+  background: var(--text-muted);
+  animation: tfile-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes tfile-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tfile-bar i {
+    width: 100%;
+    opacity: 0.5;
+    animation: none;
+  }
+}
+
+.tfile-or {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--outline);
+  font-size: 0.75rem;
+}
+
+.tfile-or::before,
+.tfile-or::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border-softer);
+}
+
+.tfile-url {
+  display: flex;
+  gap: 8px;
+}
+
+.tfile-url input {
+  flex: 1;
+  min-width: 0;
+}
+
+.tfile-hint {
+  margin: -10px 0 0;
+  color: var(--outline);
+  font-size: 0.75rem;
+}
+
+.tfile-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tfile-tabs span {
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: var(--surface-container-high);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+@media (max-width: 560px) {
+  .tfile-drop {
+    flex-wrap: wrap;
+  }
+
+  .tfile-drop > button {
+    margin-left: 0;
+  }
 }
