@@ -1,9 +1,11 @@
 import { Bell, CheckCheck, ChevronDown, ChevronRight, Clock3 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useAccess } from "../contexts/AuthContext";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { deletePaymentShift, dismissCheckDiffs, listAllLatestShiftDiffs, type CheckDiffRow } from "../lib/db";
 import { formatCountdown, formatDateAbbrevYY, formatDateTime, formatPersonName, parseSqliteDateTime, resolveReimportConfigLabel } from "../lib/format";
+import { READ_ONLY_TITLE } from "./AreaRoute";
 import ChangeCards from "./ChangeCards";
 import ConfirmModal from "./ConfirmModal";
 import Drawer from "./Drawer";
@@ -62,6 +64,9 @@ export default function PendingChangesTab() {
   const location = useLocation();
   const navigate = useNavigate();
   const { trackedFiles, reimportConfigs, checkingConfigIds } = useRemoteFileUpdates();
+  const { canEdit } = useAccess();
+  // "Visto" is allowed by Verificação or Pagamentos (as on the server).
+  const canDismiss = canEdit("pagamentos") || canEdit("verificacao");
   const [rows, setRows] = useState<CheckDiffRow[]>([]);
   const [open, setOpen] = useState(false);
 
@@ -291,7 +296,8 @@ export default function PendingChangesTab() {
                 <button
                   type="button"
                   className="settings-button settings-button-ghost pc-seen"
-                  disabled={dismissingGroup}
+                  disabled={dismissingGroup || !canDismiss}
+                  title={canDismiss ? undefined : READ_ONLY_TITLE}
                   onClick={() => run(`g${key}`, () => dismissCheckDiffs(groupUnseen.map((row) => row.id)))}
                 >
                   <CheckCheck size={13} /> {dismissingGroup ? "Marcando…" : "Marcar como visto"}
@@ -376,7 +382,7 @@ export default function PendingChangesTab() {
         footer={
           <>
             <span className="rv-footer-note" />
-            <button type="button" className="settings-button settings-button-primary" disabled={dismissingAll || unseenRows.length === 0} onClick={() => run("all", () => dismissCheckDiffs(unseenRows.map((row) => row.id)))}>
+            <button type="button" className="settings-button settings-button-primary" disabled={dismissingAll || unseenRows.length === 0 || !canDismiss} title={canDismiss ? undefined : READ_ONLY_TITLE} onClick={() => run("all", () => dismissCheckDiffs(unseenRows.map((row) => row.id)))}>
               <CheckCheck size={13} /> {dismissingAll ? "Marcando…" : `Marcar tudo como visto (${unseenRows.length})`}
             </button>
           </>

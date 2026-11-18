@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
+import { useAccess } from "../contexts/AuthContext";
 import type { ReimportConfig } from "../contexts/RemoteFileUpdatesContext";
 import { colorForName, initials } from "../lib/avatar";
 import { dismissCheckDiffs, type CheckDiffRow } from "../lib/db";
 import { diffFieldLabel, formatDateAbbrevYY, formatMinutesAsTime, formatPersonName } from "../lib/format";
 import { acceptShiftChange } from "../lib/remoteCheckDiff";
+import { READ_ONLY_TITLE } from "./AreaRoute";
 
 /** "hoje às 14:28", "ontem às 18:40", "16/11 às 10:00" — when a spreadsheet version was saved (as written in the file). */
 export function savedWhen(iso: string | null): string {
@@ -80,6 +82,14 @@ export default function ChangeCards({
   /** Keeps busy keys apart when several lists share one `busyKeys`. */
   keyPrefix?: string;
 }) {
+  // Used outside any page's area (the pending-updates Drawer), so the access
+  // is checked here: applying, removing and reimporting change Pagamentos;
+  // "Ignorar"/"Visto" is allowed by Verificação or Pagamentos (as on the server).
+  const { canEdit } = useAccess();
+  const canChangeShifts = canEdit("pagamentos");
+  const canDismiss = canChangeShifts || canEdit("verificacao");
+  const shiftsTitle = canChangeShifts ? undefined : READ_ONLY_TITLE;
+
   function renderCard(cardKey: string, cardRows: CheckDiffRow[]) {
     const key = keyPrefix + cardKey;
     const state = stateOf(cardRows);
@@ -119,14 +129,26 @@ export default function ChangeCards({
     let actions: ReactNode = null;
     if (state === "pending") {
       const ignore = (label: string) => (
-        <button type="button" className="settings-button settings-button-ghost" disabled={busy} onClick={() => run(key, () => dismissCheckDiffs(ids))}>
+        <button
+          type="button"
+          className="settings-button settings-button-ghost"
+          disabled={busy || !canDismiss}
+          title={canDismiss ? undefined : READ_ONLY_TITLE}
+          onClick={() => run(key, () => dismissCheckDiffs(ids))}
+        >
           {label}
         </button>
       );
       if (first.changeKind === "field" && first.matchedShiftId !== null) {
         actions = (
           <>
-            <button type="button" className="settings-button" disabled={busy || !c} onClick={() => c && run(key, () => acceptShiftChange(c, first.matchedShiftId!))}>
+            <button
+              type="button"
+              className="settings-button"
+              disabled={busy || !c || !canChangeShifts}
+              title={shiftsTitle}
+              onClick={() => c && run(key, () => acceptShiftChange(c, first.matchedShiftId!))}
+            >
               {busy ? "Aplicando..." : "Aplicar"}
             </button>
             {ignore("Ignorar")}
@@ -135,7 +157,13 @@ export default function ChangeCards({
       } else if (first.changeKind === "removed" && first.matchedShiftId !== null) {
         actions = (
           <>
-            <button type="button" className="settings-button settings-button-danger" disabled={busy} onClick={() => onDeleteShift({ shiftId: first.matchedShiftId!, who: first.employeeName ?? "" })}>
+            <button
+              type="button"
+              className="settings-button settings-button-danger"
+              disabled={busy || !canChangeShifts}
+              title={shiftsTitle}
+              onClick={() => onDeleteShift({ shiftId: first.matchedShiftId!, who: first.employeeName ?? "" })}
+            >
               Excluir turno…
             </button>
             {ignore("Manter")}
@@ -146,7 +174,13 @@ export default function ChangeCards({
       } else {
         actions = (
           <>
-            <button type="button" className="settings-button" disabled={busy || !c} onClick={() => c && onReprocess(c.id, first.periodStart, first.periodEnd)}>
+            <button
+              type="button"
+              className="settings-button"
+              disabled={busy || !c || !canChangeShifts}
+              title={shiftsTitle}
+              onClick={() => c && onReprocess(c.id, first.periodStart, first.periodEnd)}
+            >
               Reimportar o período
             </button>
             {ignore("Ignorar")}

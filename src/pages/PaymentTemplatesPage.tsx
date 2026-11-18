@@ -1,6 +1,7 @@
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Eye, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
 import ConfirmModal from "../components/ConfirmModal";
 import PageHeader from "../components/PageHeader";
 import PaymentTemplateWizard from "../components/PaymentTemplateWizard";
@@ -18,6 +19,7 @@ const FILE_KIND_LABELS: Record<string, string> = {
 export default function PaymentTemplatesPage() {
   const location = useLocation();
   const navigate = useNavigate();
+  const readOnly = useReadOnly();
   const [templates, setTemplates] = useState<PaymentTemplateListRow[]>([]);
   const [wizardTarget, setWizardTarget] = useState<PaymentTemplateRow | "new" | null>(null);
   const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<PaymentTemplateListRow | null>(null);
@@ -81,10 +83,12 @@ export default function PaymentTemplatesPage() {
         backLabel="Voltar para Importar pagamentos"
         subtitle="Mapeamento de colunas usado ao importar arquivos de pagamento — cada template descreve como ler um formato de planilha."
         actions={
-          <button type="button" onClick={() => setWizardTarget("new")}>
-            <Plus size={15} />
-            Novo template
-          </button>
+          !readOnly && (
+            <button type="button" onClick={() => setWizardTarget("new")}>
+              <Plus size={15} />
+              Novo template
+            </button>
+          )
         }
       />
 
@@ -120,18 +124,19 @@ export default function PaymentTemplatesPage() {
                           className="ghost"
                           style={{ padding: "0.3rem" }}
                           onClick={() => handleEditTemplate(t.id)}
-                          aria-label="Editar"
-                          title="Editar"
+                          aria-label={readOnly ? "Ver" : "Editar"}
+                          title={readOnly ? "Ver" : "Editar"}
                         >
-                          <Pencil size={14} />
+                          {readOnly ? <Eye size={14} /> : <Pencil size={14} />}
                         </button>
                         <button
                           type="button"
                           className="ghost"
                           style={{ padding: "0.3rem" }}
                           onClick={() => setConfirmDeleteTarget(t)}
+                          disabled={readOnly}
                           aria-label="Excluir"
-                          title="Excluir"
+                          title={readOnly ? READ_ONLY_TITLE : "Excluir"}
                         >
                           <Trash2 size={14} />
                         </button>
