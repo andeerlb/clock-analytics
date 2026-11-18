@@ -7,6 +7,7 @@ use crate::AppState;
 
 pub mod analytics;
 pub mod clients;
+pub mod commands;
 pub mod companies;
 pub mod employees;
 pub mod payments;
@@ -17,6 +18,7 @@ pub mod timesheets;
 pub fn protected() -> Router<AppState> {
     Router::new().route("/me", get(me))
         .merge(companies::router())
+        .merge(commands::router())
         .merge(clients::router())
         .merge(roles::router())
         .merge(employees::router())

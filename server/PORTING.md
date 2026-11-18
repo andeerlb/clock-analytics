@@ -121,6 +121,22 @@ precisa ler o banco no meio do caminho.
 - **"Mostrar na pasta" / "Abrir pasta de dados"** não existem na web: troque por "Baixar" quando fizer sentido, ou remova.
 - **Janela de Conferência separada** (`open_reconciliation_window`): abra a mesma tela numa nova aba.
 
+## 3.1 Já portado na base (não refaça)
+- **Comandos de arquivo** (`server/src/routes/commands.rs` + `api.ts`): `listProviders`, `hashFiles`,
+  `parseImport`, `listSpreadsheetSheets`, `previewSpreadsheet`, `applyPaymentTemplate`,
+  `hashPaymentFile`, `readSpreadsheetAuthor`, `downloadPaymentFileFromUrl` (com proteção contra
+  endereços internos), `checkRemotePaymentFile`, `generateReportZip`.
+- `generateReportZip(entries, nome)`: o 2º argumento agora é o **nome do arquivo**; o ZIP é baixado.
+- Os seletores (`pickPdfFiles`, `pickFolder`, `listDirFiles`, `pickPaymentFile(s)`) já devolvem caminhos do servidor.
+- `readPdfBytes(path)` busca no servidor. `copyPdfTo(origem, destino)` baixa a origem com o nome do destino.
+- `writeBinaryFile(path, bytes)` baixa os bytes com o nome do caminho.
+- Viraram no-op: `revealInFileManager`, `setTrayStatus`, `backupDatabaseBeforeDelete` (o Litestream faz
+  backup contínuo); `listRecentPaymentFiles` devolve `[]`.
+- O `save()` do `@tauri-apps/plugin-dialog` **não funciona no navegador**: troque a chamada pelo nome de
+  arquivo sugerido direto (`writeBinaryFile(nomeSugerido, bytes)` / `downloadBlob`). Botões de "mostrar
+  na pasta" depois de exportar podem sair.
+- Eventos: `../lib/events` (`emit`/`listen`/`emitTo`) já substitui `@tauri-apps/api/event` em todos os arquivos.
+
 ## 4. Regras do trabalho em paralelo
 - Mexa só nos arquivos do seu domínio: `server/src/routes/<domínio>.rs` e as
   funções e telas do seu domínio em `src/`.
