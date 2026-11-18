@@ -163,9 +163,30 @@ pub fn preview(
     let rows = range
         .rows()
         .take(max_rows as usize)
-        .map(|row| row.iter().map(|cell| cell.to_string()).collect())
+        .map(|row| row.iter().map(preview_cell).collect())
         .collect();
     Ok(SpreadsheetPreview { rows, delimiter: None })
+}
+
+/// A cell as the preview shows it. A native date cell's `Display` is the raw
+/// Excel serial ("46346"), so dates come out as `YYYY-MM-DD` instead, the
+/// same value `apply_template` reads for "data" — the template wizard
+/// checks a sheet's dates on these rows. A time-only cell becomes `HH:MM`,
+/// a date with a time `YYYY-MM-DD HH:MM`.
+fn preview_cell(cell: &calamine::Data) -> String {
+    if cell.is_datetime() {
+        if let Some(dt) = cell.as_datetime() {
+            let has_time = dt.time() != chrono::NaiveTime::MIN;
+            return if dt.date() <= chrono::NaiveDate::from_ymd_opt(1899, 12, 31).expect("valid date") {
+                dt.format("%H:%M").to_string()
+            } else if has_time {
+                dt.format("%Y-%m-%d %H:%M").to_string()
+            } else {
+                dt.format("%Y-%m-%d").to_string()
+            };
+        }
+    }
+    cell.to_string()
 }
 
 /// One payment template group's own slice of the config needed to read
@@ -371,4 +392,27 @@ pub fn apply_template(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod preview_cell_tests {
+    use super::preview_cell;
+    use calamine::{Data, ExcelDateTime, ExcelDateTimeType};
+
+    fn date_cell(serial: f64) -> Data {
+        Data::DateTime(ExcelDateTime::new(serial, ExcelDateTimeType::DateTime, false))
+    }
+
+    #[test]
+    fn date_cells_read_as_dates_not_serials() {
+        assert_eq!(preview_cell(&date_cell(46346.0)), "2026-11-20");
+        assert_eq!(preview_cell(&date_cell(46346.5)), "2026-11-20 12:00");
+        assert_eq!(preview_cell(&date_cell(0.3125)), "07:30");
+    }
+
+    #[test]
+    fn other_cells_unchanged() {
+        assert_eq!(preview_cell(&Data::String("seg".into())), "seg");
+        assert_eq!(preview_cell(&Data::Float(46346.0)), "46346");
+    }
 }
