@@ -9189,28 +9189,29 @@ tr.virtual-spacer td {
 /* ---------- Login (web version) — see AuthGate.tsx ---------- */
 
 /* ---- Sign-in: "da planilha ao pagamento" ----
-   A light screen of its own (the app itself is dark): a spreadsheet drifts
-   slowly behind the panel, fading out under it. Its palette is local. */
+   Dark like the rest of the app: a spreadsheet drifts slowly behind the
+   panel, barely visible, fading out under it. Its palette is local. */
 .signin {
-  --si-bg: #fbfbfa;
-  --si-ink: #17171a;
-  --si-muted: #55555c;
-  --si-cell: #ebece8;
-  --si-cell-text: #a7a9a2;
-  --si-head: #f2f3ef;
-  --si-green: #1d7a4a;
-  --si-green-soft: #e6f2eb;
-  --si-chip: #eef0ec;
-  --si-danger: #9f1d23;
-  --si-danger-soft: #fde8e8;
-  --si-warn: #8a5300;
-  --si-warn-soft: #fff1d6;
+  --si-bg: #0b0b0d;
+  --si-ink: #f1f1f4;
+  --si-muted: #a6a7b0;
+  --si-cell: #1c1d22;
+  --si-cell-text: #3f414a;
+  --si-head: #131418;
+  --si-green: #4fbf86;
+  --si-green-soft: #11251a;
+  --si-chip: #1a1b20;
+  --si-chip-text: #b4b6bf;
+  --si-danger: #f2a2a5;
+  --si-danger-soft: #3a1618;
+  --si-warn: #f5c15a;
+  --si-warn-soft: #33270b;
   position: relative;
   min-height: 100vh;
   overflow: hidden;
   background: var(--si-bg);
   color: var(--si-ink);
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 .signin-loading {
@@ -9263,7 +9264,7 @@ tr.virtual-spacer td {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(ellipse at 30% 50%, rgba(251, 251, 250, 0.97) 0 34%, rgba(251, 251, 250, 0.6) 60%, rgba(251, 251, 250, 0.2) 100%);
+  background: radial-gradient(ellipse at 30% 50%, rgba(11, 11, 13, 0.97) 0 34%, rgba(11, 11, 13, 0.68) 60%, rgba(11, 11, 13, 0.3) 100%);
 }
 
 .signin-panel {
@@ -9330,7 +9331,7 @@ tr.virtual-spacer td {
   padding: 3px 7px;
   border-radius: 5px;
   background: var(--si-chip);
-  color: #4d4f49;
+  color: var(--si-chip-text);
 }
 
 .signin-hint {
@@ -9446,7 +9447,7 @@ tr.virtual-spacer td {
 
 @media (max-width: 720px) {
   .signin-fade {
-    background: rgba(251, 251, 250, 0.9);
+    background: rgba(11, 11, 13, 0.88);
   }
 }
 
