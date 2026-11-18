@@ -199,27 +199,10 @@ export function deleteImportedFiles(paths: string[]): Promise<number> {
   return rpc<number>("deleteImportedFiles", { paths });
 }
 
-/** Empties and recreates the imports/ folder — the file half of "Apagar histórico e arquivos". */
-export function clearImportsDir(): Promise<void> {
-  return rpc<void>("clearImportsDir");
-}
-
-/** Zips the DB and/or imports/ on the server and downloads the .zip — the backup offered before "Apagar histórico e arquivos". */
-export async function downloadBackup(includeDb: boolean, includeFiles: boolean): Promise<void> {
-  const { path } = await rpc<{ path: string }>("backupAppData", { includeDb, includeFiles });
-  await downloadServerFile(path, "pontoscan-backup.zip");
-}
-
 /** Saves bytes generated in the browser as a download named after `path`'s last component. */
 export function writeBinaryFile(path: string, data: Uint8Array): Promise<void> {
   downloadBlob(data, baseName(path));
   return Promise.resolve();
-}
-
-/** Downloads a consistent copy of the live database ("Baixar uma cópia do banco"). */
-export async function downloadDatabaseCopy(): Promise<void> {
-  const { path } = await rpc<{ path: string }>("exportDatabase");
-  await downloadServerFile(path, "pontoscan.db");
 }
 
 /** Recently-picked payment template sample file paths, newest first — dead paths already filtered out. */

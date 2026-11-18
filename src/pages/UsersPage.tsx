@@ -29,7 +29,7 @@ const EMPTY_PERMISSIONS: Permissions = {
 const LEVEL_LABEL: Record<Level, string> = { none: "Sem acesso", view: "Ver", edit: "Editar" };
 
 const EXTRAS: { key: "export" | "ai" | "users"; label: string; desc: string }[] = [
-  { key: "export", label: "Exportar e baixar", desc: "Excel, PDF, ZIP de espelhos, cópia do banco" },
+  { key: "export", label: "Exportar e baixar", desc: "Excel, PDF, ZIP de espelhos e PDFs" },
   { key: "ai", label: "Assistente com IA", desc: "Cada pergunta usa a chave da equipe" },
   { key: "users", label: "Gerenciar usuários e perfis", desc: "Dá acesso a esta tela: na prática, vira admin" },
 ];

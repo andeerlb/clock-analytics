@@ -1045,34 +1045,6 @@ export async function getPaymentShiftsByIds(ids: number[]): Promise<PaymentShift
   return rpc<PaymentShiftRow[]>("getPaymentShiftsByIds", { ids });
 }
 
-/**
- * A multi-page batch's whole original file, once every one of its pages
- * has its own saved import — at that point the whole-original is pure
- * duplication (each employee's split-off page already has everything),
- * so it's safe to offer up for deletion. Single-page sources are never
- * candidates: there, the "original" and the employee's own file are the
- * same one copy, not a duplicate.
- */
-export interface RedundantOriginal {
-  sourceFileId: number;
-  path: string;
-}
-
-export async function findRedundantOriginals(): Promise<RedundantOriginal[]> {
-  return rpc<RedundantOriginal[]>("findRedundantOriginals");
-}
-
-/**
- * Marks a batch's whole-original as removed after its file has actually
- * been deleted from disk. `original_pdf_path` stays `NOT NULL` in the
- * schema, so "removed" is the empty string — same sentinel the column
- * already defaults to before a file is ever recorded — rather than NULL.
- */
-export async function markOriginalsRemoved(sourceFileIds: number[]): Promise<void> {
-  if (sourceFileIds.length === 0) return;
-  await rpc<void>("markOriginalsRemoved", { sourceFileIds });
-}
-
 export async function listPaymentTemplates(): Promise<PaymentTemplateListRow[]> {
   return rpc<PaymentTemplateListRow[]>("listPaymentTemplates");
 }
@@ -2061,30 +2033,6 @@ export async function setPaymentVisibleColumns(columns: string[]): Promise<void>
   await rpc<void>("setPaymentVisibleColumns", { columns });
 }
 
-/**
- * Recompacts the DB file — reclaims space left behind by deleted rows
- * without touching any surviving data. Cheap, non-destructive; the natural
- * first thing to try before "Limpar tudo".
- */
-export async function vacuumDatabase(): Promise<void> {
-  await rpc<void>("vacuumDatabase");
-}
-
-export interface ClearDataOptions {
-  /** Keep companies (and, transitively, whatever else depends on them). */
-  keepCompanies?: boolean;
-  /** Keep clients/client_companies — implies keeping companies too (a kept client's links need somewhere to point). */
-  keepClients?: boolean;
-  /** Keep employees — implies keeping their clients and companies too (both are required FKs). */
-  keepEmployees?: boolean;
-  /** Keep payment-import templates and their column-mapping groups/rules. Independent of the others — a template has no FK into companies/clients/employees (routing/identification is resolved per row at import execution time, never baked into the template). */
-  keepPaymentTemplates?: boolean;
-  /** Keep colaborador-import templates and their column-mapping groups. Same independence as `keepPaymentTemplates`. */
-  keepEmployeeTemplates?: boolean;
-  /** Keep `payment_shifts` rows with `edited_manually` set (see the manual transition functions above) instead of wiping every one — only meaningful alongside `keepEmployees` (a kept shift's `employee_id` is `NOT NULL`), enforced by the caller disabling the checkbox rather than here. */
-  keepManuallyEditedShifts?: boolean;
-}
-
 export interface DatabaseTableSize {
   tableName: string;
   bytes: number;
@@ -2121,20 +2069,3 @@ export async function getImportedFileNamesByBasename(): Promise<Map<string, stri
   return byBasename;
 }
 
-/**
- * Deletes rows from every table (schema and migration history stay intact)
- * and reclaims the freed space — the database half of "Limpar tudo". The
- * file half (everything under `imports/`) is a separate, Rust-side step,
- * since this only touches the SQL connection.
- *
- * Import/timesheet data (punches, day_records, imports, import_files,
- * source_files) is always wiped — there's no "keep" option for it, since
- * it's exactly what's re-derivable by re-importing the same PDFs. Master
- * data (companies/clients/employees, and both template kinds) can
- * optionally survive via `options` — companies/clients/employees respect
- * the real dependency chain (employees → clients → companies), while the
- * two template kinds are independent of that chain and of each other.
- */
-export async function clearAllData(options: ClearDataOptions = {}): Promise<void> {
-  await rpc<void>("clearAllData", { options });
-}

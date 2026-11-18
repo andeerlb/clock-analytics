@@ -218,14 +218,10 @@ fn rpc_rule(name: &str) -> &'static [Req] {
         "dismissCheckDiffs" => &[Edit(&[VE, PG])],
 
         // --- Configurações ---
-        "getStorageUsage" | "getImportsFileList" | "getDatabaseTableSizes" | "listImportedFileNames" | "findRedundantOriginals" => {
-            &[View(&[CF])]
-        }
-        "vacuumDatabase" | "markOriginalsRemoved" | "clearAllData" | "clearImportsDir" | "aiSetApiKey" | "aiClearApiKey" => &[Edit(&[CF])],
-        // Also used to drop spreadsheets downloaded by link after an import.
-        "deleteImportedFiles" => &[Edit(&[CF, PG])],
-        "exportDatabase" => &[View(&[CF]), Export],
-        "backupAppData" => &[Edit(&[CF]), Export],
+        "getStorageUsage" | "getImportsFileList" | "getDatabaseTableSizes" | "listImportedFileNames" => &[View(&[CF])],
+        "aiSetApiKey" | "aiClearApiKey" => &[Edit(&[CF])],
+        // Drops spreadsheets downloaded by link after an import.
+        "deleteImportedFiles" => &[Edit(&[PG])],
 
         // --- Assistente com IA ---
         "aiStatus" => &[Signed],
