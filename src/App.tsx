@@ -5,9 +5,11 @@ import { useEffect, useState } from "react";
 import { HashRouter, Navigate, Link, Route, Routes } from "react-router-dom";
 import "./App.css";
 import { AiAssistantProvider } from "./components/AiAssistant";
+import AuthGate from "./components/AuthGate";
 import PendingChangesTab from "./components/PendingChangesTab";
 import Modal from "./components/Modal";
 import Sidebar from "./components/Sidebar";
+import { AuthProvider } from "./contexts/AuthContext";
 import { FiltersProvider } from "./contexts/FiltersContext";
 import { RemoteFileUpdatesProvider } from "./contexts/RemoteFileUpdatesContext";
 import { checkPopplerStatus, clearDatabaseImportResult, takeDatabaseImportResult, type DatabaseImportResult } from "./lib/api";
@@ -154,20 +156,24 @@ function App() {
   }
 
   return (
-    <HashRouter>
-      <FiltersProvider>
-        <RemoteFileUpdatesProvider>
-          <AiAssistantProvider>
-            <AppShell popplerMissing={popplerMissing} importResult={importResult} clearImportResult={() => {
-              clearDatabaseImportResult().then(() => {
-                localStorage.removeItem("database-import-events");
-                setImportResult(null);
-              }).catch(() => {});
-            }} />
-          </AiAssistantProvider>
-        </RemoteFileUpdatesProvider>
-      </FiltersProvider>
-    </HashRouter>
+    <AuthProvider>
+      <AuthGate>
+        <HashRouter>
+          <FiltersProvider>
+            <RemoteFileUpdatesProvider>
+              <AiAssistantProvider>
+                <AppShell popplerMissing={popplerMissing} importResult={importResult} clearImportResult={() => {
+                  clearDatabaseImportResult().then(() => {
+                    localStorage.removeItem("database-import-events");
+                    setImportResult(null);
+                  }).catch(() => {});
+                }} />
+              </AiAssistantProvider>
+            </RemoteFileUpdatesProvider>
+          </FiltersProvider>
+        </HashRouter>
+      </AuthGate>
+    </AuthProvider>
   );
 }
 

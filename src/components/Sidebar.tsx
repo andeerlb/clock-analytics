@@ -1,6 +1,7 @@
 import type { Update } from "@tauri-apps/plugin-updater";
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
+import SidebarAccount from "./SidebarAccount";
 import UpdateModal from "./UpdateModal";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { checkForUpdate } from "../lib/updateCheck";
@@ -187,6 +188,8 @@ export default function Sidebar() {
           <MenuIcon path={ICONS.settings} />
           <span className="app-nav-label">Configurações</span>
         </NavLink>
+
+        <SidebarAccount collapsed={collapsed} />
       </div>
 
       {showUpdateModal && availableUpdate && (

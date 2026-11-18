@@ -12,9 +12,18 @@ const API_BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 type TokenProvider = () => Promise<string | null>;
 let tokenProvider: TokenProvider = async () => null;
 
-/** Set by the login layer once Firebase Auth is wired in. */
+/** Set by `AuthProvider`: hands out the signed-in user's Firebase ID token (refreshed by Firebase as needed). */
 export function setAuthTokenProvider(provider: TokenProvider): void {
   tokenProvider = provider;
+}
+
+/** 401 = the session is no longer valid; 403 = this e-mail lost access. */
+type AuthFailureHandler = (status: 401 | 403) => void;
+let authFailureHandler: AuthFailureHandler = () => {};
+
+/** Set by `AuthProvider`, so any screen's API call can trigger "sessão expirou" / "sem acesso". */
+export function setAuthFailureHandler(handler: AuthFailureHandler): void {
+  authFailureHandler = handler;
 }
 
 export class ApiError extends Error {
@@ -49,6 +58,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     } catch {
       // Not JSON (proxy error page, etc.) — keep the generic message.
     }
+    if (response.status === 401 || response.status === 403) authFailureHandler(response.status);
     throw new ApiError(message, response.status);
   }
 
