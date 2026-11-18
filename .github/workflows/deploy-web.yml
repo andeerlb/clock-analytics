@@ -1,13 +1,16 @@
 name: Deploy web
 
 # Run by hand (Actions → Deploy web → Run workflow, branch `web`); a push no
-# longer deploys. It tests, builds and publishes the web version:
+# longer deploys. "O que publicar" picks the parts: tudo (default), só o
+# servidor, or só o site. It tests, builds and publishes:
 #   1. server: cargo test → release build → binary to the releases bucket.
 #      The VM checks that bucket every minute, installs the new binary and
 #      rolls back on its own if it doesn't come up (infra/startup.sh.tftpl).
 #   2. web: waits until the VM answers /api/version with this commit, then
 #      builds the frontend and publishes it to Firebase Hosting — so the
-#      new screens never go live before the API they call.
+#      new screens never go live before the API they call. With "só o site"
+#      there's no server to wait for: use it only when the screens don't
+#      need anything new from the server.
 #
 # Authentication is keyless (Workload Identity Federation, infra/deploy.tf):
 # nothing secret is stored in GitHub. Every project-specific value comes from
@@ -23,6 +26,15 @@ name: Deploy web
 # (attribute_condition in infra/deploy.tf).
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: O que publicar
+        type: choice
+        default: tudo
+        options:
+          - tudo
+          - só o servidor
+          - só o site
 
 permissions:
   contents: read
@@ -34,6 +46,7 @@ concurrency:
 
 jobs:
   server:
+    if: inputs.target != 'só o site'
     runs-on: ubuntu-24.04 # same Ubuntu as the VM, so the binary's glibc matches
     environment: production
     env:
@@ -83,6 +96,11 @@ jobs:
 
   web:
     needs: server
+    # Runs after the server when both go out, on its own with "só o site";
+    # never after a failed server job.
+    if: >-
+      always() && inputs.target != 'só o servidor' &&
+      (needs.server.result == 'success' || needs.server.result == 'skipped')
     runs-on: ubuntu-24.04
     environment: production
     env:
@@ -126,6 +144,7 @@ jobs:
         run: yarn build
 
       - name: Wait for the VM to run this commit
+        if: needs.server.result == 'success'
         run: |
           for i in $(seq 1 30); do
             running=$(curl -fsS --max-time 10 "${API_URL}/api/version" || true)

@@ -46,7 +46,10 @@ Até o primeiro deploy do servidor, `https://<subdomínio>.duckdns.org` responde
 ## Deploy
 
 O deploy é **manual**: no GitHub, Actions → **Deploy web** → Run workflow, no ramo `web`
-(ou `gh workflow run deploy-web.yml --ref web`). Um push não publica nada. O workflow
+(ou `gh workflow run deploy-web.yml --ref web`). Um push não publica nada. Em
+**O que publicar** dá para escolher `tudo` (padrão), `só o servidor` ou `só o site`
+(ex.: `gh workflow run deploy-web.yml --ref web -f target="só o site"`). Use `só o site`
+apenas quando as telas não dependem de nada novo do servidor. O workflow
 `.github/workflows/deploy-web.yml`:
 
 1. roda os testes do servidor, compila e manda o binário para o bucket
