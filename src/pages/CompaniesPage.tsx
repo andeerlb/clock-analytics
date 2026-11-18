@@ -1,12 +1,14 @@
 import { Building2, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useReadOnly } from "../components/AreaRoute";
 import PageHeader from "../components/PageHeader";
 import { listCompanies, type CompanyRow } from "../lib/db";
 import { formatCnpj } from "../lib/format";
 
 export default function CompaniesPage() {
   const navigate = useNavigate();
+  const readOnly = useReadOnly();
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -24,10 +26,12 @@ export default function CompaniesPage() {
         title="Empresas"
         subtitle="Cadastre as empresas que podem ser selecionadas ao importar espelhos de ponto."
         actions={
-          <button type="button" onClick={() => navigate("/companies/new")}>
-            <Plus size={15} />
-            Nova empresa
-          </button>
+          !readOnly && (
+            <button type="button" onClick={() => navigate("/companies/new")}>
+              <Plus size={15} />
+              Nova empresa
+            </button>
+          )
         }
       />
 

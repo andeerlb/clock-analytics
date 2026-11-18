@@ -96,11 +96,14 @@ export default function EmployeeTemplateWizard({
   target,
   onClose,
   onSaved,
+  readOnly = false,
 }: {
   /** `null` keeps the wizard unmounted/closed; `"new"` starts a blank template; a row edits it. */
   target: EmployeeTemplateRow | "new" | null;
   onClose: () => void;
   onSaved: () => void;
+  /** View-only profile: the steps can be browsed, but every field is disabled and there's no Salvar. */
+  readOnly?: boolean;
 }) {
   const [stepIndex, setStepIndex] = useState(0);
 
@@ -770,7 +773,7 @@ export default function EmployeeTemplateWizard({
         onClick={(e) => e.stopPropagation()}
       >
         <strong style={{ fontSize: "0.95rem" }}>
-          {isEditing ? "Editar template de colaboradores" : "Novo template de colaboradores"}
+          {isEditing ? (readOnly ? "Template de colaboradores" : "Editar template de colaboradores") : "Novo template de colaboradores"}
         </strong>
         <CloseButton />
       </div>
@@ -788,6 +791,9 @@ export default function EmployeeTemplateWizard({
         onClick={(e) => e.stopPropagation()}
       >
         {error && <div className="error-box" style={{ marginBottom: "1rem" }}>{error}</div>}
+
+        {/* `display: contents` keeps the steps' flex layout; `disabled` still reaches every field inside. */}
+        <fieldset disabled={readOnly} style={{ display: "contents" }}>
 
         {currentStep === "file" && (
           <div className="details-layout">
@@ -1399,6 +1405,7 @@ export default function EmployeeTemplateWizard({
             </div>
           </div>
         )}
+        </fieldset>
       </div>
 
       <div
@@ -1425,6 +1432,8 @@ export default function EmployeeTemplateWizard({
             Avançar
             <ChevronRight size={15} style={{ marginLeft: "0.3rem" }} />
           </button>
+        ) : readOnly ? (
+          <span />
         ) : (
           <button
             type="button"

@@ -1,5 +1,6 @@
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Eye, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
 import ConfirmModal from "../components/ConfirmModal";
 import PageHeader from "../components/PageHeader";
 import EmployeeTemplateWizard from "../components/EmployeeTemplateWizard";
@@ -15,6 +16,7 @@ const FILE_KIND_LABELS: Record<string, string> = {
 };
 
 export default function EmployeeTemplatesPage() {
+  const readOnly = useReadOnly();
   const [templates, setTemplates] = useState<EmployeeTemplateListRow[]>([]);
   const [wizardTarget, setWizardTarget] = useState<EmployeeTemplateRow | "new" | null>(null);
   const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<EmployeeTemplateListRow | null>(null);
@@ -62,10 +64,12 @@ export default function EmployeeTemplatesPage() {
         backLabel="Voltar para Importar colaboradores"
         subtitle="Mapeamento de colunas usado ao importar arquivos de colaboradores — cada template descreve como ler um formato de planilha."
         actions={
-          <button type="button" onClick={() => setWizardTarget("new")}>
-            <Plus size={15} />
-            Novo template
-          </button>
+          !readOnly && (
+            <button type="button" onClick={() => setWizardTarget("new")}>
+              <Plus size={15} />
+              Novo template
+            </button>
+          )
         }
       />
 
@@ -101,18 +105,19 @@ export default function EmployeeTemplatesPage() {
                           className="ghost"
                           style={{ padding: "0.3rem" }}
                           onClick={() => handleEditTemplate(t.id)}
-                          aria-label="Editar"
-                          title="Editar"
+                          aria-label={readOnly ? "Ver" : "Editar"}
+                          title={readOnly ? "Ver" : "Editar"}
                         >
-                          <Pencil size={14} />
+                          {readOnly ? <Eye size={14} /> : <Pencil size={14} />}
                         </button>
                         <button
                           type="button"
                           className="ghost"
                           style={{ padding: "0.3rem" }}
                           onClick={() => setConfirmDeleteTarget(t)}
+                          disabled={readOnly}
                           aria-label="Excluir"
-                          title="Excluir"
+                          title={readOnly ? READ_ONLY_TITLE : "Excluir"}
                         >
                           <Trash2 size={14} />
                         </button>
@@ -128,6 +133,7 @@ export default function EmployeeTemplatesPage() {
 
       <EmployeeTemplateWizard
         target={wizardTarget}
+        readOnly={readOnly}
         onClose={() => setWizardTarget(null)}
         onSaved={() => {
           setWizardTarget(null);

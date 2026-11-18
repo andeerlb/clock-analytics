@@ -1,6 +1,7 @@
 import { Building2, Calculator, Info, Moon, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
 import FormPanel from "../components/FormPanel";
 import NightShiftRuleFields from "../components/NightShiftRuleFields";
 import PageHeader from "../components/PageHeader";
@@ -27,6 +28,7 @@ export default function ClientFormPage() {
   const { id } = useParams<{ id: string }>();
   const isEditing = id !== undefined;
   const navigate = useNavigate();
+  const readOnly = useReadOnly();
 
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   // Editing: companies already linked in the DB (add/remove act on it right
@@ -200,11 +202,11 @@ export default function ClientFormPage() {
   return (
     <div>
       <PageHeader
-        title={isEditing ? "Editar cliente" : "Novo cliente"}
+        title={isEditing ? (readOnly ? "Cliente" : "Editar cliente") : "Novo cliente"}
         backFallback="/clients"
         backLabel="Voltar para Clientes"
         actions={
-          !loading && (
+          !loading && !readOnly && (
             <>
               {dirty && (
                 <span className="form-dirty">
@@ -230,6 +232,8 @@ export default function ClientFormPage() {
       {loading ? (
         <p className="muted">Carregando...</p>
       ) : (
+        // View-only profile: everything stays readable, nothing editable.
+        <fieldset disabled={readOnly} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         <form id="client-form" onSubmit={handleSubmit} className="details-main" style={{ maxWidth: "52rem" }}>
           <FormPanel icon={Building2} title="Empresas vinculadas">
             <div className="field">
@@ -248,7 +252,8 @@ export default function ClientFormPage() {
                           className="ghost"
                           style={{ padding: "0.3rem" }}
                           onClick={() => handleRemoveCompany(c.id)}
-                          disabled={companyBusy}
+                          disabled={readOnly || companyBusy}
+                          title={readOnly ? READ_ONLY_TITLE : undefined}
                           aria-label="Remover"
                         >
                           <X size={14} />
@@ -264,7 +269,7 @@ export default function ClientFormPage() {
                   Nenhuma empresa cadastrada. <Link to="/companies">Cadastre uma empresa</Link> antes.
                 </p>
               ) : (
-                addableCompanies.length > 0 && (
+                !readOnly && addableCompanies.length > 0 && (
                   <div style={{ display: "flex", gap: "0.5rem" }}>
                     <select
                       value={addCompanyId}
@@ -356,6 +361,7 @@ export default function ClientFormPage() {
                   if (patch.nightShiftRule !== undefined) setNightShiftRule(patch.nightShiftRule);
                 }}
                 idPrefix="client"
+                readOnly={readOnly}
               />
             ) : (
               companyValueRules.map((c) => (
@@ -396,7 +402,7 @@ export default function ClientFormPage() {
               </div>
             </div>
             {ownValueRules ? (
-              <PaymentValueRulesEditor valueRules={valueRules} onChange={setValueRules} companyIds={currentCompanies.map((c) => c.id)} />
+              <PaymentValueRulesEditor valueRules={valueRules} onChange={setValueRules} companyIds={currentCompanies.map((c) => c.id)} readOnly={readOnly} />
             ) : (
               companyValueRules.map((c) => (
                 <div key={c.id}>
@@ -412,6 +418,7 @@ export default function ClientFormPage() {
           </FormPanel>
 
         </form>
+        </fieldset>
       )}
     </div>
   );

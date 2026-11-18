@@ -2,6 +2,7 @@ import { Briefcase, Info, KeyRound, Plus, Tags, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import ConfirmModal from "../components/ConfirmModal";
+import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
 import FormPanel from "../components/FormPanel";
 import PageHeader from "../components/PageHeader";
 import {
@@ -46,6 +47,7 @@ export default function EmployeeFormPage() {
   const { id } = useParams<{ id: string }>();
   const isEditing = id !== undefined;
   const navigate = useNavigate();
+  const readOnly = useReadOnly();
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const pixSectionRef = useRef<HTMLDivElement>(null);
@@ -314,7 +316,7 @@ export default function EmployeeFormPage() {
   return (
     <div>
       <PageHeader
-        title={isEditing ? "Editar colaborador" : "Novo colaborador"}
+        title={isEditing ? (readOnly ? "Colaborador" : "Editar colaborador") : "Novo colaborador"}
         backFallback="/employees"
         backLabel="Voltar para Colaboradores"
         subtitle={
@@ -326,7 +328,8 @@ export default function EmployeeFormPage() {
 
       {error && <div className="error-box">{error}</div>}
 
-      <div className="details-main" style={{ maxWidth: "52rem" }}>
+      {/* View-only profile: everything stays readable, nothing editable. */}
+      <fieldset disabled={readOnly} className="details-main" style={{ maxWidth: "52rem", border: 0, padding: 0, margin: 0 }}>
         {loading ? (
           <p className="muted">Carregando...</p>
         ) : (
@@ -418,9 +421,11 @@ export default function EmployeeFormPage() {
                 )}
               </div>
 
-              <button type="submit" disabled={busy}>
-                {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
-              </button>
+              {!readOnly && (
+                <button type="submit" disabled={busy}>
+                  {busy ? "Salvando..." : isEditing ? "Salvar" : "Cadastrar"}
+                </button>
+              )}
             </form>
           </FormPanel>
         )}
@@ -448,26 +453,29 @@ export default function EmployeeFormPage() {
                     >
                       {PIX_KEY_TYPES.map((type) => <option key={type} value={type}>{PIX_KEY_TYPE_LABELS[type]}</option>)}
                     </select>
-                    <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={() => handleRemovePixKey(key.id)} aria-label="Remover chave PIX">
+                    <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={() => handleRemovePixKey(key.id)} disabled={readOnly} title={readOnly ? READ_ONLY_TITLE : undefined} aria-label="Remover chave PIX">
                       <X size={14} />
                     </button>
                   </div>
                 ))}
               </div>
             )}
-            <form onSubmit={handleAddPixKey} style={{ display: "flex", gap: "0.5rem" }}>
-              <input
-                type="text"
-                value={newPixKey}
-                onChange={(e) => setNewPixKey(e.target.value)}
-                placeholder="CPF, CNPJ, telefone, e-mail ou chave aleatória"
-                style={{ flex: 1 }}
-              />
-              <button type="submit" className="secondary" disabled={pixBusy || !newPixKey.trim()}>
-                <Plus size={14} style={{ marginRight: "0.3rem" }} />
-                Adicionar
-              </button>
-            </form>
+            {readOnly && pixKeys.length === 0 && <p className="muted">Nenhuma chave PIX cadastrada.</p>}
+            {!readOnly && (
+              <form onSubmit={handleAddPixKey} style={{ display: "flex", gap: "0.5rem" }}>
+                <input
+                  type="text"
+                  value={newPixKey}
+                  onChange={(e) => setNewPixKey(e.target.value)}
+                  placeholder="CPF, CNPJ, telefone, e-mail ou chave aleatória"
+                  style={{ flex: 1 }}
+                />
+                <button type="submit" className="secondary" disabled={pixBusy || !newPixKey.trim()}>
+                  <Plus size={14} style={{ marginRight: "0.3rem" }} />
+                  Adicionar
+                </button>
+              </form>
+            )}
           </FormPanel>
           </div>
         )}
@@ -511,8 +519,8 @@ export default function EmployeeFormPage() {
                       className="ghost"
                       style={{ padding: "0.3rem" }}
                       onClick={() => handleRemoveLink(l.clientId, l.companyId)}
-                      disabled={links.length <= 1}
-                      title={links.length <= 1 ? "O colaborador precisa de ao menos um vínculo" : "Remover vínculo"}
+                      disabled={readOnly || links.length <= 1}
+                      title={readOnly ? READ_ONLY_TITLE : links.length <= 1 ? "O colaborador precisa de ao menos um vínculo" : "Remover vínculo"}
                       aria-label="Remover vínculo"
                     >
                       <X size={14} />
@@ -522,49 +530,51 @@ export default function EmployeeFormPage() {
               ))}
             </div>
 
-            <form onSubmit={handleAddLink} style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-              <select
-                value={addClientId}
-                onChange={(e) => {
-                  setAddClientId(e.target.value);
-                  setAddCompanyId("");
-                }}
-                required
-                style={{ flex: "1 1 160px" }}
-              >
-                <option value="">Vincular a outro cliente...</option>
-                {Array.from(new Map(clients.map((c) => [c.id, c])).values()).map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={addCompanyId}
-                onChange={(e) => setAddCompanyId(e.target.value)}
-                required
-                disabled={!addClientId}
-                style={{ flex: "1 1 160px" }}
-              >
-                <option value="">Empresa...</option>
-                {availableLinksToAdd.map((c) => (
-                  <option key={c.companyId} value={c.companyId}>
-                    {c.companyName}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="text"
-                value={addMatricula}
-                onChange={(e) => setAddMatricula(e.target.value)}
-                placeholder="Matrícula (opcional)"
-                style={{ width: "10rem" }}
-              />
-              <button type="submit" className="secondary" disabled={linkBusy || !addClientId || !addCompanyId}>
-                <Plus size={14} style={{ marginRight: "0.3rem" }} />
-                Vincular
-              </button>
-            </form>
+            {!readOnly && (
+              <form onSubmit={handleAddLink} style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                <select
+                  value={addClientId}
+                  onChange={(e) => {
+                    setAddClientId(e.target.value);
+                    setAddCompanyId("");
+                  }}
+                  required
+                  style={{ flex: "1 1 160px" }}
+                >
+                  <option value="">Vincular a outro cliente...</option>
+                  {Array.from(new Map(clients.map((c) => [c.id, c])).values()).map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={addCompanyId}
+                  onChange={(e) => setAddCompanyId(e.target.value)}
+                  required
+                  disabled={!addClientId}
+                  style={{ flex: "1 1 160px" }}
+                >
+                  <option value="">Empresa...</option>
+                  {availableLinksToAdd.map((c) => (
+                    <option key={c.companyId} value={c.companyId}>
+                      {c.companyName}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  value={addMatricula}
+                  onChange={(e) => setAddMatricula(e.target.value)}
+                  placeholder="Matrícula (opcional)"
+                  style={{ width: "10rem" }}
+                />
+                <button type="submit" className="secondary" disabled={linkBusy || !addClientId || !addCompanyId}>
+                  <Plus size={14} style={{ marginRight: "0.3rem" }} />
+                  Vincular
+                </button>
+              </form>
+            )}
           </FormPanel>
         )}
 
@@ -591,6 +601,8 @@ export default function EmployeeFormPage() {
                         className="ghost"
                         style={{ padding: "0.3rem" }}
                         onClick={() => handleRemoveAlias(a.id)}
+                        disabled={readOnly}
+                        title={readOnly ? READ_ONLY_TITLE : undefined}
                         aria-label="Remover"
                       >
                         <X size={14} />
@@ -601,23 +613,26 @@ export default function EmployeeFormPage() {
               </div>
             )}
 
-            <form onSubmit={handleAddAlias} style={{ display: "flex", gap: "0.5rem" }}>
-              <input
-                type="text"
-                value={newAlias}
-                onChange={(e) => setNewAlias(e.target.value)}
-                placeholder="Ex.: Anderson Lucas"
-                style={{ flex: 1 }}
-              />
-              <button type="submit" className="secondary" disabled={aliasBusy || !newAlias.trim()}>
-                <Plus size={14} style={{ marginRight: "0.3rem" }} />
-                Adicionar
-              </button>
-            </form>
+            {readOnly && aliases.length === 0 && <p className="muted">Nenhum outro nome cadastrado.</p>}
+            {!readOnly && (
+              <form onSubmit={handleAddAlias} style={{ display: "flex", gap: "0.5rem" }}>
+                <input
+                  type="text"
+                  value={newAlias}
+                  onChange={(e) => setNewAlias(e.target.value)}
+                  placeholder="Ex.: Anderson Lucas"
+                  style={{ flex: 1 }}
+                />
+                <button type="submit" className="secondary" disabled={aliasBusy || !newAlias.trim()}>
+                  <Plus size={14} style={{ marginRight: "0.3rem" }} />
+                  Adicionar
+                </button>
+              </form>
+            )}
           </FormPanel>
         )}
 
-        {!loading && isEditing && (
+        {!loading && isEditing && !readOnly && (
           <FormPanel
             icon={Trash2}
             title="Excluir colaborador"
@@ -630,7 +645,7 @@ export default function EmployeeFormPage() {
             </button>
           </FormPanel>
         )}
-      </div>
+      </fieldset>
 
       {deleteConfirmOpen && !forceDelete && (
         <ConfirmModal

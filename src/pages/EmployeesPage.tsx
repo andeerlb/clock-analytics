@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import OptionPicker from "../components/OptionPicker";
 import Pagination from "../components/Pagination";
+import { useReadOnly } from "../components/AreaRoute";
 import PageHeader from "../components/PageHeader";
 import { listClients, listCompanies, listEmployeesGlobal, type ClientRow, type CompanyRow, type EmployeeRow } from "../lib/db";
 import { formatCnpj, formatCpf } from "../lib/format";
@@ -12,6 +13,7 @@ const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 export default function EmployeesPage() {
   const navigate = useNavigate();
+  const readOnly = useReadOnly();
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
   const [total, setTotal] = useState(0);
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
@@ -98,10 +100,12 @@ export default function EmployeesPage() {
         title="Colaboradores"
         subtitle="Cadastro de colaboradores, independente de espelho de ponto ou pagamento importado. O CPF é único por cliente — o mesmo CPF pode existir para clientes diferentes."
         actions={
-          <button type="button" onClick={() => navigate("/employees/new")}>
-            <Plus size={15} />
-            Novo colaborador
-          </button>
+          !readOnly && (
+            <button type="button" onClick={() => navigate("/employees/new")}>
+              <Plus size={15} />
+              Novo colaborador
+            </button>
+          )
         }
       />
 
