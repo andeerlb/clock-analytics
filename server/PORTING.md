@@ -137,6 +137,11 @@ precisa ler o banco no meio do caminho.
   na pasta" depois de exportar podem sair.
 - Eventos: `../lib/events` (`emit`/`listen`/`emitTo`) já substitui `@tauri-apps/api/event` em todos os arquivos.
 
+## 3.2 Código do servidor chamando outras funções portadas
+`routes::call(&state, handler, json!({...}))` chama um handler RPC por dentro do servidor, com os
+mesmos argumentos JSON que o frontend mandaria. A verificação automática (`src/remote_checks/`)
+usa isso para rodar exatamente o mesmo código da tela de importação.
+
 ## 4. Regras do trabalho em paralelo
 - Mexa só nos arquivos do seu domínio: `server/src/routes/<domínio>.rs` e as
   funções e telas do seu domínio em `src/`.
@@ -154,7 +159,7 @@ precisa ler o banco no meio do caminho.
 ```sh
 # cópia do banco real (só leitura do original)
 sqlite3 ~/.config/com.andeerlb.pontoscan/pontoscan.db ".backup '/tmp/<pasta>/pontoscan.db'"
-cd server && PONTOSCAN_DEV_USER_EMAIL=dev@local PONTOSCAN_DB_PATH=/tmp/<pasta>/pontoscan.db PONTOSCAN_BIND=127.0.0.1:<porta> cargo run
+cd server && PONTOSCAN_REMOTE_CHECKS=off PONTOSCAN_DEV_USER_EMAIL=dev@local PONTOSCAN_DB_PATH=/tmp/<pasta>/pontoscan.db PONTOSCAN_BIND=127.0.0.1:<porta> cargo run
 PONTOSCAN_API_PROXY=http://127.0.0.1:<porta> npx vite --port <porta-vite> --strictPort
 ```
 Sem `.env.local` com `VITE_FIREBASE_*`, o app abre sem login.

@@ -752,14 +752,14 @@ export interface TrackedPaymentUrl {
   lastCheckedAt: string | null;
   lastResult: UrlCheckResult | null;
   lastErrorMessage: string | null;
-  /** The remote signature (etag/lastModified/contentLength) the last deep check (download+parse+diff) ran against — `null` before the first one. Compared against a fresh header check's own signature to decide whether a new deep pass is needed (see `RemoteFileUpdatesContext.runChecks`), independent of `sourceEtag`/etc. above, which only update on an actual saved reimport. */
+  /** The remote signature (etag/lastModified/contentLength) the last deep check (download+parse+diff) ran against — `null` before the first one. Compared against a fresh header check's own signature to decide whether a new deep pass is needed (see `run_one` in server/src/remote_checks/runner.rs), independent of `sourceEtag`/etc. above, which only update on an actual saved reimport. */
   lastDeepCheckEtag: string | null;
   lastDeepCheckLastModified: string | null;
   lastDeepCheckContentLength: number | null;
   lastDeepCheckAt: string | null;
-  /** What the last deep check actually found for this exact signature — 'changed' only when a real field/new-shift diff turned up, 'unchanged' when it ran clean and found nothing, 'error' when it couldn't finish. This, not the header check, is what a check attempt logs as its `result` (see `RemoteFileUpdatesContext.runChecks`) — a header-only "changed" against an already-deep-checked signature reuses this instead of re-downloading to say the same thing again. */
+  /** What the last deep check actually found for this exact signature — 'changed' only when a real field/new-shift diff turned up, 'unchanged' when it ran clean and found nothing, 'error' when it couldn't finish. This, not the header check, is what a check attempt logs as its `result` (see `run_one` in server/src/remote_checks/runner.rs) — a header-only "changed" against an already-deep-checked signature reuses this instead of re-downloading to say the same thing again. */
   lastDeepCheckResult: UrlCheckResult | null;
-  /** The `source_url_check_log.id` whose `source_url_check_diffs` rows are the cached ones above — a check that reuses this signature's verdict copies those same diff rows onto its own id (see `copyCheckDiffs`), so its own "Detalhes" is never blank just because the download/parse itself was skipped. */
+  /** The `source_url_check_log.id` whose `source_url_check_diffs` rows are the cached ones above — a check that reuses this signature's verdict copies those same diff rows onto its own id (see `copy_check_diffs` in server/src/remote_checks/runner.rs), so its own "Detalhes" is never blank just because the download/parse itself was skipped. */
   lastDeepCheckLogId: number | null;
 }
 
@@ -772,38 +772,7 @@ export interface TrackedPaymentUrl {
  * `ReimportConfig` instead (see `listReimportConfigs`).
  */
 export async function listTrackedPaymentUrls(): Promise<TrackedPaymentUrl[]> {
-  const db = await getDb();
-  return db.select<TrackedPaymentUrl[]>(
-    `SELECT
-       sf.source_url AS sourceUrl,
-       sf.file_name AS fileName,
-       sf.provider,
-       sf.imported_at AS importedAt,
-       sf.source_etag AS sourceEtag,
-       sf.source_last_modified AS sourceLastModified,
-       sf.source_content_length AS sourceContentLength,
-       log.checked_at AS lastCheckedAt,
-       log.result AS lastResult,
-       log.message AS lastErrorMessage,
-       sus.last_deep_check_etag AS lastDeepCheckEtag,
-       sus.last_deep_check_last_modified AS lastDeepCheckLastModified,
-       sus.last_deep_check_content_length AS lastDeepCheckContentLength,
-       sus.last_deep_check_at AS lastDeepCheckAt,
-       sus.last_deep_check_result AS lastDeepCheckResult,
-       sus.last_deep_check_log_id AS lastDeepCheckLogId
-     FROM (
-       SELECT *, ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY imported_at DESC) AS rn
-       FROM source_files
-       WHERE import_type = 'payment' AND source_url IS NOT NULL
-     ) sf
-     LEFT JOIN source_url_settings sus ON sus.source_url = sf.source_url
-     LEFT JOIN (
-       SELECT *, ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY checked_at DESC) AS rn
-       FROM source_url_check_log
-     ) log ON log.source_url = sf.source_url AND log.rn = 1
-     WHERE sf.rn = 1 AND COALESCE(sus.tracking_enabled, 0) = 1
-     ORDER BY sf.imported_at DESC`,
-  );
+  return rpc<TrackedPaymentUrl[]>("listTrackedPaymentUrls");
 }
 
 /** "month" = "Mês atual": from the 1st of the current month to today (see `resolveReimportPeriod`). */
@@ -851,43 +820,7 @@ export const DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES = 5;
  * one runs on its own check schedule (see `RemoteFileUpdatesContext`).
  */
 export async function listReimportConfigs(): Promise<ReimportConfig[]> {
-  const db = await getDb();
-  const rawRows = await db.select<
-    (Omit<ReimportConfig, "checkDisabled" | "keepManualEdits" | "autoApplyEnabled" | "autoApplyOverwriteManualEdits" | "autoApplyOverwritePaid"> & {
-      checkDisabled: number;
-      keepManualEdits: number;
-      autoApplyEnabled: number;
-      autoApplyOverwriteManualEdits: number;
-      autoApplyOverwritePaid: number;
-    })[]
-  >(
-    `SELECT
-       c.id, c.source_url AS sourceUrl, c.label,
-       c.template_id AS templateId, pt.name AS templateName,
-       c.date_mode AS dateMode,
-       c.period_start AS periodStart, c.period_end AS periodEnd,
-       c.start_offset_days AS startOffsetDays, c.end_offset_days AS endOffsetDays,
-       c.check_disabled AS checkDisabled, c.check_interval_minutes AS checkIntervalMinutes,
-       c.keep_manual_edits AS keepManualEdits,
-       c.auto_apply_enabled AS autoApplyEnabled,
-       c.auto_apply_overwrite_manual_edits AS autoApplyOverwriteManualEdits,
-       c.auto_apply_overwrite_paid AS autoApplyOverwritePaid,
-       (SELECT MAX(l.checked_at)
-        FROM source_url_check_log_configs jc
-        JOIN source_url_check_log l ON l.id = jc.check_log_id
-        WHERE jc.config_id = c.id) AS lastCheckedAt
-     FROM source_url_reimport_configs c
-     LEFT JOIN payment_templates pt ON pt.id = c.template_id
-     ORDER BY c.created_at`,
-  );
-  return rawRows.map((r) => ({
-    ...r,
-    checkDisabled: Boolean(r.checkDisabled),
-    keepManualEdits: Boolean(r.keepManualEdits),
-    autoApplyEnabled: Boolean(r.autoApplyEnabled),
-    autoApplyOverwriteManualEdits: Boolean(r.autoApplyOverwriteManualEdits),
-    autoApplyOverwritePaid: Boolean(r.autoApplyOverwritePaid),
-  }));
+  return rpc<ReimportConfig[]>("listReimportConfigs");
 }
 
 export interface ReimportConfigInput {
@@ -907,30 +840,7 @@ export interface ReimportConfigInput {
 }
 
 export async function createReimportConfig(input: ReimportConfigInput): Promise<number> {
-  const db = await getDb();
-  const result = await db.execute(
-    `INSERT INTO source_url_reimport_configs
-       (source_url, label, template_id, date_mode, period_start, period_end, start_offset_days, end_offset_days,
-        check_interval_minutes, keep_manual_edits, auto_apply_enabled, auto_apply_overwrite_manual_edits,
-        auto_apply_overwrite_paid)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-    [
-      input.sourceUrl,
-      input.label,
-      input.templateId,
-      input.dateMode,
-      input.periodStart,
-      input.periodEnd,
-      input.startOffsetDays,
-      input.endOffsetDays,
-      input.checkIntervalMinutes,
-      input.keepManualEdits ? 1 : 0,
-      input.autoApplyEnabled ? 1 : 0,
-      input.autoApplyOverwriteManualEdits ? 1 : 0,
-      input.autoApplyOverwritePaid ? 1 : 0,
-    ],
-  );
-  return result.lastInsertId as number;
+  return rpc<number>("createReimportConfig", { input });
 }
 
 /** Template is deliberately not editable here — see the Verificação automática page's own comment on why (changing it on an existing config risks silently reinterpreting the column mapping). Delete and recreate instead. */
@@ -938,49 +848,18 @@ export async function updateReimportConfig(
   id: number,
   input: Omit<ReimportConfigInput, "sourceUrl" | "templateId">,
 ): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `UPDATE source_url_reimport_configs SET
-       label = $2, date_mode = $3, period_start = $4, period_end = $5,
-       start_offset_days = $6, end_offset_days = $7, check_interval_minutes = $8,
-       keep_manual_edits = $9, auto_apply_enabled = $10, auto_apply_overwrite_manual_edits = $11,
-       auto_apply_overwrite_paid = $12, updated_at = datetime('now')
-     WHERE id = $1`,
-    [
-      id,
-      input.label,
-      input.dateMode,
-      input.periodStart,
-      input.periodEnd,
-      input.startOffsetDays,
-      input.endOffsetDays,
-      input.checkIntervalMinutes,
-      input.keepManualEdits ? 1 : 0,
-      input.autoApplyEnabled ? 1 : 0,
-      input.autoApplyOverwriteManualEdits ? 1 : 0,
-      input.autoApplyOverwritePaid ? 1 : 0,
-    ],
-  );
+  await rpc<void>("updateReimportConfig", { id, input });
 }
 
 /** Independent of `updateReimportConfig` — this is an immediate on/off toggle, not part of the edit-then-Salvar draft flow. */
 export async function setConfigCheckDisabled(id: number, disabled: boolean): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    "UPDATE source_url_reimport_configs SET check_disabled = $2, updated_at = datetime('now') WHERE id = $1",
-    [id, disabled ? 1 : 0],
-  );
+  await rpc<void>("setConfigCheckDisabled", { id, disabled });
 }
 
 export async function deleteReimportConfig(id: number): Promise<void> {
-  // Unlike source_url_check_diffs (which keeps a config_label snapshot for
-  // audit even after the config is gone), this table has no audit value on
-  // its own — it's pure scheduling bookkeeping (see `isConfigDue`), so once
-  // the config no longer exists there's nothing left to compute from it.
-  await runWriteBatch([
-    { sql: "DELETE FROM source_url_check_log_configs WHERE config_id = $1", params: [id] },
-    { sql: "DELETE FROM source_url_reimport_configs WHERE id = $1", params: [id] },
-  ]);
+  // Also drops the config's scheduling rows (source_url_check_log_configs);
+  // the diffs keep their own config_label snapshot for the history.
+  await rpc<void>("deleteReimportConfig", { id });
 }
 
 /**
@@ -990,22 +869,7 @@ export async function deleteReimportConfig(id: number): Promise<void> {
  * URL," not "undo what was ever imported from it."
  */
 export async function untrackPaymentUrl(sourceUrl: string): Promise<void> {
-  const params = [sourceUrl];
-  await runWriteBatch([
-    {
-      sql: `DELETE FROM source_url_check_diffs
-     WHERE check_log_id IN (SELECT id FROM source_url_check_log WHERE source_url = $1)`,
-      params,
-    },
-    {
-      sql: `DELETE FROM source_url_check_log_configs
-     WHERE check_log_id IN (SELECT id FROM source_url_check_log WHERE source_url = $1)`,
-      params,
-    },
-    { sql: "DELETE FROM source_url_check_log WHERE source_url = $1", params },
-    { sql: "DELETE FROM source_url_reimport_configs WHERE source_url = $1", params },
-    { sql: "DELETE FROM source_url_settings WHERE source_url = $1", params },
-  ]);
+  await rpc<void>("untrackPaymentUrl", { sourceUrl });
 }
 
 /**
@@ -1025,82 +889,6 @@ export async function trackUrlForAutoReimport(
   keepManualEdits: boolean,
 ): Promise<void> {
   await rpc<void>("trackUrlForAutoReimport", { sourceUrl, templateId, periodStart, periodEnd, keepManualEdits });
-}
-
-const MAX_CHECK_LOG_ENTRIES_PER_URL = 200;
-
-/** A reimport config THIS check attempt actually evaluated, snapshotted at evaluation time — see `logUrlCheckResult`. */
-export interface EvaluatedConfigSnapshot {
-  id: number;
-  templateId: number;
-  templateName: string | null;
-  periodStart: string | null;
-  periodEnd: string | null;
-}
-
-/**
- * Records one check attempt and prunes older entries for that URL beyond
- * the last 200, so the log stays bounded regardless of how short the check
- * interval is. `evaluatedConfigs` are the reimport configs THIS attempt
- * actually evaluated (never "every config the URL has" — see
- * `RemoteFileUpdatesContext.runChecks`), recorded in
- * `source_url_check_log_configs` — template/período snapshotted as of this
- * exact evaluation, not read live off `source_url_reimport_configs`, so a
- * later edit or delete of the config never rewrites what a past check
- * actually used — so each config's own due-ness/history is independent of
- * any sibling config sharing the same URL. Returns the inserted row's id, so
- * a deep check that runs right after can link its diffs back to this exact
- * attempt.
- */
-export async function logUrlCheckResult(
-  sourceUrl: string,
-  fileName: string,
-  result: UrlCheckResult,
-  message: string | null,
-  evaluatedConfigs: EvaluatedConfigSnapshot[],
-  /** Who saved the version this check downloaded; `null` when nothing was downloaded or the format says nothing. */
-  author: FileAuthor | null = null,
-): Promise<number> {
-  const db = await getDb();
-  const inserted = await db.execute(
-    `INSERT INTO source_url_check_log (source_url, file_name, result, message, saved_by, saved_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-    [sourceUrl, fileName, result, message, author?.savedBy ?? null, author?.savedAt ?? null],
-  );
-  const checkLogId = inserted.lastInsertId as number;
-  for (const config of evaluatedConfigs) {
-    await db.execute(
-      `INSERT INTO source_url_check_log_configs (check_log_id, config_id, template_id, template_name, period_start, period_end)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [checkLogId, config.id, config.templateId, config.templateName, config.periodStart, config.periodEnd],
-    );
-  }
-  await db.execute(
-    `DELETE FROM source_url_check_diffs
-     WHERE check_log_id IN (
-       SELECT id FROM source_url_check_log
-       WHERE source_url = $1
-         AND id NOT IN (SELECT id FROM source_url_check_log WHERE source_url = $1 ORDER BY checked_at DESC LIMIT $2)
-     )`,
-    [sourceUrl, MAX_CHECK_LOG_ENTRIES_PER_URL],
-  );
-  await db.execute(
-    `DELETE FROM source_url_check_log_configs
-     WHERE check_log_id IN (
-       SELECT id FROM source_url_check_log
-       WHERE source_url = $1
-         AND id NOT IN (SELECT id FROM source_url_check_log WHERE source_url = $1 ORDER BY checked_at DESC LIMIT $2)
-     )`,
-    [sourceUrl, MAX_CHECK_LOG_ENTRIES_PER_URL],
-  );
-  await db.execute(
-    `DELETE FROM source_url_check_log
-     WHERE source_url = $1
-       AND id NOT IN (
-         SELECT id FROM source_url_check_log WHERE source_url = $1 ORDER BY checked_at DESC LIMIT $2
-       )`,
-    [sourceUrl, MAX_CHECK_LOG_ENTRIES_PER_URL],
-  );
-  return checkLogId;
 }
 
 export interface UrlCheckLogEntry {
@@ -1142,38 +930,7 @@ export async function listUrlCheckLogForConfig(
   limit: number,
   offset: number = 0,
 ): Promise<UrlCheckLogEntry[]> {
-  const db = await getDb();
-  const rawRows = await db.select<(Omit<UrlCheckLogEntry, "hasOwnError"> & { hasOwnError: number })[]>(
-    `SELECT l.id, l.source_url AS sourceUrl, l.file_name AS fileName, l.checked_at AS checkedAt, l.result, l.message,
-            l.saved_by AS savedBy, l.saved_at AS savedAt,
-            jc.template_id AS templateId, jc.template_name AS templateName,
-            jc.period_start AS periodStart, jc.period_end AS periodEnd,
-            (SELECT COUNT(*) FROM source_url_check_diffs d WHERE d.check_log_id = l.id AND d.config_id = $1) AS diffCount,
-            (SELECT MAX(CASE WHEN d.change_kind = 'error' THEN 1 ELSE 0 END)
-             FROM source_url_check_diffs d WHERE d.check_log_id = l.id AND d.config_id = $1) AS hasOwnError,
-            (SELECT d.id FROM source_url_check_diffs d
-             WHERE d.check_log_id = l.id AND d.change_kind = 'error' AND (d.config_id = $1 OR d.config_id IS NULL)
-             ORDER BY (d.config_id IS NULL) ASC LIMIT 1) AS errorDiffId,
-            (SELECT d.dismissed_at FROM source_url_check_diffs d
-             WHERE d.check_log_id = l.id AND d.change_kind = 'error' AND (d.config_id = $1 OR d.config_id IS NULL)
-             ORDER BY (d.config_id IS NULL) ASC LIMIT 1) AS errorDismissedAt
-     FROM source_url_check_log l
-     JOIN source_url_check_log_configs jc ON jc.check_log_id = l.id AND jc.config_id = $1
-     ORDER BY l.checked_at DESC
-     LIMIT $2 OFFSET $3`,
-    [configId, limit, offset],
-  );
-  return rawRows.map((r) => ({ ...r, hasOwnError: Boolean(r.hasOwnError) }));
-}
-
-/** Config ids a given check attempt actually evaluated — used to decide whether a cached deep-check verdict can be reused for a NEW set of configs (only safe when every one of them was already covered by that same attempt), see `RemoteFileUpdatesContext.runChecks`. */
-export async function listCheckLogConfigIds(checkLogId: number): Promise<number[]> {
-  const db = await getDb();
-  const rows = await db.select<{ configId: number }[]>(
-    `SELECT config_id AS configId FROM source_url_check_log_configs WHERE check_log_id = $1`,
-    [checkLogId],
-  );
-  return rows.map((r) => r.configId);
+  return rpc<UrlCheckLogEntry[]>("listUrlCheckLogForConfig", { configId, limit, offset });
 }
 
 export type CheckDiffKind = "field" | "new-shift" | "unresolved" | "error" | "removed";
@@ -1219,176 +976,9 @@ export interface CheckDiffRow {
   savedAt: string | null;
 }
 
-export type CheckDiffInput = Omit<
-  CheckDiffRow,
-  "id" | "checkLogId" | "sourceUrl" | "dismissedAt" | "periodStart" | "periodEnd" | "savedBy" | "savedAt"
->;
-
-/** Who saved a downloaded spreadsheet, from its own properties — see `read_spreadsheet_author` in Rust. */
-export interface FileAuthor {
-  savedBy: string | null;
-  savedAt: string | null;
-}
-
-type CheckDiffRowRaw = Omit<CheckDiffRow, "applied"> & { applied: number };
-
-function parseCheckDiffRow(r: CheckDiffRowRaw): CheckDiffRow {
-  return { ...r, applied: Boolean(r.applied) };
-}
-
-// U+001F, a control character no real field/message text will ever contain
-// — safe as a delimiter joining fingerprint fields without ambiguity.
-const FINGERPRINT_SEP = "\x1f";
-
-/** Deterministic content signature for a diff — anything that would make two occurrences look meaningfully different to the user, and nothing else (not `id`/`checkLogId`/`createdAt`/`applied`/`configLabel`, which can shift without the underlying problem changing at all). Same shape (field order/coalescing) as the SQL expression `copyCheckDiffs` builds inline — the two MUST stay identical or lookups silently stop matching. */
-function diffContentFingerprint(e: {
-  changeKind: CheckDiffKind;
-  configId: number | null;
-  employeeId: number | null;
-  employeeName: string | null;
-  workDate: string | null;
-  local: string | null;
-  role: string | null;
-  scheduleStartMinutes: number | null;
-  scheduleEndMinutes: number | null;
-  sheetName: string | null;
-  rowNumber: number | null;
-  fieldName: string | null;
-  oldValue: string | null;
-  newValue: string | null;
-  message: string | null;
-}): string {
-  return [
-    e.changeKind,
-    e.configId,
-    e.employeeId,
-    e.employeeName,
-    e.workDate,
-    e.local,
-    e.role,
-    e.scheduleStartMinutes,
-    e.scheduleEndMinutes,
-    e.sheetName,
-    e.rowNumber,
-    e.fieldName,
-    e.oldValue,
-    e.newValue,
-    e.message,
-  ]
-    .map((v) => (v === null || v === undefined ? "" : String(v)))
-    .join(FINGERPRINT_SEP);
-}
-
-/** Same field order as `diffContentFingerprint`, as a SQL expression over `source_url_check_diffs` columns (aliased/unaliased via `prefix`, e.g. `"d."`) — lets `copyCheckDiffs` check fingerprint matches in one bulk `INSERT ... SELECT` instead of a per-row round trip. */
-function fingerprintSqlExpr(prefix: string): string {
-  const cols = [
-    "change_kind",
-    "config_id",
-    "employee_id",
-    "employee_name",
-    "work_date",
-    "local",
-    "role",
-    "schedule_start_minutes",
-    "schedule_end_minutes",
-    "sheet_name",
-    "row_number",
-    "field_name",
-    "old_value",
-    "new_value",
-    "message",
-  ];
-  return cols.map((c) => `COALESCE(${prefix}${c}, '')`).join(` || char(31) || `);
-}
-
-/** Bulk-inserts the deep-check diff for one check attempt — see `computeReimportDiff` (`remoteCheckDiff.ts`) for how these are produced. `sourceUrl` scopes the "Visto" fingerprint lookup (see `diffContentFingerprint`): a new row whose content exactly matches one already dismissed for this URL is inserted already dismissed, so re-alerting only happens when something actually changed. */
-export async function saveCheckDiffs(
-  checkLogId: number,
-  sourceUrl: string,
-  entries: CheckDiffInput[],
-  /** Who saved the version this check downloaded — given to each change that shows up for the first time here. */
-  author: FileAuthor | null = null,
-): Promise<void> {
-  if (entries.length === 0) return;
-  const db = await getDb();
-  for (const e of entries) {
-    const fingerprint = diffContentFingerprint(e);
-    const dismissedMatch = await db.select<{ id: number }[]>(
-      `SELECT id FROM dismissed_diff_fingerprints WHERE source_url = $1 AND fingerprint = $2 LIMIT 1`,
-      [sourceUrl, fingerprint],
-    );
-    // The same change already seen on an earlier check of this URL keeps the
-    // author of the version it first appeared in (even an unknown one, from
-    // before authors were recorded): later checks only saw it again.
-    const earlier = await db.select<{ savedBy: string | null; savedAt: string | null }[]>(
-      `SELECT d.saved_by AS savedBy, d.saved_at AS savedAt
-       FROM source_url_check_diffs d
-       JOIN source_url_check_log l ON l.id = d.check_log_id
-       WHERE l.source_url = $1 AND d.check_log_id < $2 AND ${fingerprintSqlExpr("d.")} = $3
-       ORDER BY d.id DESC LIMIT 1`,
-      [sourceUrl, checkLogId, fingerprint],
-    );
-    const savedBy = earlier.length > 0 ? earlier[0].savedBy : (author?.savedBy ?? null);
-    const savedAt = earlier.length > 0 ? earlier[0].savedAt : (author?.savedAt ?? null);
-    const inserted = await db.execute(
-      `INSERT INTO source_url_check_diffs
-         (check_log_id, config_id, config_label, change_kind, matched_shift_id, employee_id, employee_name,
-          work_date, local, role, schedule_start_minutes, schedule_end_minutes, sheet_name, row_number,
-          column_letter, field_name, old_value, new_value, message, applied, saved_by, saved_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
-      [
-        checkLogId,
-        e.configId,
-        e.configLabel,
-        e.changeKind,
-        e.matchedShiftId,
-        e.employeeId,
-        e.employeeName,
-        e.workDate,
-        e.local,
-        e.role,
-        e.scheduleStartMinutes,
-        e.scheduleEndMinutes,
-        e.sheetName,
-        e.rowNumber,
-        e.columnLetter,
-        e.fieldName,
-        e.oldValue,
-        e.newValue,
-        e.message,
-        e.applied ? 1 : 0,
-        savedBy,
-        savedAt,
-      ],
-    );
-    if (dismissedMatch.length > 0) {
-      await db.execute(`UPDATE source_url_check_diffs SET dismissed_at = datetime('now') WHERE id = $1`, [
-        inserted.lastInsertId,
-      ]);
-    }
-  }
-}
-
 /** Lazily fetched when a check-log row is expanded in the UI — most rows have none. */
 export async function listCheckDiffs(checkLogId: number): Promise<CheckDiffRow[]> {
-  const db = await getDb();
-  const rows = await db.select<CheckDiffRowRaw[]>(
-    `SELECT d.id, d.check_log_id AS checkLogId, l.source_url AS sourceUrl, d.config_id AS configId, d.config_label AS configLabel,
-            d.change_kind AS changeKind, d.matched_shift_id AS matchedShiftId, d.employee_id AS employeeId,
-            d.employee_name AS employeeName, d.work_date AS workDate, d.local, d.role,
-            d.schedule_start_minutes AS scheduleStartMinutes, d.schedule_end_minutes AS scheduleEndMinutes,
-            d.sheet_name AS sheetName, d.row_number AS rowNumber, d.column_letter AS columnLetter,
-            d.field_name AS fieldName, d.old_value AS oldValue, d.new_value AS newValue, d.message, d.applied,
-            d.dismissed_at AS dismissedAt, jc.period_start AS periodStart, jc.period_end AS periodEnd,
-            d.saved_by AS savedBy, d.saved_at AS savedAt
-     FROM source_url_check_diffs d
-     JOIN source_url_check_log l ON l.id = d.check_log_id
-     LEFT JOIN source_url_check_log_configs jc ON jc.check_log_id = d.check_log_id AND jc.config_id = d.config_id
-     WHERE d.check_log_id = $1
-     ORDER BY d.id`,
-    [checkLogId],
-  );
-  return rows.map(parseCheckDiffRow);
+  return rpc<CheckDiffRow[]>("listCheckDiffs", { checkLogId });
 }
 
 export interface CheckLogConfigDiffCount {
@@ -1404,7 +994,7 @@ export interface CheckLogConfigDiffCount {
 /**
  * Per-(check, config) diff counts for a batch of check-log ids — one check
  * covers every active reimport config for a URL at once (see
- * `RemoteFileUpdatesContext.runChecks`), but the Verificação automática
+ * `run_one` in server/src/remote_checks/runner.rs), but the Verificação automática
  * page shows one history ROW per config regardless (never merging several
  * configs' template/período/detalhes into a single combined row — a
  * mismatch found there needs to point at exactly one template, unambiguously),
@@ -1412,17 +1002,7 @@ export interface CheckLogConfigDiffCount {
  */
 export async function listCheckDiffCountsByLogIds(checkLogIds: number[]): Promise<CheckLogConfigDiffCount[]> {
   if (checkLogIds.length === 0) return [];
-  const db = await getDb();
-  const placeholders = checkLogIds.map((_, i) => `$${i + 1}`).join(", ");
-  const rows = await db.select<(Omit<CheckLogConfigDiffCount, "hasError"> & { hasError: number })[]>(
-    `SELECT check_log_id AS checkLogId, config_id AS configId, config_label AS configLabel, COUNT(*) AS diffCount,
-            MAX(CASE WHEN change_kind = 'error' THEN 1 ELSE 0 END) AS hasError
-     FROM source_url_check_diffs
-     WHERE check_log_id IN (${placeholders})
-     GROUP BY check_log_id, config_id, config_label`,
-    checkLogIds,
-  );
-  return rows.map((r) => ({ ...r, hasError: Boolean(r.hasError) }));
+  return rpc<CheckLogConfigDiffCount[]>("listCheckDiffCountsByLogIds", { checkLogIds });
 }
 
 export interface ShiftFieldDiffRow {
@@ -1486,74 +1066,13 @@ export async function listAllLatestShiftDiffs(): Promise<CheckDiffRow[]> {
  * (`dismissed_diff_fingerprints`, scoped to that row's `source_url`), so a
  * LATER check whose new row has the exact identical content — same config,
  * kind, identity, value/message, nothing actually changed — is inserted
- * already dismissed (see `saveCheckDiffs`/`copyCheckDiffs`) instead of
+ * already dismissed (see `save_check_diffs`/`copy_check_diffs` in server/src/remote_checks/runner.rs) instead of
  * re-alerting. The moment even one field differs, it's a genuinely new
  * problem and starts undismissed.
  */
 export async function dismissCheckDiffs(ids: number[]): Promise<void> {
   if (ids.length === 0) return;
   return rpc<void>("dismissCheckDiffs", { ids });
-}
-
-/** Records the remote signature a deep check (download+parse+diff) just ran against, and what it actually found (`result`) — so `RemoteFileUpdatesContext.runChecks` doesn't repeat that work every tick while the user hasn't reimported yet, and a later "changed"-per-header check against the same signature can log the SAME diff-driven verdict instead of re-asserting the raw header result. */
-export async function markDeepCheckSignature(
-  sourceUrl: string,
-  etag: string | null,
-  lastModified: string | null,
-  contentLength: number | null,
-  result: UrlCheckResult,
-  checkLogId: number,
-): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `UPDATE source_url_settings
-     SET last_deep_check_etag = $2, last_deep_check_last_modified = $3, last_deep_check_content_length = $4,
-         last_deep_check_result = $5, last_deep_check_log_id = $6, last_deep_check_at = datetime('now')
-     WHERE source_url = $1`,
-    [sourceUrl, etag, lastModified, contentLength, result, checkLogId],
-  );
-}
-
-/**
- * Copies one check's diff rows onto another check_log_id, verbatim — used
- * when a check reuses an already-known deep-check verdict for the same
- * remote signature (see `RemoteFileUpdatesContext.runChecks`) instead of
- * re-downloading/re-parsing just to arrive at the same rows again. Every
- * check attempt's history is meant to show what it found, even when what it
- * found is "the same thing as last time" — this is how a cached "Mudou"
- * still gets its own expandable diff detail instead of a blank "—". Same
- * "Visto" fingerprint check as `saveCheckDiffs` (done inline, in SQL, since
- * this is a single bulk copy rather than one entry at a time) — a copied row
- * whose content matches something already dismissed for `sourceUrl` arrives
- * already dismissed too.
- */
-export async function copyCheckDiffs(fromCheckLogId: number, toCheckLogId: number, sourceUrl: string): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `INSERT INTO source_url_check_diffs
-       (check_log_id, config_id, config_label, change_kind, matched_shift_id, employee_id, employee_name,
-        work_date, local, role, schedule_start_minutes, schedule_end_minutes, sheet_name, row_number,
-        column_letter, field_name, old_value, new_value, message, applied, dismissed_at, saved_by, saved_at)
-     SELECT $2, config_id, config_label, change_kind, matched_shift_id, employee_id, employee_name,
-            work_date, local, role, schedule_start_minutes, schedule_end_minutes, sheet_name, row_number,
-            column_letter, field_name, old_value, new_value, message, applied,
-            CASE WHEN EXISTS (
-              SELECT 1 FROM dismissed_diff_fingerprints f
-              WHERE f.source_url = $3 AND f.fingerprint = ${fingerprintSqlExpr("")}
-            ) THEN datetime('now') ELSE NULL END,
-            saved_by, saved_at
-     FROM source_url_check_diffs
-     WHERE check_log_id = $1`,
-    [fromCheckLogId, toCheckLogId, sourceUrl],
-  );
-  // Same downloaded version, so the same author on the check itself.
-  await db.execute(
-    `UPDATE source_url_check_log
-     SET saved_by = (SELECT saved_by FROM source_url_check_log WHERE id = $1),
-         saved_at = (SELECT saved_at FROM source_url_check_log WHERE id = $1)
-     WHERE id = $2`,
-    [fromCheckLogId, toCheckLogId],
-  );
 }
 
 /** Batched lookup for the deep-check diff pass — one query for every matched shift's current values instead of N calls to `getPaymentShift`. */

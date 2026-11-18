@@ -17,6 +17,12 @@ pub struct Config {
     /// Origins allowed to call the API from a browser, e.g.
     /// `https://pontoscan.web.app`. Empty = same-origin only.
     pub cors_origins: Vec<String>,
+    /// The team's time zone: "today" for the automatic check's relative
+    /// períodos (the desktop used the computer's own clock).
+    pub timezone: chrono_tz::Tz,
+    /// Whether the automatic check runs in the background (`off` for local
+    /// tests against a copy of the real database).
+    pub remote_checks: bool,
     pub auth: AuthConfig,
 }
 
@@ -58,7 +64,17 @@ impl Config {
             .map(|v| v.split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect())
             .unwrap_or_default();
 
-        Ok(Config { bind, db_path, data_dir, static_dir, cors_origins, auth: AuthConfig::from_env()? })
+        let timezone = var("PONTOSCAN_TIMEZONE")
+            .unwrap_or_else(|| "America/Sao_Paulo".into())
+            .parse()
+            .map_err(|e| ConfigError(format!("PONTOSCAN_TIMEZONE inválido: {e}")))?;
+        let remote_checks = match var("PONTOSCAN_REMOTE_CHECKS").map(|v| v.to_lowercase()).as_deref() {
+            None | Some("on") => true,
+            Some("off") => false,
+            Some(other) => return Err(ConfigError(format!("PONTOSCAN_REMOTE_CHECKS deve ser on ou off, não {other}."))),
+        };
+
+        Ok(Config { bind, db_path, data_dir, static_dir, cors_origins, timezone, remote_checks, auth: AuthConfig::from_env()? })
     }
 }
 

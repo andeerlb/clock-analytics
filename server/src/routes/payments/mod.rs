@@ -15,9 +15,9 @@ use crate::error::{ApiError, ApiResult};
 use crate::sql::{self, Row};
 use crate::AppState;
 
-mod import;
-mod shifts;
-mod templates;
+pub(crate) mod import;
+pub(crate) mod shifts;
+pub(crate) mod templates;
 
 #[cfg(test)]
 mod tests;

@@ -277,7 +277,7 @@ async fn generate_report_zip(State(state): State<AppState>, Json(args): Json<Rep
 // --- payment spreadsheets ---------------------------------------------------
 
 #[derive(Deserialize)]
-struct PathArgs {
+pub(crate) struct PathArgs {
     path: String,
 }
 
@@ -302,13 +302,13 @@ async fn preview_spreadsheet(State(state): State<AppState>, Json(args): Json<Pre
 }
 
 #[derive(Deserialize)]
-struct ApplyTemplateArgs {
+pub(crate) struct ApplyTemplateArgs {
     path: String,
     groups: Vec<spreadsheet::GroupSpec>,
     delimiter: Option<String>,
 }
 
-async fn apply_payment_template(
+pub(crate) async fn apply_payment_template(
     State(state): State<AppState>,
     Json(args): Json<ApplyTemplateArgs>,
 ) -> ApiResult<Json<Vec<spreadsheet::AppliedPaymentRow>>> {
@@ -319,13 +319,13 @@ async fn apply_payment_template(
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PaymentFileHash {
+pub(crate) struct PaymentFileHash {
     path: String,
     file_name: String,
     hash: String,
 }
 
-async fn hash_payment_file(State(state): State<AppState>, Json(args): Json<PathArgs>) -> ApiResult<Json<PaymentFileHash>> {
+pub(crate) async fn hash_payment_file(State(state): State<AppState>, Json(args): Json<PathArgs>) -> ApiResult<Json<PaymentFileHash>> {
     let path = path_string(&resolve(&state.data_dir, &args.path)?);
     let hashed = blocking(move || {
         let hash = hashing::hash_file(&path).map_err(|e| e.to_string())?;
@@ -336,7 +336,7 @@ async fn hash_payment_file(State(state): State<AppState>, Json(args): Json<PathA
     Ok(Json(hashed))
 }
 
-async fn read_spreadsheet_author(State(state): State<AppState>, Json(args): Json<PathArgs>) -> ApiResult<Json<file_author::FileAuthor>> {
+pub(crate) async fn read_spreadsheet_author(State(state): State<AppState>, Json(args): Json<PathArgs>) -> ApiResult<Json<file_author::FileAuthor>> {
     let path = path_string(&resolve(&state.data_dir, &args.path)?);
     Ok(Json(blocking(move || Ok(file_author::read(&path))).await?))
 }
@@ -494,7 +494,7 @@ fn filename_from_url(url: &reqwest::Url) -> Option<String> {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DownloadedPaymentFile {
+pub(crate) struct DownloadedPaymentFile {
     path: String,
     file_name: String,
     file_kind: String,
@@ -504,13 +504,13 @@ struct DownloadedPaymentFile {
 }
 
 #[derive(Deserialize)]
-struct UrlArgs {
+pub(crate) struct UrlArgs {
     url: String,
 }
 
 /// Downloads a spreadsheet from a direct-download link, checks by magic
 /// bytes that it really is xlsx/xls/ods, and stores it in `imports/`.
-async fn download_payment_file_from_url(State(state): State<AppState>, Json(args): Json<UrlArgs>) -> ApiResult<Json<DownloadedPaymentFile>> {
+pub(crate) async fn download_payment_file_from_url(State(state): State<AppState>, Json(args): Json<UrlArgs>) -> ApiResult<Json<DownloadedPaymentFile>> {
     let parsed = normalize_office_share_url(&parse_http_url(&args.url)?);
     ensure_public_destination(&parsed).await?;
     let client = build_http_client(DOWNLOAD_TIMEOUT)?;
@@ -572,21 +572,21 @@ async fn download_payment_file_from_url(State(state): State<AppState>, Json(args
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RemoteFileSignature {
+pub(crate) struct RemoteFileSignature {
     etag: Option<String>,
     last_modified: Option<String>,
     content_length: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
-struct RemoteChangeCheck {
+pub(crate) struct RemoteChangeCheck {
     changed: Option<bool>,
     current: RemoteFileSignature,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RemoteCheckArgs {
+pub(crate) struct RemoteCheckArgs {
     url: String,
     known_etag: Option<String>,
     known_last_modified: Option<String>,
@@ -595,7 +595,7 @@ struct RemoteCheckArgs {
 
 /// HEAD-based "did the remote file change": ETag when both sides have one,
 /// then Last-Modified, then Content-Length; `None` = no comparable signal.
-async fn check_remote_payment_file(Json(args): Json<RemoteCheckArgs>) -> ApiResult<Json<RemoteChangeCheck>> {
+pub(crate) async fn check_remote_payment_file(Json(args): Json<RemoteCheckArgs>) -> ApiResult<Json<RemoteChangeCheck>> {
     let parsed = normalize_office_share_url(&parse_http_url(&args.url)?);
     ensure_public_destination(&parsed).await?;
     let client = build_http_client(HEAD_TIMEOUT)?;

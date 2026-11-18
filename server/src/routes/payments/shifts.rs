@@ -63,12 +63,12 @@ fn count_of(rows: &[Row]) -> Value {
 // --- lists ---------------------------------------------------------------------
 
 #[derive(Deserialize)]
-struct IdsArgs {
+pub(crate) struct IdsArgs {
     ids: Vec<i64>,
 }
 
 /// Batched lookup for the deep-check diff pass.
-async fn get_payment_shifts_by_ids(State(state): State<AppState>, Json(args): Json<IdsArgs>) -> ApiResult<Json<Vec<Value>>> {
+pub(crate) async fn get_payment_shifts_by_ids(State(state): State<AppState>, Json(args): Json<IdsArgs>) -> ApiResult<Json<Vec<Value>>> {
     if args.ids.is_empty() {
         return Ok(Json(vec![]));
     }
@@ -343,7 +343,7 @@ async fn insert_successor(mut tx: Transaction<'_, Sqlite>, sql_text: &str, param
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ShiftIdArgs {
+pub(crate) struct ShiftIdArgs {
     shift_id: i64,
 }
 
@@ -606,7 +606,7 @@ pub(crate) async fn auto_sync_impl(state: &AppState, args: &AutoSyncArgs) -> Api
     .await
 }
 
-async fn apply_auto_synced_field_update(State(state): State<AppState>, Json(args): Json<AutoSyncArgs>) -> ApiResult<Json<i64>> {
+pub(crate) async fn apply_auto_synced_field_update(State(state): State<AppState>, Json(args): Json<AutoSyncArgs>) -> ApiResult<Json<i64>> {
     Ok(Json(auto_sync_impl(&state, &args).await?))
 }
 

@@ -4,6 +4,7 @@ mod config;
 mod db;
 mod error;
 mod files;
+mod remote_checks;
 mod routes;
 mod sql;
 
@@ -26,18 +27,20 @@ pub struct AppState {
     pub db: SqlitePool,
     /// Root for every file the server stores or serves; see `files.rs`.
     pub data_dir: Arc<std::path::PathBuf>,
+    /// Verificação automática: what is being checked right now.
+    pub remote_checks: Arc<remote_checks::Runtime>,
 }
 
 impl AppState {
-    pub fn new(db: SqlitePool, data_dir: std::path::PathBuf) -> Self {
-        AppState { db, data_dir: Arc::new(data_dir) }
+    pub fn new(db: SqlitePool, data_dir: std::path::PathBuf, timezone: chrono_tz::Tz) -> Self {
+        AppState { db, data_dir: Arc::new(data_dir), remote_checks: Arc::new(remote_checks::Runtime::new(timezone)) }
     }
 
     #[cfg(test)]
     pub async fn for_tests() -> Self {
         let dir = std::env::temp_dir().join(format!("pontoscan-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        AppState::new(db::test_pool().await, dir.canonicalize().unwrap())
+        AppState::new(db::test_pool().await, dir.canonicalize().unwrap(), chrono_tz::America::Sao_Paulo)
     }
 }
 
@@ -92,7 +95,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     files::spawn_upload_cleanup(data_dir.clone());
 
     let auth = Arc::new(Authenticator::new(&config.auth));
-    let app = app(&config, AppState::new(pool.clone(), data_dir), auth);
+    let state = AppState::new(pool.clone(), data_dir, config.timezone);
+    if config.remote_checks {
+        remote_checks::spawn_scheduler(state.clone());
+        tracing::info!(timezone = %config.timezone, "verificação automática ligada");
+    } else {
+        tracing::warn!("verificação automática desligada (PONTOSCAN_REMOTE_CHECKS=off)");
+    }
+    let app = app(&config, state, auth);
 
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(addr = %config.bind, "servidor no ar");
@@ -129,7 +139,16 @@ mod tests {
     use tower::ServiceExt;
 
     fn config(auth: AuthConfig) -> Config {
-        Config { bind: "127.0.0.1:0".parse().unwrap(), db_path: "unused".into(), data_dir: "unused".into(), static_dir: None, cors_origins: vec![], auth }
+        Config {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            db_path: "unused".into(),
+            data_dir: "unused".into(),
+            static_dir: None,
+            cors_origins: vec![],
+            timezone: chrono_tz::America::Sao_Paulo,
+            remote_checks: false,
+            auth,
+        }
     }
 
     async fn firebase_app() -> Router {

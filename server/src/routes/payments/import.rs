@@ -124,13 +124,13 @@ async fn find_duplicate_payment_shifts(State(state): State<AppState>, Json(args)
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PositionArgs {
+pub(crate) struct PositionArgs {
     source_url: String,
     sheet_name: Option<String>,
     row_number: f64,
 }
 
-async fn find_payment_shift_by_position(State(state): State<AppState>, Json(args): Json<PositionArgs>) -> ApiResult<Json<Value>> {
+pub(crate) async fn find_payment_shift_by_position(State(state): State<AppState>, Json(args): Json<PositionArgs>) -> ApiResult<Json<Value>> {
     let row = sql::select_one(
         &state.db,
         &format!(
@@ -160,13 +160,13 @@ async fn find_payment_shift_by_position(State(state): State<AppState>, Json(args
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SourceUrlArgs {
+pub(crate) struct SourceUrlArgs {
     source_url: String,
     period_start: Option<String>,
     period_end: Option<String>,
 }
 
-async fn list_head_shifts_for_source_url(State(state): State<AppState>, Json(args): Json<SourceUrlArgs>) -> ApiResult<Json<Vec<Value>>> {
+pub(crate) async fn list_head_shifts_for_source_url(State(state): State<AppState>, Json(args): Json<SourceUrlArgs>) -> ApiResult<Json<Vec<Value>>> {
     let mut conditions = vec!["sf.source_url = $1".to_owned(), head_shift_condition()];
     let mut params = params![args.source_url];
     if let Some(start) = args.period_start.filter(|s| !s.is_empty()) {

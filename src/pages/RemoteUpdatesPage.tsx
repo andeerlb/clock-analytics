@@ -613,16 +613,6 @@ export default function RemoteUpdatesPage() {
           <span className="rv-small">Hoje isso é {todayRange(s)}.</span>
         </div>
 
-        <label className="rv-toggle">
-          <span className="rv-text">
-            <span className="rv-toggle-title">Aplicar mudanças sozinho</span>
-            <span className="rv-toggle-desc">
-              Alterações, turnos novos e turnos que saíram da planilha entram sem precisar revisar.{" "}
-              {s.autoApplyOverwritePaid ? "Turnos já pagos também são alterados (veja “Mais detalhes”)" : "Turnos já pagos nunca são alterados"}, e nomes sem cadastro sempre esperam você.
-            </span>
-          </span>
-          <input type="checkbox" role="switch" className="settings-switch" checked={s.autoApplyEnabled} onChange={(e) => onChange({ autoApplyEnabled: e.target.checked })} />
-        </label>
       </>
     );
   }
@@ -686,37 +676,6 @@ export default function RemoteUpdatesPage() {
               <section className="rv-more-section">
                 <span className="rv-section-label">Turnos editados à mão</span>
                 <div className="rv-opts">
-                  <label className={c.autoApplyEnabled ? "rv-opts-row" : "rv-opts-row rv-opts-row-off"}>
-                    <span className="rv-text">
-                      <span className="rv-opts-title">Alterar quando aplicar sozinho</span>
-                      <span className="rv-opts-desc">
-                        Turnos pagos, voltados para pendente ou com valor corrigido.
-                        {!c.autoApplyEnabled && " Ligue “Aplicar mudanças sozinho” para usar."}
-                      </span>
-                    </span>
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      className="settings-switch"
-                      checked={c.autoApplyOverwriteManualEdits}
-                      disabled={!c.autoApplyEnabled}
-                      onChange={(e) => saveRule(c, { autoApplyOverwriteManualEdits: e.target.checked })}
-                    />
-                  </label>
-                  <label className={c.autoApplyEnabled ? "rv-opts-row" : "rv-opts-row rv-opts-row-off"}>
-                    <span className="rv-text">
-                      <span className="rv-opts-title">Alterar também os já pagos</span>
-                      <span className="rv-opts-desc">Quando aplicar sozinho.</span>
-                    </span>
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      className="settings-switch"
-                      checked={c.autoApplyOverwritePaid}
-                      disabled={!c.autoApplyEnabled}
-                      onChange={(e) => saveRule(c, { autoApplyOverwritePaid: e.target.checked })}
-                    />
-                  </label>
                   <label className="rv-opts-row">
                     <span className="rv-text">
                       <span className="rv-opts-title">Manter ao reimportar</span>
@@ -943,7 +902,7 @@ export default function RemoteUpdatesPage() {
         {mode === "applied" && (
           <div className="rv-banner rv-banner-info">
             <strong>Aplicado sozinho</strong>
-            <span>Esta regra está com “Aplicar mudanças sozinho” ligado. Nada aqui precisa de você; é só pra conferir.</span>
+            <span>Gravadas pela versão desktop, que aplicava mudanças sozinha. Nada aqui precisa de você; é só pra conferir.</span>
           </div>
         )}
         {mode === "pending" && kinds.length > 1 && (
