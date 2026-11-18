@@ -43,9 +43,11 @@ gcloud compute ssh tapago --zone us-east1-b --tunnel-through-iap -- sudo journal
 Até o primeiro deploy do servidor, `https://<subdomínio>.duckdns.org` responde
 **502**. É o esperado: o Caddy está no ar, só falta o servidor atrás dele.
 
-## Deploy automático
+## Deploy
 
-Cada push no ramo `web` dispara `.github/workflows/deploy-web.yml`, que:
+O deploy é **manual**: no GitHub, Actions → **Deploy web** → Run workflow, no ramo `web`
+(ou `gh workflow run deploy-web.yml --ref web`). Um push não publica nada. O workflow
+`.github/workflows/deploy-web.yml`:
 
 1. roda os testes do servidor, compila e manda o binário para o bucket
    `<projeto>-tapago-releases`;
@@ -56,7 +58,7 @@ Cada push no ramo `web` dispara `.github/workflows/deploy-web.yml`, que:
    e só então publica o frontend no Firebase Hosting.
 
 O GitHub entra no Google Cloud sem chave guardada (Workload Identity Federation,
-`deploy.tf`). Só pushes deste repositório nos ramos `web`/`master` são aceitos, e a
+`deploy.tf`). Só execuções deste repositório nos ramos `web`/`master` são aceitas, e a
 conta de deploy só pode escrever no bucket de versões e publicar no Hosting.
 
 ### Variáveis do deploy no GitHub

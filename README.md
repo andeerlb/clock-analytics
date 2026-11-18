@@ -38,7 +38,7 @@ Without `VITE_FIREBASE_*` variables (e.g. no `.env.local`) the app opens without
 
 ## Deploying
 
-Pushing to the `web` branch runs [`deploy-web.yml`](.github/workflows/deploy-web.yml): it builds the server, uploads it for the VM to install (with automatic rollback if the health check fails), and publishes the frontend to Firebase Hosting once the API reports the new version. Creating the infrastructure is described in [`infra/README.md`](infra/README.md).
+Deploys are started by hand: Actions → **Deploy web** → Run workflow, on the `web` branch ([`deploy-web.yml`](.github/workflows/deploy-web.yml)). It builds the server, uploads it for the VM to install (with automatic rollback if the health check fails), and publishes the frontend to Firebase Hosting once the API reports the new version. Creating the infrastructure is described in [`infra/README.md`](infra/README.md).
 
 ## Migrations
 
