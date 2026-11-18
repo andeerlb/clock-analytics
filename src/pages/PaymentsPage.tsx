@@ -12,6 +12,7 @@ import {
 import { listen } from "../lib/events";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
 import Avatar from "../components/Avatar";
 import Drawer from "../components/Drawer";
 import ColumnPicker from "../components/ColumnPicker";
@@ -22,6 +23,7 @@ import PaymentsFiltersPanel, { PaymentsFilterChips, usePaymentsActiveFilterCount
 import ShiftPanel, { type LastPayment, type ShiftEditFields, type ShiftPanelTab } from "../components/ShiftPanel";
 import TableScroll from "../components/TableScroll";
 import { PAYMENT_SHIFT_STATUSES, SHIFT_PERIODS, usePaymentsFilters } from "../contexts/FiltersContext";
+import { useAccess } from "../contexts/AuthContext";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { openReconciliationWindow } from "../lib/api";
 import {
@@ -286,6 +288,8 @@ function readFiltersOpen(): boolean {
 
 export default function PaymentsPage() {
   const navigate = useNavigate();
+  const readOnly = useReadOnly();
+  const { canExport } = useAccess();
   const [searchParams, setSearchParams] = useSearchParams();
   const attentionParam = searchParams.get("attention");
   const attention = attentionParam === "pending-audit" || attentionParam === "missing-amount" ? attentionParam : undefined;
@@ -1060,6 +1064,7 @@ export default function PaymentsPage() {
         }
         actions={
           <div className="payments-head-actions">
+            {canExport && (
             <PaymentsExportMenu
               onTemplateExport={() => setExportDrawerOpen(true)}
               onValueReport={handleGenerateLegacyPdf}
@@ -1068,6 +1073,7 @@ export default function PaymentsPage() {
               generatingShiftReport={generatingShiftPdf}
               shiftCount={shiftCount}
             />
+            )}
             <button
               type="button"
               className="payments-reconcile"
@@ -1257,8 +1263,12 @@ export default function PaymentsPage() {
         )}
         {!loading && !listError && total === 0 && hasFilters && (
           <p className="muted" style={{ padding: "1.4rem" }}>
-            Nenhum resultado para os filtros selecionados. Considere ajustar os filtros ou{" "}
-            <Link to="/import/payments">importar um novo pagamento</Link>.
+            Nenhum resultado para os filtros selecionados. Considere ajustar os filtros
+            {readOnly ? "." : (
+              <>
+                {" "}ou <Link to="/import/payments">importar um novo pagamento</Link>.
+              </>
+            )}
           </p>
         )}
 
@@ -1513,7 +1523,8 @@ export default function PaymentsPage() {
                         type="button"
                         className="ghost"
                         style={{ marginTop: "0.5rem" }}
-                        disabled={markingReviewDeleted}
+                        disabled={readOnly || markingReviewDeleted}
+                        title={readOnly ? READ_ONLY_TITLE : undefined}
                         onClick={handleMarkReviewDeleted}
                       >
                         {markingReviewDeleted ? "Marcando…" : "Marcar como excluído"}
@@ -1568,7 +1579,8 @@ export default function PaymentsPage() {
                   <button
                     type="button"
                     onClick={handleAcceptChange}
-                    disabled={accepting}
+                    disabled={readOnly || accepting}
+                    title={readOnly ? READ_ONLY_TITLE : undefined}
                     style={{ alignSelf: "flex-start" }}
                   >
                     {accepting ? "Aplicando..." : "Aceitar e atualizar"}

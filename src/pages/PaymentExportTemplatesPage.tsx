@@ -1,6 +1,7 @@
-import { Copy, FileSpreadsheet, FileText, Pencil, Plus, Trash2 } from "lucide-react";
+import { Copy, Eye, FileSpreadsheet, FileText, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
 import ConfirmModal from "../components/ConfirmModal";
 import PageHeader from "../components/PageHeader";
 import {
@@ -25,6 +26,7 @@ type TemplateKind = "excel" | "pdf";
  */
 export default function PaymentExportTemplatesPage() {
   const navigate = useNavigate();
+  const readOnly = useReadOnly();
   const [excelTemplates, setExcelTemplates] = useState<PaymentExportTemplateListRow[]>([]);
   const [pdfTemplates, setPdfTemplates] = useState<PaymentPdfTemplateListRow[]>([]);
   const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<{ kind: TemplateKind; id: number; name: string } | null>(null);
@@ -74,9 +76,10 @@ export default function PaymentExportTemplatesPage() {
     const cloneKey = `${kind}-${id}`;
     return (
       <span style={{ display: "flex", gap: "0.3rem" }}>
-        <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={() => navigate(editPath)} aria-label="Editar" title="Editar">
-          <Pencil size={14} />
+        <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={() => navigate(editPath)} aria-label={readOnly ? "Ver" : "Editar"} title={readOnly ? "Ver" : "Editar"}>
+          {readOnly ? <Eye size={14} /> : <Pencil size={14} />}
         </button>
+        {!readOnly && (
         <button
           type="button"
           className="ghost"
@@ -88,7 +91,16 @@ export default function PaymentExportTemplatesPage() {
         >
           <Copy size={14} />
         </button>
-        <button type="button" className="ghost" style={{ padding: "0.3rem" }} onClick={() => setConfirmDeleteTarget({ kind, id, name })} aria-label="Excluir" title="Excluir">
+        )}
+        <button
+          type="button"
+          className="ghost"
+          style={{ padding: "0.3rem" }}
+          onClick={() => setConfirmDeleteTarget({ kind, id, name })}
+          disabled={readOnly}
+          aria-label="Excluir"
+          title={readOnly ? READ_ONLY_TITLE : "Excluir"}
+        >
           <Trash2 size={14} />
         </button>
       </span>
@@ -142,10 +154,12 @@ export default function PaymentExportTemplatesPage() {
 
       <h3 style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", margin: "1.4rem 0 0.6rem" }}>
         <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}><FileSpreadsheet size={17} /> Excel</span>
-        <button type="button" className="secondary" onClick={() => navigate("/payments/export-templates/new")} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
-          <Plus size={15} />
-          Novo template Excel
-        </button>
+        {!readOnly && (
+          <button type="button" className="secondary" onClick={() => navigate("/payments/export-templates/new")} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+            <Plus size={15} />
+            Novo template Excel
+          </button>
+        )}
       </h3>
       <div className="card table-card">
         {templateTable(excelRows, "Nenhum template de Excel cadastrado ainda. Crie um para definir como os turnos de pagamento saem em planilha.")}
@@ -159,10 +173,12 @@ export default function PaymentExportTemplatesPage() {
 
       <h3 style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", margin: "0 0 1rem" }}>
         <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}><FileText size={17} /> PDF</span>
-        <button type="button" className="secondary" onClick={() => navigate("/payments/pdf-templates/new")} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
-          <Plus size={15} />
-          Novo template PDF
-        </button>
+        {!readOnly && (
+          <button type="button" className="secondary" onClick={() => navigate("/payments/pdf-templates/new")} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+            <Plus size={15} />
+            Novo template PDF
+          </button>
+        )}
       </h3>
       <div className="card table-card">
         {templateTable(pdfRows, "Nenhum template de PDF cadastrado ainda. Crie um para definir como os turnos de pagamento saem em PDF.")}

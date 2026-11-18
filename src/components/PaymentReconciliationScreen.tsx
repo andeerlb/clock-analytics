@@ -21,6 +21,7 @@ import {
 import { formatCurrencyBRL, formatDateAbbrevYY, formatDateTimeAbbrevYY, formatMinutesAsTime, scheduleDurationMinutes } from "../lib/format";
 import { ALWAYS_VISIBLE_COLUMN_ID, FLAT_COLUMNS, PAYMENT_PICKER_COLUMNS } from "../lib/paymentColumns";
 import { PAYMENT_AUDIT_RESULT_LABELS, type PaymentAuditResult, type PaymentShiftStatus } from "../lib/types";
+import { useReadOnly } from "./AreaRoute";
 import Avatar from "./Avatar";
 import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
 import ColumnPicker from "./ColumnPicker";
@@ -103,6 +104,8 @@ export default function PaymentReconciliationScreen({
   roles: RoleRow[];
   locals: string[];
 }) {
+  // View-only profile: the list, filters and columns work; no verdict can be recorded.
+  const readOnly = useReadOnly();
   const {
     selectedEmployeeIds,
     selectedCompanyIds,
@@ -409,8 +412,8 @@ export default function PaymentReconciliationScreen({
   const focusedAudit = focusedRow ? audits.get(focusedRow.id) ?? null : null;
   // Same per-action logic as the row's own buttons/menu: disabled exactly
   // when it would be a no-op given the row's current verdict.
-  const focusedCanConfirm = focusedRow?.status === "pago" && focusedAudit?.result !== "confirmado";
-  const focusedCanMarkError = focusedRow?.status === "pago" && focusedAudit?.result !== "erro";
+  const focusedCanConfirm = !readOnly && focusedRow?.status === "pago" && focusedAudit?.result !== "confirmado";
+  const focusedCanMarkError = !readOnly && focusedRow?.status === "pago" && focusedAudit?.result !== "erro";
 
   // Arrow keys move focus across every visible row (not just actionable
   // ones — see the comment above the focus-reset effect); Enter confirms,
@@ -437,7 +440,7 @@ export default function PaymentReconciliationScreen({
         if (focusedRow && focusedCanMarkError) handleErrorSubmit(focusedRow);
       } else if (e.key === "Backspace") {
         e.preventDefault();
-        if (focusedRow && focusedAudit) handleUndoAudit(focusedRow);
+        if (focusedRow && focusedAudit && !readOnly) handleUndoAudit(focusedRow);
       }
     }
     document.addEventListener("keydown", onKeyDown);
@@ -536,7 +539,9 @@ export default function PaymentReconciliationScreen({
             <div>
               <strong style={{ fontSize: "0.95rem" }}>Conferência de Pagamentos</strong>
               <p className="muted" style={{ margin: "0.2rem 0 0", fontSize: "0.78rem" }}>
-                Atalhos: ↑ / ↓ navegar · Enter confirmar · Delete marcar erro · Backspace desfazer · clique direito num item para ver todas as ações
+                {readOnly
+                  ? "Somente visualização: seu perfil não permite registrar conferências. Atalhos: ↑ / ↓ navegar"
+                  : "Atalhos: ↑ / ↓ navegar · Enter confirmar · Delete marcar erro · Backspace desfazer · clique direito num item para ver todas as ações"}
               </p>
             </div>
           </div>
@@ -619,8 +624,8 @@ export default function PaymentReconciliationScreen({
                   // `pago` (see the module doc comment), so `canMarkError`
                   // doubles as "hasn't already been marked erro" without
                   // needing to also check `audit`.
-                  const canConfirm = r.status === "pago" && audit?.result !== "confirmado";
-                  const canMarkError = r.status === "pago" && audit?.result !== "erro";
+                  const canConfirm = !readOnly && r.status === "pago" && audit?.result !== "confirmado";
+                  const canMarkError = !readOnly && r.status === "pago" && audit?.result !== "erro";
                   const col = (id: string) => visibleColumns.has(id);
                   // Every possible action always appears in the right-click
                   // menu (the only place any of this is reachable via mouse
@@ -647,7 +652,7 @@ export default function PaymentReconciliationScreen({
                     {
                       label: "Desfazer",
                       shortcut: "Backspace",
-                      disabled: !audit || actingShiftId === r.id,
+                      disabled: readOnly || !audit || actingShiftId === r.id,
                       onClick: () => handleUndoAudit(r),
                     },
                   ];

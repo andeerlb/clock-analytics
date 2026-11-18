@@ -1,6 +1,7 @@
 import { CircleHelp } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
 import ConfirmModal from "../components/ConfirmModal";
 import PageHeader from "../components/PageHeader";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
@@ -70,6 +71,7 @@ function ColorSwatchRow({
 export default function PaymentPdfTemplateEditorPage() {
   const { id } = useParams<{ id: string }>();
   const isEditing = id !== undefined;
+  const readOnly = useReadOnly();
   const navigate = useNavigate();
   const gridRef = useRef<TemplateGridEditorHandle>(null);
 
@@ -456,7 +458,7 @@ export default function PaymentPdfTemplateEditorPage() {
   if (loading) {
     return (
       <div>
-        <PageHeader title={isEditing ? "Editar template de PDF" : "Novo template de PDF"} backFallback="/payments/export-templates" backLabel="Voltar para Templates de exportação" />
+        <PageHeader title={readOnly ? "Template de PDF" : isEditing ? "Editar template de PDF" : "Novo template de PDF"} backFallback="/payments/export-templates" backLabel="Voltar para Templates de exportação" />
         <p className="muted">Carregando...</p>
       </div>
     );
@@ -465,7 +467,7 @@ export default function PaymentPdfTemplateEditorPage() {
   return (
     <div>
       <PageHeader
-        title={isEditing ? "Editar template de PDF" : "Novo template de PDF"}
+        title={readOnly ? "Template de PDF" : isEditing ? "Editar template de PDF" : "Novo template de PDF"}
         backFallback="/payments/export-templates"
         backLabel="Voltar para Templates de exportação"
         subtitle="Monte a página — texto, cor de fundo, negrito — e use o botão direito do mouse: numa célula, pra inserir um campo; no número da linha, pra marcar seu papel (turno, cabeçalho de grupo, separador, SOMA). Tudo acima da linha do turno vira o cabeçalho fixo, repetido no topo de cada página do PDF."
@@ -474,7 +476,7 @@ export default function PaymentPdfTemplateEditorPage() {
             <button type="button" className="outline" onClick={() => setHelpOpen(true)}>
               <CircleHelp size={15} /> Como criar meu template
             </button>
-            <button type="button" onClick={handleSave} disabled={busy}>
+            <button type="button" onClick={handleSave} disabled={readOnly || busy} title={readOnly ? READ_ONLY_TITLE : undefined}>
               {busy ? "Salvando..." : "Salvar"}
             </button>
           </>
@@ -490,6 +492,7 @@ export default function PaymentPdfTemplateEditorPage() {
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
+            readOnly={readOnly}
             placeholder="Ex: Recibo de pagamentos — Santo Amaro"
           />
         </div>
