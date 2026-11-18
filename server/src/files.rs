@@ -46,6 +46,7 @@ pub fn uploads_dir(data_dir: &Path) -> PathBuf {
 }
 
 /// Where imported files are kept for good (the desktop app's `imports/`).
+#[allow(dead_code)] // used by the domain ports
 pub fn imports_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("imports")
 }

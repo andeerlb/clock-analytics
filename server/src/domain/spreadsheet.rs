@@ -89,7 +89,7 @@ pub struct SpreadsheetPreview {
     pub delimiter: Option<String>,
 }
 
-const DELIMITER_CANDIDATES: [u8; 4] = [b',', b';', b'\t', b'|'];
+const DELIMITER_CANDIDATES: [u8; 4] = *b",;\t|";
 
 /// Guesses a csv's delimiter: whichever candidate splits the first several
 /// records into the same field count (more than one field) wins; falls

@@ -7,6 +7,9 @@
 //! them, and rows come back in exactly the JSON shape the frontend already
 //! expects. See `server/PORTING.md`.
 
+// Used by the per-domain route modules as they get ported.
+#![allow(dead_code)]
+
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sqlx::query::Query;
@@ -21,9 +24,10 @@ pub type Row = Map<String, Value>;
 /// Builds a JSON array of parameters: `params![a, b, c]`.
 #[macro_export]
 macro_rules! params {
-    ($($value:expr),* $(,)?) => {
-        vec![$(::serde_json::json!($value)),*]
-    };
+    ($($value:expr),* $(,)?) => {{
+        let params: Vec<::serde_json::Value> = vec![$(::serde_json::json!($value)),*];
+        params
+    }};
 }
 
 /// Binds one parameter exactly like tauri-plugin-sql did: numbers as f64
