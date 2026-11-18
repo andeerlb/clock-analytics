@@ -20,6 +20,7 @@ import { toIso, todayUtc } from "../lib/calendar";
 import { formatCurrencyBRL, scheduleDurationMinutes } from "../lib/format";
 import { buildShiftValueResolver } from "../lib/paymentShiftValue";
 import { openReconciliationWindow } from "../lib/api";
+import { useAccess } from "../contexts/AuthContext";
 
 type Tab = "overview" | "costs" | "journeys" | "audit";
 /** "1 turno" / "15 turnos". */
@@ -205,6 +206,10 @@ function aggregate(rows: PaymentShiftReportRow[], key: (r: PaymentShiftReportRow
 
 export default function AnalyticsPage() {
   const navigate = useNavigate();
+  // Links into Pagamentos / Verificação automática only for who can open them.
+  const { canView } = useAccess();
+  const canPayments = canView("pagamentos");
+  const canVerify = canView("verificacao");
   const paymentFilters = usePaymentsFilters();
   const { trackedFiles } = useRemoteFileUpdates();
   // Período lives in the shared Pagamentos filters (same as the Filtros panel
@@ -362,7 +367,7 @@ export default function AnalyticsPage() {
                 value={formatCurrencyBRL(metrics.pending)}
                 valueColor={metrics.pending > 0 ? "var(--warning)" : undefined}
                 detail={plural(rows.filter((r) => r.status === "pendente").length,"turno pendente","turnos pendentes")}
-                action={rows.some((r) => r.status === "pendente") ? { label: "Ver em Pagamentos", onClick: () => preparePaymentsNavigation(["pendente"]) } : undefined}
+                action={canPayments && rows.some((r) => r.status === "pendente") ? { label: "Ver em Pagamentos", onClick: () => preparePaymentsNavigation(["pendente"]) } : undefined}
               />}
               {<KpiCard
                 label="Horas previstas"
@@ -380,7 +385,7 @@ export default function AnalyticsPage() {
               </div>}
               {<div className="card analytics-panel">
                 <header><div><h3>Maiores clientes</h3><p className="analytics-panel-sub">Participação no custo do período</p></div></header>
-                <CostBars showRank={false} rows={clients.slice(0, 5).map((r) => ({ ...r, detail: `${metrics.total ? Math.round(r.value / metrics.total * 100) : 0}% · ${plural(r.shifts, "turno", "turnos")}` }))} onSelect={i=>{const r=rows.find(x=>x.clientName===clients[i].label);if(r)preparePaymentsNavigation(undefined,{clientId:r.clientId});}}/>
+                <CostBars showRank={false} rows={clients.slice(0, 5).map((r) => ({ ...r, detail: `${metrics.total ? Math.round(r.value / metrics.total * 100) : 0}% · ${plural(r.shifts, "turno", "turnos")}` }))} onSelect={!canPayments ? undefined : i=>{const r=rows.find(x=>x.clientName===clients[i].label);if(r)preparePaymentsNavigation(undefined,{clientId:r.clientId});}}/>
               </div>}
             </section>
             {<section className="card analytics-panel analytics-attention">
@@ -388,8 +393,8 @@ export default function AnalyticsPage() {
               {(() => {
                 const items = [
                   { show: pendingAudit > 0, icon: <SearchIcon size={15} />, color: "var(--warning)", bg: "var(--warning-soft)", title: plural(pendingAudit, "pagamento aguardando conferência", "pagamentos aguardando conferência"), text: "Confira contra o extrato e registre o resultado.", action: "Abrir Conferência", onClick: () => setTab("audit") },
-                  { show: metrics.errors > 0, icon: <AlertTriangle size={15} />, color: "var(--danger)", bg: "var(--danger-soft)", title: plural(metrics.errors, "turno com erro", "turnos com erro"), text: "Corrija os dados antes de pagar.", action: "Ver em Pagamentos", onClick: () => preparePaymentsNavigation(["erro"]) },
-                  { show: occurrences.unseen > 0, icon: <RefreshCw size={15} />, color: "#93c5fd", bg: "rgba(147, 197, 253, 0.12)", title: plural(occurrences.unseen, "atualização pendente", "atualizações pendentes"), text: "Planilhas por link mudaram desde a última leitura.", action: "Revisar", onClick: () => navigate("/remote-updates/imports") },
+                  { show: canPayments && metrics.errors > 0, icon: <AlertTriangle size={15} />, color: "var(--danger)", bg: "var(--danger-soft)", title: plural(metrics.errors, "turno com erro", "turnos com erro"), text: "Corrija os dados antes de pagar.", action: "Ver em Pagamentos", onClick: () => preparePaymentsNavigation(["erro"]) },
+                  { show: canVerify && occurrences.unseen > 0, icon: <RefreshCw size={15} />, color: "#93c5fd", bg: "rgba(147, 197, 253, 0.12)", title: plural(occurrences.unseen, "atualização pendente", "atualizações pendentes"), text: "Planilhas por link mudaram desde a última leitura.", action: "Revisar", onClick: () => navigate("/remote-updates/imports") },
                 ].filter((item) => item.show);
                 if (!items.length) return <p className="analytics-attention-empty"><CheckCircle2 size={15} /> Nada pedindo ação neste período.</p>;
                 return items.map((item) => (
@@ -426,7 +431,7 @@ export default function AnalyticsPage() {
                 value={plural(metrics.missingAmount, "turno", "turnos")}
                 valueColor={metrics.missingAmount > 0 ? "var(--warning)" : undefined}
                 detail={metrics.missingAmount > 0 ? "Fora dos totais até ter um valor" : "Todos os turnos têm valor"}
-                action={metrics.missingAmount > 0 ? { label: "Ver em Pagamentos", onClick: () => preparePaymentsNavigation(["pendente", "erro", "pago"], undefined, "?attention=missing-amount") } : undefined}
+                action={canPayments && metrics.missingAmount > 0 ? { label: "Ver em Pagamentos", onClick: () => preparePaymentsNavigation(["pendente", "erro", "pago"], undefined, "?attention=missing-amount") } : undefined}
               />
             </section>
             <section className="card analytics-panel">
@@ -445,7 +450,7 @@ export default function AnalyticsPage() {
                     const max = ranking[0].value || 1;
                     const scope = rankBy === "company" ? { companyId: item.sample.companyId } : rankBy === "role" ? (item.sample.roleId ? { roleId: item.sample.roleId } : undefined) : rankBy === "employee" ? { employeeId: item.sample.employeeId } : (item.sample.local ? { local: item.sample.local } : undefined);
                     return (
-                      <button key={item.label} type="button" className="analytics-rank-row" disabled={!scope} onClick={() => scope && preparePaymentsNavigation(undefined, scope)}>
+                      <button key={item.label} type="button" className="analytics-rank-row" disabled={!scope || !canPayments} onClick={() => scope && preparePaymentsNavigation(undefined, scope)}>
                         <span className="analytics-rank-label" title={item.label}>{item.label}</span>
                         <strong>{formatCurrencyBRL(item.value)}</strong>
                         <span className="analytics-rank-track">
@@ -463,9 +468,9 @@ export default function AnalyticsPage() {
 
           {tab === "journeys" && <>
             <section className="analytics-kpis">
-              <KpiCard label="Acima de 12h" value={plural(long.length, "turno", "turnos")} valueColor={long.length ? "var(--danger)" : undefined} detail={`${pct(long.length, rows.length)} dos turnos · possível excesso`} action={long.length ? { label: "Ver turnos", onClick: () => preparePaymentsNavigation(undefined, undefined, "?analytics=journey-over-12h") } : undefined} />
-              <KpiCard label="Descanso abaixo de 11h" value={plural(restIds.length, "turno", "turnos")} valueColor={restIds.length ? "var(--danger)" : undefined} detail="Entre jornadas do mesmo colaborador" action={restIds.length ? { label: "Ver turnos", onClick: () => preparePaymentsNavigation(undefined, undefined, `?analytics=rest-under-11h&ids=${restIds.join(",")}`) } : undefined} />
-              <KpiCard label="Abaixo de 4h" value={plural(short.length, "turno", "turnos")} valueColor={short.length ? "var(--warning)" : undefined} detail={`${pct(short.length, rows.length)} dos turnos · fora do padrão`} action={short.length ? { label: "Ver turnos", onClick: () => preparePaymentsNavigation(undefined, undefined, "?analytics=journey-under-4h") } : undefined} />
+              <KpiCard label="Acima de 12h" value={plural(long.length, "turno", "turnos")} valueColor={long.length ? "var(--danger)" : undefined} detail={`${pct(long.length, rows.length)} dos turnos · possível excesso`} action={canPayments && long.length ? { label: "Ver turnos", onClick: () => preparePaymentsNavigation(undefined, undefined, "?analytics=journey-over-12h") } : undefined} />
+              <KpiCard label="Descanso abaixo de 11h" value={plural(restIds.length, "turno", "turnos")} valueColor={restIds.length ? "var(--danger)" : undefined} detail="Entre jornadas do mesmo colaborador" action={canPayments && restIds.length ? { label: "Ver turnos", onClick: () => preparePaymentsNavigation(undefined, undefined, `?analytics=rest-under-11h&ids=${restIds.join(",")}`) } : undefined} />
+              <KpiCard label="Abaixo de 4h" value={plural(short.length, "turno", "turnos")} valueColor={short.length ? "var(--warning)" : undefined} detail={`${pct(short.length, rows.length)} dos turnos · fora do padrão`} action={canPayments && short.length ? { label: "Ver turnos", onClick: () => preparePaymentsNavigation(undefined, undefined, "?analytics=journey-under-4h") } : undefined} />
               <KpiCard label="Jornada média" value={timedRows.length ? formatHours(avgDuration) : "—"} detail="Sem contar turnos sem horário" />
             </section>
             <section className="analytics-grid">
@@ -477,7 +482,7 @@ export default function AnalyticsPage() {
                   return (
                     <div className="analytics-hist">
                       {DURATION_BUCKETS.map((b, i) => (
-                        <button key={b.label} type="button" className="analytics-hist-col" disabled={!b.analytics || !counts[i]} onClick={() => b.analytics && preparePaymentsNavigation(undefined, undefined, `?analytics=${b.analytics}`)} aria-label={`${b.label}: ${plural(counts[i], "turno", "turnos")}`}>
+                        <button key={b.label} type="button" className="analytics-hist-col" disabled={!b.analytics || !counts[i] || !canPayments} onClick={() => b.analytics && preparePaymentsNavigation(undefined, undefined, `?analytics=${b.analytics}`)} aria-label={`${b.label}: ${plural(counts[i], "turno", "turnos")}`}>
                           <span className="analytics-hist-count">{counts[i]}</span>
                           <span className="analytics-hist-bar" style={{ height: `${Math.max(2, counts[i] / max * 100)}%`, background: b.tone === "danger" ? "var(--danger)" : b.tone === "warning" ? "var(--warning)" : "#6b6b75" }} />
                           <span className="analytics-hist-label">{b.label}</span>
@@ -500,7 +505,7 @@ export default function AnalyticsPage() {
                       {days.map((day, weekday) => [
                         <span key={`${day}-label`} className="analytics-heat-row">{day}</span>,
                         ...grid[weekday].map((count, bucket) => (
-                          <button key={`${day}-${bucket}`} type="button" className="analytics-heat-cell" disabled={!count} style={{ background: `rgba(246,246,248,${count ? 0.15 + count / max * 0.75 : 0.04})` }} title={`${day}, ${bucket * 2}h–${bucket * 2 + 2}h: ${plural(count, "turno", "turnos")}`} aria-label={`${day}, ${bucket * 2} a ${bucket * 2 + 2} horas: ${plural(count, "turno", "turnos")}`} onClick={() => preparePaymentsNavigation(undefined, undefined, `?analytics=heatmap&weekday=${weekday}&bucket=${bucket}`)}>{count || ""}</button>
+                          <button key={`${day}-${bucket}`} type="button" className="analytics-heat-cell" disabled={!count || !canPayments} style={{ background: `rgba(246,246,248,${count ? 0.15 + count / max * 0.75 : 0.04})` }} title={`${day}, ${bucket * 2}h–${bucket * 2 + 2}h: ${plural(count, "turno", "turnos")}`} aria-label={`${day}, ${bucket * 2} a ${bucket * 2 + 2} horas: ${plural(count, "turno", "turnos")}`} onClick={() => preparePaymentsNavigation(undefined, undefined, `?analytics=heatmap&weekday=${weekday}&bucket=${bucket}`)}>{count || ""}</button>
                         )),
                       ])}
                     </div>
@@ -535,8 +540,8 @@ export default function AnalyticsPage() {
               <header><div><h3>O que fazer agora</h3><p className="analytics-panel-sub">Cada item abre onde ele se resolve</p></div></header>
               {(() => {
                 const items = [
-                  { show: pendingAudit > 0, icon: <SearchIcon size={15} />, color: "var(--warning)", bg: "var(--warning-soft)", title: `Conferir ${plural(pendingAudit, "pagamento", "pagamentos")} contra o extrato`, text: "Abre a Conferência de Pagamentos com o período e os filtros desta tela.", action: "Abrir Conferência", onClick: openConference },
-                  { show: metrics.errors > 0, icon: <AlertTriangle size={15} />, color: "var(--danger)", bg: "var(--danger-soft)", title: `Corrigir ${plural(metrics.errors, "turno com erro", "turnos com erro")}`, text: "Revise a mensagem de erro antes de pagar.", action: "Ver em Pagamentos", onClick: () => preparePaymentsNavigation(["erro"]) },
+                  { show: canPayments && pendingAudit > 0, icon: <SearchIcon size={15} />, color: "var(--warning)", bg: "var(--warning-soft)", title: `Conferir ${plural(pendingAudit, "pagamento", "pagamentos")} contra o extrato`, text: "Abre a Conferência de Pagamentos com o período e os filtros desta tela.", action: "Abrir Conferência", onClick: openConference },
+                  { show: canPayments && metrics.errors > 0, icon: <AlertTriangle size={15} />, color: "var(--danger)", bg: "var(--danger-soft)", title: `Corrigir ${plural(metrics.errors, "turno com erro", "turnos com erro")}`, text: "Revise a mensagem de erro antes de pagar.", action: "Ver em Pagamentos", onClick: () => preparePaymentsNavigation(["erro"]) },
                 ].filter((item) => item.show);
                 if (!items.length) return <p className="analytics-attention-empty"><CheckCircle2 size={15} /> Tudo conferido e sem erros neste período.</p>;
                 return items.map((item) => (
@@ -549,7 +554,7 @@ export default function AnalyticsPage() {
               })()}
             </section>
           </>}
-          <div className="analytics-footer-link"><Link to="/payments">Ver todos os turnos em Pagamentos <ArrowRight size={15}/></Link></div>
+          {canPayments && <div className="analytics-footer-link"><Link to="/payments">Ver todos os turnos em Pagamentos <ArrowRight size={15}/></Link></div>}
         </>
       )}
       <PaymentsFiltersPanel

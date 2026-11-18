@@ -1,9 +1,11 @@
 import { Bell, CheckCheck, ChevronDown, ChevronRight, Clock3 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useAccess } from "../contexts/AuthContext";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
 import { deletePaymentShift, dismissCheckDiffs, listAllLatestShiftDiffs, type CheckDiffRow } from "../lib/db";
 import { formatCountdown, formatDateAbbrevYY, formatDateTime, formatPersonName, parseSqliteDateTime, resolveReimportConfigLabel } from "../lib/format";
+import { READ_ONLY_TITLE } from "./AreaRoute";
 import ChangeCards from "./ChangeCards";
 import ConfirmModal from "./ConfirmModal";
 import Drawer from "./Drawer";
@@ -62,6 +64,13 @@ export default function PendingChangesTab() {
   const location = useLocation();
   const navigate = useNavigate();
   const { trackedFiles, reimportConfigs, checkingConfigIds } = useRemoteFileUpdates();
+  // Not inside an AreaRoute: viewing is open to anyone who gets here, but
+  // "Visto" needs "Editar" in Verificação automática or Pagamentos, and
+  // accepting/deleting/reimporting needs "Editar" in Pagamentos.
+  const { canEdit } = useAccess();
+  const canChange = canEdit("pagamentos");
+  const canDismiss = canChange || canEdit("verificacao");
+  const dismissTitle = canDismiss ? undefined : READ_ONLY_TITLE;
   const [rows, setRows] = useState<CheckDiffRow[]>([]);
   const [open, setOpen] = useState(false);
 
@@ -291,7 +300,8 @@ export default function PendingChangesTab() {
                 <button
                   type="button"
                   className="settings-button settings-button-ghost pc-seen"
-                  disabled={dismissingGroup}
+                  disabled={!canDismiss || dismissingGroup}
+                  title={dismissTitle}
                   onClick={() => run(`g${key}`, () => dismissCheckDiffs(groupUnseen.map((row) => row.id)))}
                 >
                   <CheckCheck size={13} /> {dismissingGroup ? "Marcando…" : "Marcar como visto"}
@@ -308,6 +318,8 @@ export default function PendingChangesTab() {
                 stateOf={(cardRows) =>
                   appliedGroup || cardRows.every((r) => r.applied) ? "applied" : cardRows.every((r) => r.dismissedAt !== null) ? "seen" : "pending"
                 }
+                canDismiss={canDismiss}
+                canChange={canChange}
                 busyKeys={busyKeys}
                 run={run}
                 onDeleteShift={setDeleteShiftTarget}
@@ -376,7 +388,7 @@ export default function PendingChangesTab() {
         footer={
           <>
             <span className="rv-footer-note" />
-            <button type="button" className="settings-button settings-button-primary" disabled={dismissingAll || unseenRows.length === 0} onClick={() => run("all", () => dismissCheckDiffs(unseenRows.map((row) => row.id)))}>
+            <button type="button" className="settings-button settings-button-primary" disabled={!canDismiss || dismissingAll || unseenRows.length === 0} title={dismissTitle} onClick={() => run("all", () => dismissCheckDiffs(unseenRows.map((row) => row.id)))}>
               <CheckCheck size={13} /> {dismissingAll ? "Marcando…" : `Marcar tudo como visto (${unseenRows.length})`}
             </button>
           </>

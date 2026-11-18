@@ -1,12 +1,14 @@
 import { CheckCircle2, ListFilter, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { useReadOnly } from "../components/AreaRoute";
 import Avatar from "../components/Avatar";
 import LibraryFiltersPanel, { LibraryFilterChips, useLibraryActiveFilterCount } from "../components/LibraryFiltersPanel";
 import Pagination from "../components/Pagination";
 import PageHeader from "../components/PageHeader";
 import PdfViewerModal from "../components/PdfViewerModal";
 import ZipExportButton from "../components/ZipExportButton";
+import { useAccess } from "../contexts/AuthContext";
 import { LIBRARY_PAGE_SIZE_OPTIONS, useLibraryFilters, type ReportMode } from "../contexts/FiltersContext";
 import { generateReportZip } from "../lib/api";
 import { listClients, listCompanies, listImports, type ClientRow, type CompanyRow } from "../lib/db";
@@ -98,6 +100,8 @@ export default function LibraryPage() {
     pageSize,
     setPageSize,
   } = useLibraryFilters();
+  const readOnly = useReadOnly();
+  const { canExport } = useAccess();
 
   const [imports, setImports] = useState<StoredImport[]>([]);
   const [total, setTotal] = useState(0);
@@ -192,7 +196,11 @@ export default function LibraryPage() {
       <PageHeader
         title="Cartão Ponto"
         subtitle="Espelhos de ponto importados, organizados em pastas por empresa e cliente."
-        actions={<ZipExportButton mode={mode} onModeChange={setMode} onGenerate={handleGenerateZip} busy={busy} total={loading ? null : total} />}
+        actions={
+          canExport ? (
+            <ZipExportButton mode={mode} onModeChange={setMode} onGenerate={handleGenerateZip} busy={busy} total={loading ? null : total} />
+          ) : undefined
+        }
       />
 
       {error && <div className="error-box">{error}</div>}
@@ -233,8 +241,14 @@ export default function LibraryPage() {
         {loading && imports.length === 0 && <p className="muted" style={{ padding: "1.4rem" }}>Carregando...</p>}
         {!loading && total === 0 && (
           <p className="muted" style={{ padding: "1.4rem" }}>
-            Nenhum resultado para os filtros selecionados. Considere ajustar os filtros ou{" "}
-            <Link to="/import/timesheet">importar um novo PDF</Link>.
+            Nenhum resultado para os filtros selecionados.{" "}
+            {readOnly ? (
+              "Considere ajustar os filtros."
+            ) : (
+              <>
+                Considere ajustar os filtros ou <Link to="/import/timesheet">importar um novo PDF</Link>.
+              </>
+            )}
           </p>
         )}
         {total > 0 && (
@@ -303,6 +317,7 @@ export default function LibraryPage() {
         path={viewerImport?.originalPdfPath ?? null}
         title={viewerImport ? `${viewerImport.employeeName} — ${formatDate(viewerImport.periodStart)} a ${formatDate(viewerImport.periodEnd)}` : undefined}
         onClose={() => setViewerImport(null)}
+        allowDownload={canExport}
       />
 
       <LibraryFiltersPanel
