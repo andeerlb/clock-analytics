@@ -1,6 +1,7 @@
 name: Deploy web
 
-# Every push to `web` tests, builds and publishes the web version:
+# Run by hand (Actions → Deploy web → Run workflow, branch `web`); a push no
+# longer deploys. It tests, builds and publishes the web version:
 #   1. server: cargo test → release build → binary to the releases bucket.
 #      The VM checks that bucket every minute, installs the new binary and
 #      rolls back on its own if it doesn't come up (infra/startup.sh.tftpl).
@@ -14,13 +15,13 @@ name: Deploy web
 # production → Variables), so moving to another Google Cloud/Firebase project
 # means changing those variables, not this file. None of them are secrets:
 #   GCP_PROJECT, WIF_PROVIDER, DEPLOY_SA, RELEASES_BUCKET, API_URL
-#     → printed by `tofu output github_variables` (infra/)
+#     → printed by `tofu output github_variables_commands` (infra/)
 #   FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_APP_ID
 #     → Firebase console → Configurações do projeto → Seus apps → app Web
 
+# Only `web` and `master` can deploy: the Google side refuses any other ref
+# (attribute_condition in infra/deploy.tf).
 on:
-  push:
-    branches: [web]
   workflow_dispatch:
 
 permissions:
