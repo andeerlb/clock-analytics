@@ -25,8 +25,13 @@ export default defineConfig(() => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching `src-tauri` and the web server
+      ignored: ["**/src-tauri/**", "**/server/**"],
+    },
+    // Web version: in `yarn dev` the API lives on the local `server/`
+    // (cargo run, default 127.0.0.1:8787) and is reached same-origin.
+    proxy: {
+      "/api": "http://127.0.0.1:8787",
     },
   },
 }));

@@ -4,6 +4,7 @@ import Database from "@tauri-apps/plugin-sql";
 import { overtimeMinutesForDay, sumIntervalMinutes } from "./analysis";
 import { normalizeCnpj, normalizeCpf, parseTimeToMinutes } from "./format";
 import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "./periodStatus";
+import { api } from "./http";
 import { detectPixKeyType, type PixKeyType } from "./pix";
 import type {
   ConflictInfo,
@@ -453,12 +454,7 @@ export interface CompanyRow {
 }
 
 export async function listCompanies(): Promise<CompanyRow[]> {
-  const db = await getDb();
-  return db.select<CompanyRow[]>(
-    `SELECT id, name, cnpj, night_start_time AS nightStartTime, night_end_time AS nightEndTime,
-            night_shift_rule AS nightShiftRule
-     FROM companies ORDER BY name`,
-  );
+  return api.get<CompanyRow[]>("/companies");
 }
 
 /** Full company detail, including its optional pay-value chain — only `getCompany` fetches this; `listCompanies` stays lightweight for dropdowns. */
@@ -506,49 +502,12 @@ export async function createCompany(
   nightShiftRule: NightShiftRule = "overlap",
   valueRules: PaymentValueRule[] = [],
 ): Promise<number> {
-  const db = await getDb();
-  const normalizedCnpj = normalizeCnpj(cnpj);
-  if (normalizedCnpj.length !== 14) {
-    throw new Error("CNPJ deve ter 14 dígitos.");
-  }
-  const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM companies WHERE cnpj = $1",
-    [normalizedCnpj],
-  );
-  if (existing.length > 0) {
-    throw new Error("Já existe uma empresa cadastrada com esse CNPJ.");
-  }
-  const results = await runWriteBatch([
-    {
-      sql: "INSERT INTO companies (name, cnpj, night_start_time, night_end_time, night_shift_rule) VALUES ($1, $2, $3, $4, $5)",
-      params: [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule],
-    },
-    ...valueRuleInserts("payment_value_rules", "company_id", { $lastInsertId: 0 }, valueRules),
-  ]);
-  return results[0].lastInsertId;
+  const { id } = await api.post<{ id: number }>("/companies", { name, cnpj, nightStartTime, nightEndTime, nightShiftRule, valueRules });
+  return id;
 }
 
 export async function getCompany(id: number): Promise<CompanyDetail> {
-  const db = await getDb();
-  const rows = await db.select<CompanyRow[]>(
-    `SELECT id, name, cnpj, night_start_time AS nightStartTime, night_end_time AS nightEndTime,
-            night_shift_rule AS nightShiftRule
-     FROM companies WHERE id = $1`,
-    [id],
-  );
-  if (rows.length === 0) throw new Error("Empresa não encontrada.");
-
-  const valueRuleRows = await db.select<(Omit<PaymentValueRule, "conditions"> & { conditionsJson: string | null })[]>(
-    `SELECT kind, conditions_json AS conditionsJson, operator, threshold_minutes AS thresholdMinutes, amount
-     FROM payment_value_rules WHERE company_id = $1 ORDER BY id`,
-    [id],
-  );
-  const valueRules: PaymentValueRule[] = valueRuleRows.map(({ conditionsJson, ...rule }) => ({
-    ...rule,
-    conditions: conditionsJson ? JSON.parse(conditionsJson) : [],
-  }));
-
-  return { ...rows[0], valueRules };
+  return api.get<CompanyDetail>(`/companies/${id}`);
 }
 
 export async function updateCompany(
@@ -560,26 +519,7 @@ export async function updateCompany(
   nightShiftRule: NightShiftRule,
   valueRules: PaymentValueRule[],
 ): Promise<void> {
-  const db = await getDb();
-  const normalizedCnpj = normalizeCnpj(cnpj);
-  if (normalizedCnpj.length !== 14) {
-    throw new Error("CNPJ deve ter 14 dígitos.");
-  }
-  const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM companies WHERE cnpj = $1 AND id != $2",
-    [normalizedCnpj, id],
-  );
-  if (existing.length > 0) {
-    throw new Error("Já existe uma empresa cadastrada com esse CNPJ.");
-  }
-  await runWriteBatch([
-    {
-      sql: "UPDATE companies SET name = $1, cnpj = $2, night_start_time = $3, night_end_time = $4, night_shift_rule = $5 WHERE id = $6",
-      params: [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule, id],
-    },
-    { sql: "DELETE FROM payment_value_rules WHERE company_id = $1", params: [id] },
-    ...valueRuleInserts("payment_value_rules", "company_id", id, valueRules),
-  ]);
+  await api.put<void>(`/companies/${id}`, { name, cnpj, nightStartTime, nightEndTime, nightShiftRule, valueRules });
 }
 
 // One row per (client, company) link — a client with multiple companies

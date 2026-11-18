@@ -1,3 +1,4 @@
+import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -45,7 +46,9 @@ import AnalyticsPage from "./pages/AnalyticsPage";
  * needs, since `PaymentReconciliationWindowPage` reads/writes
  * `usePaymentsFilters()`.
  */
-const IS_RECONCILIATION_WINDOW = getCurrentWindow().label === "reconciliation";
+// In the browser (web version) there is no Tauri window to ask — and
+// `getCurrentWindow()` throws there, which would blank the whole app.
+const IS_RECONCILIATION_WINDOW = isTauri() && getCurrentWindow().label === "reconciliation";
 
 function AppShell({ popplerMissing, importResult, clearImportResult }: { popplerMissing: boolean; importResult: DatabaseImportResult | null; clearImportResult: () => void }) {
   return (
