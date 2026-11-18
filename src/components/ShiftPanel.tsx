@@ -1,4 +1,3 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   AlertTriangle,
   BriefcaseBusiness,
@@ -383,7 +382,7 @@ function OriginSection({ shift, importedAt }: { shift: PaymentShiftRow; imported
     rows.push({
       label: "Arquivo",
       value: shift.sourceUrl ? (
-        <button type="button" className="sa-link sa-link-icon" onClick={() => openUrl(shift.sourceUrl!)} title={shift.sourceUrl}>
+        <button type="button" className="sa-link sa-link-icon" onClick={() => window.open(shift.sourceUrl!, "_blank", "noopener")} title={shift.sourceUrl}>
           <Link2 size={12} />
           {shift.sourceFileName}
         </button>

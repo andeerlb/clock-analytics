@@ -1,4 +1,3 @@
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   CheckCircle2,
   CheckSquare,
@@ -23,7 +22,7 @@ import {
   UploadCloud,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type DragEvent } from "react";
 import Modal, { useModalClose } from "./Modal";
 
 /** Header X, routed through `useModalClose` instead of the raw `onClose` prop so it plays the same animated exit `Modal` already uses for Escape/backdrop. */
@@ -54,6 +53,7 @@ import {
   type PaymentTemplateRuleInput,
   type PaymentTemplateStatusRuleInput,
 } from "../lib/db";
+import { uploadDropped } from "../lib/files";
 import { columnLetter, fileNameFromPath } from "../lib/format";
 import {
   DEFAULT_IDENTIFIER_PRIORITY,
@@ -95,6 +95,9 @@ const STEP_LABEL_TEXT: Record<WizardStep, string> = {
 
 /** Stand-in group key for csv, which has no sheets to key groups off of — there's always exactly one implicit group. */
 const CSV_GROUP_KEY = "__csv__";
+
+/** What the Arquivo step accepts, by extension (same list the desktop drop handler checked). */
+const PAYMENT_FILE_EXTENSIONS = ["csv", "xlsx", "xls", "ods"];
 
 const SAMPLE_ROW_COUNT = 10;
 
@@ -312,35 +315,24 @@ export default function PaymentTemplateWizard({
     listRecentPaymentFiles().then(setRecentFiles);
   }, [target]);
 
-  // OS-level drag-and-drop for the Arquivo step — Tauri intercepts this at
-  // the whole-webview level (not a DOM dragover/drop target), so it's only
-  // acted on while the wizard is open and actually on that step.
-  useEffect(() => {
-    if (!target || currentStep !== "file") return;
-    let unlisten: (() => void) | undefined;
-    getCurrentWebview()
-      .onDragDropEvent((event) => {
-        if (event.payload.type === "drop") {
-          setDragOver(false);
-          const path = event.payload.paths[0];
-          if (!path) return;
-          const ext = path.split(".").pop()?.toLowerCase();
-          if (!ext || !["csv", "xlsx", "xls", "ods"].includes(ext)) {
-            setError("Formato de arquivo não suportado. Use CSV, XLSX, XLS ou ODS.");
-            return;
-          }
-          selectFile(path);
-        } else if (event.payload.type === "enter" || event.payload.type === "over") {
-          setDragOver(true);
-        } else {
-          setDragOver(false);
-        }
-      })
-      .then((fn) => {
-        unlisten = fn;
-      });
-    return () => unlisten?.();
-  }, [target, currentStep]);
+  /** Drag-and-drop on the Arquivo step's dropzone: the dropped file is uploaded, then handled like a picked one. */
+  async function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragOver(false);
+    const file = event.dataTransfer.files[0];
+    if (!file) return;
+    const ext = file.name.split(".").pop()?.toLowerCase();
+    if (!ext || !PAYMENT_FILE_EXTENSIONS.includes(ext)) {
+      setError("Formato de arquivo não suportado. Use CSV, XLSX, XLS ou ODS.");
+      return;
+    }
+    try {
+      const [path] = await uploadDropped(event.dataTransfer, PAYMENT_FILE_EXTENSIONS);
+      if (path) selectFile(path);
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    }
+  }
 
   /** Which group a sheet's mapping should be read from — csv always has exactly one, implicit group. */
   function groupKeyOf(sheetName: string | null): string {
@@ -1031,6 +1023,12 @@ export default function PaymentTemplateWizard({
               <div
                 className={`file-dropzone${dragOver ? " drag-over" : ""}`}
                 onClick={handlePickFile}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOver(true);
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={handleDrop}
                 role="button"
                 tabIndex={0}
               >

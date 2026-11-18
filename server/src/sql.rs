@@ -7,8 +7,6 @@
 //! them, and rows come back in exactly the JSON shape the frontend already
 //! expects. See `server/PORTING.md`.
 
-// Used by the per-domain route modules as they get ported.
-#![allow(dead_code)]
 
 use serde::Deserialize;
 use serde_json::{Map, Value};

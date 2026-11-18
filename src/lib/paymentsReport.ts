@@ -1,4 +1,3 @@
-import { save } from "@tauri-apps/plugin-dialog";
 import jsPDF from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import { writeBinaryFile } from "./api";
@@ -148,8 +147,8 @@ async function generateReportPdf(
     } : undefined,
   });
 
-  const path = await save({ defaultPath: `${sanitizeFileName(title)}-${formatTimestampForFileName()}.pdf`, filters: [{ name: "PDF", extensions: ["pdf"] }] });
-  if (!path) return { rowCount: rows.length, matchedCount: allRows.length, path: null, title };
+  // Web: no save dialog — the browser downloads it under the suggested name.
+  const path = `${sanitizeFileName(title)}-${formatTimestampForFileName()}.pdf`;
   await writeBinaryFile(path, new Uint8Array(doc.output("arraybuffer")));
   return { rowCount: rows.length, matchedCount: allRows.length, path, title };
 }

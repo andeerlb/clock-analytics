@@ -302,14 +302,24 @@ export function addRecentPaymentFile(path: string): Promise<void> {
   return Promise.resolve();
 }
 
-/** "Destacar" on "Conferência de Pagamentos" — opens (or refocuses) it as its own OS window. See `open_reconciliation_window`. */
+/** Hash route of the standalone "Conferência de Pagamentos" tab (see `App.tsx`). */
+const RECONCILIATION_ROUTE = "/payments/reconciliation";
+/** Browser window name of that tab — `window.open` with it reuses an already-open one instead of opening a second. */
+const RECONCILIATION_WINDOW_NAME = "pontoscan-reconciliation";
+let reconciliationTab: Window | null = null;
+
+/** "Destacar" on "Conferência de Pagamentos" — opens (or refocuses) it in its own browser tab. */
 export function openReconciliationWindow(): Promise<void> {
-  return invoke("open_reconciliation_window");
+  const url = `${window.location.pathname}${window.location.search}#${RECONCILIATION_ROUTE}`;
+  // No "noopener": the handle is what lets `isReconciliationWindowOpen` see the tab (it's this app's own page).
+  reconciliationTab = window.open(url, RECONCILIATION_WINDOW_NAME);
+  reconciliationTab?.focus();
+  return Promise.resolve();
 }
 
-/** Whether "Conferência de Pagamentos" is already open in its own detached window. See `is_reconciliation_window_open`. */
+/** Whether "Conferência de Pagamentos" is open in its own tab (one this tab opened). */
 export function isReconciliationWindowOpen(): Promise<boolean> {
-  return invoke("is_reconciliation_window_open");
+  return Promise.resolve(reconciliationTab !== null && !reconciliationTab.closed);
 }
 
 /** How the assistant can reach Claude. The installed Claude Code wins when both are present. */

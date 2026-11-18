@@ -831,3 +831,71 @@ mod tests {
         assert_eq!(js_number_string(-0.0), "0");
     }
 }
+
+#[cfg(test)]
+mod equivalence_with_payments {
+    //! Análises and Pagamentos were ported in parallel and each carries a
+    //! copy of db.ts's `buildPaymentShiftRowConditions` (both verified
+    //! against the real database on their own). This pins them to the same
+    //! SQL and parameters for the same filters, so a change to one that
+    //! isn't mirrored in the other fails here.
+    use super::*;
+    use crate::routes::payments::{build_row_conditions, head_shift_condition as payments_head, shift_period_select_sql as payments_period_select, ShiftQuery};
+    use serde_json::json;
+
+    fn cases() -> Vec<Value> {
+        let all = json!({ "statuses": ["pendente", "pago"], "shiftPeriods": ["diurno", "noturno"] });
+        let mut out = vec![all.clone()];
+        let extras = [
+            json!({ "employeeIds": [1, 2, 3] }),
+            json!({ "companyIds": [1], "clientIds": [2, 5] }),
+            json!({ "roleIds": [7], "locals": ["Santo amaro atacadista", "LOJA 12"] }),
+            json!({ "periodStart": "2026-09-01", "periodEnd": "2026-09-30" }),
+            json!({ "periodStart": "", "periodEnd": "" }),
+            json!({ "statuses": ["pago"] }),
+            json!({ "shiftPeriods": ["noturno"] }),
+            json!({ "scheduleTimeFilter": { "rule": "start-before", "time": "08:00" } }),
+            json!({ "scheduleTimeFilter": { "rule": "end-after", "time": "22:30" } }),
+            json!({ "scheduleTimeFilter": { "rule": "start-before", "time": "xx" } }),
+            json!({ "attention": "pending-audit" }),
+            json!({ "attention": "missing-amount", "shiftIds": [10, 11] }),
+            json!({ "shiftIds": [] }),
+            json!({ "analytics": "long-journey" }),
+            json!({ "analytics": "short-rest", "analyticsShiftIds": [4, 5] }),
+            json!({ "analytics": "short-rest" }),
+            json!({ "analytics": "heatmap", "analyticsWeekday": 3, "analyticsTimeBucket": 14 }),
+            json!({ "analytics": "heatmap", "analyticsWeekday": 3 }),
+            json!({ "employeeIds": [9], "statuses": ["pendente"], "shiftPeriods": ["diurno"], "attention": "pending-audit",
+                    "scheduleTimeFilter": { "rule": "end-before", "time": "18:00" }, "periodStart": "2026-01-01" }),
+        ];
+        for extra in extras {
+            let mut case = all.clone();
+            for (k, v) in extra.as_object().unwrap() {
+                case[k] = v.clone();
+            }
+            out.push(case);
+        }
+        out
+    }
+
+    #[test]
+    fn row_conditions_match_the_payments_copy() {
+        for case in cases() {
+            let a: PaymentShiftsQuery = serde_json::from_value(case.clone()).unwrap();
+            let b: ShiftQuery = serde_json::from_value(case.clone()).unwrap();
+            let (mut pa, mut pb) = (Vec::new(), Vec::new());
+            let ca = build_payment_shift_row_conditions(&a, &mut pa);
+            let cb = build_row_conditions(&b, &mut pb).unwrap();
+            assert_eq!(ca, cb, "conditions differ for {case}");
+            // `sql::bind` sends every number as f64, so 1680 and 1680.0 bind the same.
+            let norm = |p: Vec<Value>| -> Vec<Value> { p.into_iter().map(|v| v.as_f64().map(Value::from).unwrap_or(v)).collect() };
+            assert_eq!(norm(pa), norm(pb), "params differ for {case}");
+        }
+    }
+
+    #[test]
+    fn shared_fragments_match() {
+        assert_eq!(head_shift_condition(), payments_head());
+        assert_eq!(shift_period_select_sql(), payments_period_select());
+    }
+}
