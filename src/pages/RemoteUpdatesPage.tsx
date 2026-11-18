@@ -1,11 +1,13 @@
 import { ChevronDown, ChevronRight, ExternalLink, FileSpreadsheet, Plus, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import ChangeCards, { authorKey, savedWhen, UNNAMED_AUTHOR } from "../components/ChangeCards";
+import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
+import ChangeCards, { authorKey, NO_PAYMENT_EDIT_TITLE, savedWhen, UNNAMED_AUTHOR } from "../components/ChangeCards";
 import ConfirmModal from "../components/ConfirmModal";
 import DateRangePicker from "../components/DateRangePicker";
 import Drawer from "../components/Drawer";
 import PageHeader from "../components/PageHeader";
+import { useAccess } from "../contexts/AuthContext";
 import { useRemoteFileUpdates, type ReimportConfig, type TrackedPaymentUrl } from "../contexts/RemoteFileUpdatesContext";
 import { colorForName, initials } from "../lib/avatar";
 import {
@@ -99,7 +101,7 @@ function periodText(s: RuleSettings): string {
 /** "De [N] até [M] dias atrás" for "Dias atrás…": saves on every valid change (start ≥ end), keeps an invalid draft local.
  *  Only it changes the offsets while open, so the draft isn't re-synced from props (a slow save would overwrite what's being typed);
  *  it is keyed by rule so another rule starts fresh. */
-function RelativeDaysFields({ start, end, onChange }: { start: number; end: number; onChange: (start: number, end: number) => void }) {
+function RelativeDaysFields({ start, end, onChange, disabled = false }: { start: number; end: number; onChange: (start: number, end: number) => void; disabled?: boolean }) {
   const [draft, setDraft] = useState({ start: String(start), end: String(end) });
   const parse = (v: string) => (/^\d{1,3}$/.test(v) ? Number(v) : null);
   const a = parse(draft.start);
@@ -115,9 +117,9 @@ function RelativeDaysFields({ start, end, onChange }: { start: number; end: numb
     <div className="rv-days">
       <div className="rv-days-row">
         De
-        <input className="rv-days-input" type="number" inputMode="numeric" min={0} max={999} aria-label="Início, em dias atrás" value={draft.start} onChange={(e) => edit({ ...draft, start: e.target.value })} />
+        <input className="rv-days-input" type="number" inputMode="numeric" min={0} max={999} aria-label="Início, em dias atrás" disabled={disabled} title={disabled ? READ_ONLY_TITLE : undefined} value={draft.start} onChange={(e) => edit({ ...draft, start: e.target.value })} />
         até
-        <input className="rv-days-input" type="number" inputMode="numeric" min={0} max={999} aria-label="Fim, em dias atrás" value={draft.end} onChange={(e) => edit({ ...draft, end: e.target.value })} />
+        <input className="rv-days-input" type="number" inputMode="numeric" min={0} max={999} aria-label="Fim, em dias atrás" disabled={disabled} title={disabled ? READ_ONLY_TITLE : undefined} value={draft.end} onChange={(e) => edit({ ...draft, end: e.target.value })} />
         dias atrás
       </div>
       {invalid && <span className="rv-days-error">O início precisa ser igual ou maior que o fim (ex.: de 7 até 0).</span>}
@@ -129,7 +131,7 @@ function RelativeDaysFields({ start, end, onChange }: { start: number; end: numb
           ["7 dias", 7, 0],
           ["60 dias", 60, 0],
         ].map(([label, ps, pe]) => (
-          <button key={label} type="button" className="rv-days-preset" onClick={() => edit({ start: String(ps), end: String(pe) })}>
+          <button key={label} type="button" className="rv-days-preset" disabled={disabled} title={disabled ? READ_ONLY_TITLE : undefined} onClick={() => edit({ start: String(ps), end: String(pe) })}>
             {label}
           </button>
         ))}
@@ -197,6 +199,16 @@ type Sheet =
  */
 export default function RemoteUpdatesPage() {
   const navigate = useNavigate();
+  // View-only in Verificação automática: rules, toggles and checks are off.
+  const readOnly = useReadOnly();
+  const roTitle = readOnly ? READ_ONLY_TITLE : undefined;
+  // Accepting a change, deleting a turno or reimporting writes to Pagamentos.
+  const { canEdit } = useAccess();
+  const canPay = canEdit("pagamentos");
+  const payTitle = canPay ? undefined : NO_PAYMENT_EDIT_TITLE;
+  // "Visto"/"Ignorar" is allowed with "Editar" in either area.
+  const canDismiss = !readOnly || canPay;
+  const dismissTitle = canDismiss ? undefined : READ_ONLY_TITLE;
   const {
     trackedFiles,
     reimportConfigs,
@@ -483,7 +495,7 @@ export default function RemoteUpdatesPage() {
 
   function renderSingle(file: TrackedPaymentUrl, c: ReimportConfig | undefined) {
     const status = c ? ruleStatus(c) : null;
-    const open = () => (c ? openSheet({ kind: "rule", configId: c.id }) : openNewRule(file.sourceUrl));
+    const open = () => (c ? openSheet({ kind: "rule", configId: c.id }) : !readOnly && openNewRule(file.sourceUrl));
     return (
       <div
         key={file.sourceUrl}
@@ -498,7 +510,7 @@ export default function RemoteUpdatesPage() {
           <div className="rv-name">{file.fileName}</div>
           {status ? statusLine(status.tone, status.text) : statusLine("off", "Sem regra: não está sendo conferida")}
         </div>
-        {status?.action ?? (c ? <span className="rv-every">{c.checkDisabled ? "" : everyText(c.checkIntervalMinutes)}</span> : (
+        {status?.action ?? (c ? <span className="rv-every">{c.checkDisabled ? "" : everyText(c.checkIntervalMinutes)}</span> : !readOnly && (
           <button type="button" className="settings-button" onClick={(e) => (e.stopPropagation(), openNewRule(file.sourceUrl))}>
             Criar regra
           </button>
@@ -560,7 +572,8 @@ export default function RemoteUpdatesPage() {
   }
 
   /** The rule settings shared by "edit" and "new rule". */
-  function renderRuleFields(s: RuleSettings, onChange: (patch: Partial<RuleSettings>) => void, ruleKey: string) {
+  function renderRuleFields(s: RuleSettings, onChange: (patch: Partial<RuleSettings>) => void, ruleKey: string, disabled = false) {
+    const title = disabled ? READ_ONLY_TITLE : undefined;
     const periodChoice = periodChoiceOf(s);
     const daysOpen = periodChoice === "days" || (daysEditing && s.dateMode === "relative");
     const customInterval = !INTERVAL_CHOICES.includes(s.checkIntervalMinutes);
@@ -570,7 +583,7 @@ export default function RemoteUpdatesPage() {
           <span className="rv-label">Conferir a cada</span>
           <div className="rv-chips">
             {INTERVAL_CHOICES.map((m) => (
-              <button key={m} type="button" className="rv-chip" aria-pressed={s.checkIntervalMinutes === m} onClick={() => onChange({ checkIntervalMinutes: m })}>
+              <button key={m} type="button" className="rv-chip" aria-pressed={s.checkIntervalMinutes === m} disabled={disabled} title={title} onClick={() => onChange({ checkIntervalMinutes: m })}>
                 {m === 60 ? "1 hora" : `${m} min`}
               </button>
             ))}
@@ -586,7 +599,7 @@ export default function RemoteUpdatesPage() {
           <span className="rv-label">Quais turnos olhar</span>
           <div className="rv-chips">
             {PERIOD_CHOICES.map((p) => (
-              <button key={p.key} type="button" className="rv-chip" aria-pressed={periodChoice === p.key} onClick={() => (setDaysEditing(false), onChange(p.settings))}>
+              <button key={p.key} type="button" className="rv-chip" aria-pressed={periodChoice === p.key} disabled={disabled} title={title} onClick={() => (setDaysEditing(false), onChange(p.settings))}>
                 {p.label}
               </button>
             ))}
@@ -594,6 +607,8 @@ export default function RemoteUpdatesPage() {
               type="button"
               className="rv-chip"
               aria-pressed={daysOpen}
+              disabled={disabled}
+              title={title}
               onClick={() => {
                 setDaysEditing(true);
                 if (s.dateMode !== "relative") onChange({ dateMode: "relative", periodStart: null, periodEnd: null, startOffsetDays: 7, endOffsetDays: 0 });
@@ -605,14 +620,19 @@ export default function RemoteUpdatesPage() {
               type="button"
               className="rv-chip"
               aria-pressed={periodChoice === "fixed"}
+              disabled={disabled}
+              title={title}
               onClick={() => (setDaysEditing(false), onChange({ dateMode: "fixed", startOffsetDays: null, endOffsetDays: null, periodStart: s.periodStart, periodEnd: s.periodEnd }))}
             >
               Período fixo…
             </button>
           </div>
-          {daysOpen && <RelativeDaysFields key={ruleKey} start={s.startOffsetDays ?? 0} end={s.endOffsetDays ?? 0} onChange={(start, end) => onChange({ startOffsetDays: start, endOffsetDays: end })} />}
+          {daysOpen && <RelativeDaysFields key={ruleKey} start={s.startOffsetDays ?? 0} end={s.endOffsetDays ?? 0} onChange={(start, end) => onChange({ startOffsetDays: start, endOffsetDays: end })} disabled={disabled} />}
           {periodChoice === "fixed" && (
-            <DateRangePicker startValue={s.periodStart ?? ""} endValue={s.periodEnd ?? ""} onChange={(start, end) => onChange({ periodStart: start || null, periodEnd: end || null })} fullWidth />
+            // DateRangePicker has no `disabled`; a disabled fieldset turns off its controls.
+            <fieldset disabled={disabled} title={title} style={{ display: "contents" }}>
+              <DateRangePicker startValue={s.periodStart ?? ""} endValue={s.periodEnd ?? ""} onChange={(start, end) => onChange({ periodStart: start || null, periodEnd: end || null })} fullWidth />
+            </fieldset>
           )}
           <span className="rv-small">Hoje isso é {todayRange(s)}.</span>
         </div>
@@ -641,11 +661,11 @@ export default function RemoteUpdatesPage() {
               <button type="button" className="settings-button" onClick={() => openUrl(c.sourceUrl)}>
                 Abrir link <ExternalLink size={12} />
               </button>
-              <button type="button" className="settings-button settings-button-primary" onClick={() => forceCheckConfig(c.id)} disabled={checkingConfigIds.has(c.id)}>
+              <button type="button" className="settings-button settings-button-primary" onClick={() => forceCheckConfig(c.id)} disabled={readOnly || checkingConfigIds.has(c.id)} title={roTitle}>
                 {checkingConfigIds.has(c.id) ? "Conferindo..." : "Tentar de novo"}
               </button>
               {error && (
-                <button type="button" className="settings-button settings-button-ghost" onClick={() => withBusy(`e${error.id}`, () => dismissCheckDiffs([error.id]))}>
+                <button type="button" className="settings-button settings-button-ghost" disabled={!canDismiss} title={dismissTitle} onClick={() => withBusy(`e${error.id}`, () => dismissCheckDiffs([error.id]))}>
                   Ok, já vi
                 </button>
               )}
@@ -658,10 +678,10 @@ export default function RemoteUpdatesPage() {
             <span className="rv-toggle-title">Conferir esta planilha</span>
             <span className="rv-toggle-desc">Desligue para pausar sem perder os ajustes.</span>
           </span>
-          <input type="checkbox" role="switch" className="settings-switch" checked={!c.checkDisabled} onChange={() => toggleRule(c)} />
+          <input type="checkbox" role="switch" className="settings-switch" checked={!c.checkDisabled} disabled={readOnly} title={roTitle} onChange={() => toggleRule(c)} />
         </label>
 
-        {renderRuleFields(s, (patch) => saveRule(c, patch), `rule-${c.id}`)}
+        {renderRuleFields(s, (patch) => saveRule(c, patch), `rule-${c.id}`, readOnly)}
 
         <div className={moreOpen ? "rv-more rv-more-open" : "rv-more"}>
           <button type="button" className="rv-more-toggle" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>
@@ -685,7 +705,7 @@ export default function RemoteUpdatesPage() {
                       <span className="rv-opts-title">Manter ao reimportar</span>
                       <span className="rv-opts-desc">Vale para “Reimportar agora”, abaixo.</span>
                     </span>
-                    <input type="checkbox" role="switch" className="settings-switch" checked={c.keepManualEdits} onChange={(e) => saveRule(c, { keepManualEdits: e.target.checked })} />
+                    <input type="checkbox" role="switch" className="settings-switch" checked={c.keepManualEdits} disabled={readOnly} title={roTitle} onChange={(e) => saveRule(c, { keepManualEdits: e.target.checked })} />
                   </label>
                 </div>
               </section>
@@ -753,17 +773,19 @@ export default function RemoteUpdatesPage() {
               </section>
 
               <div className="rv-more-actions">
-                <button type="button" className="settings-button" onClick={() => forceCheckConfig(c.id)} disabled={checkingConfigIds.has(c.id)}>
+                <button type="button" className="settings-button" onClick={() => forceCheckConfig(c.id)} disabled={readOnly || checkingConfigIds.has(c.id)} title={roTitle}>
                   <RefreshCw size={13} />
                   {checkingConfigIds.has(c.id) ? "Conferindo..." : "Conferir agora"}
                 </button>
-                <button type="button" className="settings-button" onClick={() => reprocess(c.id, resolveReimportPeriod(s).start, resolveReimportPeriod(s).end)}>
+                <button type="button" className="settings-button" disabled={!canPay} title={payTitle} onClick={() => reprocess(c.id, resolveReimportPeriod(s).start, resolveReimportPeriod(s).end)}>
                   Reimportar agora
                 </button>
-                <button type="button" className="settings-button settings-button-ghost" onClick={() => openNewRule(c.sourceUrl)}>
-                  <Plus size={13} />
-                  Outra regra para esta planilha
-                </button>
+                {!readOnly && (
+                  <button type="button" className="settings-button settings-button-ghost" onClick={() => openNewRule(c.sourceUrl)}>
+                    <Plus size={13} />
+                    Outra regra para esta planilha
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -795,9 +817,11 @@ export default function RemoteUpdatesPage() {
             );
           })}
         </div>
-        <button type="button" className="settings-button" style={{ alignSelf: "flex-start" }} onClick={() => openNewRule(sourceUrl)}>
-          + Nova regra para esta planilha
-        </button>
+        {!readOnly && (
+          <button type="button" className="settings-button" style={{ alignSelf: "flex-start" }} onClick={() => openNewRule(sourceUrl)}>
+            + Nova regra para esta planilha
+          </button>
+        )}
       </div>
     );
   }
@@ -924,6 +948,8 @@ export default function RemoteUpdatesPage() {
         {renderAuthors(rows)}
         {actionError && <div className="error-box">{actionError}</div>}
         <ChangeCards
+          canDismiss={canDismiss}
+          canChange={canPay}
           rows={shown}
           configFor={() => c}
           stateOf={() => (mode === "applied" ? "applied" : "pending")}
@@ -977,17 +1003,19 @@ export default function RemoteUpdatesPage() {
     sheetFooter = (
       <>
         {siblings.length > 1 ? (
-          <button type="button" className="settings-button settings-button-danger" onClick={() => setDeleteRuleTarget(sheetConfig)}>
+          <button type="button" className="settings-button settings-button-danger" disabled={readOnly} title={roTitle} onClick={() => setDeleteRuleTarget(sheetConfig)}>
             Excluir esta regra…
           </button>
         ) : (
           file && (
-            <button type="button" className="settings-button settings-button-danger" onClick={() => setUntrackTarget(file)}>
+            <button type="button" className="settings-button settings-button-danger" disabled={readOnly} title={roTitle} onClick={() => setUntrackTarget(file)}>
               Parar de acompanhar…
             </button>
           )
         )}
-        <span className="rv-footer-note">{saveError ? <span className="settings-text-danger">{saveError}</span> : savingConfigId === sheetConfig.id ? "Salvando..." : "Salvo automaticamente"}</span>
+        <span className="rv-footer-note">
+          {readOnly ? READ_ONLY_TITLE : saveError ? <span className="settings-text-danger">{saveError}</span> : savingConfigId === sheetConfig.id ? "Salvando..." : "Salvo automaticamente"}
+        </span>
       </>
     );
   } else if (sheet?.kind === "file") {
@@ -997,7 +1025,7 @@ export default function RemoteUpdatesPage() {
     sheetSub = linkTo(sheet.sourceUrl);
     sheetBody = renderFileSheet(sheet.sourceUrl);
     sheetFooter = file && (
-      <button type="button" className="settings-button settings-button-danger" onClick={() => setUntrackTarget(file)}>
+      <button type="button" className="settings-button settings-button-danger" disabled={readOnly} title={roTitle} onClick={() => setUntrackTarget(file)}>
         Parar de acompanhar…
       </button>
     );
@@ -1017,7 +1045,7 @@ export default function RemoteUpdatesPage() {
         <button type="button" className="settings-button settings-button-ghost" onClick={() => setSheet(null)}>
           Cancelar
         </button>
-        <button type="button" className="settings-button settings-button-primary" onClick={() => handleCreateRule(sheet.sourceUrl)} disabled={creating}>
+        <button type="button" className="settings-button settings-button-primary" onClick={() => handleCreateRule(sheet.sourceUrl)} disabled={readOnly || creating} title={roTitle}>
           {creating ? "Criando..." : "Criar regra"}
         </button>
       </>
@@ -1041,14 +1069,14 @@ export default function RemoteUpdatesPage() {
       sheet.mode === "applied" ? (
         <>
           <span className="rv-footer-note">Ao confirmar, essas mudanças saem da lista.</span>
-          <button type="button" className="settings-button settings-button-primary" disabled={busyKeys.has("seen") || rows.length === 0} onClick={() => withBusy("seen", () => dismissCheckDiffs(rows.map((r) => r.id)))}>
+          <button type="button" className="settings-button settings-button-primary" disabled={!canDismiss || busyKeys.has("seen") || rows.length === 0} title={dismissTitle} onClick={() => withBusy("seen", () => dismissCheckDiffs(rows.map((r) => r.id)))}>
             Ok, entendi
           </button>
         </>
       ) : (
         <>
           <span className="rv-footer-note">{n ? `${n} restantes` : "Nada pendente"}</span>
-          <button type="button" className="settings-button settings-button-primary" disabled={fieldShifts === 0 || busyKeys.has("all")} onClick={() => applyAll(reviewConfig, pending)}>
+          <button type="button" className="settings-button settings-button-primary" disabled={!canPay || fieldShifts === 0 || busyKeys.has("all")} title={payTitle} onClick={() => applyAll(reviewConfig, pending)}>
             {busyKeys.has("all") ? "Aplicando..." : `Aplicar as alterações (${fieldShifts})`}
           </button>
         </>
@@ -1085,6 +1113,8 @@ export default function RemoteUpdatesPage() {
         {checkDiffs === null && <p className="rv-muted">Carregando...</p>}
         {checkDiffs !== null && changes.length === 0 && !sheet.entry.message && errors.length === 0 && <p className="rv-muted">Nenhuma mudança nesta verificação.</p>}
         <ChangeCards
+          canDismiss={canDismiss}
+          canChange={canPay}
           rows={changes}
           configFor={() => sheetConfig}
           stateOf={cardState}
@@ -1116,7 +1146,7 @@ export default function RemoteUpdatesPage() {
         subtitle="Planilhas importadas por link que o PontoScan confere sozinho."
         actions={
           files.length > 0 && (
-            <button type="button" className="settings-button" onClick={handleForceCheckAll} disabled={forcingAll}>
+            <button type="button" className="settings-button" onClick={handleForceCheckAll} disabled={readOnly || forcingAll} title={roTitle}>
               <RefreshCw size={14} className={forcingAll ? "ai-spin" : undefined} />
               {forcingAll ? "Conferindo..." : "Verificar agora"}
             </button>
@@ -1144,9 +1174,11 @@ export default function RemoteUpdatesPage() {
               <b>3</b>Ela aparece aqui, e você é avisado quando algo mudar.
             </li>
           </ol>
-          <button type="button" className="settings-button settings-button-primary" onClick={() => navigate("/import/payments")}>
-            Ir para Importar Pagamentos
-          </button>
+          {canPay && (
+            <button type="button" className="settings-button settings-button-primary" onClick={() => navigate("/import/payments")}>
+              Ir para Importar Pagamentos
+            </button>
+          )}
         </div>
       ) : (
         <>
@@ -1156,13 +1188,15 @@ export default function RemoteUpdatesPage() {
               return configs.length > 1 ? renderGroup(f, configs) : renderSingle(f, configs[0]);
             })}
           </div>
-          <p className="rv-hint">
-            Para acompanhar outra planilha, importe-a por link em{" "}
-            <button type="button" className="rv-link" onClick={() => navigate("/import/payments")}>
-              Importar Pagamentos
-            </button>{" "}
-            e marque “Rastrear atualizações automaticamente”.
-          </p>
+          {canPay && (
+            <p className="rv-hint">
+              Para acompanhar outra planilha, importe-a por link em{" "}
+              <button type="button" className="rv-link" onClick={() => navigate("/import/payments")}>
+                Importar Pagamentos
+              </button>{" "}
+              e marque “Rastrear atualizações automaticamente”.
+            </p>
+          )}
         </>
       )}
 

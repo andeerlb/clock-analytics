@@ -4,6 +4,10 @@ import { colorForName, initials } from "../lib/avatar";
 import { dismissCheckDiffs, type CheckDiffRow } from "../lib/db";
 import { diffFieldLabel, formatDateAbbrevYY, formatMinutesAsTime, formatPersonName } from "../lib/format";
 import { acceptShiftChange } from "../lib/remoteCheckDiff";
+import { READ_ONLY_TITLE } from "./AreaRoute";
+
+/** Tooltip for applying/deleting/reimporting a turno without "Editar" in Pagamentos. */
+export const NO_PAYMENT_EDIT_TITLE = "Seu perfil não permite alterar Pagamentos";
 
 /** "hoje às 14:28", "ontem às 18:40", "16/11 às 10:00" — when a spreadsheet version was saved (as written in the file). */
 export function savedWhen(iso: string | null): string {
@@ -67,6 +71,8 @@ export default function ChangeCards({
   onDeleteShift,
   onReprocess,
   keyPrefix = "",
+  canDismiss = true,
+  canChange = true,
 }: {
   rows: CheckDiffRow[];
   /** The rule that found the change; actions that need it are disabled when it was removed. */
@@ -79,6 +85,10 @@ export default function ChangeCards({
   onReprocess: (configId: number, periodStart: string | null, periodEnd: string | null) => void;
   /** Keeps busy keys apart when several lists share one `busyKeys`. */
   keyPrefix?: string;
+  /** "Ignorar"/"Manter"/"Ok, já vi": needs "Editar" in Verificação automática or Pagamentos. */
+  canDismiss?: boolean;
+  /** "Aplicar", "Excluir turno…", "Reimportar o período": need "Editar" in Pagamentos. */
+  canChange?: boolean;
 }) {
   function renderCard(cardKey: string, cardRows: CheckDiffRow[]) {
     const key = keyPrefix + cardKey;
@@ -119,14 +129,14 @@ export default function ChangeCards({
     let actions: ReactNode = null;
     if (state === "pending") {
       const ignore = (label: string) => (
-        <button type="button" className="settings-button settings-button-ghost" disabled={busy} onClick={() => run(key, () => dismissCheckDiffs(ids))}>
+        <button type="button" className="settings-button settings-button-ghost" disabled={busy || !canDismiss} title={canDismiss ? undefined : READ_ONLY_TITLE} onClick={() => run(key, () => dismissCheckDiffs(ids))}>
           {label}
         </button>
       );
       if (first.changeKind === "field" && first.matchedShiftId !== null) {
         actions = (
           <>
-            <button type="button" className="settings-button" disabled={busy || !c} onClick={() => c && run(key, () => acceptShiftChange(c, first.matchedShiftId!))}>
+            <button type="button" className="settings-button" disabled={busy || !c || !canChange} title={canChange ? undefined : NO_PAYMENT_EDIT_TITLE} onClick={() => c && run(key, () => acceptShiftChange(c, first.matchedShiftId!))}>
               {busy ? "Aplicando..." : "Aplicar"}
             </button>
             {ignore("Ignorar")}
@@ -135,7 +145,7 @@ export default function ChangeCards({
       } else if (first.changeKind === "removed" && first.matchedShiftId !== null) {
         actions = (
           <>
-            <button type="button" className="settings-button settings-button-danger" disabled={busy} onClick={() => onDeleteShift({ shiftId: first.matchedShiftId!, who: first.employeeName ?? "" })}>
+            <button type="button" className="settings-button settings-button-danger" disabled={busy || !canChange} title={canChange ? undefined : NO_PAYMENT_EDIT_TITLE} onClick={() => onDeleteShift({ shiftId: first.matchedShiftId!, who: first.employeeName ?? "" })}>
               Excluir turno…
             </button>
             {ignore("Manter")}
@@ -146,7 +156,7 @@ export default function ChangeCards({
       } else {
         actions = (
           <>
-            <button type="button" className="settings-button" disabled={busy || !c} onClick={() => c && onReprocess(c.id, first.periodStart, first.periodEnd)}>
+            <button type="button" className="settings-button" disabled={busy || !c || !canChange} title={canChange ? undefined : NO_PAYMENT_EDIT_TITLE} onClick={() => c && onReprocess(c.id, first.periodStart, first.periodEnd)}>
               Reimportar o período
             </button>
             {ignore("Ignorar")}

@@ -2,9 +2,11 @@ import { Archive, ChevronRight, Download, Search, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import AiSettingsCard, { type AiConnection } from "../components/AiSettingsCard";
+import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
 import ConfirmModal from "../components/ConfirmModal";
 import Modal from "../components/Modal";
 import PageHeader from "../components/PageHeader";
+import { useAccess } from "../contexts/AuthContext";
 import {
   aiStatus,
   clearImportsDir,
@@ -33,8 +35,14 @@ const CLEAR_CONFIRM_PHRASE = "APAGAR TUDO";
 /** Rows whose details open below them. */
 type ExpandableRow = "espaco" | "ia";
 
+const NO_EXPORT_TITLE = "Seu perfil não permite exportar ou baixar arquivos";
+
 export default function SettingsPage() {
   const navigate = useNavigate();
+  // View-only: storage info stays readable; what changes data is off.
+  const readOnly = useReadOnly();
+  const roTitle = readOnly ? READ_ONLY_TITLE : undefined;
+  const { canExport } = useAccess();
   const [storage, setStorage] = useState<StorageUsage | null>(null);
   const [loadingStorage, setLoadingStorage] = useState(true);
   // Which storage tile's breakdown is open in the detail Modal, if any —
@@ -396,7 +404,7 @@ export default function SettingsPage() {
                     {purgeMessage && <span className="settings-row-result"> {purgeMessage}</span>}
                   </span>
                 </span>
-                <button type="button" className="settings-button" onClick={handleFindRedundant} disabled={purging}>
+                <button type="button" className="settings-button" onClick={handleFindRedundant} disabled={readOnly || purging} title={roTitle}>
                   {purging ? "Procurando..." : "Procurar e remover"}
                 </button>
               </div>
@@ -407,7 +415,7 @@ export default function SettingsPage() {
                   <span className="settings-row-title">Compactar o banco</span>
                   <span className="settings-row-desc">Recupera o espaço de registros já apagados, sem remover nenhum dado.</span>
                 </span>
-                <button type="button" className="settings-button" onClick={handleVacuum} disabled={vacuuming}>
+                <button type="button" className="settings-button" onClick={handleVacuum} disabled={readOnly || vacuuming} title={roTitle}>
                   {vacuuming ? "Compactando..." : "Compactar"}
                 </button>
               </div>
@@ -418,7 +426,7 @@ export default function SettingsPage() {
                   <span className="settings-row-title">Baixar uma cópia do banco</span>
                   <span className="settings-row-desc">Um arquivo .db para guardar ou mandar pra alguém analisar. Não muda nada aqui.</span>
                 </span>
-                <button type="button" className="settings-button" onClick={handleExportDatabase} disabled={exporting}>
+                <button type="button" className="settings-button" onClick={handleExportDatabase} disabled={!canExport || exporting} title={canExport ? undefined : NO_EXPORT_TITLE}>
                   <Download size={14} />
                   {exporting ? "Preparando..." : "Baixar cópia"}
                 </button>
@@ -473,7 +481,7 @@ export default function SettingsPage() {
                   <span className="settings-row-title settings-text-danger">Apagar histórico e arquivos</span>
                   <span className="settings-row-desc">Escolha o que manter e baixe um backup antes.</span>
                 </span>
-                <button type="button" className="settings-button settings-button-danger" onClick={openClearWizard}>
+                <button type="button" className="settings-button settings-button-danger" onClick={openClearWizard} disabled={readOnly} title={roTitle}>
                   Começar…
                 </button>
               </div>
