@@ -43,6 +43,28 @@ gcloud compute ssh pontoscan --zone us-east1-b --tunnel-through-iap -- sudo jour
 Até o primeiro deploy do servidor, `https://<subdomínio>.duckdns.org` responde
 **502**. É o esperado: o Caddy está no ar, só falta o servidor atrás dele.
 
+## Deploy automático
+
+Cada push no ramo `web` dispara `.github/workflows/deploy-web.yml`, que:
+
+1. roda os testes do servidor, compila e manda o binário para o bucket
+   `<projeto>-pontoscan-releases`;
+2. a VM confere esse bucket a cada minuto (timer `pontoscan-update`), instala o binário
+   novo, reinicia o serviço e **volta para a versão anterior sozinha** se a nova não
+   responder em 30 segundos;
+3. o workflow espera `https://<subdomínio>.duckdns.org/api/version` mostrar o commit novo
+   e só então publica o frontend no Firebase Hosting.
+
+O GitHub entra no Google Cloud sem chave guardada (Workload Identity Federation,
+`deploy.tf`). Só pushes deste repositório nos ramos `web`/`master` são aceitos, e a
+conta de deploy só pode escrever no bucket de versões e publicar no Hosting.
+
+Para ver o que a VM fez:
+
+```sh
+gcloud compute ssh pontoscan --zone us-east1-b --tunnel-through-iap -- sudo journalctl -u pontoscan-update -u pontoscan -n 50
+```
+
 ## Mudar algo depois
 
 Edite `terraform.tfvars` (por exemplo, para adicionar um e-mail) e rode `tofu apply`. A VM

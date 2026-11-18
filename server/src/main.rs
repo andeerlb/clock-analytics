@@ -27,6 +27,7 @@ pub fn app(config: &Config, state: AppState, auth: Arc<Authenticator>) -> Router
     let api = routes::protected()
         .route_layer(middleware::from_fn_with_state(auth, auth::require_auth))
         .route("/health", get(routes::health))
+        .route("/version", get(routes::version))
         .with_state(state);
 
     let mut app = Router::new().nest("/api", api);
