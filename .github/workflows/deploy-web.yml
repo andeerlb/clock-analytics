@@ -1,0 +1,103 @@
+name: Deploy web
+
+# Every push to `web` tests, builds and publishes the web version:
+#   1. server: cargo test → release build → binary to the releases bucket.
+#      The VM checks that bucket every minute, installs the new binary and
+#      rolls back on its own if it doesn't come up (infra/startup.sh.tftpl).
+#   2. web: waits until the VM answers /api/version with this commit, then
+#      builds the frontend and publishes it to Firebase Hosting — so the
+#      new screens never go live before the API they call.
+#
+# Authentication is keyless (Workload Identity Federation, infra/deploy.tf):
+# nothing secret is stored in GitHub. None of the values below are secrets.
+
+on:
+  push:
+    branches: [web]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # lets the job ask GitHub for the OIDC token Google trusts
+
+concurrency:
+  group: deploy-web
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT: clock-analytics-b123c
+  WIF_PROVIDER: projects/667650515882/locations/global/workloadIdentityPools/github/providers/github-actions
+  DEPLOY_SA: github-deploy@clock-analytics-b123c.iam.gserviceaccount.com
+  RELEASES_BUCKET: clock-analytics-b123c-pontoscan-releases
+  API_URL: https://pontoscan.duckdns.org
+
+jobs:
+  server:
+    runs-on: ubuntu-24.04 # same Ubuntu as the VM, so the binary's glibc matches
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+
+      - name: Test
+        working-directory: server
+        run: cargo test --locked
+
+      - name: Build
+        working-directory: server
+        env:
+          PONTOSCAN_BUILD_SHA: ${{ github.sha }}
+        run: cargo build --release --locked
+
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - name: Publish binary
+        run: gcloud storage cp server/target/release/pontoscan-server "gs://${RELEASES_BUCKET}/pontoscan-server"
+
+  web:
+    needs: server
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+
+      - name: Install
+        run: yarn install --frozen-lockfile
+
+      - name: Build
+        run: yarn build # uses .env.production
+
+      - name: Wait for the VM to run this commit
+        run: |
+          for i in $(seq 1 30); do
+            running=$(curl -fsS --max-time 10 "${API_URL}/api/version" || true)
+            if [ "$running" = "$GITHUB_SHA" ]; then
+              echo "servidor no ar com ${GITHUB_SHA}"
+              exit 0
+            fi
+            echo "aguardando a VM (rodando: ${running:-nada})"
+            sleep 10
+          done
+          echo "::error::A VM não subiu a versão nova em 5 minutos. Veja: sudo journalctl -u pontoscan-update -u pontoscan"
+          exit 1
+
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SA }}
+
+      - name: Publish to Firebase Hosting
+        run: npx --yes firebase-tools@15.35.0 deploy --only hosting --project "${GCP_PROJECT}" --non-interactive

@@ -145,8 +145,9 @@ resource "google_compute_instance" "server" {
       allowed_emails      = join(",", var.allowed_emails)
       cors_origins        = join(",", local.cors_origins)
       backup_bucket       = google_storage_bucket.backups.name
+      releases_bucket     = google_storage_bucket.releases.name
     })
   }
 
-  depends_on = [google_storage_bucket_iam_member.vm_backups]
+  depends_on = [google_storage_bucket_iam_member.vm_backups, google_storage_bucket_iam_member.vm_releases]
 }

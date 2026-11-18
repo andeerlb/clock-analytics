@@ -149,6 +149,89 @@ OnUnitActiveSec=5min
 WantedBy=timers.target
 EOF
 
+# --- Deploy: pull a new server binary when CI publishes one ---
+# GitHub Actions only writes gs://${releases_bucket}/pontoscan-server; this
+# timer notices the new object generation, verifies its MD5, swaps it in,
+# restarts the service and rolls back if /api/health doesn't answer.
+cat > /usr/local/bin/pontoscan-update <<'EOF'
+#!/bin/bash
+set -euo pipefail
+BUCKET=${releases_bucket}
+OBJECT=pontoscan-server
+BIN=/opt/pontoscan/pontoscan-server
+STATE=/var/lib/pontoscan-deploy
+install -d -m 700 "$STATE"
+
+TOKEN=$(curl -fsS -H "Metadata-Flavor: Google" \
+  "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" |
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')
+
+META_FILE=$(mktemp)
+trap 'rm -f "$META_FILE" "$BIN.new"' EXIT
+STATUS=$(curl -sS -o "$META_FILE" -w '%%{http_code}' -H "Authorization: Bearer $TOKEN" \
+  "https://storage.googleapis.com/storage/v1/b/$BUCKET/o/$OBJECT")
+if [ "$STATUS" = "404" ]; then exit 0; fi   # nothing published yet
+if [ "$STATUS" != "200" ]; then echo "falha ao consultar o bucket: HTTP $STATUS" >&2; exit 1; fi
+
+read -r GENERATION MD5 < <(python3 -c 'import json, sys; m = json.load(open(sys.argv[1])); print(m["generation"], m["md5Hash"])' "$META_FILE")
+LAST=$(cat "$STATE/generation" 2>/dev/null || true)
+if [ "$GENERATION" = "$LAST" ] || [ "failed-$GENERATION" = "$LAST" ]; then exit 0; fi
+
+echo "nova versão publicada (generation $GENERATION), instalando"
+curl -fsS -H "Authorization: Bearer $TOKEN" -o "$BIN.new" \
+  "https://storage.googleapis.com/storage/v1/b/$BUCKET/o/$OBJECT?alt=media&generation=$GENERATION"
+GOT=$(openssl md5 -binary "$BIN.new" | base64)
+if [ "$GOT" != "$MD5" ]; then echo "MD5 não confere, download descartado" >&2; exit 1; fi
+chmod 755 "$BIN.new"
+
+[ -f "$BIN" ] && cp -p "$BIN" "$BIN.prev"
+mv "$BIN.new" "$BIN"
+systemctl restart pontoscan.service
+
+for _ in $(seq 1 30); do
+  if curl -fsS --max-time 2 http://127.0.0.1:8787/api/health >/dev/null 2>&1; then
+    echo "$GENERATION" > "$STATE/generation"
+    # Litestream may have given up while the database didn't exist yet.
+    systemctl restart litestream.service || true
+    echo "versão $GENERATION no ar"
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "a versão $GENERATION não respondeu; voltando para a anterior" >&2
+echo "failed-$GENERATION" > "$STATE/generation"
+if [ -f "$BIN.prev" ]; then
+  mv "$BIN.prev" "$BIN"
+  systemctl restart pontoscan.service
+fi
+exit 1
+EOF
+chmod 755 /usr/local/bin/pontoscan-update
+
+cat > /etc/systemd/system/pontoscan-update.service <<'EOF'
+[Unit]
+Description=Instala a versão nova do servidor PontoScan, se houver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pontoscan-update
+EOF
+
+cat > /etc/systemd/system/pontoscan-update.timer <<'EOF'
+[Unit]
+Description=Procura versão nova do servidor PontoScan a cada minuto
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+
 # --- Caddy: HTTPS in front of the server ---
 cat > /etc/caddy/Caddyfile <<'EOF'
 ${domain} {
@@ -162,6 +245,7 @@ systemctl daemon-reload
 # Point the name at this IP before Caddy asks Let's Encrypt for a certificate.
 systemctl start duckdns-update.service || echo "aviso: primeira atualização do DuckDNS falhou; o timer tenta de novo" >&2
 systemctl enable --now duckdns-update.timer
+systemctl enable --now pontoscan-update.timer
 systemctl enable pontoscan.service litestream.service
 systemctl restart pontoscan.service || true   # no-op until the first deploy
 systemctl restart litestream.service || true
