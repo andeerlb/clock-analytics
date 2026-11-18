@@ -134,7 +134,7 @@ pub(crate) async fn list_summaries_impl(state: &AppState, query: &PagedQuery) ->
     {where_clause}
     GROUP BY e.id, competencia
     {having_clause}
-    ORDER BY competencia DESC, e.name
+    ORDER BY competencia DESC, e.name, e.id
     LIMIT ${} OFFSET ${}",
             n + 1,
             n + 2
@@ -178,7 +178,7 @@ pub(crate) async fn list_flat_impl(state: &AppState, query: &PagedQuery) -> ApiR
             {} AS shiftPeriod
      {from}
      {where_clause}
-     ORDER BY ps.work_date DESC, e.name
+     ORDER BY ps.work_date DESC, e.name, ps.id DESC
      LIMIT ${} OFFSET ${}",
             shift_period_select_sql(),
             n + 1,
