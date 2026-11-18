@@ -59,6 +59,27 @@ O GitHub entra no Google Cloud sem chave guardada (Workload Identity Federation,
 `deploy.tf`). Só pushes deste repositório nos ramos `web`/`master` são aceitos, e a
 conta de deploy só pode escrever no bucket de versões e publicar no Hosting.
 
+### Variáveis do deploy no GitHub
+
+O workflow não tem nada do projeto escrito nele: lê tudo das **variáveis** do
+environment `production` do GitHub (Settings → Environments → production → Variables).
+Nenhuma é segredo. Depois de um `tofu apply`, grave as do Google Cloud com:
+
+```sh
+tofu output -raw github_variables_commands | sh
+```
+
+E as três do Firebase, copiadas do console do Firebase (Configurações do projeto →
+Seus apps → app Web):
+
+```sh
+gh variable set FIREBASE_API_KEY     --env production --body "AIza..."
+gh variable set FIREBASE_AUTH_DOMAIN --env production --body "<projeto>.firebaseapp.com"
+gh variable set FIREBASE_APP_ID      --env production --body "1:...:web:..."
+```
+
+Trocar de projeto do Google Cloud/Firebase é só refazer esses dois passos.
+
 Para ver o que a VM fez:
 
 ```sh
