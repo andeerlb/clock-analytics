@@ -1,7 +1,8 @@
 # PontoScan — servidor web
 
-Backend da versão web do PontoScan (Rust + axum + SQLite). Substitui, aos
-poucos, o acesso direto ao banco que o app desktop fazia pelo `src/lib/db.ts`.
+Backend da versão web do PontoScan (Rust + axum + SQLite). Substitui o acesso
+direto ao banco que o app desktop fazia pelo `src/lib/db.ts`, e os comandos Tauri
+que mexiam com arquivos. Como portar uma função: `PORTING.md`.
 
 ## Rodar localmente
 
@@ -34,6 +35,7 @@ cd server && cargo test
 |---|---|---|
 | `PONTOSCAN_BIND` | `127.0.0.1:8787` | Endereço/porta em que o servidor escuta. |
 | `PONTOSCAN_DB_PATH` | `data/pontoscan.db` | Arquivo SQLite. Criado se não existir. |
+| `PONTOSCAN_DATA_DIR` | pasta do banco | Onde ficam os arquivos: `imports/` (PDFs e planilhas importados, guardados) e `uploads/` (envios temporários, apagados em 24h). |
 | `PONTOSCAN_STATIC_DIR` | — | Pasta do frontend buildado (`dist/`) para o próprio servidor servir. Vazio = só API (frontend no Firebase Hosting). |
 | `PONTOSCAN_CORS_ORIGINS` | — | Origens que podem chamar a API, separadas por vírgula, ex. `https://pontoscan.web.app`. |
 | `FIREBASE_PROJECT_ID` | — | **Obrigatório em produção.** ID do projeto Firebase cujos tokens de login são aceitos. |

@@ -115,12 +115,6 @@ function urlHost(url: string): string {
   }
 }
 
-/** "/home/me/Pagamentos/semana.xlsx" -> "/home/me/Pagamentos" — the short origin shown under a locally-picked file's name. */
-function parentDir(path: string): string {
-  const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return i > 0 ? path.slice(0, i) : "";
-}
-
 /** The import's Período starts empty (the whole file), so "Arquivo inteiro" leads the usual shortcuts — same idea as Pagamentos' "Todo o período". */
 function importPeriodPresets(): PeriodPreset[] {
   return [{ label: "Arquivo inteiro", start: "", end: "" }, ...periodPresets()];
@@ -1883,7 +1877,8 @@ export default function ImportPaymentsPage() {
                       const provenance = urlSourceByPath.get(p);
                       const name = info?.fileName ? safeDecodeFileName(info.fileName) : fileNameFromPath(p);
                       const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
-                      const origin = provenance ? urlHost(provenance.url) : parentDir(p);
+                      // A local file's path is a server upload folder on the web — meaningless to show, so only URL sources get an origin.
+                      const origin = provenance ? urlHost(provenance.url) : "";
                       return (
                         <div className="file-row" key={p}>
                           <div className="file-row-icon import-file-icon">
@@ -1899,7 +1894,7 @@ export default function ImportPaymentsPage() {
                                 </span>
                               )}
                               {origin && (
-                                <span className="import-file-origin" title={provenance?.url ?? p}>
+                                <span className="import-file-origin" title={provenance?.url}>
                                   {origin}
                                 </span>
                               )}

@@ -3,15 +3,13 @@ import {
   ChevronDown,
   ChevronRight,
   ClipboardCheck,
-  Eye,
-  FolderOpen,
   List,
   ListFilter,
   RefreshCw,
   Trash2,
   Users,
 } from "lucide-react";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "../lib/events";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Avatar from "../components/Avatar";
@@ -21,12 +19,11 @@ import PageHeader from "../components/PageHeader";
 import PaymentExportDrawer from "../components/PaymentExportDrawer";
 import PaymentsExportMenu from "../components/PaymentsExportMenu";
 import PaymentsFiltersPanel, { PaymentsFilterChips, usePaymentsActiveFilterCount } from "../components/PaymentsFiltersPanel";
-import PdfViewerModal from "../components/PdfViewerModal";
 import ShiftPanel, { type LastPayment, type ShiftEditFields, type ShiftPanelTab } from "../components/ShiftPanel";
 import TableScroll from "../components/TableScroll";
 import { PAYMENT_SHIFT_STATUSES, SHIFT_PERIODS, usePaymentsFilters } from "../contexts/FiltersContext";
 import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
-import { openReconciliationWindow, revealInFileManager } from "../lib/api";
+import { openReconciliationWindow } from "../lib/api";
 import {
   deletePaymentShift,
   editPaymentShift,
@@ -326,16 +323,13 @@ export default function PaymentsPage() {
   const [roles, setRoles] = useState<RoleRow[]>([]);
   const [locals, setLocals] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewerPath, setViewerPath] = useState<string | null>(null);
 
   const [generatingLegacyPdf, setGeneratingLegacyPdf] = useState(false);
   const [legacyPdfError, setLegacyPdfError] = useState<string | null>(null);
   const [generatedLegacyPdf, setGeneratedLegacyPdf] = useState<PaymentsReportResult | null>(null);
-  const [revealingLegacyPdf, setRevealingLegacyPdf] = useState(false);
   const [generatingShiftPdf, setGeneratingShiftPdf] = useState(false);
   const [shiftPdfError, setShiftPdfError] = useState<string | null>(null);
   const [generatedShiftPdf, setGeneratedShiftPdf] = useState<PaymentsReportResult | null>(null);
-  const [revealingShiftPdf, setRevealingShiftPdf] = useState(false);
 
   const [exportTemplates, setExportTemplates] = useState<PaymentExportTemplateListRow[]>([]);
   const [generatingExport, setGeneratingExport] = useState(false);
@@ -347,11 +341,9 @@ export default function PaymentsPage() {
   const [generatingPdfExport, setGeneratingPdfExport] = useState(false);
   const [pdfExportError, setPdfExportError] = useState<string | null>(null);
   const [generatedPdfExport, setGeneratedPdfExport] = useState<PaymentPdfExportResult | null>(null);
-  const [revealingPdfExport, setRevealingPdfExport] = useState(false);
 
   /** The single "Exportar" drawer — format (Excel/PDF) and template are picked in there, selection state kept here so it survives reopening. */
   const [exportDrawerOpen, setExportDrawerOpen] = useState(false);
-  const [revealingExport, setRevealingExport] = useState(false);
   const [generatedExport, setGeneratedExport] = useState<PaymentExportResult | null>(null);
 
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(DEFAULT_VISIBLE_COLUMN_IDS));
@@ -970,18 +962,6 @@ export default function PaymentsPage() {
     }
   }
 
-  async function handleRevealExport() {
-    if (!generatedExport?.path) return;
-    setRevealingExport(true);
-    try {
-      await revealInFileManager(generatedExport.path);
-    } catch (e) {
-      setExportError(String(e instanceof Error ? e.message : e));
-    } finally {
-      setRevealingExport(false);
-    }
-  }
-
   /** Same shape as `handleGenerateExport`, but for a PDF template — the template-driven replacement of the old fixed-layout "Gerar PDF" report. */
   async function handleGeneratePdfExport(templateId: number) {
     setPdfExportError(null);
@@ -1029,42 +1009,6 @@ export default function PaymentsPage() {
       setShiftPdfError(String(e instanceof Error ? e.message : e));
     } finally {
       setGeneratingShiftPdf(false);
-    }
-  }
-
-  async function handleRevealLegacyPdf() {
-    if (!generatedLegacyPdf?.path) return;
-    setRevealingLegacyPdf(true);
-    try {
-      await revealInFileManager(generatedLegacyPdf.path);
-    } catch (e) {
-      setLegacyPdfError(String(e instanceof Error ? e.message : e));
-    } finally {
-      setRevealingLegacyPdf(false);
-    }
-  }
-
-  async function handleRevealShiftPdf() {
-    if (!generatedShiftPdf?.path) return;
-    setRevealingShiftPdf(true);
-    try {
-      await revealInFileManager(generatedShiftPdf.path);
-    } catch (e) {
-      setShiftPdfError(String(e instanceof Error ? e.message : e));
-    } finally {
-      setRevealingShiftPdf(false);
-    }
-  }
-
-  async function handleRevealPdfExport() {
-    if (!generatedPdfExport?.path) return;
-    setRevealingPdfExport(true);
-    try {
-      await revealInFileManager(generatedPdfExport.path);
-    } catch (e) {
-      setPdfExportError(String(e instanceof Error ? e.message : e));
-    } finally {
-      setRevealingPdfExport(false);
     }
   }
 
@@ -1201,10 +1145,6 @@ export default function PaymentsPage() {
               <CheckCircle2 size={16} />
               Excel gerado com sucesso: {generatedExport.title} ({generatedExport.rowCount} turno(s))
             </span>
-            <button type="button" className="outline" onClick={handleRevealExport} disabled={revealingExport}>
-              <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-              Abrir no explorador
-            </button>
           </div>
         )}
 
@@ -1224,16 +1164,6 @@ export default function PaymentsPage() {
               <CheckCircle2 size={16} />
               PDF gerado com sucesso: {generatedPdfExport.title} ({generatedPdfExport.rowCount} turno(s))
             </span>
-            <div style={{ display: "flex", gap: "0.6rem" }}>
-              <button type="button" className="outline" onClick={() => setViewerPath(generatedPdfExport.path)}>
-                <Eye size={15} style={{ marginRight: "0.4rem" }} />
-                Abrir PDF
-              </button>
-              <button type="button" className="outline" onClick={handleRevealPdfExport} disabled={revealingPdfExport}>
-                <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-                Abrir no explorador
-              </button>
-            </div>
           </div>
         )}
 
@@ -1243,14 +1173,6 @@ export default function PaymentsPage() {
               <CheckCircle2 size={16} />
               Relatório por valor gerado com sucesso: {generatedLegacyPdf.title} ({generatedLegacyPdf.rowCount} turno(s))
             </span>
-            <div style={{ display: "flex", gap: "0.6rem" }}>
-              <button type="button" className="outline" onClick={() => setViewerPath(generatedLegacyPdf.path)}>
-                <Eye size={15} style={{ marginRight: "0.4rem" }} /> Abrir PDF
-              </button>
-              <button type="button" className="outline" onClick={handleRevealLegacyPdf} disabled={revealingLegacyPdf}>
-                <FolderOpen size={15} style={{ marginRight: "0.4rem" }} /> Abrir no explorador
-              </button>
-            </div>
           </div>
         )}
 
@@ -1260,14 +1182,6 @@ export default function PaymentsPage() {
               <CheckCircle2 size={16} />
               Relatório por turno gerado com sucesso: {generatedShiftPdf.title} ({generatedShiftPdf.rowCount} turno(s))
             </span>
-            <div style={{ display: "flex", gap: "0.6rem" }}>
-              <button type="button" className="outline" onClick={() => setViewerPath(generatedShiftPdf.path)}>
-                <Eye size={15} style={{ marginRight: "0.4rem" }} /> Abrir PDF
-              </button>
-              <button type="button" className="outline" onClick={handleRevealShiftPdf} disabled={revealingShiftPdf}>
-                <FolderOpen size={15} style={{ marginRight: "0.4rem" }} /> Abrir no explorador
-              </button>
-            </div>
           </div>
         )}
       </div>
@@ -1553,13 +1467,6 @@ export default function PaymentsPage() {
           setExportDrawerOpen(false);
           navigate("/payments/export-templates");
         }}
-      />
-
-      <PdfViewerModal
-        path={viewerPath}
-        title={generatedLegacyPdf?.path === viewerPath ? generatedLegacyPdf.title : generatedPdfExport?.title}
-        allowDownload={false}
-        onClose={() => setViewerPath(null)}
       />
 
       <Drawer

@@ -1,4 +1,3 @@
-import { save } from "@tauri-apps/plugin-dialog";
 import ExcelJS from "exceljs";
 import { writeBinaryFile } from "./api";
 import { getPaymentExportTemplate, listPaymentShiftsForReport, type ListPaymentShiftSummariesQuery, type PaymentShiftReportRow } from "./db";
@@ -251,12 +250,8 @@ export async function generatePaymentsExportXlsx(
 
   const buffer = await workbook.xlsx.writeBuffer();
 
-  const destPath = await save({
-    defaultPath: `${sanitizeFileName(template.name)}-${formatTimestampForFileName()}.xlsx`,
-    filters: [{ name: "Excel", extensions: ["xlsx"] }],
-  });
-  if (!destPath) return { rowCount: rows.length, matchedCount: allRows.length, path: null, title: template.name };
-
+  // Web: no save dialog — the browser downloads it under the suggested name.
+  const destPath = `${sanitizeFileName(template.name)}-${formatTimestampForFileName()}.xlsx`;
   await writeBinaryFile(destPath, new Uint8Array(buffer));
 
   return { rowCount: rows.length, matchedCount: allRows.length, path: destPath, title: template.name };

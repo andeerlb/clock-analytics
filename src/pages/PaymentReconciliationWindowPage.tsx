@@ -1,4 +1,4 @@
-import { emit, listen } from "@tauri-apps/api/event";
+import { emit, listen } from "../lib/events";
 import { useEffect, useState } from "react";
 import PaymentReconciliationScreen from "../components/PaymentReconciliationScreen";
 import { SidePanelSlotContext } from "../components/SidePanel";
@@ -13,8 +13,10 @@ import { listClients, listCompanies, listDistinctPaymentShiftLocals, listRolesGl
 
 /**
  * The whole content of "Conferência" on `PaymentsPage`
- * (`open_reconciliation_window`) — `App.tsx` renders this instead of the
- * normal app shell whenever `getCurrentWindow().label === "reconciliation"`.
+ * (`openReconciliationWindow`) — `App.tsx` renders this instead of the
+ * normal app shell on the `#/payments/reconciliation` route, which the web
+ * version opens in its own browser tab (the desktop used a second OS
+ * window, labelled "reconciliation").
  * It always opens as its own OS window, never as an in-app modal, and
  * closes via its own native OS chrome — no in-app "Anexar" back into the
  * main window. Its own `FiltersProvider` (see `App.tsx`) starts at the same

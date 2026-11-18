@@ -1,4 +1,4 @@
-import { emitTo, listen } from "@tauri-apps/api/event";
+import { emitTo, listen } from "../lib/events";
 import { createContext, useContext, useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { toIso, todayUtc } from "../lib/calendar";
 import type { PeriodStatusId } from "../lib/periodStatus";

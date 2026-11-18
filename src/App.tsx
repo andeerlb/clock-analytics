@@ -160,16 +160,27 @@ function App() {
       <AuthGate>
         <HashRouter>
           <FiltersProvider>
-            <RemoteFileUpdatesProvider>
-              <AiAssistantProvider>
-                <AppShell popplerMissing={popplerMissing} importResult={importResult} clearImportResult={() => {
-                  clearDatabaseImportResult().then(() => {
-                    localStorage.removeItem("database-import-events");
-                    setImportResult(null);
-                  }).catch(() => {});
-                }} />
-              </AiAssistantProvider>
-            </RemoteFileUpdatesProvider>
+            <Routes>
+              {/* Web: "Conferência" opens in its own browser tab (see
+                  `openReconciliationWindow`), with none of the app shell —
+                  the same focused surface the desktop's second window was. */}
+              <Route path="/payments/reconciliation" element={<PaymentReconciliationWindowPage />} />
+              <Route
+                path="*"
+                element={
+                  <RemoteFileUpdatesProvider>
+                    <AiAssistantProvider>
+                      <AppShell popplerMissing={popplerMissing} importResult={importResult} clearImportResult={() => {
+                        clearDatabaseImportResult().then(() => {
+                          localStorage.removeItem("database-import-events");
+                          setImportResult(null);
+                        }).catch(() => {});
+                      }} />
+                    </AiAssistantProvider>
+                  </RemoteFileUpdatesProvider>
+                }
+              />
+            </Routes>
           </FiltersProvider>
         </HashRouter>
       </AuthGate>

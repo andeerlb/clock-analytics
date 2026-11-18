@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { baseName, downloadBlob, downloadServerFile, pickAndUpload } from "./files";
+import { api, fetchServerFile, rpc } from "./http";
 import type {
   FileHash,
   FileParseResult,
@@ -11,22 +12,24 @@ import type {
 } from "./types";
 
 export function listProviders(): Promise<ProviderInfo[]> {
-  return invoke("list_providers");
+  return rpc("listProviders");
 }
 
 /** Content-hashes each file — cheap enough to run before deciding whether to parse it at all. */
 export function hashFiles(paths: string[]): Promise<FileHash[]> {
-  return invoke("hash_files", { paths });
+  return rpc("hashFiles", { paths });
 }
 
 /** Parses each file independently — check `.error` per result instead of a try/catch around the whole batch. */
 export function parseImport(provider: string, paths: string[]): Promise<FileParseResult[]> {
-  return invoke("parse_import", { provider, paths });
+  return rpc("parseImport", { provider, paths });
 }
 
 /** Opens `path`'s containing folder in the OS file manager ("abrir no explorador de arquivos"). */
 export function revealInFileManager(path: string): Promise<void> {
-  return invoke("reveal_in_file_manager", { path });
+  // The web has no file manager to open: the file was already downloaded.
+  void path;
+  return Promise.resolve();
 }
 
 /** Opens the app's whole data folder (DB + imports/) in the OS file manager. */
@@ -34,60 +37,51 @@ export function openAppDataDir(): Promise<void> {
   return invoke("open_app_data_dir");
 }
 
-/** Raw bytes of a PDF, for the in-app viewer to render. */
+/** Raw bytes of a PDF stored on the server, for the in-app viewer to render. */
 export async function readPdfBytes(path: string): Promise<ArrayBuffer> {
-  return invoke("read_pdf_bytes", { path });
+  return fetchServerFile(path);
 }
 
-/** Copies the PDF at `sourcePath` to `destPath` — the viewer's "Baixar" action. */
+/** The viewer's "Baixar": downloads the stored PDF through the browser, named after `destPath`'s last component. */
 export function copyPdfTo(sourcePath: string, destPath: string): Promise<void> {
-  return invoke("copy_pdf_to", { sourcePath, destPath });
+  return downloadServerFile(sourcePath, baseName(destPath));
 }
 
-/** Opens the native file picker, restricted to PDFs, multi-select on. */
+/** Lets the user choose PDFs, uploads them, and resolves with their server paths (empty if cancelled). */
 export async function pickPdfFiles(): Promise<string[]> {
-  const selection = await open({
-    multiple: true,
-    filters: [{ name: "PDF", extensions: ["pdf"] }],
-  });
-  if (!selection) return [];
-  return Array.isArray(selection) ? selection : [selection];
+  return pickAndUpload({ accept: [".pdf"], multiple: true, extensions: ["pdf"] });
 }
 
-/** Opens the native folder picker — the "Pasta inteira" alternative to multi-file selection. */
+/**
+ * The "Pasta inteira" option: the user chooses a folder, its files are
+ * uploaded into one server folder, and that folder's server path is
+ * returned — `listDirFiles` then lists it, same as on the desktop.
+ */
 export async function pickFolder(): Promise<string | null> {
-  const selection = await open({ directory: true, multiple: false });
-  return typeof selection === "string" ? selection : null;
+  const paths = await pickAndUpload({ directory: true, extensions: ["pdf", "csv", "xlsx", "xls", "ods"] });
+  if (paths.length === 0) return null;
+  return paths[0].replace(/[\\/][^\\/]*$/, "");
 }
 
-/** Immediate files (not subfolders) inside `dir` whose extension matches one of `extensions` (no leading dot, e.g. "pdf"). */
+/** Immediate files inside `dir` (a folder returned by `pickFolder`) whose extension matches one of `extensions` (no leading dot, e.g. "pdf"). */
 export function listDirFiles(dir: string, extensions: string[]): Promise<string[]> {
-  return invoke("list_dir_files", { dir, extensions });
+  return api.post<string[]>("/files/list", { dir, extensions });
 }
 
-/** Opens the native file picker, restricted to payroll spreadsheet formats, single-select — for the template wizard's sample file. */
+/** Lets the user choose one payroll spreadsheet (the template wizard's sample file) and uploads it. */
 export async function pickPaymentFile(): Promise<string | null> {
-  const selection = await open({
-    multiple: false,
-    filters: [{ name: "Planilha de pagamentos", extensions: ["csv", "xlsx", "xls", "ods"] }],
-  });
-  return typeof selection === "string" ? selection : null;
+  const paths = await pickAndUpload({ accept: [".csv", ".xlsx", ".xls", ".ods"], extensions: ["csv", "xlsx", "xls", "ods"] });
+  return paths[0] ?? null;
 }
 
 /**
  * Multi-select — for actually importing (one template can be applied to
  * several files at once). Unlike `pickPaymentFile`, filtered to a single
  * format: the template chosen for this import already fixes its expected
- * file format, so there's no "which format is this" left to figure out
- * like there is when first building a template from a sample file.
+ * file format.
  */
 export async function pickPaymentFiles(extensions: string[]): Promise<string[]> {
-  const selection = await open({
-    multiple: true,
-    filters: [{ name: "Planilha de pagamentos", extensions }],
-  });
-  if (!selection) return [];
-  return Array.isArray(selection) ? selection : [selection];
+  return pickAndUpload({ accept: extensions.map((e) => `.${e}`), multiple: true, extensions });
 }
 
 export interface PaymentFileHash {
@@ -98,7 +92,7 @@ export interface PaymentFileHash {
 
 /** Content-hashes a payment file — no page count (unlike `hashFiles`, which is PDF-only via pdfinfo). */
 export function hashPaymentFile(path: string): Promise<PaymentFileHash> {
-  return invoke("hash_payment_file", { path });
+  return rpc("hashPaymentFile", { path });
 }
 
 export interface DownloadedPaymentFile {
@@ -117,12 +111,12 @@ export interface DownloadedPaymentFile {
  * download" links redirect to instead of the file.
  */
 export function downloadPaymentFileFromUrl(url: string): Promise<DownloadedPaymentFile> {
-  return invoke("download_payment_file_from_url", { url });
+  return rpc("downloadPaymentFileFromUrl", { url });
 }
 
 /** Who last saved a downloaded spreadsheet, and when, from the file's own properties (.xlsx/.ods; nothing for .xls/.csv). */
 export function readSpreadsheetAuthor(path: string): Promise<{ savedBy: string | null; savedAt: string | null }> {
-  return invoke("read_spreadsheet_author", { path });
+  return rpc("readSpreadsheetAuthor", { path });
 }
 
 export interface RemoteFileSignature {
@@ -144,7 +138,7 @@ export function checkRemotePaymentFile(
   knownLastModified: string | null,
   knownContentLength: number | null,
 ): Promise<RemoteChangeCheck> {
-  return invoke("check_remote_payment_file", {
+  return rpc("checkRemotePaymentFile", {
     url,
     knownEtag,
     knownLastModified,
@@ -159,7 +153,7 @@ export interface SpreadsheetPreview {
 
 /** Sheet names in an xlsx/xls/ods workbook, for the payment template wizard's sheet tabs — empty for csv. */
 export function listSpreadsheetSheets(path: string): Promise<string[]> {
-  return invoke("list_spreadsheet_sheets", { path });
+  return rpc("listSpreadsheetSheets", { path });
 }
 
 /** Raw preview rows (no header-row assumption) for the payment template wizard's Excel-like grid. */
@@ -169,7 +163,7 @@ export function previewSpreadsheet(
   delimiter: string | null,
   maxRows: number,
 ): Promise<SpreadsheetPreview> {
-  return invoke("preview_spreadsheet", { path, sheet, delimiter, maxRows });
+  return rpc("previewSpreadsheet", { path, sheet, delimiter, maxRows });
 }
 
 /** The bit of a `PaymentTemplateGroup` (see types.ts) actually needed to read rows — id/headerLabel don't matter here. */
@@ -194,12 +188,14 @@ export function applyPaymentTemplate(
   groups: PaymentTemplateGroupSpec[],
   delimiter: string | null,
 ): Promise<AppliedPaymentRow[]> {
-  return invoke("apply_payment_template", { path, groups, delimiter });
+  return rpc("applyPaymentTemplate", { path, groups, delimiter });
 }
 
 /** Builds the Relatórios export zip at `destZipPath` from the given entries. */
-export function generateReportZip(entries: ReportZipEntry[], destZipPath: string): Promise<void> {
-  return invoke("generate_report_zip", { entries, destZipPath });
+/** Builds the ZIP on the server and downloads it as `fileName` (a bare name; any folders in it are ignored). */
+export async function generateReportZip(entries: ReportZipEntry[], fileName: string): Promise<void> {
+  const { path } = await rpc<{ path: string }>("generateReportZip", { entries });
+  await downloadServerFile(path, baseName(fileName));
 }
 
 /** Disk usage of the DB and the copied imported files (PDFs and, when downloaded by link, payment spreadsheets). */
@@ -229,7 +225,9 @@ export function backupAppData(destZipPath: string, includeDb: boolean, includeFi
 
 /** Writes arbitrary bytes to `path` — a caller that already has a concrete destination (e.g. from a save dialog). */
 export function writeBinaryFile(path: string, data: Uint8Array): Promise<void> {
-  return invoke("write_binary_file", { path, data: Array.from(data) });
+  // Web: the browser saves the file (named after `path`'s last component).
+  downloadBlob(data, baseName(path));
+  return Promise.resolve();
 }
 
 /** Copies the live database file to `destPath` — call `checkpointDatabase()` (lib/db) first so it's a complete snapshot. */
@@ -267,7 +265,10 @@ export function setPopplerDir(dir: string | null): Promise<PopplerStatus> {
 
 /** Snapshots the database into the app's `backups/` folder before a forced delete, with `label` in the file name — resolves to the backup's path. */
 export function backupDatabaseBeforeDelete(label: string): Promise<string> {
-  return invoke("backup_database_before_delete", { label });
+  // The server streams every change to Cloud Storage (Litestream), so there
+  // is no separate pre-delete copy to make.
+  void label;
+  return Promise.resolve("");
 }
 
 /** Whether "Minimizar na bandeja ao fechar" is on — checked on Configurações' mount. */
@@ -282,27 +283,43 @@ export function setCloseToTray(enabled: boolean): Promise<void> {
 
 /** Swaps the tray icon (normal/"atenção" badge) and tooltip — reflects the aggregate check state even while the window is hidden. */
 export function setTrayStatus(attention: boolean, tooltip: string): Promise<void> {
-  return invoke("set_tray_status", { attention, tooltip });
+  // No system tray in the browser.
+  void attention;
+  void tooltip;
+  return Promise.resolve();
 }
 
 /** Recently-picked payment template sample file paths, newest first — dead paths already filtered out. */
 export function listRecentPaymentFiles(): Promise<string[]> {
-  return invoke("list_recent_payment_files");
+  // Uploaded files only live for a day on the server, so there is no
+  // useful "recent files" list on the web.
+  return Promise.resolve([]);
 }
 
 /** Records `path` as the most recently picked payment sample file. */
 export function addRecentPaymentFile(path: string): Promise<void> {
-  return invoke("add_recent_payment_file", { path });
+  void path;
+  return Promise.resolve();
 }
 
-/** "Destacar" on "Conferência de Pagamentos" — opens (or refocuses) it as its own OS window. See `open_reconciliation_window`. */
+/** Hash route of the standalone "Conferência de Pagamentos" tab (see `App.tsx`). */
+const RECONCILIATION_ROUTE = "/payments/reconciliation";
+/** Browser window name of that tab — `window.open` with it reuses an already-open one instead of opening a second. */
+const RECONCILIATION_WINDOW_NAME = "pontoscan-reconciliation";
+let reconciliationTab: Window | null = null;
+
+/** "Destacar" on "Conferência de Pagamentos" — opens (or refocuses) it in its own browser tab. */
 export function openReconciliationWindow(): Promise<void> {
-  return invoke("open_reconciliation_window");
+  const url = `${window.location.pathname}${window.location.search}#${RECONCILIATION_ROUTE}`;
+  // No "noopener": the handle is what lets `isReconciliationWindowOpen` see the tab (it's this app's own page).
+  reconciliationTab = window.open(url, RECONCILIATION_WINDOW_NAME);
+  reconciliationTab?.focus();
+  return Promise.resolve();
 }
 
-/** Whether "Conferência de Pagamentos" is already open in its own detached window. See `is_reconciliation_window_open`. */
+/** Whether "Conferência de Pagamentos" is open in its own tab (one this tab opened). */
 export function isReconciliationWindowOpen(): Promise<boolean> {
-  return invoke("is_reconciliation_window_open");
+  return Promise.resolve(reconciliationTab !== null && !reconciliationTab.closed);
 }
 
 /** How the assistant can reach Claude. The installed Claude Code wins when both are present. */

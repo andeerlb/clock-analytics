@@ -76,12 +76,6 @@ function fileNameOf(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
 
-/** "/home/me/Pessoal/lista.xlsx" -> "/home/me/Pessoal" — the short origin under a picked file's name. */
-function parentDirOf(path: string): string {
-  const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return i > 0 ? path.slice(0, i) : "";
-}
-
 type RowCategory = "valid" | "update" | "duplicate-in-file" | "skipped";
 type RowFilter = RowCategory | "error" | "all" | "selected";
 
@@ -745,11 +739,6 @@ export default function ImportEmployeesPage() {
                           </div>
                           <div className="file-row-info">
                             <div className="file-name">{name}</div>
-                            <div className="file-meta import-file-meta">
-                              <span className="import-file-origin" title={p}>
-                                {parentDirOf(p)}
-                              </span>
-                            </div>
                           </div>
                           <div className="file-row-actions">
                             {ext && <span className="import-file-ext">{ext}</span>}

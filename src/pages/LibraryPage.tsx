@@ -1,5 +1,4 @@
-import { save } from "@tauri-apps/plugin-dialog";
-import { CheckCircle2, FolderOpen, ListFilter, X } from "lucide-react";
+import { CheckCircle2, ListFilter, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import Avatar from "../components/Avatar";
@@ -9,7 +8,7 @@ import PageHeader from "../components/PageHeader";
 import PdfViewerModal from "../components/PdfViewerModal";
 import ZipExportButton from "../components/ZipExportButton";
 import { LIBRARY_PAGE_SIZE_OPTIONS, useLibraryFilters, type ReportMode } from "../contexts/FiltersContext";
-import { generateReportZip, revealInFileManager } from "../lib/api";
+import { generateReportZip } from "../lib/api";
 import { listClients, listCompanies, listImports, type ClientRow, type CompanyRow } from "../lib/db";
 import {
   fileNameFromPath,
@@ -158,14 +157,6 @@ export default function LibraryPage() {
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
-  async function handleReveal(path: string) {
-    try {
-      await revealInFileManager(path);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
   // Zip generation needs every matching import, not just the current page
   // — a dedicated unpaginated fetch (same filters) rather than reusing
   // `imports`, which now only ever holds one page's worth.
@@ -185,13 +176,10 @@ export default function LibraryPage() {
       const entries = buildZipEntries(allMatching, mode);
       if (entries.length === 0) return;
 
-      const destPath = await save({
-        defaultPath: `relatorio-${formatTimestampForFileName()}.zip`,
-        filters: [{ name: "ZIP", extensions: ["zip"] }],
-      });
-      if (!destPath) return;
-      await generateReportZip(entries, destPath);
-      setGeneratedZipPath(destPath);
+      // The browser downloads the zip (no save dialog on the web).
+      const fileName = `relatorio-${formatTimestampForFileName()}.zip`;
+      await generateReportZip(entries, fileName);
+      setGeneratedZipPath(fileName);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -235,10 +223,6 @@ export default function LibraryPage() {
         <div className="success-box library-zip-done">
           <CheckCircle2 size={16} />
           <span>Zip gerado: {fileNameFromPath(generatedZipPath)}</span>
-          <button type="button" className="outline" onClick={() => handleReveal(generatedZipPath)}>
-            <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-            Abrir pasta
-          </button>
           <button type="button" className="ghost library-zip-done-close" aria-label="Fechar aviso" onClick={() => setGeneratedZipPath(null)}>
             <X size={15} />
           </button>

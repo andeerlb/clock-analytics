@@ -1,4 +1,4 @@
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "../lib/events";
 import { ListFilter, Moon, Sun } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { PAYMENT_SHIFT_STATUSES, SHIFT_PERIODS, usePaymentsFilters } from "../contexts/FiltersContext";

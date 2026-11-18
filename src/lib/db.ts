@@ -1,15 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
+import { emit } from "./events";
 import Database from "@tauri-apps/plugin-sql";
 import { overtimeMinutesForDay, sumIntervalMinutes } from "./analysis";
-import { normalizeCnpj, normalizeCpf, parseTimeToMinutes } from "./format";
-import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "./periodStatus";
-import { api } from "./http";
-import { detectPixKeyType, type PixKeyType } from "./pix";
+import type { PeriodStatusId } from "./periodStatus";
+import { api, ApiError, rpc } from "./http";
+import type { PixKeyType } from "./pix";
 import type {
   ConflictInfo,
   DuplicateFileInfo,
-  EmployeeTemplateFieldMapping,
   EmployeeTemplateGroup,
   EmployeeTemplateListRow,
   EmployeeTemplateRow,
@@ -22,27 +20,21 @@ import type {
   ParsedTimesheet,
   PaymentAuditResult,
   PaymentAuditRow,
-  PaymentExportTemplateConfig,
   PaymentExportTemplateInput,
   PaymentExportTemplateListRow,
   PaymentExportTemplateRow,
   PaymentFileKind,
-  PaymentPdfTemplateConfig,
   PaymentPdfTemplateInput,
   PaymentPdfTemplateListRow,
   PaymentPdfTemplateRow,
   PaymentRuleCondition,
-  PaymentRuleField,
-  PaymentTemplateFieldMapping,
   PaymentTemplateGroup,
   PaymentTemplateListRow,
   PaymentTemplateRow,
-  PaymentTemplateRule,
   PaymentTemplateRuleKind,
   PaymentShiftRow,
   PaymentShiftStatus,
   PaymentShiftSummaryRow,
-  PaymentStatusRule,
   PaymentValueRule,
   ScheduleTimeFilter,
   ShiftPeriod,
@@ -57,18 +49,6 @@ let dbPromise: Promise<Database> | null = null;
 function getDb(): Promise<Database> {
   if (!dbPromise) dbPromise = Database.load(DB_URL);
   return dbPromise;
-}
-
-/**
- * Appends a `column IN ($n, $n+1, ...)` fragment (and its values) built off
- * the current length of `params` — `null` when `values` is empty, since an
- * empty IN(...) isn't valid SQL and the caller means "no filter" anyway.
- */
-function inClause(column: string, values: (string | number)[], params: (string | number)[]): string | null {
-  if (values.length === 0) return null;
-  const placeholders = values.map((_, i) => `$${params.length + i + 1}`).join(", ");
-  params.push(...values);
-  return `${column} IN (${placeholders})`;
 }
 
 /** `{ $lastInsertId: n }` stands for the id the batch's own statement `n` (0-based) inserted. */
@@ -111,93 +91,20 @@ function notifyPaymentShiftsChanged(): void {
 }
 
 /**
- * Common PT-BR accented letters folded to their base ASCII form. Both cases
- * are listed explicitly (not just lowercase) because SQLite's built-in
- * `LOWER()` only case-folds ASCII — an uppercase "Ç"/"É"/etc. (the employee
- * directory is all-caps) passes through `LOWER()` unchanged, so it still
- * needs its own `REPLACE()` pair downstream of it.
+ * Awaits a shift transition and then broadcasts the change — also when the
+ * server refused it because another writer superseded that shift first
+ * (409): the desktop emitted right after the INSERT ran, before throwing
+ * that error, so the other windows refresh in that case too.
  */
-const ACCENT_FOLD_PAIRS: [string, string][] = [
-  ["á", "a"], ["à", "a"], ["ã", "a"], ["â", "a"], ["ä", "a"],
-  ["Á", "a"], ["À", "a"], ["Ã", "a"], ["Â", "a"], ["Ä", "a"],
-  ["é", "e"], ["è", "e"], ["ê", "e"], ["ë", "e"],
-  ["É", "e"], ["È", "e"], ["Ê", "e"], ["Ë", "e"],
-  ["í", "i"], ["ì", "i"], ["î", "i"], ["ï", "i"],
-  ["Í", "i"], ["Ì", "i"], ["Î", "i"], ["Ï", "i"],
-  ["ó", "o"], ["ò", "o"], ["õ", "o"], ["ô", "o"], ["ö", "o"],
-  ["Ó", "o"], ["Ò", "o"], ["Õ", "o"], ["Ô", "o"], ["Ö", "o"],
-  ["ú", "u"], ["ù", "u"], ["û", "u"], ["ü", "u"],
-  ["Ú", "u"], ["Ù", "u"], ["Û", "u"], ["Ü", "u"],
-  ["ç", "c"], ["Ç", "c"], ["ñ", "n"], ["Ñ", "n"],
-];
-
-/**
- * Wraps a SQL expression (a column reference or a bound-parameter
- * placeholder) with `LOWER()` plus a chain of `REPLACE()` calls that fold
- * accented PT-BR letters to their base form — SQLite has no built-in accent
- * folding, so a name search needs the *same* chain applied to both sides of
- * a `LIKE` to match case- and accent-insensitively (e.g. "goncalves" against
- * "GONÇALVES").
- */
-function foldAccentsSql(sqlExpr: string): string {
-  return ACCENT_FOLD_PAIRS.reduce((expr, [from, to]) => `REPLACE(${expr}, '${from}', '${to}')`, `LOWER(${sqlExpr})`);
-}
-
-async function upsertEmployee(
-  db: Database,
-  companyId: number,
-  clientId: number,
-  name: string,
-  cpf: string,
-): Promise<number> {
-  // Digits-only, same normalization every other write path to `employees`
-  // applies (createEmployeeManual/updateEmployee/createEmployeesFromImport)
-  // — the PDF parser's own CPF regex allows dots/dashes through, so this is
-  // the only thing standing between a punctuated CPF and a stored row that
-  // `findEmployeeByAttempts`'s digits-only comparison would then silently
-  // never match again.
-  const normalizedCpf = normalizeCpf(cpf);
-  // Scoped to cpf alone — since 0072_employee_client_link.sql a colaborador
-  // is one person globally, not one person per cliente (and, since 0071,
-  // not one person per empresa either). Neither `clientId` nor `companyId`
-  // pick out *which* employee row this is anymore; they're just which
-  // (cliente, empresa) pair this particular timesheet import links them to,
-  // recorded below in `employee_client_companies` alongside every other
-  // pair they've already been imported under. Auto-linking a new pair here
-  // (instead of asking first, the way `createEmployeeManual`/
-  // `findEmployeeByAttempts` do for the same situation) mirrors this
-  // function's own prior behavior: it already silently auto-created a
-  // brand-new employee on an unmatched cpf with no confirmation step, and
-  // importing one specific PDF under an explicitly-chosen cliente/empresa is
-  // already a single deliberate action, not an ambiguous bulk match.
-  const existing = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1", [normalizedCpf]);
-  let employeeId: number;
-  if (existing.length > 0) {
-    employeeId = existing[0].id;
-    await db.execute("UPDATE employees SET name = $1 WHERE id = $2", [name, employeeId]);
-  } else {
-    const result = await db.execute("INSERT INTO employees (name, cpf) VALUES ($1, $2)", [name, normalizedCpf]);
-    employeeId = result.lastInsertId as number;
+async function withShiftsChangedNotice(call: Promise<number>): Promise<number> {
+  try {
+    const id = await call;
+    notifyPaymentShiftsChanged();
+    return id;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409) notifyPaymentShiftsChanged();
+    throw error;
   }
-  await db.execute(
-    `INSERT INTO employee_client_companies (employee_id, client_id, company_id) VALUES ($1, $2, $3)
-     ON CONFLICT (employee_id, client_id, company_id) DO NOTHING`,
-    [employeeId, clientId, companyId],
-  );
-  return employeeId;
-}
-
-async function upsertImportFile(db: Database, fileName: string, fileHash: string): Promise<number> {
-  const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM import_files WHERE file_hash = $1",
-    [fileHash],
-  );
-  if (existing.length > 0) return existing[0].id;
-  const result = await db.execute(
-    "INSERT INTO import_files (file_name, file_hash) VALUES ($1, $2)",
-    [fileName, fileHash],
-  );
-  return result.lastInsertId as number;
 }
 
 /**
@@ -224,47 +131,7 @@ export async function logSourceFile(input: {
   sourceLastModified?: string | null;
   sourceContentLength?: number | null;
 }): Promise<number> {
-  const db = await getDb();
-  await db.execute(
-    `INSERT INTO source_files
-       (file_name, file_hash, page_count, provider, import_type, status, error_message, original_pdf_path,
-        source_url, source_etag, source_last_modified, source_content_length)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-     ON CONFLICT(file_hash) DO UPDATE SET
-       file_name = excluded.file_name,
-       page_count = excluded.page_count,
-       provider = excluded.provider,
-       import_type = excluded.import_type,
-       status = excluded.status,
-       error_message = excluded.error_message,
-       original_pdf_path = excluded.original_pdf_path,
-       source_url = excluded.source_url,
-       source_etag = excluded.source_etag,
-       source_last_modified = excluded.source_last_modified,
-       source_content_length = excluded.source_content_length,
-       imported_at = datetime('now')`,
-    [
-      input.fileName,
-      input.fileHash,
-      input.pageCount,
-      input.provider,
-      input.importType,
-      input.status,
-      input.errorMessage,
-      input.originalPdfPath,
-      input.sourceUrl ?? null,
-      input.sourceEtag ?? null,
-      input.sourceLastModified ?? null,
-      input.sourceContentLength ?? null,
-    ],
-  );
-  // `lastInsertId` isn't reliable across the ON CONFLICT DO UPDATE path, so
-  // look the row up explicitly rather than trust it.
-  const row = await db.select<{ id: number }[]>(
-    "SELECT id FROM source_files WHERE file_hash = $1",
-    [input.fileHash],
-  );
-  return row[0].id;
+  return rpc<number>("logSourceFile", { input });
 }
 
 /**
@@ -274,36 +141,11 @@ export async function logSourceFile(input: {
  * that case it should still be reprocessable.
  */
 export async function markSourceFileSaved(fileHash: string): Promise<void> {
-  await runWriteBatch(markSourceFilesSavedStatements([fileHash]));
-}
-
-/** `markSourceFileSaved` as batch statements, for a save that must mark its files in the same transaction as the rows it wrote. */
-function markSourceFilesSavedStatements(fileHashes: Iterable<string>): BatchStatement[] {
-  return Array.from(fileHashes, (fileHash) => ({
-    sql: "UPDATE source_files SET saved_at = datetime('now') WHERE file_hash = $1",
-    params: [fileHash],
-  }));
-}
-
-/**
- * Deletes an import and its day_records/punches. Cascades are done by hand
- * rather than relying on `ON DELETE CASCADE`, since sqlite only enforces
- * foreign keys when `PRAGMA foreign_keys = ON` was set on the connection,
- * which isn't guaranteed here.
- */
-function deleteImportStatements(importId: number): BatchStatement[] {
-  return [
-    {
-      sql: "DELETE FROM punches WHERE day_record_id IN (SELECT id FROM day_records WHERE import_id = $1)",
-      params: [importId],
-    },
-    { sql: "DELETE FROM day_records WHERE import_id = $1", params: [importId] },
-    { sql: "DELETE FROM imports WHERE id = $1", params: [importId] },
-  ];
+  await rpc<void>("markSourceFileSaved", { fileHash });
 }
 
 export async function deleteImport(importId: number): Promise<void> {
-  await runWriteBatch(deleteImportStatements(importId));
+  await rpc<void>("deleteImport", { importId });
 }
 
 /**
@@ -326,31 +168,11 @@ export async function saveParsedTimesheet(
   replaceImportId?: number,
   sourceFileId?: number,
 ): Promise<number> {
-  const db = await getDb();
-
-  // A client can be linked to more than one company, so the pairing has to
-  // be validated explicitly rather than derived.
-  const link = await db.select<{ clientId: number }[]>(
-    "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
-    [clientId, companyId],
-  );
-  if (link.length === 0) {
-    throw new Error("Esse cliente não está vinculado à empresa selecionada.");
-  }
-
-  const employeeId = await upsertEmployee(
-    db,
-    companyId,
-    clientId,
-    sheet.employee.name,
-    sheet.employee.cpf,
-  );
-  const importFileId = await upsertImportFile(db, sheet.originalFileName, sheet.originalFileHash);
-
   // Computed once, here, at import time, over the whole (fixed) period —
   // the UI reads these instead of scanning day_records on every render.
   // `maxPunches` floors at 4 (2 pairs), matching the fixed grid the PDF
-  // itself always has, even on days that leave it unfilled.
+  // itself always has, even on days that leave it unfilled. Pure
+  // computation, so it stays here (analysis.ts) and the server stores it.
   let maxPunches = 4;
   let totalWorkedMinutes = 0;
   let overtimeMinutes = 0;
@@ -380,27 +202,16 @@ export async function saveParsedTimesheet(
     if (day.punches.length % 2 !== 0) pendingCount++;
   }
 
-  // The replaced import's removal and the new import's rows go in one
-  // transaction, so a failure part-way never leaves the old import gone
-  // with only half of the new one written.
-  const statements: BatchStatement[] = replaceImportId !== undefined ? deleteImportStatements(replaceImportId) : [];
-  const importStatementIndex = statements.length;
-  statements.push({
-    sql: `INSERT INTO imports
-       (provider, employee_id, client_id, company_id, period_start, period_end, original_pdf_path, import_file_id,
-        source_file_id, max_punches, total_worked_minutes, overtime_minutes, absence_minutes,
-        late_minutes, regular_minutes, interval_minutes, pending_count)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
-    params: [
-      sheet.provider,
-      employeeId,
-      clientId,
-      companyId,
-      sheet.period.start,
-      sheet.period.end,
-      sheet.originalPdfPath,
-      importFileId,
-      sourceFileId ?? null,
+  // The server validates the cliente/empresa pair, upserts the employee and
+  // import file, and removes `replaceImportId` + writes the new rows, all in
+  // one transaction.
+  return rpc<number>("saveParsedTimesheet", {
+    sheet,
+    clientId,
+    companyId,
+    replaceImportId: replaceImportId ?? null,
+    sourceFileId: sourceFileId ?? null,
+    aggregates: {
       maxPunches,
       totalWorkedMinutes,
       overtimeMinutes,
@@ -409,38 +220,8 @@ export async function saveParsedTimesheet(
       regularMinutes,
       intervalMinutes,
       pendingCount,
-    ],
+    },
   });
-
-  for (const day of sheet.days) {
-    const dayStatementIndex = statements.length;
-    statements.push({
-      sql: `INSERT INTO day_records
-         (import_id, date, weekday, total_worked_minutes, normal_hours_minutes, absence_minutes, observation)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      params: [
-        { $lastInsertId: importStatementIndex },
-        day.date,
-        day.weekday,
-        day.totalWorkedMinutes,
-        day.normalHoursMinutes,
-        day.absenceMinutes,
-        day.observation,
-      ],
-    });
-
-    for (let i = 0; i < day.punches.length; i++) {
-      statements.push({
-        sql: "INSERT INTO punches (day_record_id, punch_time, sequence_index) VALUES ($1, $2, $3)",
-        params: [{ $lastInsertId: dayStatementIndex }, day.punches[i], i],
-      });
-    }
-  }
-
-  const results = await runWriteBatch(statements);
-  const importId = results[importStatementIndex].lastInsertId;
-
-  return importId;
 }
 
 export interface CompanyRow {
@@ -460,32 +241,6 @@ export async function listCompanies(): Promise<CompanyRow[]> {
 /** Full company detail, including its optional pay-value chain — only `getCompany` fetches this; `listCompanies` stays lightweight for dropdowns. */
 export interface CompanyDetail extends CompanyRow {
   valueRules: PaymentValueRule[];
-}
-
-/**
- * One INSERT per rule into `table` (`payment_value_rules` for a company,
- * `client_payment_value_rules` for a client's override), in array order —
- * same evaluation-by-insertion-order convention as the payment-template
- * rule chains, see `resolvePaymentValue`.
- */
-function valueRuleInserts(
-  table: "payment_value_rules" | "client_payment_value_rules",
-  ownerColumn: "company_id" | "client_id",
-  ownerId: BatchParam,
-  rules: PaymentValueRule[],
-): BatchStatement[] {
-  return rules.map((rule) => ({
-    sql: `INSERT INTO ${table} (${ownerColumn}, kind, conditions_json, operator, threshold_minutes, amount)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-    params: [
-      ownerId,
-      rule.kind,
-      rule.kind === "condition" && rule.conditions.length > 0 ? JSON.stringify(rule.conditions) : null,
-      rule.kind === "condition" ? rule.operator : null,
-      rule.kind === "condition" ? rule.thresholdMinutes : null,
-      rule.amount,
-    ],
-  }));
 }
 
 /**
@@ -535,14 +290,7 @@ export interface ClientRow {
 }
 
 export async function listClients(): Promise<ClientRow[]> {
-  const db = await getDb();
-  return db.select<ClientRow[]>(`
-    SELECT cl.id, cl.name, cl.cnpj, c.id AS companyId, c.name AS companyName
-    FROM clients cl
-    JOIN client_companies cc ON cc.client_id = cl.id
-    JOIN companies c ON c.id = cc.company_id
-    ORDER BY c.name, cl.name
-  `);
+  return rpc<ClientRow[]>("listClients");
 }
 
 /**
@@ -565,46 +313,7 @@ export async function createClient(
   nightShiftRule: NightShiftRule | null = null,
   valueRules: PaymentValueRule[] = [],
 ): Promise<number> {
-  const db = await getDb();
-  const normalizedCnpj = normalizeCnpj(cnpj);
-  if (normalizedCnpj.length !== 14) {
-    throw new Error("CNPJ deve ter 14 dígitos.");
-  }
-  if (companyIds.length === 0) {
-    throw new Error("Selecione pelo menos uma empresa.");
-  }
-
-  const existing = await db.select<{ id: number }[]>("SELECT id FROM clients WHERE cnpj = $1", [
-    normalizedCnpj,
-  ]);
-
-  const statements: BatchStatement[] = [];
-  let clientId: BatchParam;
-  if (existing.length > 0) {
-    // Linking an existing client to one more empresa isn't an edit of that
-    // client — its rule overrides (if any) are left exactly as they are,
-    // any `nightStartTime`/`valueRules` passed here are silently ignored.
-    clientId = existing[0].id;
-  } else {
-    statements.push({
-      sql: "INSERT INTO clients (name, cnpj, night_start_time, night_end_time, night_shift_rule) VALUES ($1, $2, $3, $4, $5)",
-      params: [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule],
-    });
-    clientId = { $lastInsertId: 0 };
-    statements.push(...valueRuleInserts("client_payment_value_rules", "client_id", clientId, valueRules));
-  }
-
-  for (const companyId of companyIds) {
-    statements.push({
-      sql: `INSERT INTO client_companies (client_id, company_id)
-            SELECT $1, $2
-            WHERE NOT EXISTS (SELECT 1 FROM client_companies WHERE client_id = $1 AND company_id = $2)`,
-      params: [clientId, companyId],
-    });
-  }
-
-  const results = await runWriteBatch(statements);
-  return typeof clientId === "number" ? clientId : results[0].lastInsertId;
+  return rpc<number>("createClient", { companyIds, name, cnpj, nightStartTime, nightEndTime, nightShiftRule, valueRules });
 }
 
 export interface ClientDetail {
@@ -621,48 +330,12 @@ export interface ClientDetail {
 }
 
 export async function getClient(id: number): Promise<ClientDetail> {
-  const db = await getDb();
-  const rows = await db.select<
-    { id: number; name: string; cnpj: string; nightStartTime: string | null; nightEndTime: string | null; nightShiftRule: NightShiftRule | null }[]
-  >(
-    `SELECT id, name, cnpj, night_start_time AS nightStartTime, night_end_time AS nightEndTime,
-            night_shift_rule AS nightShiftRule
-     FROM clients WHERE id = $1`,
-    [id],
-  );
-  if (rows.length === 0) throw new Error("Cliente não encontrado.");
-  const companies = await db.select<{ id: number; name: string }[]>(
-    `SELECT c.id, c.name
-     FROM client_companies cc
-     JOIN companies c ON c.id = cc.company_id
-     WHERE cc.client_id = $1
-     ORDER BY c.name`,
-    [id],
-  );
-  const valueRuleRows = await db.select<(Omit<PaymentValueRule, "conditions"> & { conditionsJson: string | null })[]>(
-    `SELECT kind, conditions_json AS conditionsJson, operator, threshold_minutes AS thresholdMinutes, amount
-     FROM client_payment_value_rules WHERE client_id = $1 ORDER BY id`,
-    [id],
-  );
-  const valueRules: PaymentValueRule[] = valueRuleRows.map(({ conditionsJson, ...rule }) => ({
-    ...rule,
-    conditions: conditionsJson ? JSON.parse(conditionsJson) : [],
-  }));
-  return { ...rows[0], companies, valueRules };
+  return rpc<ClientDetail>("getClient", { id });
 }
 
 /** Links `clientId` to an additional `companyId` — a no-op if already linked. */
 export async function addClientCompany(clientId: number, companyId: number): Promise<void> {
-  const db = await getDb();
-  const existingLink = await db.select<{ clientId: number }[]>(
-    "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
-    [clientId, companyId],
-  );
-  if (existingLink.length > 0) return;
-  await db.execute("INSERT INTO client_companies (client_id, company_id) VALUES ($1, $2)", [
-    clientId,
-    companyId,
-  ]);
+  await rpc<void>("addClientCompany", { clientId, companyId });
 }
 
 /**
@@ -673,25 +346,7 @@ export async function addClientCompany(clientId: number, companyId: number): Pro
  * itself no longer claims to belong to.
  */
 export async function removeClientCompany(clientId: number, companyId: number): Promise<void> {
-  const db = await getDb();
-  const linkCount = await db.select<{ count: number }[]>(
-    "SELECT COUNT(*) AS count FROM client_companies WHERE client_id = $1",
-    [clientId],
-  );
-  if ((linkCount[0]?.count ?? 0) <= 1) {
-    throw new Error("O cliente precisa continuar vinculado a pelo menos uma empresa.");
-  }
-  const employeeCount = await db.select<{ count: number }[]>(
-    "SELECT COUNT(*) AS count FROM employee_client_companies WHERE client_id = $1 AND company_id = $2",
-    [clientId, companyId],
-  );
-  if ((employeeCount[0]?.count ?? 0) > 0) {
-    throw new Error("Existem colaboradores cadastrados para esse cliente nessa empresa — desvincule ou mova-os antes.");
-  }
-  await db.execute("DELETE FROM client_companies WHERE client_id = $1 AND company_id = $2", [
-    clientId,
-    companyId,
-  ]);
+  await rpc<void>("removeClientCompany", { clientId, companyId });
 }
 
 /**
@@ -707,26 +362,7 @@ export async function updateClient(
   nightShiftRule: NightShiftRule | null = null,
   valueRules: PaymentValueRule[] = [],
 ): Promise<void> {
-  const db = await getDb();
-  const normalizedCnpj = normalizeCnpj(cnpj);
-  if (normalizedCnpj.length !== 14) {
-    throw new Error("CNPJ deve ter 14 dígitos.");
-  }
-  const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM clients WHERE cnpj = $1 AND id != $2",
-    [normalizedCnpj, id],
-  );
-  if (existing.length > 0) {
-    throw new Error("Já existe um cliente cadastrado com esse CNPJ.");
-  }
-  await runWriteBatch([
-    {
-      sql: "UPDATE clients SET name = $1, cnpj = $2, night_start_time = $3, night_end_time = $4, night_shift_rule = $5 WHERE id = $6",
-      params: [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule, id],
-    },
-    { sql: "DELETE FROM client_payment_value_rules WHERE client_id = $1", params: [id] },
-    ...valueRuleInserts("client_payment_value_rules", "client_id", id, valueRules),
-  ]);
+  await rpc<void>("updateClient", { id, name, cnpj, nightStartTime, nightEndTime, nightShiftRule, valueRules });
 }
 
 /** The night-shift window/rule + pay-value chain actually in effect for one (cliente, empresa) pair — the client's own override when it has one, falling back field-by-field (night window) or as a whole chain (value rules) to the company's otherwise. Mirrored in SQL by `shiftPeriodSql` for night-shift classification (the only one of the two ever resolved SQL-side). */
@@ -738,13 +374,7 @@ export interface EffectivePaymentRules {
 }
 
 export async function getEffectivePaymentRules(clientId: number, companyId: number): Promise<EffectivePaymentRules> {
-  const [client, company] = await Promise.all([getClient(clientId), getCompany(companyId)]);
-  return {
-    nightStartTime: client.nightStartTime ?? company.nightStartTime,
-    nightEndTime: client.nightEndTime ?? company.nightEndTime,
-    nightShiftRule: client.nightShiftRule ?? company.nightShiftRule,
-    valueRules: client.valueRules.length > 0 ? client.valueRules : company.valueRules,
-  };
+  return rpc<EffectivePaymentRules>("getEffectivePaymentRules", { clientId, companyId });
 }
 
 /**
@@ -782,57 +412,6 @@ export interface EmployeeRow {
   links: EmployeeClientCompanyLink[];
 }
 
-/**
- * Builds full `EmployeeRow`s (including each one's `links`) for a batch of
- * employee ids in two queries total instead of one per id — every
- * `employees` read path (`getEmployee`, `listEmployeesGlobal`,
- * `findEmployeeByAttempts` and its siblings) goes through this so the
- * "attach links" logic can't drift between them. Order of the returned
- * array is NOT guaranteed to match `employeeIds` — callers that care about
- * order (e.g. `listEmployeesGlobal`'s `ORDER BY name`) re-sort by id
- * themselves.
- */
-async function hydrateEmployeeRows(db: Database, employeeIds: number[]): Promise<EmployeeRow[]> {
-  if (employeeIds.length === 0) return [];
-  const placeholders = employeeIds.map((_, i) => `$${i + 1}`).join(", ");
-  const base = await db.select<{ id: number; name: string; cpf: string }[]>(
-    `SELECT e.id, e.name, e.cpf FROM employees e WHERE e.id IN (${placeholders})`,
-    employeeIds,
-  );
-  const linkRows = await db.select<
-    {
-      employeeId: number;
-      clientId: number;
-      clientName: string;
-      companyId: number;
-      companyName: string;
-      matricula: string | null;
-    }[]
-  >(
-    `SELECT ecc.employee_id AS employeeId, cl.id AS clientId, cl.name AS clientName,
-            c.id AS companyId, c.name AS companyName, ecc.matricula
-     FROM employee_client_companies ecc
-     JOIN clients cl ON cl.id = ecc.client_id
-     JOIN companies c ON c.id = ecc.company_id
-     WHERE ecc.employee_id IN (${placeholders})
-     ORDER BY cl.name, c.name`,
-    employeeIds,
-  );
-  const linksByEmployee = new Map<number, EmployeeClientCompanyLink[]>();
-  for (const row of linkRows) {
-    const list = linksByEmployee.get(row.employeeId) ?? [];
-    list.push({
-      clientId: row.clientId,
-      clientName: row.clientName,
-      companyId: row.companyId,
-      companyName: row.companyName,
-      matricula: row.matricula,
-    });
-    linksByEmployee.set(row.employeeId, list);
-  }
-  return base.map((e) => ({ ...e, links: linksByEmployee.get(e.id) ?? [] }));
-}
-
 export interface EmployeesGlobalQuery {
   /** Substring match on name — case- and accent-insensitive (see `foldAccentsSql`). */
   search?: string;
@@ -856,56 +435,7 @@ export interface EmployeesGlobalQuery {
  * for some other cliente).
  */
 export async function listEmployeesGlobal(query: EmployeesGlobalQuery): Promise<PagedResult<EmployeeRow>> {
-  const db = await getDb();
-  const conditions: string[] = [];
-  const params: (string | number)[] = [];
-
-  const search = query.search?.trim();
-  if (search) {
-    params.push(search);
-    const byName = `${foldAccentsSql("e.name")} LIKE '%' || ${foldAccentsSql(`$${params.length}`)} || '%'`;
-    // A search made only of digits and CPF punctuation also matches the CPF.
-    const cpfDigits = /^[\d.\s-]+$/.test(search) ? search.replace(/\D/g, "") : "";
-    if (cpfDigits.length >= 3) {
-      params.push(cpfDigits);
-      conditions.push(`(${byName} OR REPLACE(REPLACE(e.cpf, '.', ''), '-', '') LIKE '%' || $${params.length} || '%')`);
-    } else {
-      conditions.push(byName);
-    }
-  }
-  const companyClause = inClause("ecc_company.company_id", query.companyIds ?? [], params);
-  if (companyClause) {
-    conditions.push(
-      `EXISTS (SELECT 1 FROM employee_client_companies ecc_company WHERE ecc_company.employee_id = e.id AND ${companyClause})`,
-    );
-  }
-  const clientClause = inClause("ecc_client.client_id", query.clientIds ?? [], params);
-  if (clientClause) {
-    conditions.push(
-      `EXISTS (SELECT 1 FROM employee_client_companies ecc_client WHERE ecc_client.employee_id = e.id AND ${clientClause})`,
-    );
-  }
-
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const from = `FROM employees e`;
-
-  const countRows = await db.select<{ count: number }[]>(`SELECT COUNT(*) AS count ${from} ${whereClause}`, params);
-  const total = countRows[0]?.count ?? 0;
-
-  const idRows = await db.select<{ id: number }[]>(
-    `SELECT e.id
-     ${from}
-     ${whereClause}
-     ORDER BY e.name
-     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-    [...params, query.pageSize, query.page * query.pageSize],
-  );
-
-  const hydrated = await hydrateEmployeeRows(db, idRows.map((r) => r.id));
-  const byId = new Map(hydrated.map((r) => [r.id, r]));
-  const rows = idRows.map((r) => byId.get(r.id)!);
-
-  return { rows, total };
+  return rpc<PagedResult<EmployeeRow>>("listEmployeesGlobal", { query });
 }
 
 /**
@@ -917,8 +447,7 @@ export async function listEmployeesGlobal(query: EmployeesGlobalQuery): Promise<
  */
 export async function getEmployeesByIds(ids: number[]): Promise<EmployeeRow[]> {
   if (ids.length === 0) return [];
-  const db = await getDb();
-  return hydrateEmployeeRows(db, ids);
+  return rpc<EmployeeRow[]>("getEmployeesByIds", { ids });
 }
 
 /**
@@ -937,36 +466,11 @@ export async function createEmployeeManual(
   cpf: string,
   matricula: string | null = null,
 ): Promise<number> {
-  const db = await getDb();
-  const normalizedCpf = normalizeCpf(cpf);
-  if (normalizedCpf.length !== 11) {
-    throw new Error("CPF deve ter 11 dígitos.");
-  }
-
-  const link = await db.select<{ clientId: number }[]>(
-    "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
-    [clientId, companyId],
-  );
-  if (link.length === 0) {
-    throw new Error("Esse cliente não está vinculado à empresa selecionada.");
-  }
-
-  const existing = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1", [normalizedCpf]);
-  if (existing.length > 0) {
-    throw new Error("Já existe um colaborador com esse CPF.");
-  }
-
-  const result = await db.execute("INSERT INTO employees (name, cpf) VALUES ($1, $2)", [name.trim(), normalizedCpf]);
-  const employeeId = result.lastInsertId as number;
-  await linkEmployeeToClientCompany(employeeId, clientId, companyId, matricula);
-  return employeeId;
+  return rpc<number>("createEmployeeManual", { clientId, companyId, name, cpf, matricula });
 }
 
 export async function getEmployee(id: number): Promise<EmployeeRow> {
-  const db = await getDb();
-  const rows = await hydrateEmployeeRows(db, [id]);
-  if (rows.length === 0) throw new Error("Colaborador não encontrado.");
-  return rows[0];
+  return rpc<EmployeeRow>("getEmployee", { id });
 }
 
 /**
@@ -985,20 +489,7 @@ export async function linkEmployeeToClientCompany(
   companyId: number,
   matricula: string | null = null,
 ): Promise<void> {
-  const db = await getDb();
-  const link = await db.select<{ clientId: number }[]>(
-    "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
-    [clientId, companyId],
-  );
-  if (link.length === 0) {
-    throw new Error("Esse cliente não está vinculado à empresa selecionada.");
-  }
-
-  await db.execute(
-    `INSERT INTO employee_client_companies (employee_id, client_id, company_id, matricula) VALUES ($1, $2, $3, $4)
-     ON CONFLICT (employee_id, client_id, company_id) DO UPDATE SET matricula = excluded.matricula`,
-    [employeeId, clientId, companyId, matricula?.trim() || null],
-  );
+  await rpc<void>("linkEmployeeToClientCompany", { employeeId, clientId, companyId, matricula });
 }
 
 /** Just the matrícula for one of a colaborador's (cliente, empresa) links — the rest of `employee_client_companies` isn't user-editable after creation (the link itself is added/removed via `linkEmployeeToClientCompany`/`unlinkEmployeeClientCompany`). */
@@ -1008,11 +499,7 @@ export async function updateEmployeeClientCompanyMatricula(
   companyId: number,
   matricula: string | null,
 ): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    "UPDATE employee_client_companies SET matricula = $1 WHERE employee_id = $2 AND client_id = $3 AND company_id = $4",
-    [matricula?.trim() || null, employeeId, clientId, companyId],
-  );
+  await rpc<void>("updateEmployeeClientCompanyMatricula", { employeeId, clientId, companyId, matricula });
 }
 
 /**
@@ -1022,18 +509,7 @@ export async function updateEmployeeClientCompanyMatricula(
  * pair).
  */
 export async function unlinkEmployeeClientCompany(employeeId: number, clientId: number, companyId: number): Promise<void> {
-  const db = await getDb();
-  const count = await db.select<{ n: number }[]>(
-    "SELECT COUNT(*) AS n FROM employee_client_companies WHERE employee_id = $1",
-    [employeeId],
-  );
-  if ((count[0]?.n ?? 0) <= 1) {
-    throw new Error("O colaborador precisa estar vinculado a pelo menos um cliente/empresa.");
-  }
-  await db.execute(
-    "DELETE FROM employee_client_companies WHERE employee_id = $1 AND client_id = $2 AND company_id = $3",
-    [employeeId, clientId, companyId],
-  );
+  await rpc<void>("unlinkEmployeeClientCompany", { employeeId, clientId, companyId });
 }
 
 /**
@@ -1044,24 +520,7 @@ export async function unlinkEmployeeClientCompany(employeeId: number, clientId: 
  * anymore — CPF alone is (see 0072_employee_client_link.sql).
  */
 export async function updateEmployee(id: number, name: string, cpf: string): Promise<void> {
-  const db = await getDb();
-  const normalizedCpf = normalizeCpf(cpf);
-  if (normalizedCpf.length !== 11) {
-    throw new Error("CPF deve ter 11 dígitos.");
-  }
-
-  const current = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE id = $1", [id]);
-  if (current.length === 0) throw new Error("Colaborador não encontrado.");
-
-  const existing = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1 AND id != $2", [
-    normalizedCpf,
-    id,
-  ]);
-  if (existing.length > 0) {
-    throw new Error("Já existe um colaborador com esse CPF.");
-  }
-
-  await db.execute("UPDATE employees SET name = $1, cpf = $2 WHERE id = $3", [name.trim(), normalizedCpf, id]);
+  await rpc<void>("updateEmployee", { id, name, cpf });
 }
 
 /**
@@ -1089,49 +548,11 @@ export interface EmployeeDeletionImpact {
 
 /** What `deleteEmployee` would erase — shown before a delete so the user sees exactly what goes with it. */
 export async function getEmployeeDeletionImpact(employeeId: number): Promise<EmployeeDeletionImpact> {
-  const db = await getDb();
-  const rows = await db.select<EmployeeDeletionImpact[]>(
-    `SELECT
-       (SELECT COUNT(*) FROM payment_shifts WHERE employee_id = $1 AND status = 'pago') AS paymentRecords,
-       (SELECT COUNT(*) FROM payment_shifts ps WHERE ps.employee_id = $1 AND ${HEAD_SHIFT_CONDITION}) AS shifts,
-       (SELECT COUNT(*) FROM payment_shifts ps WHERE ps.employee_id = $1 AND ps.status = 'pago' AND ${HEAD_SHIFT_CONDITION}) AS paidShifts,
-       (SELECT COALESCE(SUM(ps.amount), 0) FROM payment_shifts ps WHERE ps.employee_id = $1 AND ps.status = 'pago' AND ${HEAD_SHIFT_CONDITION}) AS paidAmount,
-       (SELECT COUNT(*) FROM imports WHERE employee_id = $1) AS timesheets,
-       (SELECT COUNT(*) FROM employee_pix_keys WHERE employee_id = $1) AS pixKeys`,
-    [employeeId],
-  );
-  return rows[0];
+  return rpc<EmployeeDeletionImpact>("getEmployeeDeletionImpact", { employeeId });
 }
 
 export async function deleteEmployee(employeeId: number, options: { allowPaid?: boolean } = {}): Promise<void> {
-  // A payment that was made is a financial record — refused unless the
-  // user explicitly forced it ("Excluir mesmo assim", which also takes a
-  // backup first — see EmployeeFormPage).
-  if (!options.allowPaid) {
-    const { paymentRecords } = await getEmployeeDeletionImpact(employeeId);
-    if (paymentRecords > 0) {
-      throw new Error(
-        `Este colaborador tem ${paymentRecords} ${paymentRecords === 1 ? "registro de pagamento" : "registros de pagamento"} no histórico e não pode ser excluído sem confirmação — isso apagaria pagamentos já feitos.`,
-      );
-    }
-  }
-
-  const params = [employeeId];
-  await runWriteBatch([
-    {
-      sql: `DELETE FROM punches WHERE day_record_id IN (
-       SELECT id FROM day_records WHERE import_id IN (SELECT id FROM imports WHERE employee_id = $1)
-     )`,
-      params,
-    },
-    { sql: "DELETE FROM day_records WHERE import_id IN (SELECT id FROM imports WHERE employee_id = $1)", params },
-    { sql: "DELETE FROM imports WHERE employee_id = $1", params },
-    { sql: "DELETE FROM payment_shifts WHERE employee_id = $1", params },
-    { sql: "DELETE FROM employee_aliases WHERE employee_id = $1", params },
-    { sql: "DELETE FROM employee_pix_keys WHERE employee_id = $1", params },
-    { sql: "DELETE FROM employee_client_companies WHERE employee_id = $1", params },
-    { sql: "DELETE FROM employees WHERE id = $1", params },
-  ]);
+  await rpc<void>("deleteEmployee", { employeeId, options });
 }
 
 /**
@@ -1165,90 +586,11 @@ export async function reassignEmployeeHistoryToClientCompany(
   periodStart: string | null,
   periodEnd: string | null,
 ): Promise<void> {
-  const shiftConditions = ["employee_id = $3"];
-  const shiftParams: (string | number)[] = [newClientId, newCompanyId, employeeId];
-  if (periodStart) {
-    shiftParams.push(periodStart);
-    shiftConditions.push(`work_date >= $${shiftParams.length}`);
-  }
-  if (periodEnd) {
-    shiftParams.push(periodEnd);
-    shiftConditions.push(`work_date <= $${shiftParams.length}`);
-  }
-
-  const importConditions = ["employee_id = $3"];
-  const importParams: (string | number)[] = [newClientId, newCompanyId, employeeId];
-  if (periodEnd) {
-    importParams.push(periodEnd);
-    importConditions.push(`period_start <= $${importParams.length}`);
-  }
-  if (periodStart) {
-    importParams.push(periodStart);
-    importConditions.push(`period_end >= $${importParams.length}`);
-  }
-  await runWriteBatch([
-    {
-      sql: `UPDATE payment_shifts SET client_id = $1, company_id = $2 WHERE ${shiftConditions.join(" AND ")}`,
-      params: shiftParams,
-    },
-    {
-      sql: `UPDATE imports SET client_id = $1, company_id = $2 WHERE ${importConditions.join(" AND ")}`,
-      params: importParams,
-    },
-  ]);
+  await rpc<void>("reassignEmployeeHistoryToClientCompany", { employeeId, newClientId, newCompanyId, periodStart, periodEnd });
 }
 
-const IMPORT_SELECT_COLUMNS = `
-  i.id AS importId,
-  i.provider AS provider,
-  i.employee_id AS employeeId,
-  e.name AS employeeName,
-  e.cpf AS employeeCpf,
-  c.id AS companyId,
-  c.name AS companyName,
-  cl.id AS clientId,
-  cl.name AS clientName,
-  i.period_start AS periodStart,
-  i.period_end AS periodEnd,
-  i.original_pdf_path AS originalPdfPath,
-  sf.original_pdf_path AS sourceOriginalPdfPath,
-  i.max_punches AS maxPunches,
-  i.total_worked_minutes AS totalWorkedMinutes,
-  i.overtime_minutes AS overtimeMinutes,
-  i.absence_minutes AS absenceMinutes,
-  i.late_minutes AS lateMinutes,
-  i.regular_minutes AS regularMinutes,
-  i.interval_minutes AS intervalMinutes,
-  i.pending_count AS pendingCount,
-  i.imported_at AS importedAt
-`;
-
-const IMPORT_FROM_CLAUSE = `
-  FROM imports i
-  JOIN employees e ON e.id = i.employee_id
-  JOIN companies c ON c.id = i.company_id
-  LEFT JOIN clients cl ON cl.id = i.client_id
-  LEFT JOIN source_files sf ON sf.id = i.source_file_id
-`;
-
-/** Which raw `imports` column(s) each "Status no período" checkbox reads — must stay in sync with `PERIOD_STATUS_OPTIONS`' `matches` functions, which do the same test in JS on already-fetched rows. */
-const STATUS_SQL_CONDITIONS: Record<PeriodStatusId, string> = {
-  overtime: "i.overtime_minutes > 0",
-  absence: "i.absence_minutes > 0",
-  late: "i.late_minutes > 0",
-  regular: "i.regular_minutes > 0",
-  "no-punch": "i.total_worked_minutes = 0",
-  pending: "i.pending_count > 0",
-  interval: "i.interval_minutes > 0",
-};
-
 export async function getImportById(id: number): Promise<StoredImport | null> {
-  const db = await getDb();
-  const rows = await db.select<StoredImport[]>(
-    `SELECT ${IMPORT_SELECT_COLUMNS} ${IMPORT_FROM_CLAUSE} WHERE i.id = $1`,
-    [id],
-  );
-  return rows[0] ?? null;
+  return rpc<StoredImport | null>("getImportById", { id });
 }
 
 export interface ListImportsQuery {
@@ -1266,38 +608,13 @@ export interface ListImportsQuery {
 
 type ImportScopeQuery = Pick<ListImportsQuery, "employeeIds" | "companyIds" | "clientIds" | "periodStart" | "periodEnd">;
 
-/** Everything but "Status no período": colaborador, empresa, cliente and the period overlap. */
-function importScopeConditions(query: ImportScopeQuery): { conditions: string[]; params: (string | number)[] } {
-  const conditions: string[] = [];
-  const params: (string | number)[] = [];
-
-  const employeeClause = inClause("e.id", query.employeeIds ?? [], params);
-  if (employeeClause) conditions.push(employeeClause);
-  const companyClause = inClause("c.id", query.companyIds ?? [], params);
-  if (companyClause) conditions.push(companyClause);
-  const clientClause = inClause("cl.id", query.clientIds ?? [], params);
-  if (clientClause) conditions.push(clientClause);
-
-  params.push(query.periodStart, query.periodEnd);
-  conditions.push(`i.period_end >= $${params.length - 1} AND i.period_start <= $${params.length}`);
-
-  return { conditions, params };
-}
-
 /**
  * How many imports in scope match each "Status no período" category, for
  * the counts on the status chips. Ignores the status filter itself, so
  * each count says what picking that chip alone would bring in.
  */
 export async function countImportsByStatus(query: ImportScopeQuery): Promise<Record<PeriodStatusId, number>> {
-  const db = await getDb();
-  const { conditions, params } = importScopeConditions(query);
-  const ids = Object.keys(STATUS_SQL_CONDITIONS) as PeriodStatusId[];
-  const sums = ids.map((id, index) => `COALESCE(SUM(CASE WHEN ${STATUS_SQL_CONDITIONS[id]} THEN 1 ELSE 0 END), 0) AS s${index}`).join(", ");
-  const rows = await db.select<Record<string, number>[]>(`SELECT ${sums} ${IMPORT_FROM_CLAUSE} WHERE ${conditions.join(" AND ")}`, params);
-  const counts = {} as Record<PeriodStatusId, number>;
-  ids.forEach((id, index) => (counts[id] = rows[0]?.[`s${index}`] ?? 0));
-  return counts;
+  return rpc<Record<PeriodStatusId, number>>("countImportsByStatus", { query });
 }
 
 /**
@@ -1309,36 +626,7 @@ export async function countImportsByStatus(query: ImportScopeQuery): Promise<Rec
  */
 export async function listImports(query: ListImportsQuery): Promise<PagedResult<StoredImport>> {
   if (query.statuses.length === 0) return { rows: [], total: 0 };
-
-  const db = await getDb();
-  const { conditions, params } = importScopeConditions(query);
-
-  if (query.statuses.length < PERIOD_STATUS_OPTIONS.length) {
-    conditions.push(`(${query.statuses.map((s) => STATUS_SQL_CONDITIONS[s]).join(" OR ")})`);
-  }
-
-  const whereClause = `WHERE ${conditions.join(" AND ")}`;
-
-  const countRows = await db.select<{ count: number }[]>(
-    `SELECT COUNT(*) AS count ${IMPORT_FROM_CLAUSE} ${whereClause}`,
-    params,
-  );
-  const total = countRows[0]?.count ?? 0;
-
-  const paginate = query.page !== undefined && query.pageSize !== undefined;
-  const limitClause = paginate ? `LIMIT $${params.length + 1} OFFSET $${params.length + 2}` : "";
-  const limitParams = paginate ? [query.pageSize!, query.page! * query.pageSize!] : [];
-
-  const rows = await db.select<StoredImport[]>(
-    `SELECT ${IMPORT_SELECT_COLUMNS}
-     ${IMPORT_FROM_CLAUSE}
-     ${whereClause}
-     ORDER BY i.imported_at DESC
-     ${limitClause}`,
-    [...params, ...limitParams],
-  );
-
-  return { rows, total };
+  return rpc<PagedResult<StoredImport>>("listImports", { query });
 }
 
 interface DayRecordFilters {
@@ -1353,82 +641,7 @@ interface DayRecordFilters {
 export async function listStoredDayRecords(
   filters: DayRecordFilters,
 ): Promise<StoredDayRecord[]> {
-  const db = await getDb();
-
-  const conditions: string[] = [];
-  const params: unknown[] = [];
-  if (filters.importId !== undefined) {
-    params.push(filters.importId);
-    conditions.push(`i.id = $${params.length}`);
-  }
-  if (filters.companyId !== undefined) {
-    params.push(filters.companyId);
-    conditions.push(`c.id = $${params.length}`);
-  }
-  if (filters.clientId !== undefined) {
-    params.push(filters.clientId);
-    conditions.push(`cl.id = $${params.length}`);
-  }
-  if (filters.periodStart !== undefined) {
-    params.push(filters.periodStart);
-    conditions.push(`d.date >= $${params.length}`);
-  }
-  if (filters.periodEnd !== undefined) {
-    params.push(filters.periodEnd);
-    conditions.push(`d.date <= $${params.length}`);
-  }
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-
-  const rows = await db.select<Omit<StoredDayRecord, "punches">[]>(
-    `
-    SELECT
-      d.id AS dayRecordId,
-      d.import_id AS importId,
-      e.id AS employeeId,
-      e.name AS employeeName,
-      e.cpf AS employeeCpf,
-      c.id AS companyId,
-      c.name AS companyName,
-      cl.id AS clientId,
-      cl.name AS clientName,
-      i.original_pdf_path AS originalPdfPath,
-      d.date AS date,
-      d.weekday AS weekday,
-      d.total_worked_minutes AS totalWorkedMinutes,
-      d.normal_hours_minutes AS normalHoursMinutes,
-      d.absence_minutes AS absenceMinutes,
-      d.observation AS observation
-    FROM day_records d
-    JOIN imports i ON i.id = d.import_id
-    JOIN employees e ON e.id = i.employee_id
-    JOIN companies c ON c.id = i.company_id
-    LEFT JOIN clients cl ON cl.id = i.client_id
-    ${where}
-    ORDER BY e.name, d.date
-    `,
-    params,
-  );
-
-  if (rows.length === 0) return [];
-
-  const dayRecordIds = rows.map((r) => r.dayRecordId);
-  const placeholders = dayRecordIds.map((_, i) => `$${i + 1}`).join(", ");
-  const punchRows = await db.select<
-    { dayRecordId: number; punchTime: string; sequenceIndex: number }[]
-  >(
-    `SELECT day_record_id AS dayRecordId, punch_time AS punchTime, sequence_index AS sequenceIndex
-     FROM punches WHERE day_record_id IN (${placeholders}) ORDER BY day_record_id, sequence_index`,
-    dayRecordIds,
-  );
-
-  const punchesByDay = new Map<number, string[]>();
-  for (const p of punchRows) {
-    const list = punchesByDay.get(p.dayRecordId) ?? [];
-    list.push(p.punchTime);
-    punchesByDay.set(p.dayRecordId, list);
-  }
-
-  return rows.map((r) => ({ ...r, punches: punchesByDay.get(r.dayRecordId) ?? [] }));
+  return rpc<StoredDayRecord[]>("listStoredDayRecords", { filters });
 }
 
 /**
@@ -1448,56 +661,8 @@ export async function findDuplicateFiles(
   hashes: string[],
 ): Promise<Map<string, DuplicateFileInfo>> {
   if (hashes.length === 0) return new Map();
-  const db = await getDb();
-
-  const placeholders = hashes.map((_, i) => `$${i + 1}`).join(", ");
-  const sourceRows = await db.select<
-    { fileHash: string; fileName: string; importedAt: string; pageCount: number }[]
-  >(
-    `SELECT file_hash AS fileHash, file_name AS fileName, imported_at AS importedAt,
-            page_count AS pageCount
-     FROM source_files WHERE file_hash IN (${placeholders}) AND saved_at IS NOT NULL`,
-    hashes,
-  );
-  if (sourceRows.length === 0) return new Map();
-
-  const singlePageHashes = sourceRows.filter((r) => r.pageCount === 1).map((r) => r.fileHash);
-  const employeesByHash = new Map<
-    string,
-    { importId: number; employeeName: string; companyName: string }[]
-  >();
-  if (singlePageHashes.length > 0) {
-    const ph = singlePageHashes.map((_, i) => `$${i + 1}`).join(", ");
-    const empRows = await db.select<
-      { fileHash: string; importId: number; employeeName: string; companyName: string }[]
-    >(
-      `
-      SELECT f.file_hash AS fileHash, i.id AS importId, e.name AS employeeName, c.name AS companyName
-      FROM import_files f
-      JOIN imports i ON i.import_file_id = f.id
-      JOIN employees e ON e.id = i.employee_id
-      JOIN companies c ON c.id = e.company_id
-      WHERE f.file_hash IN (${ph})
-      `,
-      singlePageHashes,
-    );
-    for (const row of empRows) {
-      const list = employeesByHash.get(row.fileHash) ?? [];
-      list.push({ importId: row.importId, employeeName: row.employeeName, companyName: row.companyName });
-      employeesByHash.set(row.fileHash, list);
-    }
-  }
-
-  const byHash = new Map<string, DuplicateFileInfo>();
-  for (const row of sourceRows) {
-    byHash.set(row.fileHash, {
-      fileName: row.fileName,
-      importedAt: row.importedAt,
-      pageCount: row.pageCount,
-      employees: employeesByHash.get(row.fileHash) ?? [],
-    });
-  }
-  return byHash;
+  const byHash = await rpc<Record<string, DuplicateFileInfo>>("findDuplicateFiles", { hashes });
+  return new Map(Object.entries(byHash));
 }
 
 /**
@@ -1518,23 +683,13 @@ export async function findConflictingImport(
   periodStart: string,
   periodEnd: string,
 ): Promise<{ importId: number; periodStart: string; periodEnd: string; importedAt: string } | null> {
-  const db = await getDb();
-  const rows = await db.select<
-    { importId: number; periodStart: string; periodEnd: string; importedAt: string }[]
-  >(
-    `
-    SELECT i.id AS importId, i.period_start AS periodStart, i.period_end AS periodEnd,
-           i.imported_at AS importedAt
-    FROM imports i
-    JOIN employees e ON e.id = i.employee_id
-    WHERE e.cpf = $1 AND i.client_id = $2 AND i.company_id = $3
-      AND i.period_start <= $5 AND i.period_end >= $4
-    ORDER BY i.imported_at DESC
-    LIMIT 1
-    `,
-    [employeeCpf, clientId, companyId, periodStart, periodEnd],
-  );
-  return rows[0] ?? null;
+  return rpc<{ importId: number; periodStart: string; periodEnd: string; importedAt: string } | null>("findConflictingImport", {
+    employeeCpf,
+    clientId,
+    companyId,
+    periodStart,
+    periodEnd,
+  });
 }
 
 /**
@@ -1547,27 +702,7 @@ export async function findConflicts(
   clientId: number,
   companyId: number,
 ): Promise<ConflictInfo[]> {
-  const conflicts: ConflictInfo[] = [];
-  for (let i = 0; i < sheets.length; i++) {
-    const sheet = sheets[i];
-    const existing = await findConflictingImport(
-      sheet.employee.cpf,
-      clientId,
-      companyId,
-      sheet.period.start,
-      sheet.period.end,
-    );
-    if (existing) {
-      conflicts.push({
-        sheetIndex: i,
-        existingImportId: existing.importId,
-        existingPeriodStart: existing.periodStart,
-        existingPeriodEnd: existing.periodEnd,
-        existingImportedAt: existing.importedAt,
-      });
-    }
-  }
-  return conflicts;
+  return rpc<ConflictInfo[]>("findConflicts", { sheets, clientId, companyId });
 }
 
 export interface ImportFilesQuery {
@@ -1591,18 +726,7 @@ export interface ImportFileCounts {
 
 /** Per-filter counts for the import history's chips (unaffected by search). */
 export async function countImportFiles(importType: ImportType): Promise<ImportFileCounts> {
-  const db = await getDb();
-  const rows = await db.select<ImportFileCounts[]>(
-    `SELECT
-      COUNT(*) AS total,
-      COALESCE(SUM(CASE WHEN source_url IS NOT NULL THEN 1 ELSE 0 END), 0) AS link,
-      COALESCE(SUM(CASE WHEN source_url IS NULL THEN 1 ELSE 0 END), 0) AS local,
-      COALESCE(SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END), 0) AS problems
-    FROM source_files
-    WHERE import_type = $1`,
-    [importType],
-  );
-  return rows[0] ?? { total: 0, link: 0, local: 0, problems: 0 };
+  return rpc<ImportFileCounts>("countImportFiles", { importType });
 }
 
 /**
@@ -1610,53 +734,7 @@ export async function countImportFiles(importType: ImportType): Promise<ImportFi
  * recent first — filtered and paginated in SQL, not in memory.
  */
 export async function listImportFiles(query: ImportFilesQuery): Promise<PagedResult<ImportFileRow>> {
-  const db = await getDb();
-  const conditions = ["sf.import_type = $1"];
-  const params: (string | number)[] = [query.importType];
-
-  const search = query.search?.trim();
-  if (search) {
-    params.push(search);
-    const n = params.length;
-    conditions.push(`(LOWER(sf.file_name) LIKE '%' || LOWER($${n}) || '%' OR LOWER(sf.provider) LIKE '%' || LOWER($${n}) || '%')`);
-  }
-  if (query.source === "link") conditions.push("sf.source_url IS NOT NULL");
-  if (query.source === "local") conditions.push("sf.source_url IS NULL");
-  if (query.problemsOnly) conditions.push("sf.status <> 'success'");
-
-  const whereClause = `WHERE ${conditions.join(" AND ")}`;
-
-  const countRows = await db.select<{ count: number }[]>(
-    `SELECT COUNT(*) AS count FROM source_files sf ${whereClause}`,
-    params,
-  );
-  const total = countRows[0]?.count ?? 0;
-
-  const rawRows = await db.select<(Omit<ImportFileRow, "checkDisabled"> & { checkDisabled: number })[]>(
-    `SELECT
-      sf.id,
-      sf.file_name AS fileName,
-      sf.file_hash AS fileHash,
-      sf.provider,
-      sf.import_type AS importType,
-      sf.status,
-      sf.error_message AS errorMessage,
-      sf.original_pdf_path AS originalPdfPath,
-      sf.page_count AS pageCount,
-      sf.imported_at AS importedAt,
-      sf.saved_at AS savedAt,
-      sf.source_url AS sourceUrl,
-      COALESCE(sus.check_disabled, 0) AS checkDisabled
-    FROM source_files sf
-    LEFT JOIN source_url_settings sus ON sus.source_url = sf.source_url
-    ${whereClause}
-    ORDER BY sf.imported_at DESC
-    LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-    [...params, query.pageSize, query.page * query.pageSize],
-  );
-  const rows: ImportFileRow[] = rawRows.map((r) => ({ ...r, checkDisabled: Boolean(r.checkDisabled) }));
-
-  return { rows, total };
+  return rpc<PagedResult<ImportFileRow>>("listImportFiles", { query });
 }
 
 export type UrlCheckResult = "changed" | "unchanged" | "unknown" | "error";
@@ -1946,33 +1024,7 @@ export async function trackUrlForAutoReimport(
   periodEnd: string | null,
   keepManualEdits: boolean,
 ): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `INSERT INTO source_url_settings (source_url, tracking_enabled, updated_at)
-     VALUES ($1, 1, datetime('now'))
-     ON CONFLICT(source_url) DO UPDATE SET
-       tracking_enabled = 1,
-       updated_at = excluded.updated_at`,
-    [sourceUrl],
-  );
-  await createReimportConfig({
-    sourceUrl,
-    label: "",
-    templateId,
-    dateMode: "fixed",
-    periodStart,
-    periodEnd,
-    startOffsetDays: null,
-    endOffsetDays: null,
-    checkIntervalMinutes: DEFAULT_REIMPORT_CHECK_INTERVAL_MINUTES,
-    // Auto-apply is an explicit opt-in, turned on later from the
-    // Verificação automática page — tracking a URL for the first time never
-    // enables unattended writes as a side effect.
-    autoApplyEnabled: false,
-    autoApplyOverwriteManualEdits: true,
-    autoApplyOverwritePaid: false,
-    keepManualEdits,
-  });
+  await rpc<void>("trackUrlForAutoReimport", { sourceUrl, templateId, periodStart, periodEnd, keepManualEdits });
 }
 
 const MAX_CHECK_LOG_ENTRIES_PER_URL = 200;
@@ -2392,8 +1444,6 @@ export interface ShiftFieldDiffRow {
   applied: boolean;
 }
 
-type ShiftFieldDiffRowRaw = Omit<ShiftFieldDiffRow, "applied"> & { applied: number };
-
 /**
  * For each given `payment_shifts.id`, what the automatic background
  * verification most recently found for it — a field that changed, or the
@@ -2405,23 +1455,7 @@ type ShiftFieldDiffRowRaw = Omit<ShiftFieldDiffRow, "applied"> & { applied: numb
  * automatic check found different, without re-checking anything itself.
  */
 export async function listLatestFieldDiffsForShifts(shiftIds: number[]): Promise<ShiftFieldDiffRow[]> {
-  if (shiftIds.length === 0) return [];
-  const db = await getDb();
-  const placeholders = shiftIds.map((_, i) => `$${i + 1}`).join(", ");
-  const rows = await db.select<ShiftFieldDiffRowRaw[]>(
-    `SELECT d.matched_shift_id AS shiftId, d.check_log_id AS checkLogId, l.checked_at AS checkedAt,
-            d.config_id AS configId, d.config_label AS configLabel, d.change_kind AS changeKind,
-            d.field_name AS fieldName, d.column_letter AS columnLetter, d.old_value AS oldValue,
-            d.new_value AS newValue, d.message, d.applied
-     FROM source_url_check_diffs d
-     JOIN source_url_check_log l ON l.id = d.check_log_id
-     WHERE d.change_kind IN ('field', 'removed')
-       AND d.matched_shift_id IN (${placeholders})
-       AND l.id = (SELECT MAX(l2.id) FROM source_url_check_log l2 WHERE l2.source_url = l.source_url)
-     ORDER BY d.matched_shift_id, d.id`,
-    shiftIds,
-  );
-  return rows.map((r) => ({ ...r, applied: Boolean(r.applied) }));
+  return rpc<ShiftFieldDiffRow[]>("listLatestFieldDiffsForShifts", { shiftIds });
 }
 
 /**
@@ -2440,23 +1474,7 @@ export async function listLatestFieldDiffsForShifts(shiftIds: number[]): Promise
  * itself; see `PendingChangesTab`), so the full history stays browsable.
  */
 export async function listAllLatestShiftDiffs(): Promise<CheckDiffRow[]> {
-  const db = await getDb();
-  const rows = await db.select<CheckDiffRowRaw[]>(
-    `SELECT d.id, d.check_log_id AS checkLogId, l.source_url AS sourceUrl, d.config_id AS configId, d.config_label AS configLabel,
-            d.change_kind AS changeKind, d.matched_shift_id AS matchedShiftId, d.employee_id AS employeeId,
-            d.employee_name AS employeeName, d.work_date AS workDate, d.local, d.role,
-            d.schedule_start_minutes AS scheduleStartMinutes, d.schedule_end_minutes AS scheduleEndMinutes,
-            d.sheet_name AS sheetName, d.row_number AS rowNumber, d.column_letter AS columnLetter,
-            d.field_name AS fieldName, d.old_value AS oldValue, d.new_value AS newValue, d.message, d.applied,
-            d.dismissed_at AS dismissedAt, jc.period_start AS periodStart, jc.period_end AS periodEnd,
-            d.saved_by AS savedBy, d.saved_at AS savedAt
-     FROM source_url_check_diffs d
-     JOIN source_url_check_log l ON l.id = d.check_log_id
-     LEFT JOIN source_url_check_log_configs jc ON jc.check_log_id = d.check_log_id AND jc.config_id = d.config_id
-     WHERE l.id = (SELECT MAX(l2.id) FROM source_url_check_log l2 WHERE l2.source_url = l.source_url)
-     ORDER BY d.id DESC`,
-  );
-  return rows.map(parseCheckDiffRow);
+  return rpc<CheckDiffRow[]>("listAllLatestShiftDiffs");
 }
 
 /**
@@ -2474,53 +1492,7 @@ export async function listAllLatestShiftDiffs(): Promise<CheckDiffRow[]> {
  */
 export async function dismissCheckDiffs(ids: number[]): Promise<void> {
   if (ids.length === 0) return;
-  const db = await getDb();
-  const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
-  await db.execute(`UPDATE source_url_check_diffs SET dismissed_at = datetime('now') WHERE id IN (${placeholders})`, ids);
-
-  const rows = await db.select<
-    {
-      sourceUrl: string;
-      changeKind: CheckDiffKind;
-      configId: number | null;
-      employeeId: number | null;
-      employeeName: string | null;
-      workDate: string | null;
-      local: string | null;
-      role: string | null;
-      scheduleStartMinutes: number | null;
-      scheduleEndMinutes: number | null;
-      sheetName: string | null;
-      rowNumber: number | null;
-      fieldName: string | null;
-      oldValue: string | null;
-      newValue: string | null;
-      message: string | null;
-    }[]
-  >(
-    `SELECT l.source_url AS sourceUrl, d.change_kind AS changeKind, d.config_id AS configId,
-            d.employee_id AS employeeId, d.employee_name AS employeeName, d.work_date AS workDate,
-            d.local, d.role, d.schedule_start_minutes AS scheduleStartMinutes,
-            d.schedule_end_minutes AS scheduleEndMinutes, d.sheet_name AS sheetName, d.row_number AS rowNumber,
-            d.field_name AS fieldName, d.old_value AS oldValue, d.new_value AS newValue, d.message
-     FROM source_url_check_diffs d
-     JOIN source_url_check_log l ON l.id = d.check_log_id
-     WHERE d.id IN (${placeholders})`,
-    ids,
-  );
-  for (const r of rows) {
-    const fingerprint = diffContentFingerprint(r);
-    const existing = await db.select<{ id: number }[]>(
-      `SELECT id FROM dismissed_diff_fingerprints WHERE source_url = $1 AND fingerprint = $2 LIMIT 1`,
-      [r.sourceUrl, fingerprint],
-    );
-    if (existing.length === 0) {
-      await db.execute(`INSERT INTO dismissed_diff_fingerprints (source_url, fingerprint) VALUES ($1, $2)`, [
-        r.sourceUrl,
-        fingerprint,
-      ]);
-    }
-  }
+  return rpc<void>("dismissCheckDiffs", { ids });
 }
 
 /** Records the remote signature a deep check (download+parse+diff) just ran against, and what it actually found (`result`) — so `RemoteFileUpdatesContext.runChecks` doesn't repeat that work every tick while the user hasn't reimported yet, and a later "changed"-per-header check against the same signature can log the SAME diff-driven verdict instead of re-asserting the raw header result. */
@@ -2586,14 +1558,7 @@ export async function copyCheckDiffs(fromCheckLogId: number, toCheckLogId: numbe
 
 /** Batched lookup for the deep-check diff pass — one query for every matched shift's current values instead of N calls to `getPaymentShift`. */
 export async function getPaymentShiftsByIds(ids: number[]): Promise<PaymentShiftRow[]> {
-  if (ids.length === 0) return [];
-  const db = await getDb();
-  const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
-  const rows = await db.select<PaymentShiftRowRaw[]>(
-    `SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS} ${PAYMENT_SHIFT_FROM_CLAUSE} WHERE ps.id IN (${placeholders})`,
-    ids,
-  );
-  return rows.map(parsePaymentShiftRow);
+  return rpc<PaymentShiftRow[]>("getPaymentShiftsByIds", { ids });
 }
 
 /**
@@ -2636,142 +1601,12 @@ export async function markOriginalsRemoved(sourceFileIds: number[]): Promise<voi
   );
 }
 
-/** `accepted_file_kinds_json` is `NULL` for every template predating that column — falls back to a single-element list of just its own `fileKind`, the exact behavior before it existed. */
-function parseAcceptedFileKinds(fileKind: PaymentFileKind, json: string | null): PaymentFileKind[] {
-  return json ? JSON.parse(json) : [fileKind];
-}
-
 export async function listPaymentTemplates(): Promise<PaymentTemplateListRow[]> {
-  const db = await getDb();
-  const rows = await db.select<(Omit<PaymentTemplateListRow, "acceptedFileKinds"> & { acceptedFileKindsJson: string | null })[]>(`
-    SELECT pt.id, pt.name, pt.file_kind AS fileKind, pt.accepted_file_kinds_json AS acceptedFileKindsJson, pt.updated_at AS updatedAt
-    FROM payment_templates pt
-    ORDER BY pt.updated_at DESC
-  `);
-  return rows.map(({ acceptedFileKindsJson, ...r }) => ({
-    ...r,
-    acceptedFileKinds: parseAcceptedFileKinds(r.fileKind, acceptedFileKindsJson),
-  }));
+  return rpc<PaymentTemplateListRow[]>("listPaymentTemplates");
 }
 
 export async function getPaymentTemplate(id: number): Promise<PaymentTemplateRow> {
-  const db = await getDb();
-  const rows = await db.select<
-    (Omit<PaymentTemplateRow, "groups" | "rules" | "identifierPriority" | "acceptedFileKinds"> & {
-      identifierPriority: string;
-      acceptedFileKindsJson: string | null;
-    })[]
-  >(
-    `SELECT pt.id, pt.name, pt.file_kind AS fileKind, pt.accepted_file_kinds_json AS acceptedFileKindsJson, pt.delimiter,
-            pt.date_format AS dateFormat, pt.identifier_priority AS identifierPriority,
-            pt.created_at AS createdAt, pt.updated_at AS updatedAt
-     FROM payment_templates pt
-     WHERE pt.id = $1`,
-    [id],
-  );
-  if (rows.length === 0) throw new Error("Template não encontrado.");
-
-  const groupRows = await db.select<{ id: number }[]>(
-    "SELECT id FROM payment_template_groups WHERE template_id = $1",
-    [id],
-  );
-  const groups: PaymentTemplateGroup[] = [];
-  for (const g of groupRows) {
-    const sheetRows = await db.select<{ sheetName: string; included: number }[]>(
-      `SELECT sheet_name AS sheetName, included
-       FROM payment_template_sheets
-       WHERE group_id = $1
-       ORDER BY sheet_name`,
-      [g.id],
-    );
-    const fieldMappings = await db.select<PaymentTemplateFieldMapping[]>(
-      `SELECT column_letter AS columnLetter, target_field AS targetField, header_label AS headerLabel
-       FROM payment_template_fields
-       WHERE group_id = $1
-       ORDER BY column_letter`,
-      [g.id],
-    );
-    groups.push({
-      sheetNames: sheetRows.filter((r) => r.included).map((r) => r.sheetName),
-      excludedSheetNames: sheetRows.filter((r) => !r.included).map((r) => r.sheetName),
-      fieldMappings,
-    });
-  }
-
-  const ruleRows = await db.select<
-    {
-      kind: PaymentTemplateRuleKind;
-      field: PaymentRuleField | null;
-      valuesJson: string | null;
-      caseInsensitive: number;
-      conditionsJson: string | null;
-      companyId: number;
-      companyName: string;
-      clientId: number;
-      clientName: string;
-    }[]
-  >(
-    `SELECT r.kind, r.field, r.values_json AS valuesJson, r.case_insensitive AS caseInsensitive,
-            r.conditions_json AS conditionsJson,
-            r.company_id AS companyId, c.name AS companyName,
-            r.client_id AS clientId, cl.name AS clientName
-     FROM payment_template_rules r
-     JOIN companies c ON c.id = r.company_id
-     JOIN clients cl ON cl.id = r.client_id
-     WHERE r.template_id = $1
-     ORDER BY r.id`,
-    [id],
-  );
-  const rules: PaymentTemplateRule[] = ruleRows.map((r) => {
-    const { field, valuesJson, caseInsensitive, conditionsJson, ...rest } = r;
-    return {
-      ...rest,
-      conditions: conditionsJson
-        ? (JSON.parse(conditionsJson) as PaymentRuleCondition[])
-        : field
-          ? [{ field, values: valuesJson ? JSON.parse(valuesJson) : [], caseInsensitive: Boolean(caseInsensitive) }]
-          : [],
-    };
-  });
-
-  const statusRuleRows = await db.select<
-    {
-      kind: PaymentTemplateRuleKind;
-      field: PaymentRuleField | null;
-      valuesJson: string | null;
-      caseInsensitive: number;
-      conditionsJson: string | null;
-      status: PaymentShiftStatus;
-    }[]
-  >(
-    `SELECT kind, field, values_json AS valuesJson, case_insensitive AS caseInsensitive,
-            conditions_json AS conditionsJson, status
-     FROM payment_template_status_rules
-     WHERE template_id = $1
-     ORDER BY id`,
-    [id],
-  );
-  const statusRules: PaymentStatusRule[] = statusRuleRows.map((r) => {
-    const { field, valuesJson, caseInsensitive, conditionsJson, ...rest } = r;
-    return {
-      ...rest,
-      conditions: conditionsJson
-        ? (JSON.parse(conditionsJson) as PaymentRuleCondition[])
-        : field
-          ? [{ field, values: valuesJson ? JSON.parse(valuesJson) : [], caseInsensitive: Boolean(caseInsensitive) }]
-          : [],
-    };
-  });
-
-  const { acceptedFileKindsJson, ...row } = rows[0];
-  return {
-    ...row,
-    identifierPriority: JSON.parse(rows[0].identifierPriority) as IdentifierAttempt[],
-    acceptedFileKinds: parseAcceptedFileKinds(row.fileKind, acceptedFileKindsJson),
-    groups,
-    rules,
-    statusRules,
-  };
+  return rpc<PaymentTemplateRow>("getPaymentTemplate", { id });
 }
 
 export interface PaymentTemplateRuleInput {
@@ -2801,137 +1636,12 @@ export interface PaymentTemplateInput {
   statusRules: PaymentTemplateStatusRuleInput[];
 }
 
-function pushTemplateGroupInserts(
-  statements: BatchStatement[],
-  templateId: BatchParam,
-  groups: PaymentTemplateGroup[],
-): void {
-  for (const group of groups) {
-    const groupId = { $lastInsertId: statements.length };
-    statements.push({ sql: "INSERT INTO payment_template_groups (template_id) VALUES ($1)", params: [templateId] });
-    for (const sheetName of group.sheetNames) {
-      statements.push({
-        sql: "INSERT INTO payment_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 1)",
-        params: [groupId, sheetName],
-      });
-    }
-    for (const sheetName of group.excludedSheetNames) {
-      statements.push({
-        sql: "INSERT INTO payment_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 0)",
-        params: [groupId, sheetName],
-      });
-    }
-    for (const mapping of group.fieldMappings) {
-      statements.push({
-        sql: `INSERT INTO payment_template_fields (group_id, column_letter, target_field, header_label)
-         VALUES ($1, $2, $3, $4)`,
-        params: [groupId, mapping.columnLetter, mapping.targetField, mapping.headerLabel],
-      });
-    }
-  }
-}
-
-/** Deletes every group under a template, and (via their group_id) every sheet/field row under those groups. */
-function deleteTemplateGroupsStatements(templateId: number): BatchStatement[] {
-  const groupIds = "SELECT id FROM payment_template_groups WHERE template_id = $1";
-  return [
-    { sql: `DELETE FROM payment_template_fields WHERE group_id IN (${groupIds})`, params: [templateId] },
-    { sql: `DELETE FROM payment_template_sheets WHERE group_id IN (${groupIds})`, params: [templateId] },
-    { sql: "DELETE FROM payment_template_groups WHERE template_id = $1", params: [templateId] },
-  ];
-}
-
-/** Inserted in array order — evaluation order for the if/else-if/else chain matches insertion (id) order, see `resolvePaymentRoute`. */
-function pushTemplateRuleInserts(
-  statements: BatchStatement[],
-  templateId: BatchParam,
-  rules: PaymentTemplateRuleInput[],
-): void {
-  for (const rule of rules) {
-    statements.push({
-      sql: `INSERT INTO payment_template_rules
-         (template_id, kind, conditions_json, company_id, client_id)
-       VALUES ($1, $2, $3, $4, $5)`,
-      params: [
-        templateId,
-        rule.kind,
-        rule.kind === "condition" ? JSON.stringify(rule.conditions) : null,
-        rule.companyId,
-        rule.clientId,
-      ],
-    });
-  }
-}
-
-/** Inserted in array order — same evaluation-by-insertion-order convention as `pushTemplateRuleInserts`, see `resolvePaymentStatus`. */
-function pushTemplateStatusRuleInserts(
-  statements: BatchStatement[],
-  templateId: BatchParam,
-  rules: PaymentTemplateStatusRuleInput[],
-): void {
-  for (const rule of rules) {
-    statements.push({
-      sql: `INSERT INTO payment_template_status_rules
-         (template_id, kind, conditions_json, status)
-       VALUES ($1, $2, $3, $4)`,
-      params: [
-        templateId,
-        rule.kind,
-        rule.kind === "condition" ? JSON.stringify(rule.conditions) : null,
-        rule.status,
-      ],
-    });
-  }
-}
-
 export async function createPaymentTemplate(input: PaymentTemplateInput): Promise<number> {
-  const statements: BatchStatement[] = [
-    {
-      sql: `INSERT INTO payment_templates (name, file_kind, accepted_file_kinds_json, delimiter, date_format, identifier_priority)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-      params: [
-        input.name,
-        input.fileKind,
-        JSON.stringify(input.acceptedFileKinds),
-        input.delimiter,
-        input.dateFormat,
-        JSON.stringify(input.identifierPriority),
-      ],
-    },
-  ];
-  const templateId = { $lastInsertId: 0 };
-  pushTemplateGroupInserts(statements, templateId, input.groups);
-  pushTemplateRuleInserts(statements, templateId, input.rules);
-  pushTemplateStatusRuleInserts(statements, templateId, input.statusRules);
-  const results = await runWriteBatch(statements);
-  return results[0].lastInsertId;
+  return rpc<number>("createPaymentTemplate", { input });
 }
 
 export async function updatePaymentTemplate(id: number, input: PaymentTemplateInput): Promise<void> {
-  const statements: BatchStatement[] = [
-    {
-      sql: `UPDATE payment_templates SET
-       name = $1, file_kind = $2, accepted_file_kinds_json = $3, delimiter = $4, date_format = $5,
-       identifier_priority = $6, updated_at = datetime('now')
-     WHERE id = $7`,
-      params: [
-        input.name,
-        input.fileKind,
-        JSON.stringify(input.acceptedFileKinds),
-        input.delimiter,
-        input.dateFormat,
-        JSON.stringify(input.identifierPriority),
-        id,
-      ],
-    },
-    ...deleteTemplateGroupsStatements(id),
-    { sql: "DELETE FROM payment_template_rules WHERE template_id = $1", params: [id] },
-    { sql: "DELETE FROM payment_template_status_rules WHERE template_id = $1", params: [id] },
-  ];
-  pushTemplateGroupInserts(statements, id, input.groups);
-  pushTemplateRuleInserts(statements, id, input.rules);
-  pushTemplateStatusRuleInserts(statements, id, input.statusRules);
-  await runWriteBatch(statements);
+  await rpc<void>("updatePaymentTemplate", { id, input });
 }
 
 /**
@@ -2941,192 +1651,65 @@ export async function updatePaymentTemplate(id: number, input: PaymentTemplateIn
  * lose the (nullable, purely informational) back-reference to it.
  */
 export async function deletePaymentTemplate(id: number): Promise<void> {
-  await runWriteBatch([
-    { sql: "UPDATE payment_shifts SET template_id = NULL WHERE template_id = $1", params: [id] },
-    ...deleteTemplateGroupsStatements(id),
-    { sql: "DELETE FROM payment_template_rules WHERE template_id = $1", params: [id] },
-    { sql: "DELETE FROM payment_template_status_rules WHERE template_id = $1", params: [id] },
-    { sql: "DELETE FROM payment_templates WHERE id = $1", params: [id] },
-  ]);
+  await rpc<void>("deletePaymentTemplate", { id });
 }
 
 export async function listPaymentExportTemplates(): Promise<PaymentExportTemplateListRow[]> {
-  const db = await getDb();
-  return db.select<PaymentExportTemplateListRow[]>(
-    "SELECT id, name, updated_at AS updatedAt FROM payment_export_templates ORDER BY updated_at DESC",
-  );
+  return rpc<PaymentExportTemplateListRow[]>("listPaymentExportTemplates");
 }
 
 export async function getPaymentExportTemplate(id: number): Promise<PaymentExportTemplateRow> {
-  const db = await getDb();
-  const rows = await db.select<
-    (Omit<PaymentExportTemplateRow, "config"> & { configJson: string })[]
-  >(
-    "SELECT id, name, config_json AS configJson, created_at AS createdAt, updated_at AS updatedAt FROM payment_export_templates WHERE id = $1",
-    [id],
-  );
-  if (rows.length === 0) throw new Error("Template de exportação não encontrado.");
-  const { configJson, ...rest } = rows[0];
-  return { ...rest, config: JSON.parse(configJson) as PaymentExportTemplateConfig };
+  return rpc<PaymentExportTemplateRow>("getPaymentExportTemplate", { id });
 }
 
 export async function createPaymentExportTemplate(input: PaymentExportTemplateInput): Promise<number> {
-  const db = await getDb();
-  const result = await db.execute("INSERT INTO payment_export_templates (name, config_json) VALUES ($1, $2)", [
-    input.name,
-    JSON.stringify(input.config),
-  ]);
-  return result.lastInsertId as number;
+  return rpc<number>("createPaymentExportTemplate", { input });
 }
 
 export async function updatePaymentExportTemplate(id: number, input: PaymentExportTemplateInput): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    "UPDATE payment_export_templates SET name = $1, config_json = $2, updated_at = datetime('now') WHERE id = $3",
-    [input.name, JSON.stringify(input.config), id],
-  );
+  await rpc<void>("updatePaymentExportTemplate", { id, input });
 }
 
 /** Creates an independent copy of an export template, including its entire grid configuration. */
 export async function clonePaymentExportTemplate(id: number): Promise<number> {
-  const db = await getDb();
-  const result = await db.execute(
-    `INSERT INTO payment_export_templates (name, config_json)
-     SELECT name || ' (cópia)', config_json
-     FROM payment_export_templates
-     WHERE id = $1`,
-    [id],
-  );
-  if (result.rowsAffected === 0) throw new Error("Template de exportação não encontrado.");
-  return result.lastInsertId as number;
+  return rpc<number>("clonePaymentExportTemplate", { id });
 }
 
 export async function deletePaymentExportTemplate(id: number): Promise<void> {
-  const db = await getDb();
-  await db.execute("DELETE FROM payment_export_templates WHERE id = $1", [id]);
+  await rpc<void>("deletePaymentExportTemplate", { id });
 }
 
 export async function listPaymentPdfTemplates(): Promise<PaymentPdfTemplateListRow[]> {
-  const db = await getDb();
-  return db.select<PaymentPdfTemplateListRow[]>(
-    "SELECT id, name, updated_at AS updatedAt FROM payment_pdf_templates ORDER BY updated_at DESC",
-  );
+  return rpc<PaymentPdfTemplateListRow[]>("listPaymentPdfTemplates");
 }
 
 export async function getPaymentPdfTemplate(id: number): Promise<PaymentPdfTemplateRow> {
-  const db = await getDb();
-  const rows = await db.select<
-    (Omit<PaymentPdfTemplateRow, "config"> & { configJson: string })[]
-  >(
-    "SELECT id, name, config_json AS configJson, created_at AS createdAt, updated_at AS updatedAt FROM payment_pdf_templates WHERE id = $1",
-    [id],
-  );
-  if (rows.length === 0) throw new Error("Template de PDF não encontrado.");
-  const { configJson, ...rest } = rows[0];
-  return { ...rest, config: JSON.parse(configJson) as PaymentPdfTemplateConfig };
+  return rpc<PaymentPdfTemplateRow>("getPaymentPdfTemplate", { id });
 }
 
 export async function createPaymentPdfTemplate(input: PaymentPdfTemplateInput): Promise<number> {
-  const db = await getDb();
-  const result = await db.execute("INSERT INTO payment_pdf_templates (name, config_json) VALUES ($1, $2)", [
-    input.name,
-    JSON.stringify(input.config),
-  ]);
-  return result.lastInsertId as number;
+  return rpc<number>("createPaymentPdfTemplate", { input });
 }
 
 export async function updatePaymentPdfTemplate(id: number, input: PaymentPdfTemplateInput): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    "UPDATE payment_pdf_templates SET name = $1, config_json = $2, updated_at = datetime('now') WHERE id = $3",
-    [input.name, JSON.stringify(input.config), id],
-  );
+  await rpc<void>("updatePaymentPdfTemplate", { id, input });
 }
 
 /** Creates an independent copy of a PDF template, including its entire grid configuration. */
 export async function clonePaymentPdfTemplate(id: number): Promise<number> {
-  const db = await getDb();
-  const result = await db.execute(
-    `INSERT INTO payment_pdf_templates (name, config_json)
-     SELECT name || ' (cópia)', config_json
-     FROM payment_pdf_templates
-     WHERE id = $1`,
-    [id],
-  );
-  if (result.rowsAffected === 0) throw new Error("Template de PDF não encontrado.");
-  return result.lastInsertId as number;
+  return rpc<number>("clonePaymentPdfTemplate", { id });
 }
 
 export async function deletePaymentPdfTemplate(id: number): Promise<void> {
-  const db = await getDb();
-  await db.execute("DELETE FROM payment_pdf_templates WHERE id = $1", [id]);
+  await rpc<void>("deletePaymentPdfTemplate", { id });
 }
 
 export async function listEmployeeTemplates(): Promise<EmployeeTemplateListRow[]> {
-  const db = await getDb();
-  const rows = await db.select<(Omit<EmployeeTemplateListRow, "acceptedFileKinds"> & { acceptedFileKindsJson: string | null })[]>(`
-    SELECT et.id, et.name, et.file_kind AS fileKind, et.accepted_file_kinds_json AS acceptedFileKindsJson, et.updated_at AS updatedAt
-    FROM employee_templates et
-    ORDER BY et.updated_at DESC
-  `);
-  return rows.map(({ acceptedFileKindsJson, ...r }) => ({
-    ...r,
-    acceptedFileKinds: parseAcceptedFileKinds(r.fileKind, acceptedFileKindsJson),
-  }));
+  return rpc<EmployeeTemplateListRow[]>("listEmployeeTemplates");
 }
 
 export async function getEmployeeTemplate(id: number): Promise<EmployeeTemplateRow> {
-  const db = await getDb();
-  const rows = await db.select<
-    (Omit<EmployeeTemplateRow, "groups" | "identifierPriority" | "acceptedFileKinds"> & {
-      identifierPriority: string;
-      acceptedFileKindsJson: string | null;
-    })[]
-  >(
-    `SELECT et.id, et.name, et.file_kind AS fileKind, et.accepted_file_kinds_json AS acceptedFileKindsJson, et.delimiter,
-            et.identifier_priority AS identifierPriority,
-            et.created_at AS createdAt, et.updated_at AS updatedAt
-     FROM employee_templates et
-     WHERE et.id = $1`,
-    [id],
-  );
-  if (rows.length === 0) throw new Error("Template não encontrado.");
-
-  const groupRows = await db.select<{ id: number; headerRow: number | null }[]>(
-    "SELECT id, header_row AS headerRow FROM employee_template_groups WHERE template_id = $1",
-    [id],
-  );
-  const groups: EmployeeTemplateGroup[] = [];
-  for (const g of groupRows) {
-    const sheetRows = await db.select<{ sheetName: string; included: number }[]>(
-      `SELECT sheet_name AS sheetName, included
-       FROM employee_template_sheets
-       WHERE group_id = $1
-       ORDER BY sheet_name`,
-      [g.id],
-    );
-    const fieldMappings = await db.select<EmployeeTemplateFieldMapping[]>(
-      `SELECT column_letter AS columnLetter, target_field AS targetField, header_label AS headerLabel
-       FROM employee_template_fields
-       WHERE group_id = $1
-       ORDER BY column_letter`,
-      [g.id],
-    );
-    groups.push({
-      sheetNames: sheetRows.filter((r) => r.included).map((r) => r.sheetName),
-      excludedSheetNames: sheetRows.filter((r) => !r.included).map((r) => r.sheetName),
-      fieldMappings,
-      headerRow: g.headerRow,
-    });
-  }
-
-  const { acceptedFileKindsJson, ...row } = rows[0];
-  return {
-    ...row,
-    identifierPriority: JSON.parse(rows[0].identifierPriority) as IdentifierAttempt[],
-    acceptedFileKinds: parseAcceptedFileKinds(row.fileKind, acceptedFileKindsJson),
-    groups,
-  };
+  return rpc<EmployeeTemplateRow>("getEmployeeTemplate", { id });
 }
 
 export interface EmployeeTemplateInput {
@@ -3138,88 +1721,12 @@ export interface EmployeeTemplateInput {
   groups: EmployeeTemplateGroup[];
 }
 
-function pushEmployeeTemplateGroupInserts(
-  statements: BatchStatement[],
-  templateId: BatchParam,
-  groups: EmployeeTemplateGroup[],
-): void {
-  for (const group of groups) {
-    const groupId = { $lastInsertId: statements.length };
-    statements.push({
-      sql: "INSERT INTO employee_template_groups (template_id, header_row) VALUES ($1, $2)",
-      params: [templateId, group.headerRow],
-    });
-    for (const sheetName of group.sheetNames) {
-      statements.push({
-        sql: "INSERT INTO employee_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 1)",
-        params: [groupId, sheetName],
-      });
-    }
-    for (const sheetName of group.excludedSheetNames) {
-      statements.push({
-        sql: "INSERT INTO employee_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 0)",
-        params: [groupId, sheetName],
-      });
-    }
-    for (const mapping of group.fieldMappings) {
-      statements.push({
-        sql: `INSERT INTO employee_template_fields (group_id, column_letter, target_field, header_label)
-         VALUES ($1, $2, $3, $4)`,
-        params: [groupId, mapping.columnLetter, mapping.targetField, mapping.headerLabel],
-      });
-    }
-  }
-}
-
-/** Deletes every group under a template, and (via their group_id) every sheet/field row under those groups. */
-function deleteEmployeeTemplateGroupsStatements(templateId: number): BatchStatement[] {
-  const groupIds = "SELECT id FROM employee_template_groups WHERE template_id = $1";
-  return [
-    { sql: `DELETE FROM employee_template_fields WHERE group_id IN (${groupIds})`, params: [templateId] },
-    { sql: `DELETE FROM employee_template_sheets WHERE group_id IN (${groupIds})`, params: [templateId] },
-    { sql: "DELETE FROM employee_template_groups WHERE template_id = $1", params: [templateId] },
-  ];
-}
-
 export async function createEmployeeTemplate(input: EmployeeTemplateInput): Promise<number> {
-  const statements: BatchStatement[] = [
-    {
-      sql: `INSERT INTO employee_templates (name, file_kind, accepted_file_kinds_json, delimiter, identifier_priority)
-     VALUES ($1, $2, $3, $4, $5)`,
-      params: [
-        input.name,
-        input.fileKind,
-        JSON.stringify(input.acceptedFileKinds),
-        input.delimiter,
-        JSON.stringify(input.identifierPriority),
-      ],
-    },
-  ];
-  pushEmployeeTemplateGroupInserts(statements, { $lastInsertId: 0 }, input.groups);
-  const results = await runWriteBatch(statements);
-  return results[0].lastInsertId;
+  return rpc<number>("createEmployeeTemplate", { input });
 }
 
 export async function updateEmployeeTemplate(id: number, input: EmployeeTemplateInput): Promise<void> {
-  const statements: BatchStatement[] = [
-    {
-      sql: `UPDATE employee_templates SET
-       name = $1, file_kind = $2, accepted_file_kinds_json = $3, delimiter = $4,
-       identifier_priority = $5, updated_at = datetime('now')
-     WHERE id = $6`,
-      params: [
-        input.name,
-        input.fileKind,
-        JSON.stringify(input.acceptedFileKinds),
-        input.delimiter,
-        JSON.stringify(input.identifierPriority),
-        id,
-      ],
-    },
-    ...deleteEmployeeTemplateGroupsStatements(id),
-  ];
-  pushEmployeeTemplateGroupInserts(statements, id, input.groups);
-  await runWriteBatch(statements);
+  await rpc<void>("updateEmployeeTemplate", { id, input });
 }
 
 /**
@@ -3229,10 +1736,7 @@ export async function updateEmployeeTemplate(id: number, input: EmployeeTemplate
  * template that created them.
  */
 export async function deleteEmployeeTemplate(id: number): Promise<void> {
-  await runWriteBatch([
-    ...deleteEmployeeTemplateGroupsStatements(id),
-    { sql: "DELETE FROM employee_templates WHERE id = $1", params: [id] },
-  ]);
+  await rpc<void>("deleteEmployeeTemplate", { id });
 }
 
 export interface EmployeeImportRow {
@@ -3259,77 +1763,8 @@ export interface EmployeeImportRow {
  * `findEmployeeAnywhereByAttempts`.
  */
 export async function createEmployeesFromImport(rows: EmployeeImportRow[], savedFileHashes: Iterable<string> = []): Promise<void> {
-  const db = await getDb();
-
-  // Everything is checked and resolved with reads first, then written as
-  // one transaction (together with marking `savedFileHashes` saved) — a bad
-  // row anywhere fails the import before anything is written, instead of
-  // leaving the rows before it saved and the rest not.
-  const pairKeys = new Set(rows.map((r) => `${r.clientId}:${r.companyId}`));
-  for (const key of pairKeys) {
-    const [clientId, companyId] = key.split(":").map(Number);
-    const link = await db.select<{ clientId: number }[]>(
-      "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
-      [clientId, companyId],
-    );
-    if (link.length === 0) throw new Error("Esse cliente não está vinculado à empresa selecionada.");
-  }
-
-  const statements: BatchStatement[] = [];
-  // A CPF new to the database can appear on more than one row (the same
-  // person under several cliente/empresa pairs) — the first row creates the
-  // colaborador, the later ones reuse it.
-  const createdByCpf = new Map<string, BatchParam>();
-  for (const row of rows) {
-    const normalizedCpf = row.cpf === null ? "" : normalizeCpf(row.cpf);
-    const existingId =
-      row.employeeId ??
-      (await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1", [normalizedCpf]))[0]?.id ??
-      null;
-    let employeeId: BatchParam;
-    if (existingId !== null) {
-      employeeId = existingId;
-      if (row.name?.trim()) {
-        statements.push({ sql: "UPDATE employees SET name = $1 WHERE id = $2", params: [row.name.trim(), employeeId] });
-      }
-      if (row.cpf !== null) {
-        if (normalizedCpf.length !== 11) throw new Error("CPF mapeado deve ter 11 dígitos.");
-        const cpfOwner = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1 AND id != $2", [
-          normalizedCpf,
-          employeeId,
-        ]);
-        if (cpfOwner.length > 0) throw new Error("O CPF mapeado já pertence a outro colaborador.");
-        statements.push({ sql: "UPDATE employees SET cpf = $1 WHERE id = $2", params: [normalizedCpf, employeeId] });
-      }
-    } else if (createdByCpf.has(normalizedCpf)) {
-      employeeId = createdByCpf.get(normalizedCpf)!;
-    } else {
-      if (normalizedCpf.length !== 11 || !row.name?.trim()) {
-        throw new Error("Para criar um colaborador novo, a linha precisa ter CPF válido e Nome.");
-      }
-      employeeId = { $lastInsertId: statements.length };
-      statements.push({ sql: "INSERT INTO employees (name, cpf) VALUES ($1, $2)", params: [row.name.trim(), normalizedCpf] });
-      createdByCpf.set(normalizedCpf, employeeId);
-    }
-
-    // An existing link keeps its matrícula unless the template maps one.
-    statements.push({
-      sql: `INSERT INTO employee_client_companies (employee_id, client_id, company_id, matricula) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (employee_id, client_id, company_id) DO ${row.matriculaMapped ? "UPDATE SET matricula = excluded.matricula" : "NOTHING"}`,
-      params: [employeeId, row.clientId, row.companyId, row.matricula?.trim() || null],
-    });
-    for (const rawKey of row.pixKeys) {
-      const keyValue = rawKey.trim();
-      if (!keyValue) throw new Error("Informe uma chave PIX.");
-      statements.push({
-        sql: `INSERT INTO employee_pix_keys (employee_id, key_value, key_type) VALUES ($1, $2, $3)
-     ON CONFLICT(employee_id, key_value) DO UPDATE SET key_type = excluded.key_type`,
-        params: [employeeId, keyValue, detectPixKeyType(keyValue)],
-      });
-    }
-  }
-  statements.push(...markSourceFilesSavedStatements(savedFileHashes));
-  await runWriteBatch(statements);
+  // `savedFileHashes` may be a Set, which JSON can't carry — send it as an array.
+  await rpc<void>("createEmployeesFromImport", { rows, savedFileHashes: Array.from(savedFileHashes) });
 }
 
 export interface EmployeePixKeyRow {
@@ -3340,33 +1775,19 @@ export interface EmployeePixKeyRow {
 }
 
 export async function listEmployeePixKeys(employeeId: number): Promise<EmployeePixKeyRow[]> {
-  const db = await getDb();
-  return db.select<EmployeePixKeyRow[]>(
-    `SELECT id, employee_id AS employeeId, key_value AS keyValue, key_type AS keyType
-     FROM employee_pix_keys WHERE employee_id = $1 ORDER BY id`,
-    [employeeId],
-  );
+  return rpc<EmployeePixKeyRow[]>("listEmployeePixKeys", { employeeId });
 }
 
 export async function addEmployeePixKey(employeeId: number, rawValue: string, keyType?: PixKeyType): Promise<void> {
-  const db = await getDb();
-  const keyValue = rawValue.trim();
-  if (!keyValue) throw new Error("Informe uma chave PIX.");
-  await db.execute(
-    `INSERT INTO employee_pix_keys (employee_id, key_value, key_type) VALUES ($1, $2, $3)
-     ON CONFLICT(employee_id, key_value) DO UPDATE SET key_type = excluded.key_type`,
-    [employeeId, keyValue, keyType ?? detectPixKeyType(keyValue)],
-  );
+  await rpc<void>("addEmployeePixKey", { employeeId, rawValue, keyType });
 }
 
 export async function updateEmployeePixKeyType(id: number, keyType: PixKeyType): Promise<void> {
-  const db = await getDb();
-  await db.execute("UPDATE employee_pix_keys SET key_type = $1 WHERE id = $2", [keyType, id]);
+  await rpc<void>("updateEmployeePixKeyType", { id, keyType });
 }
 
 export async function removeEmployeePixKey(id: number): Promise<void> {
-  const db = await getDb();
-  await db.execute("DELETE FROM employee_pix_keys WHERE id = $1", [id]);
+  await rpc<void>("removeEmployeePixKey", { id });
 }
 
 export interface EmployeeAliasRow {
@@ -3377,11 +1798,7 @@ export interface EmployeeAliasRow {
 
 /** Every "possível nome" registered for one colaborador, most recent first. */
 export async function listEmployeeAliases(employeeId: number): Promise<EmployeeAliasRow[]> {
-  const db = await getDb();
-  return db.select<EmployeeAliasRow[]>(
-    `SELECT id, employee_id AS employeeId, alias FROM employee_aliases WHERE employee_id = $1 ORDER BY id DESC`,
-    [employeeId],
-  );
+  return rpc<EmployeeAliasRow[]>("listEmployeeAliases", { employeeId });
 }
 
 /**
@@ -3401,22 +1818,7 @@ export async function findEmployeeAliasOwner(
   employeeId: number,
   alias: string,
 ): Promise<{ id: number; name: string } | null> {
-  const db = await getDb();
-  const rows = await db.select<{ id: number; name: string }[]>(
-    `SELECT DISTINCT e.id, e.name
-     FROM employee_aliases ea
-     JOIN employees e ON e.id = ea.employee_id
-     WHERE lower(ea.alias) = lower($1)
-       AND e.id != $2
-       AND EXISTS (
-         SELECT 1 FROM employee_client_companies mine
-         JOIN employee_client_companies theirs
-           ON theirs.client_id = mine.client_id AND theirs.company_id = mine.company_id
-         WHERE mine.employee_id = $2 AND theirs.employee_id = e.id
-       )`,
-    [alias.trim(), employeeId],
-  );
-  return rows[0] ?? null;
+  return rpc<{ id: number; name: string } | null>("findEmployeeAliasOwner", { employeeId, alias });
 }
 
 /**
@@ -3428,30 +1830,11 @@ export async function findEmployeeAliasOwner(
  * that share the same raw name.
  */
 export async function addEmployeeAlias(employeeId: number, alias: string): Promise<void> {
-  const db = await getDb();
-  const trimmed = alias.trim();
-  if (!trimmed) throw new Error("Nome não pode ser vazio.");
-
-  const employeeRows = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE id = $1", [employeeId]);
-  if (employeeRows.length === 0) throw new Error("Colaborador não encontrado.");
-
-  const owner = await findEmployeeAliasOwner(employeeId, trimmed);
-  if (owner) {
-    throw new Error(`Esse nome já está vinculado a ${owner.name}.`);
-  }
-
-  const alreadyMine = await db.select<{ id: number }[]>(
-    "SELECT id FROM employee_aliases WHERE employee_id = $1 AND lower(alias) = lower($2)",
-    [employeeId, trimmed],
-  );
-  if (alreadyMine.length > 0) return;
-
-  await db.execute("INSERT INTO employee_aliases (employee_id, alias) VALUES ($1, $2)", [employeeId, trimmed]);
+  await rpc<void>("addEmployeeAlias", { employeeId, alias });
 }
 
 export async function removeEmployeeAlias(aliasId: number): Promise<void> {
-  const db = await getDb();
-  await db.execute("DELETE FROM employee_aliases WHERE id = $1", [aliasId]);
+  await rpc<void>("removeEmployeeAlias", { aliasId });
 }
 
 export interface RoleRow {
@@ -3466,62 +1849,24 @@ export interface RoleRow {
  * that empresa serves).
  */
 export async function listRoles(companyId: number): Promise<RoleRow[]> {
-  const db = await getDb();
-  return db.select<RoleRow[]>(
-    `SELECT id, company_id AS companyId, name FROM roles WHERE company_id = $1 ORDER BY name`,
-    [companyId],
-  );
+  return rpc<RoleRow[]>("listRoles", { companyId });
 }
 
 /** Every função across every empresa — the Pagamentos "Função" filter's option list, narrowed client-side to whichever empresas are currently selected (same pattern `clientOptions` already uses for Cliente vs Empresa). */
 export async function listRolesGlobal(): Promise<RoleRow[]> {
-  const db = await getDb();
-  return db.select<RoleRow[]>(`SELECT id, company_id AS companyId, name FROM roles ORDER BY name`);
+  return rpc<RoleRow[]>("listRolesGlobal");
 }
 
 export async function getRole(id: number): Promise<RoleRow> {
-  const db = await getDb();
-  const rows = await db.select<RoleRow[]>(
-    `SELECT id, company_id AS companyId, name FROM roles WHERE id = $1`,
-    [id],
-  );
-  if (rows.length === 0) throw new Error("Função não encontrada.");
-  return rows[0];
+  return rpc<RoleRow>("getRole", { id });
 }
 
 export async function createRole(companyId: number, name: string): Promise<number> {
-  const db = await getDb();
-  const trimmed = name.trim();
-  if (!trimmed) throw new Error("Nome não pode ser vazio.");
-
-  const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM roles WHERE company_id = $1 AND lower(name) = lower($2)",
-    [companyId, trimmed],
-  );
-  if (existing.length > 0) throw new Error("Já existe uma função com esse nome para essa empresa.");
-
-  const result = await db.execute("INSERT INTO roles (company_id, name) VALUES ($1, $2)", [companyId, trimmed]);
-  return result.lastInsertId as number;
+  return rpc<number>("createRole", { companyId, name });
 }
 
 export async function updateRole(id: number, name: string): Promise<void> {
-  const db = await getDb();
-  const trimmed = name.trim();
-  if (!trimmed) throw new Error("Nome não pode ser vazio.");
-
-  const current = await db.select<{ companyId: number }[]>(
-    "SELECT company_id AS companyId FROM roles WHERE id = $1",
-    [id],
-  );
-  if (current.length === 0) throw new Error("Função não encontrada.");
-
-  const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM roles WHERE company_id = $1 AND lower(name) = lower($2) AND id != $3",
-    [current[0].companyId, trimmed, id],
-  );
-  if (existing.length > 0) throw new Error("Já existe uma função com esse nome para essa empresa.");
-
-  await db.execute("UPDATE roles SET name = $1 WHERE id = $2", [trimmed, id]);
+  await rpc<void>("updateRole", { id, name });
 }
 
 /**
@@ -3532,11 +1877,7 @@ export async function updateRole(id: number, name: string): Promise<void> {
  * being deleted along with the função.
  */
 export async function deleteRole(roleId: number): Promise<void> {
-  await runWriteBatch([
-    { sql: "UPDATE payment_shifts SET role_id = NULL WHERE role_id = $1", params: [roleId] },
-    { sql: "DELETE FROM role_aliases WHERE role_id = $1", params: [roleId] },
-    { sql: "DELETE FROM roles WHERE id = $1", params: [roleId] },
-  ]);
+  await rpc<void>("deleteRole", { roleId });
 }
 
 export interface RoleAliasRow {
@@ -3547,11 +1888,7 @@ export interface RoleAliasRow {
 
 /** Every "possível nome" registered for one função, most recent first. */
 export async function listRoleAliases(roleId: number): Promise<RoleAliasRow[]> {
-  const db = await getDb();
-  return db.select<RoleAliasRow[]>(
-    `SELECT id, role_id AS roleId, alias FROM role_aliases WHERE role_id = $1 ORDER BY id DESC`,
-    [roleId],
-  );
+  return rpc<RoleAliasRow[]>("listRoleAliases", { roleId });
 }
 
 /**
@@ -3561,15 +1898,7 @@ export async function listRoleAliases(roleId: number): Promise<RoleAliasRow[]> {
  * accepted for name search elsewhere.
  */
 export async function findRoleAliasOwner(companyId: number, alias: string): Promise<{ id: number; name: string } | null> {
-  const db = await getDb();
-  const rows = await db.select<{ id: number; name: string }[]>(
-    `SELECT r.id, r.name
-     FROM role_aliases ra
-     JOIN roles r ON r.id = ra.role_id
-     WHERE r.company_id = $1 AND lower(ra.alias) = lower($2)`,
-    [companyId, alias.trim()],
-  );
-  return rows[0] ?? null;
+  return rpc<{ id: number; name: string } | null>("findRoleAliasOwner", { companyId, alias });
 }
 
 /**
@@ -3579,28 +1908,11 @@ export async function findRoleAliasOwner(companyId: number, alias: string): Prom
  * `addEmployeeAlias`.
  */
 export async function addRoleAlias(roleId: number, alias: string): Promise<void> {
-  const db = await getDb();
-  const trimmed = alias.trim();
-  if (!trimmed) throw new Error("Nome não pode ser vazio.");
-
-  const roleRows = await db.select<{ companyId: number }[]>(
-    "SELECT company_id AS companyId FROM roles WHERE id = $1",
-    [roleId],
-  );
-  if (roleRows.length === 0) throw new Error("Função não encontrada.");
-
-  const owner = await findRoleAliasOwner(roleRows[0].companyId, trimmed);
-  if (owner && owner.id !== roleId) {
-    throw new Error(`Esse nome já está vinculado à função ${owner.name}.`);
-  }
-  if (owner) return;
-
-  await db.execute("INSERT INTO role_aliases (role_id, alias) VALUES ($1, $2)", [roleId, trimmed]);
+  await rpc<void>("addRoleAlias", { roleId, alias });
 }
 
 export async function removeRoleAlias(aliasId: number): Promise<void> {
-  const db = await getDb();
-  await db.execute("DELETE FROM role_aliases WHERE id = $1", [aliasId]);
+  await rpc<void>("removeRoleAlias", { aliasId });
 }
 
 /**
@@ -3610,97 +1922,7 @@ export async function removeRoleAlias(aliasId: number): Promise<void> {
  * text). Case-insensitive, same as the "nome" tentativa there.
  */
 export async function findRoleByName(companyId: number, text: string | null): Promise<RoleRow | null> {
-  const trimmed = text?.trim();
-  if (!trimmed) return null;
-  const db = await getDb();
-  const rows = await db.select<RoleRow[]>(
-    `SELECT r.id, r.company_id AS companyId, r.name
-     FROM roles r
-     WHERE r.company_id = $1
-       AND (lower(r.name) = lower($2) OR EXISTS (
-         SELECT 1 FROM role_aliases ra WHERE ra.role_id = r.id AND lower(ra.alias) = lower($2)
-       ))`,
-    [companyId, trimmed],
-  );
-  return rows[0] ?? null;
-}
-
-/**
- * Walks a template's `identifierPriority` against a base `SELECT e.id ...`
- * (caller-supplied, already scoped however that variant needs), trying each
- * tentativa in order — every field within one tentativa must match the
- * *same* employee (an AND); the first tentativa that finds someone wins (an
- * OR across tentativas). A tentativa is skipped outright if any of its
- * fields has no raw value for this row — there's nothing to match on.
- * `matricula` lives on `employee_client_companies` now (per cliente+empresa
- * pair), not `employees` — `matriculaCondition` builds that field's SQL
- * condition given a `$n` placeholder and the tentativa's `caseInsensitive`
- * flag, since the two callers need different scopes: `findEmployeeByAttempts`
- * already joined one specific pair (`ecc`) so it can compare that column
- * directly, while `findEmployeeAnywhereByAttempts` has no pair in scope and
- * needs an `EXISTS` across all of an employee's pairs instead. Returns the
- * first matching employee's id, hydrated by the caller.
- */
-async function findEmployeeIdByAttempts(
-  db: Database,
-  baseSelect: string,
-  baseParams: (string | number)[],
-  attempts: IdentifierAttempt[],
-  values: { cpf: string | null; matricula: string | null; nome: string | null },
-  matriculaCondition: (placeholder: string, caseInsensitive: boolean) => string,
-): Promise<number | null> {
-  for (const attempt of attempts) {
-    if (attempt.fields.length === 0) continue;
-    const conditions: string[] = [];
-    const params: (string | number)[] = [...baseParams];
-    let skip = false;
-
-    for (const field of attempt.fields) {
-      if (field === "cpf") {
-        // Always digit-normalized — case doesn't apply.
-        const normalized = values.cpf ? normalizeCpf(values.cpf) : "";
-        if (normalized.length !== 11) {
-          skip = true;
-          break;
-        }
-        params.push(normalized);
-        conditions.push(`e.cpf = $${params.length}`);
-      } else if (field === "matricula") {
-        const trimmed = values.matricula?.trim();
-        if (!trimmed) {
-          skip = true;
-          break;
-        }
-        params.push(trimmed);
-        conditions.push(matriculaCondition(`$${params.length}`, attempt.caseInsensitive));
-      } else {
-        const trimmed = values.nome?.trim();
-        if (!trimmed) {
-          skip = true;
-          break;
-        }
-        // Matches the colaborador's own name, or any "possível nome"
-        // (employee_aliases) registered for them — same caseInsensitive
-        // setting governs both, so a tentativa doesn't need a second flag.
-        params.push(trimmed);
-        const nameParam = params.length;
-        params.push(trimmed);
-        const aliasParam = params.length;
-        const nameCmp = attempt.caseInsensitive ? `lower(e.name) = lower($${nameParam})` : `e.name = $${nameParam}`;
-        const aliasCmp = attempt.caseInsensitive
-          ? `lower(ea.alias) = lower($${aliasParam})`
-          : `ea.alias = $${aliasParam}`;
-        conditions.push(
-          `(${nameCmp} OR EXISTS (SELECT 1 FROM employee_aliases ea WHERE ea.employee_id = e.id AND ${aliasCmp}))`,
-        );
-      }
-    }
-
-    if (skip) continue;
-    const rows = await db.select<{ id: number }[]>(`${baseSelect} AND ${conditions.join(" AND ")}`, params);
-    if (rows.length > 0) return rows[0].id;
-  }
-  return null;
+  return rpc<RoleRow | null>("findRoleByName", { companyId, text });
 }
 
 /**
@@ -3728,17 +1950,7 @@ export async function findEmployeeByAttempts(
   attempts: IdentifierAttempt[],
   values: { cpf: string | null; matricula: string | null; nome: string | null },
 ): Promise<EmployeeRow | null> {
-  const db = await getDb();
-  const select = `SELECT e.id
-    FROM employees e
-    JOIN employee_client_companies ecc ON ecc.employee_id = e.id AND ecc.client_id = $1 AND ecc.company_id = $2
-    WHERE 1=1`;
-  const id = await findEmployeeIdByAttempts(db, select, [clientId, companyId], attempts, values, (p, ci) =>
-    ci ? `lower(ecc.matricula) = lower(${p})` : `ecc.matricula = ${p}`,
-  );
-  if (id === null) return null;
-  const rows = await hydrateEmployeeRows(db, [id]);
-  return rows[0] ?? null;
+  return rpc<EmployeeRow | null>("findEmployeeByAttempts", { clientId, companyId, attempts, values });
 }
 
 /**
@@ -3760,15 +1972,7 @@ export async function findEmployeeAnywhereByAttempts(
   attempts: IdentifierAttempt[],
   values: { cpf: string | null; matricula: string | null; nome: string | null },
 ): Promise<EmployeeRow | null> {
-  const db = await getDb();
-  const select = `SELECT e.id FROM employees e WHERE 1=1`;
-  const id = await findEmployeeIdByAttempts(db, select, [], attempts, values, (p, ci) => {
-    const cmp = ci ? `lower(ecc.matricula) = lower(${p})` : `ecc.matricula = ${p}`;
-    return `EXISTS (SELECT 1 FROM employee_client_companies ecc WHERE ecc.employee_id = e.id AND ${cmp})`;
-  });
-  if (id === null) return null;
-  const rows = await hydrateEmployeeRows(db, [id]);
-  return rows[0] ?? null;
+  return rpc<EmployeeRow | null>("findEmployeeAnywhereByAttempts", { attempts, values });
 }
 
 export interface DuplicatePaymentShiftMatch {
@@ -3842,60 +2046,8 @@ export async function findDuplicatePaymentShifts(
     scheduleEndMinutes: number | null;
   }[],
 ): Promise<Map<number, DuplicatePaymentShiftMatch>> {
-  const db = await getDb();
-  const matches = new Map<number, DuplicatePaymentShiftMatch>();
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
-    const existing = await db.select<
-      {
-        id: number;
-        editedManually: number;
-        status: PaymentShiftStatus;
-        deletedAt: string | null;
-        currentWorkDate: string;
-        currentLocal: string;
-        currentRoleId: number | null;
-        currentScheduleStart: number | null;
-        currentScheduleEnd: number | null;
-      }[]
-    >(
-      `WITH RECURSIVE lineage(id) AS (
-         SELECT ps.id FROM payment_shifts ps
-         WHERE ps.employee_id = $1 AND ps.work_date = $2 AND ps.local = $3
-           AND IFNULL(ps.role_id, -1) = IFNULL($4, -1)
-           AND IFNULL(ps.schedule_start_minutes, -1) = IFNULL($5, -1)
-           AND IFNULL(ps.schedule_end_minutes, -1) = IFNULL($6, -1)
-         UNION ALL
-         SELECT next_ps.id FROM payment_shifts next_ps
-         JOIN lineage ON next_ps.previous_shift_id = lineage.id
-       )
-       SELECT ps.id, ps.edited_manually AS editedManually, ps.status, ps.deleted_at AS deletedAt,
-              ps.work_date AS currentWorkDate, ps.local AS currentLocal, ps.role_id AS currentRoleId,
-              ps.schedule_start_minutes AS currentScheduleStart, ps.schedule_end_minutes AS currentScheduleEnd
-       FROM payment_shifts ps
-       WHERE ps.id IN (SELECT id FROM lineage) AND ${STRUCTURAL_HEAD_CONDITION}
-       ORDER BY ps.id DESC
-       LIMIT 1`,
-      [r.employeeId, r.workDate, r.local, r.roleId, r.scheduleStartMinutes, r.scheduleEndMinutes],
-    );
-    if (existing.length > 0) {
-      const head = existing[0];
-      const identityChanged =
-        head.currentWorkDate !== r.workDate ||
-        head.currentLocal !== r.local ||
-        (head.currentRoleId ?? null) !== r.roleId ||
-        (head.currentScheduleStart ?? null) !== r.scheduleStartMinutes ||
-        (head.currentScheduleEnd ?? null) !== r.scheduleEndMinutes;
-      matches.set(i, {
-        shiftId: head.id,
-        editedManually: Boolean(head.editedManually),
-        status: head.status,
-        identityChanged,
-        deleted: head.deletedAt !== null,
-      });
-    }
-  }
-  return matches;
+  // The server answers `[index, match]` pairs (a Map has no JSON form).
+  return new Map(await rpc<[number, DuplicatePaymentShiftMatch][]>("findDuplicatePaymentShifts", { rows }));
 }
 
 export interface PositionMatchedShift {
@@ -3913,11 +2065,6 @@ export interface PositionMatchedShift {
   extraData: Record<string, string> | null;
   editedManually: boolean;
 }
-
-type PositionMatchedShiftRaw = Omit<PositionMatchedShift, "extraData" | "editedManually"> & {
-  extraData: string | null;
-  editedManually: number;
-};
 
 /**
  * Fallback for the deep-check diff (`remoteCheckDiff.ts`), used two ways:
@@ -3945,27 +2092,7 @@ export async function findPaymentShiftByPosition(
   sheetName: string | null,
   rowNumber: number,
 ): Promise<PositionMatchedShift | null> {
-  const db = await getDb();
-  const rows = await db.select<PositionMatchedShiftRaw[]>(
-    `SELECT ps.id AS shiftId, ps.employee_id AS employeeId, e.name AS employeeName, ps.work_date AS workDate,
-            ps.local, COALESCE(r.name, '') AS role, ps.role_id AS roleId,
-            ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
-            ps.status, ps.extra_data AS extraData, ps.edited_manually AS editedManually
-     FROM payment_shifts ps
-     JOIN employees e ON e.id = ps.employee_id
-     JOIN source_files sf ON sf.id = ps.source_file_id
-     LEFT JOIN roles r ON r.id = ps.role_id
-     WHERE sf.source_url = $1
-       AND IFNULL(ps.source_sheet_name, '') = IFNULL($2, '')
-       AND ps.source_row_number = $3
-       AND ${STRUCTURAL_HEAD_CONDITION}
-     ORDER BY ps.id DESC
-     LIMIT 1`,
-    [sourceUrl, sheetName, rowNumber],
-  );
-  if (rows.length === 0) return null;
-  const r = rows[0];
-  return { ...r, extraData: r.extraData ? JSON.parse(r.extraData) : null, editedManually: Boolean(r.editedManually) };
+  return rpc<PositionMatchedShift | null>("findPaymentShiftByPosition", { sourceUrl, sheetName, rowNumber });
 }
 
 export interface SourceUrlHeadShift {
@@ -3986,8 +2113,6 @@ export interface SourceUrlHeadShift {
   editedManually: boolean;
 }
 
-type SourceUrlHeadShiftRaw = Omit<SourceUrlHeadShift, "editedManually"> & { editedManually: number };
-
 /**
  * Every current (head, non-deleted) shift ever imported from this exact
  * source URL, optionally bounded to a período — the mirror image of
@@ -4005,31 +2130,7 @@ export async function listHeadShiftsForSourceUrl(
   periodStart: string | null,
   periodEnd: string | null,
 ): Promise<SourceUrlHeadShift[]> {
-  const db = await getDb();
-  const conditions = ["sf.source_url = $1", HEAD_SHIFT_CONDITION];
-  const params: string[] = [sourceUrl];
-  if (periodStart) {
-    params.push(periodStart);
-    conditions.push(`ps.work_date >= $${params.length}`);
-  }
-  if (periodEnd) {
-    params.push(periodEnd);
-    conditions.push(`ps.work_date <= $${params.length}`);
-  }
-  const rows = await db.select<SourceUrlHeadShiftRaw[]>(
-    `SELECT ps.id AS shiftId, ps.employee_id AS employeeId, e.name AS employeeName, ps.work_date AS workDate,
-            ps.local, COALESCE(r.name, '') AS role, ps.role_id AS roleId,
-            ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
-            ps.status, ps.source_sheet_name AS sheetName, ps.source_row_number AS rowNumber,
-            ps.edited_manually AS editedManually
-     FROM payment_shifts ps
-     JOIN employees e ON e.id = ps.employee_id
-     JOIN source_files sf ON sf.id = ps.source_file_id
-     LEFT JOIN roles r ON r.id = ps.role_id
-     WHERE ${conditions.join(" AND ")}`,
-    params,
-  );
-  return rows.map((r) => ({ ...r, editedManually: Boolean(r.editedManually) }));
+  return rpc<SourceUrlHeadShift[]>("listHeadShiftsForSourceUrl", { sourceUrl, periodStart, periodEnd });
 }
 
 export interface PaymentShiftInput {
@@ -4057,180 +2158,7 @@ export interface PaymentShiftInput {
 
 /** Bulk-inserts shifts — `valor` and any further `pago` transition still happen in a later step. Never sets `edited_manually` — that's exclusively for the manual transition functions above, never for anything import-originated. */
 export async function savePaymentShifts(rows: PaymentShiftInput[], savedFileHashes: Iterable<string> = []): Promise<void> {
-  // One transaction for the whole import, so a failure part-way never
-  // leaves only some of the file's shifts saved. A row reprocessing an
-  // existing shift gets the same fork guard as the manual transitions (see
-  // `successorShiftId`); if that guard trips, the whole batch rolls back.
-  // `savedFileHashes` are marked saved (`markSourceFileSaved`) in the same
-  // transaction: shifts saved without their file marked would let the same
-  // file be imported again as new, duplicating them.
-  await runWriteBatch([
-    ...rows.map((r) => ({
-      sql: `INSERT INTO payment_shifts
-         (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
-          schedule_start_minutes, schedule_end_minutes, status, extra_data, previous_shift_id,
-          source_row_number, source_sheet_name)
-       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
-       WHERE $13 IS NULL OR NOT EXISTS (SELECT 1 FROM payment_shifts WHERE previous_shift_id = $13)`,
-      params: [
-        r.employeeId,
-        r.templateId,
-        r.sourceFileId,
-        r.clientId,
-        r.companyId,
-        r.local,
-        r.workDate,
-        r.roleId,
-        r.scheduleStartMinutes,
-        r.scheduleEndMinutes,
-        r.status,
-        r.extraData ? JSON.stringify(r.extraData) : null,
-        r.previousShiftId,
-        r.sourceRowNumber,
-        r.sourceSheetName,
-      ],
-      expectChanges: SHIFT_ALREADY_SUPERSEDED_ERROR,
-    })),
-    ...markSourceFilesSavedStatements(savedFileHashes),
-  ]);
-}
-
-/**
- * A shift's "current" row is whichever one nothing else points to via
- * `previous_shift_id` — once "Fazer pagamento" creates a new row linked
- * back to a pendente/erro one, that older row is superseded and drops out
- * of every list/summary/total, staying only as history reachable through
- * the link on the row that replaced it (see `getPaymentShift`). Purely
- * structural — doesn't consider `deleted_at` — so `findDuplicatePaymentShifts`
- * can use this alone to still find a *deleted* chain's head (it needs to,
- * to flag a reimport of it for review); every other consumer wants
- * `HEAD_SHIFT_CONDITION` below instead.
- */
-const STRUCTURAL_HEAD_CONDITION =
-  "ps.id NOT IN (SELECT previous_shift_id FROM payment_shifts WHERE previous_shift_id IS NOT NULL)";
-
-/**
- * The actual "currently visible" condition every list/summary/report query
- * uses — structurally the head AND not soft-deleted (see
- * 0052_payment_shifts_soft_delete.sql). "Remover" on a turno never
- * physically deletes it (so a later reimport can still recognize and flag
- * it — see `findDuplicatePaymentShifts`), so hiding it from every normal
- * view has to happen here instead.
- */
-const HEAD_SHIFT_CONDITION = `${STRUCTURAL_HEAD_CONDITION} AND ps.deleted_at IS NULL`;
-
-/** Which aggregated column each "Status" checkbox reads — a group matches a status once at least one of its shifts has it. */
-const PAYMENT_STATUS_HAVING_CONDITIONS: Record<PaymentShiftStatus, string> = {
-  pendente: "SUM(CASE WHEN ps.status = 'pendente' THEN 1 ELSE 0 END) > 0",
-  erro: "SUM(CASE WHEN ps.status = 'erro' THEN 1 ELSE 0 END) > 0",
-  pago: "SUM(CASE WHEN ps.status = 'pago' THEN 1 ELSE 0 END) > 0",
-};
-
-/**
- * SQL-side mirror of `classifyShiftPeriod` (format.ts) — every rule there
- * has an equivalent boolean/arithmetic expression here, built the same way
- * (split each side into up to two non-wrapping `[start,end)` pieces on the
- * 0-1440 circle, then compare pieces pairwise) so the "Diurno/Noturno"
- * filter on the Pagamentos list agrees with the badge shown on the detail
- * page. Kept as plain string-building instead of a stored SQL function
- * since this project only ever talks to SQLite through the JS driver.
- */
-function intervalPiecesSql(startExpr: string, endExpr: string): { p1s: string; p1e: string; p2s: string; p2e: string } {
-  const wraps = `(${endExpr} < ${startExpr})`;
-  return {
-    p1s: startExpr,
-    p1e: `(CASE WHEN ${wraps} THEN 1440 ELSE ${endExpr} END)`,
-    p2s: "0",
-    p2e: `(CASE WHEN ${wraps} THEN ${endExpr} ELSE 0 END)`,
-  };
-}
-
-function piecePairs(a: ReturnType<typeof intervalPiecesSql>, b: ReturnType<typeof intervalPiecesSql>) {
-  return [
-    [a.p1s, a.p1e, b.p1s, b.p1e],
-    [a.p1s, a.p1e, b.p2s, b.p2e],
-    [a.p2s, a.p2e, b.p1s, b.p1e],
-    [a.p2s, a.p2e, b.p2s, b.p2e],
-  ] as const;
-}
-
-/** Whether two (possibly midnight-wrapping) time-of-day ranges overlap at all. */
-function rangesOverlapSql(aStart: string, aEnd: string, bStart: string, bEnd: string): string {
-  const pairs = piecePairs(intervalPiecesSql(aStart, aEnd), intervalPiecesSql(bStart, bEnd));
-  return `(${pairs.map(([as, ae, bs, be]) => `(${as} < ${be} AND ${bs} < ${ae})`).join(" OR ")})`;
-}
-
-/** Total overlap, in minutes, between two (possibly midnight-wrapping) time-of-day ranges. */
-function overlapMinutesSql(aStart: string, aEnd: string, bStart: string, bEnd: string): string {
-  const pairs = piecePairs(intervalPiecesSql(aStart, aEnd), intervalPiecesSql(bStart, bEnd));
-  return `(${pairs.map(([as, ae, bs, be]) => `MAX(0, MIN(${ae}, ${be}) - MAX(${as}, ${bs}))`).join(" + ")})`;
-}
-
-/** Whether `point` falls in a (possibly midnight-wrapping) `[start, end)` range. */
-function timeInRangeSql(pointExpr: string, startExpr: string, endExpr: string): string {
-  return `(CASE WHEN ${endExpr} < ${startExpr}
-    THEN (${pointExpr} >= ${startExpr} OR ${pointExpr} < ${endExpr})
-    ELSE (${pointExpr} >= ${startExpr} AND ${pointExpr} < ${endExpr}) END)`;
-}
-
-/**
- * SQL fragments for classifying a `payment_shifts` row (already joined as
- * `ps`, with its company already joined as `c` AND its client already
- * joined as `cl`) as "noturno" — the effective night window/rule is the
- * client's own override when set, falling back to the company's otherwise
- * (`COALESCE(cl.night_*, c.night_*)`, same client-wins precedence as
- * `getEffectivePaymentRules`, just mirrored in SQL). `hasSchedule` (a row
- * with no parsed horário is neither diurno nor noturno, same as
- * `classifyShiftPeriod`'s caller returning `null`) and `isNoturno` (the
- * rule-dependent classification itself, only meaningful where `hasSchedule`
- * holds) are kept separate so a caller can build both "is noturno"
- * (`hasSchedule AND isNoturno`) and "is diurno" (`hasSchedule AND NOT
- * isNoturno`) without `NOT` accidentally flipping missing-schedule rows
- * into false positives.
- */
-function shiftPeriodSql(): { hasSchedule: string; isNoturno: string } {
-  const effectiveStart = "COALESCE(cl.night_start_time, c.night_start_time)";
-  const effectiveEnd = "COALESCE(cl.night_end_time, c.night_end_time)";
-  const effectiveRule = "COALESCE(cl.night_shift_rule, c.night_shift_rule)";
-  const nightStart = `((CAST(substr(${effectiveStart},1,2) AS INTEGER) * 60) + CAST(substr(${effectiveStart},4,2) AS INTEGER))`;
-  const nightEnd = `((CAST(substr(${effectiveEnd},1,2) AS INTEGER) * 60) + CAST(substr(${effectiveEnd},4,2) AS INTEGER))`;
-  const shiftStart = "ps.schedule_start_minutes";
-  const shiftEnd = "ps.schedule_end_minutes";
-
-  const startInRange = timeInRangeSql(shiftStart, nightStart, nightEnd);
-  const endInRange = timeInRangeSql(shiftEnd, nightStart, nightEnd);
-  const overlaps = rangesOverlapSql(shiftStart, shiftEnd, nightStart, nightEnd);
-  const overlapMinutes = overlapMinutesSql(shiftStart, shiftEnd, nightStart, nightEnd);
-  const duration = `(CASE WHEN ${shiftEnd} > ${shiftStart} THEN ${shiftEnd} - ${shiftStart} ELSE 1440 - ${shiftStart} + ${shiftEnd} END)`;
-  const majorityOverlap = `(${duration} > 0 AND ${overlapMinutes} * 2 >= ${duration})`;
-
-  const isNoturno = `(CASE ${effectiveRule}
-    WHEN 'start-in-range' THEN ${startInRange}
-    WHEN 'end-in-range' THEN ${endInRange}
-    WHEN 'start-or-end-in-range' THEN (${startInRange} OR ${endInRange})
-    WHEN 'majority-overlap' THEN ${majorityOverlap}
-    ELSE ${overlaps}
-  END)`;
-
-  return { hasSchedule: `(${shiftStart} IS NOT NULL AND ${shiftEnd} IS NOT NULL)`, isNoturno };
-}
-
-/**
- * Row-level SQL for the "Horário" filter: whether a shift's own start (or
- * end) falls before/after a single reference time the user picked — unlike
- * `shiftPeriodSql`, there's no range/rule table on the company to read, the
- * reference time is just a literal supplied by the caller. A shift with no
- * parsed horário never matches (same "missing schedule never matches"
- * stance as `shiftPeriodSql`'s `hasSchedule` guard). Returns `null` for an
- * unparseable time, meaning "don't filter" — same as the filter being unset.
- */
-function scheduleTimeConditionSql(filter: ScheduleTimeFilter, params: (string | number)[]): string | null {
-  const referenceMinutes = parseTimeToMinutes(filter.time);
-  if (referenceMinutes === null) return null;
-  const field = filter.rule.startsWith("start") ? "ps.schedule_start_minutes" : "ps.schedule_end_minutes";
-  const op = filter.rule.endsWith("before") ? "<" : ">";
-  params.push(referenceMinutes);
-  return `(${field} IS NOT NULL AND ${field} ${op} $${params.length})`;
+  await rpc<void>("savePaymentShifts", { rows, savedFileHashes: Array.from(savedFileHashes) });
 }
 
 /**
@@ -4242,128 +2170,7 @@ function scheduleTimeConditionSql(filter: ScheduleTimeFilter, params: (string | 
  * lookup table.
  */
 export async function listDistinctPaymentShiftLocals(): Promise<string[]> {
-  const db = await getDb();
-  const rows = await db.select<{ local: string }[]>(
-    `SELECT DISTINCT ps.local AS local
-     FROM payment_shifts ps
-     WHERE ${HEAD_SHIFT_CONDITION} AND ps.local <> ''
-     ORDER BY ps.local`,
-  );
-  return rows.map((r) => r.local);
-}
-
-/** SQL twin of `shiftDurationMinutes` (start == end is a full 24h, not 0) — needs both schedule columns non-null. */
-const SHIFT_DURATION_SQL =
-  "(CASE WHEN ps.schedule_end_minutes > ps.schedule_start_minutes THEN ps.schedule_end_minutes - ps.schedule_start_minutes ELSE 1440 - ps.schedule_start_minutes + ps.schedule_end_minutes END)";
-
-/** `ps.id IN (...)` for `query.shiftIds`, passed as one JSON array param so a long list can't hit SQLite's bound-parameter limit. */
-function shiftIdsCondition(shiftIds: number[] | undefined, params: (string | number)[]): string | null {
-  if (shiftIds === undefined) return null;
-  params.push(JSON.stringify(shiftIds));
-  return `ps.id IN (SELECT value FROM json_each($${params.length}))`;
-}
-
-/**
- * Row-level WHERE conditions shared by every flat (non-aggregated) shift
- * query — `listPaymentShiftsForReport`, `listPaymentShiftsFlat`, and
- * `listPaymentShiftsForGroup`. `listPaymentShiftSummaries` doesn't use
- * this: its status/diurno-noturno filters read aggregated SUMs, so they
- * belong in HAVING instead, not here.
- */
-function buildPaymentShiftRowConditions(
-  query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
-  params: (string | number)[],
-): string[] {
-  const conditions: string[] = [HEAD_SHIFT_CONDITION];
-  const employeeClause = inClause("e.id", query.employeeIds ?? [], params);
-  if (employeeClause) conditions.push(employeeClause);
-  const companyClause = inClause("c.id", query.companyIds ?? [], params);
-  if (companyClause) conditions.push(companyClause);
-  const clientClause = inClause("cl.id", query.clientIds ?? [], params);
-  if (clientClause) conditions.push(clientClause);
-  const roleClause = inClause("ps.role_id", query.roleIds ?? [], params);
-  if (roleClause) conditions.push(roleClause);
-  const localClause = inClause("ps.local", query.locals ?? [], params);
-  if (localClause) conditions.push(localClause);
-  if (query.periodStart) {
-    params.push(query.periodStart);
-    conditions.push(`ps.work_date >= $${params.length}`);
-  }
-  if (query.periodEnd) {
-    params.push(query.periodEnd);
-    conditions.push(`ps.work_date <= $${params.length}`);
-  }
-  if (query.statuses.length < 3) {
-    const placeholders = query.statuses.map((s) => {
-      params.push(s);
-      return `$${params.length}`;
-    });
-    conditions.push(`ps.status IN (${placeholders.join(", ")})`);
-  }
-  const { hasSchedule, isNoturno } = shiftPeriodSql();
-  if (query.shiftPeriods.length < 2) {
-    conditions.push(
-      query.shiftPeriods[0] === "noturno" ? `(${hasSchedule} AND ${isNoturno})` : `(${hasSchedule} AND NOT ${isNoturno})`,
-    );
-  }
-  if (query.scheduleTimeFilter) {
-    const cond = scheduleTimeConditionSql(query.scheduleTimeFilter, params);
-    if (cond) conditions.push(cond);
-  }
-  if (query.attention === "missing-amount") conditions.push("ps.amount IS NULL");
-  const idsCondition = shiftIdsCondition(query.shiftIds, params);
-  if (idsCondition) conditions.push(idsCondition);
-  if (query.attention === "pending-audit") {
-    conditions.push("ps.status = 'pago'");
-    conditions.push("NOT EXISTS (SELECT 1 FROM payment_audits pa_attention WHERE pa_attention.payment_shift_id = ps.id)");
-  }
-  if (query.analytics === "journey-over-12h") {
-    conditions.push("ps.schedule_start_minutes IS NOT NULL AND ps.schedule_end_minutes IS NOT NULL");
-    conditions.push(`${SHIFT_DURATION_SQL} > 720`);
-  }
-  if (query.analytics === "journey-under-4h") {
-    conditions.push("ps.schedule_start_minutes IS NOT NULL AND ps.schedule_end_minutes IS NOT NULL");
-    conditions.push(`${SHIFT_DURATION_SQL} BETWEEN 1 AND 239`);
-  }
-  if (query.analytics === "rest-under-11h") {
-    const ids = inClause("ps.id", query.analyticsShiftIds ?? [], params);
-    if (ids) conditions.push(ids);
-    else conditions.push("0 = 1");
-    /* The explicit ids are computed from the already-filtered dashboard rows,
-       making this pair-based indicator exact even when the preceding shift
-       would not itself match the active status/local/client filters. */
-    /*
-    conditions.push(`EXISTS (
-      SELECT 1 FROM payment_shifts prev
-      WHERE prev.employee_id = ps.employee_id AND prev.superseded_by_id IS NULL AND prev.id <> ps.id
-        AND datetime(prev.work_date, printf('+%d minutes', prev.schedule_end_minutes + CASE WHEN prev.schedule_end_minutes < prev.schedule_start_minutes THEN 1440 ELSE 0 END)) <= datetime(ps.work_date, printf('+%d minutes', ps.schedule_start_minutes))
-        AND datetime(prev.work_date, printf('+%d minutes', prev.schedule_end_minutes + CASE WHEN prev.schedule_end_minutes < prev.schedule_start_minutes THEN 1440 ELSE 0 END)) > datetime(ps.work_date, printf('+%d minutes', ps.schedule_start_minutes - 660))
-        AND NOT EXISTS (
-          SELECT 1 FROM payment_shifts middle
-          WHERE middle.employee_id = ps.employee_id AND middle.superseded_by_id IS NULL AND middle.id <> ps.id AND middle.id <> prev.id
-            AND datetime(middle.work_date, printf('+%d minutes', middle.schedule_end_minutes + CASE WHEN middle.schedule_end_minutes < middle.schedule_start_minutes THEN 1440 ELSE 0 END)) > datetime(prev.work_date, printf('+%d minutes', prev.schedule_end_minutes + CASE WHEN prev.schedule_end_minutes < prev.schedule_start_minutes THEN 1440 ELSE 0 END))
-            AND datetime(middle.work_date, printf('+%d minutes', middle.schedule_end_minutes + CASE WHEN middle.schedule_end_minutes < middle.schedule_start_minutes THEN 1440 ELSE 0 END)) <= datetime(ps.work_date, printf('+%d minutes', ps.schedule_start_minutes))
-        )
-    )`);
-    */
-  }
-  if (query.analytics === "heatmap") {
-    if (query.analyticsWeekday === undefined || query.analyticsTimeBucket === undefined) conditions.push("0 = 1");
-    else {
-      params.push(String(query.analyticsWeekday));
-      conditions.push(`strftime('%w', ps.work_date) = $${params.length}`);
-      // Análises' heatmap uses 2-hour start buckets (0 = 00:00–01:59 … 11 = 22:00–23:59).
-      params.push(query.analyticsTimeBucket * 120, query.analyticsTimeBucket * 120 + 119);
-      conditions.push(`ps.schedule_start_minutes BETWEEN $${params.length - 1} AND $${params.length}`);
-    }
-  }
-  return conditions;
-}
-
-/** A shift's Diurno/Noturno classification as a SQL expression — `NULL` when there's no schedule to classify, same stance as `shiftPeriodSql`'s `hasSchedule` guard. Requires `c` (companies) joined. */
-function shiftPeriodSelectSql(): string {
-  const { hasSchedule, isNoturno } = shiftPeriodSql();
-  return `(CASE WHEN NOT ${hasSchedule} THEN NULL WHEN ${isNoturno} THEN 'noturno' ELSE 'diurno' END)`;
+  return rpc<string[]>("listDistinctPaymentShiftLocals");
 }
 
 export interface ListPaymentShiftSummariesQuery {
@@ -4407,92 +2214,7 @@ export interface ListPaymentShiftSummariesQuery {
 export async function listPaymentShiftSummaries(
   query: ListPaymentShiftSummariesQuery,
 ): Promise<PagedResult<PaymentShiftSummaryRow>> {
-  if (query.statuses.length === 0 || query.shiftPeriods.length === 0) return { rows: [], total: 0 };
-
-  const db = await getDb();
-  const conditions: string[] = [];
-  const params: (string | number)[] = [];
-
-  conditions.push(HEAD_SHIFT_CONDITION);
-  const employeeClause = inClause("e.id", query.employeeIds ?? [], params);
-  if (employeeClause) conditions.push(employeeClause);
-  const companyClause = inClause("c.id", query.companyIds ?? [], params);
-  if (companyClause) conditions.push(companyClause);
-  const clientClause = inClause("cl.id", query.clientIds ?? [], params);
-  if (clientClause) conditions.push(clientClause);
-  const roleClause = inClause("ps.role_id", query.roleIds ?? [], params);
-  if (roleClause) conditions.push(roleClause);
-  const localClause = inClause("ps.local", query.locals ?? [], params);
-  if (localClause) conditions.push(localClause);
-  if (query.periodStart) {
-    params.push(query.periodStart);
-    conditions.push(`ps.work_date >= $${params.length}`);
-  }
-  if (query.periodEnd) {
-    params.push(query.periodEnd);
-    conditions.push(`ps.work_date <= $${params.length}`);
-  }
-  if (query.attention === "missing-amount") conditions.push("ps.amount IS NULL");
-  const idsCondition = shiftIdsCondition(query.shiftIds, params);
-  if (idsCondition) conditions.push(idsCondition);
-  if (query.attention === "pending-audit") {
-    conditions.push("ps.status = 'pago'");
-    conditions.push("NOT EXISTS (SELECT 1 FROM payment_audits pa_attention WHERE pa_attention.payment_shift_id = ps.id)");
-  }
-
-  const havingParts: string[] = [];
-  if (query.statuses.length < 3) {
-    havingParts.push(`(${query.statuses.map((s) => PAYMENT_STATUS_HAVING_CONDITIONS[s]).join(" OR ")})`);
-  }
-  if (query.shiftPeriods.length < 2) {
-    const { hasSchedule, isNoturno } = shiftPeriodSql();
-    const shiftPeriodConditions = query.shiftPeriods.map((p) =>
-      p === "noturno"
-        ? `SUM(CASE WHEN ${hasSchedule} AND ${isNoturno} THEN 1 ELSE 0 END) > 0`
-        : `SUM(CASE WHEN ${hasSchedule} AND NOT ${isNoturno} THEN 1 ELSE 0 END) > 0`,
-    );
-    havingParts.push(`(${shiftPeriodConditions.join(" OR ")})`);
-  }
-  if (query.scheduleTimeFilter) {
-    const cond = scheduleTimeConditionSql(query.scheduleTimeFilter, params);
-    if (cond) havingParts.push(`SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) > 0`);
-  }
-
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const havingClause = havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : "";
-  const from = `FROM payment_shifts ps
-    JOIN employees e ON e.id = ps.employee_id
-    JOIN clients cl ON cl.id = ps.client_id
-    JOIN companies c ON c.id = ps.company_id`;
-
-  const countRows = await db.select<{ count: number }[]>(
-    `SELECT COUNT(*) AS count FROM (
-       SELECT e.id ${from} ${whereClause} GROUP BY e.id, strftime('%Y-%m', ps.work_date) ${havingClause}
-     ) t`,
-    params,
-  );
-  const total = countRows[0]?.count ?? 0;
-
-  const rows = await db.select<PaymentShiftSummaryRow[]>(
-    `SELECT
-      e.id AS employeeId, e.name AS employeeName,
-      cl.id AS clientId, cl.name AS clientName,
-      c.id AS companyId, c.name AS companyName,
-      strftime('%Y-%m', ps.work_date) AS competencia,
-      COUNT(*) AS total,
-      SUM(CASE WHEN ps.status = 'pendente' THEN 1 ELSE 0 END) AS pendente,
-      SUM(CASE WHEN ps.status = 'erro' THEN 1 ELSE 0 END) AS erro,
-      SUM(CASE WHEN ps.status = 'pago' THEN 1 ELSE 0 END) AS pago
-    ${from}
-    ${whereClause}
-    GROUP BY e.id, competencia
-    ${havingClause}
-    ORDER BY competencia DESC, e.name
-    LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-    [...params, query.pageSize, query.page * query.pageSize],
-  );
-
-  return { rows, total };
+  return rpc<PagedResult<PaymentShiftSummaryRow>>("listPaymentShiftSummaries", { query });
 }
 
 export interface PaymentShiftReportRow {
@@ -4520,8 +2242,6 @@ export interface PaymentShiftReportRow {
   shiftPeriod: ShiftPeriod | null;
 }
 
-type PaymentShiftReportRowRaw = Omit<PaymentShiftReportRow, "extraData"> & { extraData: string | null };
-
 /**
  * Every *current* shift matching the Pagamentos list's filters, flat (no
  * grouping/pagination) — the data behind "Gerar PDF" and "Conferência de
@@ -4533,29 +2253,7 @@ type PaymentShiftReportRowRaw = Omit<PaymentShiftReportRow, "extraData"> & { ext
 export async function listPaymentShiftsForReport(
   query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
 ): Promise<PaymentShiftReportRow[]> {
-  if (query.statuses.length === 0 || query.shiftPeriods.length === 0) return [];
-
-  const db = await getDb();
-  const params: (string | number)[] = [];
-  const conditions = buildPaymentShiftRowConditions(query, params);
-
-  const rows = await db.select<PaymentShiftReportRowRaw[]>(
-    `SELECT ps.id, e.id AS employeeId, e.name AS employeeName, c.id AS companyId, c.name AS companyName,
-            cl.id AS clientId, cl.name AS clientName,
-            ps.work_date AS workDate, ps.local, COALESCE(r.name, '') AS role, ps.role_id AS roleId,
-            ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
-            ps.status, ps.amount, ps.imported_at AS importedAt, ps.extra_data AS extraData,
-            ${shiftPeriodSelectSql()} AS shiftPeriod
-     FROM payment_shifts ps
-     JOIN employees e ON e.id = ps.employee_id
-     JOIN clients cl ON cl.id = ps.client_id
-     JOIN companies c ON c.id = ps.company_id
-     LEFT JOIN roles r ON r.id = ps.role_id
-     WHERE ${conditions.join(" AND ")}
-     ORDER BY ps.work_date, ps.local, e.name`,
-    params,
-  );
-  return rows.map((r) => ({ ...r, extraData: r.extraData ? JSON.parse(r.extraData) : null }));
+  return rpc<PaymentShiftReportRow[]>("listPaymentShiftsForReport", { query });
 }
 
 /**
@@ -4571,35 +2269,7 @@ export async function listPaymentShiftsForReportPage(
   page: number,
   pageSize: number,
 ): Promise<PagedResult<PaymentShiftReportRow>> {
-  if (query.statuses.length === 0 || query.shiftPeriods.length === 0) return { rows: [], total: 0 };
-
-  const db = await getDb();
-  const params: (string | number)[] = [];
-  const conditions = buildPaymentShiftRowConditions(query, params);
-  const from = `FROM payment_shifts ps
-    JOIN employees e ON e.id = ps.employee_id
-    JOIN clients cl ON cl.id = ps.client_id
-    JOIN companies c ON c.id = ps.company_id
-    LEFT JOIN roles r ON r.id = ps.role_id`;
-  const whereClause = `WHERE ${conditions.join(" AND ")}`;
-
-  const countRows = await db.select<{ count: number }[]>(`SELECT COUNT(*) AS count ${from} ${whereClause}`, params);
-  const total = countRows[0]?.count ?? 0;
-
-  const rows = await db.select<PaymentShiftReportRowRaw[]>(
-    `SELECT ps.id, e.id AS employeeId, e.name AS employeeName, c.id AS companyId, c.name AS companyName,
-            cl.id AS clientId, cl.name AS clientName,
-            ps.work_date AS workDate, ps.local, COALESCE(r.name, '') AS role, ps.role_id AS roleId,
-            ps.schedule_start_minutes AS scheduleStartMinutes, ps.schedule_end_minutes AS scheduleEndMinutes,
-            ps.status, ps.amount, ps.imported_at AS importedAt, ps.extra_data AS extraData,
-            ${shiftPeriodSelectSql()} AS shiftPeriod
-     ${from}
-     ${whereClause}
-     ORDER BY ps.work_date, ps.local, e.name
-     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-    [...params, pageSize, page * pageSize],
-  );
-  return { rows: rows.map((r) => ({ ...r, extraData: r.extraData ? JSON.parse(r.extraData) : null })), total };
+  return rpc<PagedResult<PaymentShiftReportRow>>("listPaymentShiftsForReportPage", { query, page, pageSize });
 }
 
 /**
@@ -4613,24 +2283,7 @@ export async function listPaymentShiftsForReportPage(
 export async function countPaymentShiftsPendingAudit(
   query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
 ): Promise<number> {
-  if (query.statuses.length === 0 || query.shiftPeriods.length === 0) return 0;
-
-  const db = await getDb();
-  const params: (string | number)[] = [];
-  const conditions = buildPaymentShiftRowConditions(query, params);
-  conditions.push("ps.status = 'pago'");
-
-  const countRows = await db.select<{ count: number }[]>(
-    `SELECT COUNT(*) AS count
-     FROM payment_shifts ps
-     JOIN employees e ON e.id = ps.employee_id
-     JOIN clients cl ON cl.id = ps.client_id
-     JOIN companies c ON c.id = ps.company_id
-     LEFT JOIN payment_audits pa ON pa.payment_shift_id = ps.id
-     WHERE ${conditions.join(" AND ")} AND pa.id IS NULL`,
-    params,
-  );
-  return countRows[0]?.count ?? 0;
+  return rpc<number>("countPaymentShiftsPendingAudit", { query });
 }
 
 export interface PaymentShiftFlatRow extends PaymentShiftRow {
@@ -4642,11 +2295,6 @@ export interface PaymentShiftFlatRow extends PaymentShiftRow {
   shiftPeriod: ShiftPeriod | null;
 }
 
-type PaymentShiftFlatRowRaw = Omit<PaymentShiftFlatRow, "extraData" | "editedManually"> & {
-  extraData: string | null;
-  editedManually: number;
-};
-
 /**
  * Every *current* shift matching the Pagamentos list's filters, one row per
  * turno — the "desagrupado" view. Same WHERE-condition shape and pagination
@@ -4657,34 +2305,7 @@ type PaymentShiftFlatRowRaw = Omit<PaymentShiftFlatRow, "extraData" | "editedMan
 export async function listPaymentShiftsFlat(
   query: ListPaymentShiftSummariesQuery,
 ): Promise<PagedResult<PaymentShiftFlatRow>> {
-  if (query.statuses.length === 0 || query.shiftPeriods.length === 0) return { rows: [], total: 0 };
-
-  const db = await getDb();
-  const params: (string | number)[] = [];
-  const conditions = buildPaymentShiftRowConditions(query, params);
-  const from = `FROM payment_shifts ps
-    JOIN employees e ON e.id = ps.employee_id
-    JOIN clients cl ON cl.id = ps.client_id
-    JOIN companies c ON c.id = ps.company_id
-    LEFT JOIN source_files sf ON sf.id = ps.source_file_id
-    LEFT JOIN roles r ON r.id = ps.role_id`;
-  const whereClause = `WHERE ${conditions.join(" AND ")}`;
-
-  const countRows = await db.select<{ count: number }[]>(`SELECT COUNT(*) AS count ${from} ${whereClause}`, params);
-  const total = countRows[0]?.count ?? 0;
-
-  const rows = await db.select<PaymentShiftFlatRowRaw[]>(
-    `SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS},
-            c.name AS companyName, cl.name AS clientName,
-            ${shiftPeriodSelectSql()} AS shiftPeriod
-     ${from}
-     ${whereClause}
-     ORDER BY ps.work_date DESC, e.name
-     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-    [...params, query.pageSize, query.page * query.pageSize],
-  );
-
-  return { rows: rows.map((r) => ({ ...parsePaymentShiftRow(r), companyName: r.companyName, clientName: r.clientName, shiftPeriod: r.shiftPeriod })), total };
+  return rpc<PagedResult<PaymentShiftFlatRow>>("listPaymentShiftsFlat", { query });
 }
 
 /**
@@ -4695,64 +2316,13 @@ export async function listPaymentShiftsFlat(
 export async function countPaymentShiftsByStatus(
   query: Omit<ListPaymentShiftSummariesQuery, "page" | "pageSize">,
 ): Promise<Record<PaymentShiftStatus, number>> {
-  const counts: Record<PaymentShiftStatus, number> = { pendente: 0, erro: 0, pago: 0 };
-  if (query.shiftPeriods.length === 0) return counts;
-  const db = await getDb();
-  const params: (string | number)[] = [];
-  const conditions = buildPaymentShiftRowConditions({ ...query, statuses: ["pendente", "erro", "pago"] }, params);
-  const rows = await db.select<{ status: PaymentShiftStatus; count: number }[]>(
-    `SELECT ps.status AS status, COUNT(*) AS count
-     FROM payment_shifts ps
-     JOIN employees e ON e.id = ps.employee_id
-     JOIN clients cl ON cl.id = ps.client_id
-     JOIN companies c ON c.id = ps.company_id
-     WHERE ${conditions.join(" AND ")}
-     GROUP BY ps.status`,
-    params,
-  );
-  for (const row of rows) if (row.status in counts) counts[row.status] = row.count;
-  return counts;
-}
-
-const PAYMENT_SHIFT_SELECT_COLUMNS = `
-  ps.id, ps.employee_id AS employeeId, e.name AS employeeName,
-  ps.client_id AS clientId, ps.company_id AS companyId,
-  ps.local, ps.work_date AS workDate, COALESCE(r.name, '') AS role, ps.role_id AS roleId,
-  ps.schedule_start_minutes AS scheduleStartMinutes,
-  ps.schedule_end_minutes AS scheduleEndMinutes,
-  ps.status, ps.error_message AS errorMessage, ps.amount, ps.imported_at AS importedAt,
-  ps.previous_shift_id AS previousShiftId, ps.extra_data AS extraData,
-  ps.edited_manually AS editedManually,
-  ps.source_row_number AS sourceRowNumber, ps.source_sheet_name AS sourceSheetName,
-  sf.file_name AS sourceFileName, sf.source_url AS sourceUrl
-`;
-
-const PAYMENT_SHIFT_FROM_CLAUSE = `
-  FROM payment_shifts ps
-  JOIN employees e ON e.id = ps.employee_id
-  LEFT JOIN source_files sf ON sf.id = ps.source_file_id
-  LEFT JOIN roles r ON r.id = ps.role_id
-`;
-
-type PaymentShiftRowRaw = Omit<PaymentShiftRow, "extraData" | "editedManually"> & {
-  extraData: string | null;
-  editedManually: number;
-};
-
-/** `extra_data` is stored as a JSON string (or NULL), `edited_manually` as a 0/1 integer — normalized once here so every reader gets the real shape. */
-function parsePaymentShiftRow(row: PaymentShiftRowRaw): PaymentShiftRow {
-  return { ...row, extraData: row.extraData ? JSON.parse(row.extraData) : null, editedManually: Boolean(row.editedManually) };
+  return rpc<Record<PaymentShiftStatus, number>>("countPaymentShiftsByStatus", { query });
 }
 
 export interface PaymentShiftGroupRow extends PaymentShiftRow {
   /** Same idea as `PaymentShiftReportRow.shiftPeriod` — computed in SQL, `null` when there's no schedule to classify. */
   shiftPeriod: ShiftPeriod | null;
 }
-
-type PaymentShiftGroupRowRaw = Omit<PaymentShiftGroupRow, "extraData" | "editedManually"> & {
-  extraData: string | null;
-  editedManually: number;
-};
 
 /**
  * Every *current* shift (see `HEAD_SHIFT_CONDITION`) for one colaborador in
@@ -4772,28 +2342,7 @@ export async function listPaymentShiftsForGroup(
     "statuses" | "shiftPeriods" | "scheduleTimeFilter" | "periodStart" | "periodEnd"
   >,
 ): Promise<PaymentShiftGroupRow[]> {
-  if (filters.statuses.length === 0 || filters.shiftPeriods.length === 0) return [];
-
-  const db = await getDb();
-  const params: (string | number)[] = [employeeId, competencia];
-  const conditions = [
-    "ps.employee_id = $1",
-    "strftime('%Y-%m', ps.work_date) = $2",
-    ...buildPaymentShiftRowConditions(filters, params),
-  ];
-  const rows = await db.select<PaymentShiftGroupRowRaw[]>(
-    `SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS}, ${shiftPeriodSelectSql()} AS shiftPeriod
-     FROM payment_shifts ps
-     JOIN employees e ON e.id = ps.employee_id
-     JOIN companies c ON c.id = ps.company_id
-     JOIN clients cl ON cl.id = ps.client_id
-     LEFT JOIN source_files sf ON sf.id = ps.source_file_id
-     LEFT JOIN roles r ON r.id = ps.role_id
-     WHERE ${conditions.join(" AND ")}
-     ORDER BY ps.work_date, ps.id`,
-    params,
-  );
-  return rows.map((r) => ({ ...parsePaymentShiftRow(r), shiftPeriod: r.shiftPeriod }));
+  return rpc<PaymentShiftGroupRow[]>("listPaymentShiftsForGroup", { employeeId, competencia, filters });
 }
 
 /**
@@ -4803,73 +2352,7 @@ export async function listPaymentShiftsForGroup(
  * their own since it's not a head row anymore.
  */
 export async function getPaymentShift(id: number): Promise<PaymentShiftRow> {
-  const db = await getDb();
-  const rows = await db.select<PaymentShiftRowRaw[]>(
-    `SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS} ${PAYMENT_SHIFT_FROM_CLAUSE} WHERE ps.id = $1`,
-    [id],
-  );
-  if (rows.length === 0) throw new Error("Turno não encontrado.");
-  return parsePaymentShiftRow(rows[0]);
-}
-
-interface PaymentShiftCoreFields {
-  employeeId: number;
-  templateId: number | null;
-  sourceFileId: number | null;
-  /** Snapshotted, carried forward unchanged by every plain status/value transition below — only `applyAutoSyncedFieldUpdate` (a real re-sync against the source file) is allowed to replace it, with a freshly resolved route. */
-  clientId: number;
-  companyId: number;
-  local: string;
-  workDate: string;
-  /** The função turno, as a role_id only — no raw-text column exists anymore, same as `employeeId`. Carried forward unchanged by every plain status/value transition; only `editPaymentShift`/`applyAutoSyncedFieldUpdate` (which can change the função) re-resolve it instead of copying it. */
-  roleId: number | null;
-  scheduleStartMinutes: number | null;
-  scheduleEndMinutes: number | null;
-  /** Raw JSON string as stored (or NULL) — passed straight through into the new row, not re-parsed, since a status transition never changes what was in the original file. */
-  extraData: string | null;
-  status: PaymentShiftStatus;
-  sourceRowNumber: number | null;
-  sourceSheetName: string | null;
-  /** Only read by `applyAutoSyncedFieldUpdate` (to preserve a paid shift's recorded amount across an auto-synced field fix) — every other caller of `readPaymentShiftCoreFields` supplies its own `amount` explicitly instead of carrying this one over. */
-  amount: number | null;
-  /** 0/1 as stored — read so `markPaymentShiftPaid`/`revertPaymentShiftToPending` can carry it forward instead of forcing it, since neither of those touches a field (see their own doc comments for why forcing it was wrong). */
-  editedManually: number;
-  /** Only read by `undoPaymentShiftAuditError`, to walk back one hop and recover the `pago` row's original amount — every other caller ignores it. */
-  previousShiftId: number | null;
-}
-
-const SHIFT_ALREADY_SUPERSEDED_ERROR =
-  "Esse turno já foi alterado em outro lugar (outra janela ou a verificação automática). Atualize a lista e tente de novo.";
-
-/**
- * Every append-only transition below inserts its new row with
- * `INSERT ... SELECT ... WHERE NOT EXISTS (a row already pointing back at
- * shiftId)` — one statement, so SQLite checks and inserts atomically. That
- * keeps a chain from forking when two writers act on the same head at once
- * (a double click, the detached "Conferência" window, a background
- * auto-apply), which would otherwise leave two heads for one shift. Zero
- * rows inserted means another writer got there first.
- */
-function successorShiftId(result: { rowsAffected: number; lastInsertId?: number }): number {
-  if (result.rowsAffected === 0) throw new Error(SHIFT_ALREADY_SUPERSEDED_ERROR);
-  return result.lastInsertId as number;
-}
-
-/** Shared by every status-transition function below — the fields that always carry over unchanged into the new row. */
-async function readPaymentShiftCoreFields(db: Database, shiftId: number): Promise<PaymentShiftCoreFields> {
-  const rows = await db.select<PaymentShiftCoreFields[]>(
-    `SELECT employee_id AS employeeId, template_id AS templateId, source_file_id AS sourceFileId,
-            client_id AS clientId, company_id AS companyId,
-            local, work_date AS workDate, role_id AS roleId,
-            schedule_start_minutes AS scheduleStartMinutes, schedule_end_minutes AS scheduleEndMinutes,
-            extra_data AS extraData, status,
-            source_row_number AS sourceRowNumber, source_sheet_name AS sourceSheetName, amount,
-            edited_manually AS editedManually, previous_shift_id AS previousShiftId
-     FROM payment_shifts WHERE id = $1`,
-    [shiftId],
-  );
-  if (rows.length === 0) throw new Error("Turno não encontrado.");
-  return rows[0];
+  return rpc<PaymentShiftRow>("getPaymentShift", { id });
 }
 
 /**
@@ -4891,37 +2374,7 @@ async function readPaymentShiftCoreFields(db: Database, shiftId: number): Promis
  * paid, that fact isn't erased by paying it.
  */
 export async function markPaymentShiftPaid(shiftId: number, amount: number): Promise<number> {
-  const db = await getDb();
-  const s = await readPaymentShiftCoreFields(db, shiftId);
-
-  const result = await db.execute(
-    `INSERT INTO payment_shifts
-       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
-        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
-        source_row_number, source_sheet_name)
-     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pago', $11, $12, $13, $14, $15, $16
-     WHERE NOT EXISTS (SELECT 1 FROM payment_shifts WHERE previous_shift_id = $12)`,
-    [
-      s.employeeId,
-      s.templateId,
-      s.sourceFileId,
-      s.clientId,
-      s.companyId,
-      s.local,
-      s.workDate,
-      s.roleId,
-      s.scheduleStartMinutes,
-      s.scheduleEndMinutes,
-      amount,
-      shiftId,
-      s.extraData,
-      s.editedManually,
-      s.sourceRowNumber,
-      s.sourceSheetName,
-    ],
-  );
-  notifyPaymentShiftsChanged();
-  return successorShiftId(result);
+  return withShiftsChangedNotice(rpc<number>("markPaymentShiftPaid", { shiftId, amount }));
 }
 
 /**
@@ -4942,40 +2395,8 @@ export async function markPaymentShiftPaid(shiftId: number, amount: number): Pro
  * whatever the flag already was.
  */
 export async function revertPaymentShiftToPending(shiftId: number): Promise<number> {
-  const db = await getDb();
-  const s = await readPaymentShiftCoreFields(db, shiftId);
-
-  const result = await db.execute(
-    `INSERT INTO payment_shifts
-       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
-        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
-        source_row_number, source_sheet_name)
-     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pendente', NULL, $11, $12, $13, $14, $15
-     WHERE NOT EXISTS (SELECT 1 FROM payment_shifts WHERE previous_shift_id = $11)`,
-    [
-      s.employeeId,
-      s.templateId,
-      s.sourceFileId,
-      s.clientId,
-      s.companyId,
-      s.local,
-      s.workDate,
-      s.roleId,
-      s.scheduleStartMinutes,
-      s.scheduleEndMinutes,
-      shiftId,
-      s.extraData,
-      s.editedManually,
-      s.sourceRowNumber,
-      s.sourceSheetName,
-    ],
-  );
-  notifyPaymentShiftsChanged();
-  return successorShiftId(result);
+  return withShiftsChangedNotice(rpc<number>("revertPaymentShiftToPending", { shiftId }));
 }
-
-/** Shown alongside the "Erro" badge on the Pagamentos page for a shift `markPaymentShiftAuditError` transitioned — same spot `error_message` already shows an import-time parse failure in. */
-const AUDIT_ERROR_MESSAGE = "Marcado como erro na Conferência de Pagamentos.";
 
 /**
  * "Marcar erro" in "Conferência de Pagamentos": same append-only transition
@@ -4988,37 +2409,7 @@ const AUDIT_ERROR_MESSAGE = "Marcado como erro na Conferência de Pagamentos.";
  * Pairs with `undoPaymentShiftAuditError` for "Desfazer".
  */
 export async function markPaymentShiftAuditError(shiftId: number): Promise<number> {
-  const db = await getDb();
-  const s = await readPaymentShiftCoreFields(db, shiftId);
-
-  const result = await db.execute(
-    `INSERT INTO payment_shifts
-       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
-        schedule_start_minutes, schedule_end_minutes, status, error_message, amount, previous_shift_id, extra_data, edited_manually,
-        source_row_number, source_sheet_name)
-     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'erro', $11, NULL, $12, $13, $14, $15, $16
-     WHERE NOT EXISTS (SELECT 1 FROM payment_shifts WHERE previous_shift_id = $12)`,
-    [
-      s.employeeId,
-      s.templateId,
-      s.sourceFileId,
-      s.clientId,
-      s.companyId,
-      s.local,
-      s.workDate,
-      s.roleId,
-      s.scheduleStartMinutes,
-      s.scheduleEndMinutes,
-      AUDIT_ERROR_MESSAGE,
-      shiftId,
-      s.extraData,
-      s.editedManually,
-      s.sourceRowNumber,
-      s.sourceSheetName,
-    ],
-  );
-  notifyPaymentShiftsChanged();
-  return successorShiftId(result);
+  return withShiftsChangedNotice(rpc<number>("markPaymentShiftAuditError", { shiftId }));
 }
 
 /**
@@ -5031,41 +2422,7 @@ export async function markPaymentShiftAuditError(shiftId: number): Promise<numbe
  * every other "Desfazer" — this only reverses the `payment_shifts` side.
  */
 export async function undoPaymentShiftAuditError(shiftId: number): Promise<number> {
-  const db = await getDb();
-  const s = await readPaymentShiftCoreFields(db, shiftId);
-  if (s.previousShiftId === null) {
-    throw new Error("Não foi possível encontrar o pagamento original para restaurar.");
-  }
-  const previous = await readPaymentShiftCoreFields(db, s.previousShiftId);
-
-  const result = await db.execute(
-    `INSERT INTO payment_shifts
-       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
-        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
-        source_row_number, source_sheet_name)
-     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pago', $11, $12, $13, $14, $15, $16
-     WHERE NOT EXISTS (SELECT 1 FROM payment_shifts WHERE previous_shift_id = $12)`,
-    [
-      s.employeeId,
-      s.templateId,
-      s.sourceFileId,
-      s.clientId,
-      s.companyId,
-      s.local,
-      s.workDate,
-      s.roleId,
-      s.scheduleStartMinutes,
-      s.scheduleEndMinutes,
-      previous.amount,
-      shiftId,
-      s.extraData,
-      s.editedManually,
-      s.sourceRowNumber,
-      s.sourceSheetName,
-    ],
-  );
-  notifyPaymentShiftsChanged();
-  return successorShiftId(result);
+  return withShiftsChangedNotice(rpc<number>("undoPaymentShiftAuditError", { shiftId }));
 }
 
 /**
@@ -5079,27 +2436,13 @@ export async function undoPaymentShiftAuditError(shiftId: number): Promise<numbe
  * applies to a fresh `INSERT`, not the `UPDATE` half of an upsert.
  */
 export async function recordPaymentAudit(paymentShiftId: number, result: PaymentAuditResult, note: string | null): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `INSERT INTO payment_audits (payment_shift_id, result, note)
-     VALUES ($1, $2, $3)
-     ON CONFLICT(payment_shift_id) DO UPDATE SET result = excluded.result, note = excluded.note, audited_at = datetime('now')`,
-    [paymentShiftId, result, note],
-  );
+  await rpc<void>("recordPaymentAudit", { paymentShiftId, result, note });
   notifyPaymentShiftsChanged();
 }
 
 /** The recorded audit verdict, if any, for each given `payment_shifts.id` — at most one per id (UNIQUE constraint). */
 export async function listPaymentAuditsForShiftIds(shiftIds: number[]): Promise<PaymentAuditRow[]> {
-  if (shiftIds.length === 0) return [];
-  const db = await getDb();
-  const placeholders = shiftIds.map((_, i) => `$${i + 1}`).join(", ");
-  return db.select<PaymentAuditRow[]>(
-    `SELECT id, payment_shift_id AS paymentShiftId, result, note, audited_at AS auditedAt
-     FROM payment_audits
-     WHERE payment_shift_id IN (${placeholders})`,
-    shiftIds,
-  );
+  return rpc<PaymentAuditRow[]>("listPaymentAuditsForShiftIds", { shiftIds });
 }
 
 /**
@@ -5111,8 +2454,7 @@ export async function listPaymentAuditsForShiftIds(shiftIds: number[]): Promise<
  * audit row itself, for either case.
  */
 export async function deletePaymentAudit(paymentShiftId: number): Promise<void> {
-  const db = await getDb();
-  await db.execute(`DELETE FROM payment_audits WHERE payment_shift_id = $1`, [paymentShiftId]);
+  await rpc<void>("deletePaymentAudit", { paymentShiftId });
   notifyPaymentShiftsChanged();
 }
 
@@ -5142,52 +2484,7 @@ export async function editPaymentShift(
     amount: number | null;
   },
 ): Promise<number> {
-  const db = await getDb();
-  const s = await readPaymentShiftCoreFields(db, shiftId);
-  if (s.status === "pago") throw new Error("Não é possível editar um turno já pago.");
-
-  // Função is only ever a role_id now — the edited text must resolve to a
-  // cadastro (by name or apelido, scoped to this shift's própria empresa)
-  // or be blank (clearing the função), same requirement the import flow's
-  // "função não encontrada" block already enforces at import time.
-  const trimmedRole = fields.role.trim();
-  let roleId: number | null = null;
-  if (trimmedRole) {
-    const role = await findRoleByName(s.companyId, trimmedRole);
-    if (!role) {
-      throw new Error(`Função "${trimmedRole}" não encontrada. Cadastre-a em Funções antes de vincular a este turno.`);
-    }
-    roleId = role.id;
-  }
-
-  const result = await db.execute(
-    `INSERT INTO payment_shifts
-       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
-        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data, edited_manually,
-        source_row_number, source_sheet_name)
-     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, $15, $16
-     WHERE NOT EXISTS (SELECT 1 FROM payment_shifts WHERE previous_shift_id = $13)`,
-    [
-      s.employeeId,
-      s.templateId,
-      s.sourceFileId,
-      s.clientId,
-      s.companyId,
-      fields.local,
-      fields.workDate,
-      roleId,
-      fields.scheduleStartMinutes,
-      fields.scheduleEndMinutes,
-      s.status,
-      fields.amount,
-      shiftId,
-      s.extraData,
-      s.sourceRowNumber,
-      s.sourceSheetName,
-    ],
-  );
-  notifyPaymentShiftsChanged();
-  return successorShiftId(result);
+  return withShiftsChangedNotice(rpc<number>("editPaymentShift", { shiftId, fields }));
 }
 
 /**
@@ -5236,42 +2533,7 @@ export async function applyAutoSyncedFieldUpdate(
   sourceRowNumber: number | null,
   sourceSheetName: string | null,
 ): Promise<number> {
-  const db = await getDb();
-  const s = await readPaymentShiftCoreFields(db, shiftId);
-  // Re-resolved against `fields.companyId` (this sync's own fresh route),
-  // not `s.companyId` — same reasoning as `fields.clientId`/`fields.companyId`
-  // themselves being fresh instead of carried over: a routing change can
-  // move this shift to a different empresa, whose função cadastro is a
-  // different scope entirely.
-  const role = await findRoleByName(fields.companyId, fields.role);
-
-  const result = await db.execute(
-    `INSERT INTO payment_shifts
-       (employee_id, template_id, source_file_id, client_id, company_id, local, work_date, role_id,
-        schedule_start_minutes, schedule_end_minutes, status, amount, previous_shift_id, extra_data,
-        edited_manually, source_row_number, source_sheet_name)
-     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16
-     WHERE NOT EXISTS (SELECT 1 FROM payment_shifts WHERE previous_shift_id = $13)`,
-    [
-      s.employeeId,
-      s.templateId,
-      sourceFileId,
-      fields.clientId,
-      fields.companyId,
-      fields.local,
-      fields.workDate,
-      role?.id ?? null,
-      fields.scheduleStartMinutes,
-      fields.scheduleEndMinutes,
-      fields.status,
-      s.amount,
-      shiftId,
-      fields.extraData ? JSON.stringify(fields.extraData) : null,
-      sourceRowNumber,
-      sourceSheetName,
-    ],
-  );
-  return successorShiftId(result);
+  return rpc<number>("applyAutoSyncedFieldUpdate", { shiftId, fields, sourceFileId, sourceRowNumber, sourceSheetName });
 }
 
 /**
@@ -5290,23 +2552,7 @@ export async function applyAutoSyncedFieldUpdate(
  * `imported_at` second (that column has only 1s resolution).
  */
 export async function getPaymentShiftHistory(shiftId: number): Promise<PaymentShiftRow[]> {
-  const db = await getDb();
-  const rows = await db.select<PaymentShiftRowRaw[]>(
-    `WITH RECURSIVE chain(id) AS (
-       SELECT $1
-       UNION ALL
-       SELECT ps.previous_shift_id
-       FROM payment_shifts ps
-       JOIN chain ON chain.id = ps.id
-       WHERE ps.previous_shift_id IS NOT NULL
-     )
-     SELECT ${PAYMENT_SHIFT_SELECT_COLUMNS}
-     ${PAYMENT_SHIFT_FROM_CLAUSE}
-     JOIN chain ON chain.id = ps.id
-     ORDER BY ps.id DESC`,
-    [shiftId],
-  );
-  return rows.map(parsePaymentShiftRow);
+  return rpc<PaymentShiftRow[]>("getPaymentShiftHistory", { shiftId });
 }
 
 /**
@@ -5329,44 +2575,18 @@ export async function getPaymentShiftHistory(shiftId: number): Promise<PaymentSh
  * it either reappearing unannounced or disappearing forever.
  */
 export async function deletePaymentShift(shiftId: number): Promise<void> {
-  const db = await getDb();
-
-  const ids = new Set<number>([shiftId]);
-  let currentId: number | null = shiftId;
-  while (currentId !== null) {
-    const rows: { previousShiftId: number | null }[] = await db.select(
-      "SELECT previous_shift_id AS previousShiftId FROM payment_shifts WHERE id = $1",
-      [currentId],
-    );
-    const previousId: number | null = rows[0]?.previousShiftId ?? null;
-    if (previousId === null || ids.has(previousId)) break;
-    ids.add(previousId);
-    currentId = previousId;
-  }
-
-  const idList = [...ids];
-  const placeholders = idList.map((_, i) => `$${i + 1}`).join(", ");
-  await db.execute(`UPDATE payment_shifts SET deleted_at = datetime('now') WHERE id IN (${placeholders})`, idList);
+  await rpc<void>("deletePaymentShift", { shiftId });
   notifyPaymentShiftsChanged();
 }
 
 /** Which columns of the Pagamentos table are shown — `null` means every column (the default, and what a fresh install has). */
 export async function getPaymentVisibleColumns(): Promise<string[] | null> {
-  const db = await getDb();
-  const rows = await db.select<{ visibleColumnsJson: string | null }[]>(
-    "SELECT visible_columns_json AS visibleColumnsJson FROM payment_settings WHERE id = 1",
-  );
-  const json = rows[0]?.visibleColumnsJson ?? null;
-  return json ? JSON.parse(json) : null;
+  return rpc<string[] | null>("getPaymentVisibleColumns");
 }
 
 /** Persists the Pagamentos table's column visibility — saved immediately on every toggle, not behind a "Salvar" button, same as the other filter state that lives in `FiltersContext`. */
 export async function setPaymentVisibleColumns(columns: string[]): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    "UPDATE payment_settings SET visible_columns_json = $1, updated_at = datetime('now') WHERE id = 1",
-    [JSON.stringify(columns)],
-  );
+  await rpc<void>("setPaymentVisibleColumns", { columns });
 }
 
 /**

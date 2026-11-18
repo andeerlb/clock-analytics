@@ -1,8 +1,7 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { Copy, ExternalLink, FolderOpen, History, Link2, RotateCcw, Search, X } from "lucide-react";
+import { Copy, Download, ExternalLink, FolderOpen, History, Link2, RotateCcw, Search, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { revealInFileManager } from "../lib/api";
 import { countImportFiles, listImportFiles, type ImportFileCounts } from "../lib/db";
+import { downloadServerFile } from "../lib/files";
 import { parseSqliteDateTime, safeDecodeFileName } from "../lib/format";
 import type { ImportFileRow, ImportStatus, ImportType } from "../lib/types";
 import Drawer from "./Drawer";
@@ -224,7 +223,7 @@ export default function ImportHistoryDrawer({
           const name = safeDecodeFileName(row.fileName);
           const { ext, kind } = extKind(name);
           const status = STATUS[row.status];
-          const canReveal = !row.sourceUrl && Boolean(row.originalPdfPath);
+          const canDownload = !row.sourceUrl && Boolean(row.originalPdfPath);
           return (
             <div key={row.id}>
               {header}
@@ -275,7 +274,7 @@ export default function ImportHistoryDrawer({
                           className="history-action"
                           title="Abrir link"
                           aria-label="Abrir link"
-                          onClick={() => openUrl(row.sourceUrl!).catch(() => {})}
+                          onClick={() => window.open(row.sourceUrl!, "_blank", "noopener")}
                         >
                           <ExternalLink size={13} />
                         </button>
@@ -295,15 +294,16 @@ export default function ImportHistoryDrawer({
                         )}
                       </>
                     )}
-                    {canReveal && (
+                    {canDownload && (
+                      // "Mostrar na pasta" on the desktop; on the web the stored file is downloaded instead.
                       <button
                         type="button"
                         className="history-action"
-                        title="Mostrar na pasta"
-                        aria-label="Mostrar na pasta"
-                        onClick={() => revealInFileManager(row.originalPdfPath).catch(() => {})}
+                        title="Baixar"
+                        aria-label="Baixar"
+                        onClick={() => downloadServerFile(row.originalPdfPath, name).catch(() => {})}
                       >
-                        <FolderOpen size={13} />
+                        <Download size={13} />
                       </button>
                     )}
                   </span>

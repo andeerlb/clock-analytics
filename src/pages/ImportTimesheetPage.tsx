@@ -1,4 +1,3 @@
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   FileText,
   History,
@@ -29,6 +28,7 @@ import {
   type ClientRow,
 } from "../lib/db";
 import { formatCnpj, formatDateTime, formatPeriod, normalizeCnpj } from "../lib/format";
+import { uploadDropped } from "../lib/files";
 import { importStatusOf } from "../lib/types";
 import type {
   ConflictInfo,
@@ -59,12 +59,6 @@ function processLabel(count: number): string {
 /** "/home/me/Ponto/joao.pdf" -> "joao.pdf". */
 function fileNameOf(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
-}
-
-/** "/home/me/Ponto/joao.pdf" -> "/home/me/Ponto" — the short origin under a picked file's name. */
-function parentDirOf(path: string): string {
-  const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return i > 0 ? path.slice(0, i) : "";
 }
 
 type PreviewRow =
@@ -107,20 +101,37 @@ export default function ImportTimesheetPage() {
     listClients().then(setClients);
   }, []);
 
+  // Files can be dropped anywhere on the page (the desktop's webview-wide
+  // drag-and-drop); dropped PDFs are uploaded and added like picked ones.
   useEffect(() => {
-    const unlisten = getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type === "over") {
-        setDragActive(true);
-      } else if (event.payload.type === "drop") {
-        setDragActive(false);
-        const pdfPaths = event.payload.paths.filter((p) => p.toLowerCase().endsWith(".pdf"));
-        if (pdfPaths.length > 0) addPaths(pdfPaths);
-      } else {
-        setDragActive(false);
-      }
-    });
+    const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+    function onDragOver(e: DragEvent) {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      setDragActive(true);
+    }
+    function onDragLeave(e: DragEvent) {
+      // Only when the pointer leaves the window, not when it moves between children.
+      if (e.relatedTarget === null) setDragActive(false);
+    }
+    function onDrop(e: DragEvent) {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      setDragActive(false);
+      if (!e.dataTransfer) return;
+      uploadDropped(e.dataTransfer, ["pdf"])
+        .then((pdfPaths) => {
+          if (pdfPaths.length > 0) addPaths(pdfPaths);
+        })
+        .catch((err) => setError(String(err)));
+    }
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", onDrop);
     return () => {
-      unlisten.then((f) => f());
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeave);
+      window.removeEventListener("drop", onDrop);
     };
   }, []);
 
@@ -611,11 +622,7 @@ export default function ImportTimesheetPage() {
                               {" · importado em "}
                               {formatDateTime(status.duplicate.importedAt)}
                             </span>
-                          ) : (
-                            <span className="import-file-origin" title={p}>
-                              {parentDirOf(p)}
-                            </span>
-                          )}
+                          ) : null}
                         </div>
                       </div>
                       <div className="file-row-actions">
