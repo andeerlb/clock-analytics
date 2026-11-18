@@ -1,5 +1,5 @@
 import { parseDateWithFormat, parseScheduleToMinutes } from "./format";
-import type { IdentifierField, PaymentTargetField } from "./types";
+import type { EmployeeTargetField, IdentifierField, PaymentTargetField } from "./types";
 
 /**
  * Helpers behind the payment template's "Onde está cada informação?" flow:
@@ -199,4 +199,101 @@ export function checkSheet(rows: string[][], mapping: Record<number, PaymentTarg
     problem = { text: `${shifts.length} de ${dated.length} horários reconhecidos`, field: "horario" };
   }
   return { candidates: candidates.length, datesOk: dated.length, shifts: shifts.length, problem, samples };
+}
+
+/* ---------- colaboradores (employee templates) ---------- */
+
+const EMPLOYEE_HEADER_PATTERNS: [EmployeeTargetField, RegExp[]][] = [
+  ["cpf", [/\bCPF\b/]],
+  ["matricula", [/MATRIC/, /^MAT\.?$/, /\bCHAPA\b/, /\bRE\b/]],
+  ["pix", [/\bPIX\b/, /CHAVE/]],
+  ["nome", [/^NOME$/, /NOME/, /COLABORADOR/, /FUNCIONARIO/, /EMPREGADO/, /PROFISSIONAL/]],
+];
+
+function digitsOf(value: string): string {
+  return value.replace(/\D/g, "");
+}
+
+/** First answers for a colaboradores template, from the column names (CPF also from values that look like one). */
+export function guessEmployeeMapping(rows: string[][]): Record<number, EmployeeTargetField> {
+  const headers = headersOf(rows).map(normalize);
+  const used = new Set<number>();
+  const result: Record<number, EmployeeTargetField> = {};
+  for (const [field, patterns] of EMPLOYEE_HEADER_PATTERNS) {
+    for (const pattern of patterns) {
+      const index = headers.findIndex((h, i) => !used.has(i) && pattern.test(h));
+      if (index >= 0) {
+        result[index] = field;
+        used.add(index);
+        break;
+      }
+    }
+  }
+  if (!Object.values(result).includes("cpf")) {
+    const data = dataRowsOf(rows).slice(0, 60);
+    const width = data.reduce((max, r) => Math.max(max, r.length), headers.length);
+    for (let i = 0; i < width; i++) {
+      if (!used.has(i) && ratio(data.map((r) => r[i] ?? ""), (v) => digitsOf(v).length === 11) >= 0.6) {
+        result[i] = "cpf";
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+/** Whether a freshly loaded sheet looks like a list of people — decides if it starts checked. */
+export function looksLikeEmployeeSheet(rows: string[][]): boolean {
+  const fields = Object.values(guessEmployeeMapping(rows));
+  return fields.some((f) => f === "cpf" || f === "matricula" || f === "nome") && dataRowsOf(rows).some((r) => r.some((c) => c.trim()));
+}
+
+export interface EmployeeSheetCheck {
+  /** Rows that name someone. */
+  people: number;
+  problem: { text: string; field: "colaborador" | "cpf" } | null;
+  samples: { who: string; cpf: string }[];
+}
+
+/** Reads a sheet's rows with its answers: how many people it has, and whether its CPF column holds CPFs. */
+export function checkEmployeeSheet(rows: string[][], mapping: Record<number, EmployeeTargetField>): EmployeeSheetCheck {
+  const colOf = (field: EmployeeTargetField) => {
+    const entry = Object.entries(mapping).find(([, f]) => f === field);
+    return entry ? Number(entry[0]) : null;
+  };
+  const idCols = IDENTIFIERS.map(colOf).filter((c): c is number => c !== null);
+  const cpfCol = colOf("cpf");
+  const nameCol = colOf("nome");
+  const cell = (row: string[], col: number | null) => (col === null ? "" : (row[col] ?? "").trim());
+
+  const people = dataRowsOf(rows).filter((r) => idCols.some((c) => cell(r, c)));
+  const samples = people.slice(0, 5).map((r) => ({
+    who: cell(r, nameCol) || idCols.map((c) => cell(r, c)).find(Boolean) || "",
+    cpf: cell(r, cpfCol),
+  }));
+
+  let problem: EmployeeSheetCheck["problem"] = null;
+  if (people.length === 0) {
+    problem = { text: "nenhuma linha com colaborador", field: "colaborador" };
+  } else if (cpfCol !== null) {
+    const filled = people.filter((r) => cell(r, cpfCol));
+    const valid = filled.filter((r) => digitsOf(cell(r, cpfCol)).length === 11);
+    if (filled.length > 0 && valid.length < filled.length / 2) {
+      problem = { text: `${valid.length} de ${filled.length} CPFs reconhecidos`, field: "cpf" };
+    }
+  }
+  return { people: people.length, problem, samples };
+}
+
+/**
+ * The header row of a colaboradores sheet, or -1. Stricter than
+ * `findHeaderRow`: the row must have a column name we know (Nome, CPF,
+ * Matrícula, PIX...), because the import skips this row and everything
+ * above it — a sheet without a header must not lose its first person.
+ */
+export function employeeHeaderRow(rows: string[][]): number {
+  const index = findHeaderRow(rows);
+  if (index < 0) return -1;
+  const known = rows[index].map(normalize).some((h) => EMPLOYEE_HEADER_PATTERNS.some(([, patterns]) => patterns.some((p) => p.test(h))));
+  return known ? index : -1;
 }

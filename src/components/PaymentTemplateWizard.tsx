@@ -1,15 +1,9 @@
-import {
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  Table2,
-  UploadCloud,
-  X,
-} from "lucide-react";
-import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { X } from "lucide-react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 import { READ_ONLY_TITLE, useReadOnly } from "./AreaRoute";
-import Drawer from "./Drawer";
-import OptionPicker, { type PickerOption } from "./OptionPicker";
+import { SampleFileStep, SheetsStep, WizardDrawer } from "./TemplateWizardParts";
+import OptionPicker from "./OptionPicker";
+import { ColumnQuestion, type GroupColumn } from "./TemplateColumns";
 import PaymentTemplateDetails, {
   detailsProblem,
   effectiveIdentifierOrder,
@@ -148,8 +142,6 @@ export default function PaymentTemplateWizard({
   /** Every format an import accepts for this template, beyond `fileKind` itself (see "Formatos aceitos" in the Detalhes step) — xlsx/xls/ods can be freely combined, but never with csv. */
   const [acceptedFileKinds, setAcceptedFileKinds] = useState<Set<PaymentFileKind>>(new Set());
   const [sheets, setSheets] = useState<string[]>([]);
-  const [editingSheetName, setEditingSheetName] = useState<string | null>(null);
-  const [editingSheetNameDraft, setEditingSheetNameDraft] = useState("");
   const [includedSheets, setIncludedSheets] = useState<Set<string>>(new Set());
   const [delimiter, setDelimiter] = useState<string | null>(null);
   /** The sample file's rows per sheet (csv: under `CSV_GROUP_KEY`) — what prefills and checks the answers. Empty while editing a saved template. */
@@ -194,10 +186,6 @@ export default function PaymentTemplateWizard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [dragOver, setDragOver] = useState(false);
-  const [urlInput, setUrlInput] = useState("");
-  const [urlDownloading, setUrlDownloading] = useState(false);
-  const [urlError, setUrlError] = useState<string | null>(null);
 
   const isEditing = target !== null && target !== "new";
   const readOnly = useReadOnly();
@@ -277,7 +265,6 @@ export default function PaymentTemplateWizard({
   /** Drag-and-drop on the Arquivo step's dropzone: the dropped file is uploaded, then handled like a picked one. */
   async function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
-    setDragOver(false);
     const file = event.dataTransfer.files[0];
     if (!file) return;
     const ext = file.name.split(".").pop()?.toLowerCase();
@@ -339,8 +326,6 @@ export default function PaymentTemplateWizard({
   /** Clears everything the Abas/Colunas/Conferir steps hold, keeping `sheetNames` as the list of sheets. */
   function resetMappingState(sheetNames: string[]) {
     setSheets(sheetNames);
-    setEditingSheetName(null);
-    setEditingSheetNameDraft("");
     setIncludedSheets(new Set());
     setSheetRows({});
     setSheetGroupOf({});
@@ -418,30 +403,15 @@ export default function PaymentTemplateWizard({
   }
 
   /** "Baixar por URL" in the Arquivo step — same direct-download-link download `Importar Pagamentos`'s URL tab uses, just to get a sample file for the mapping instead of an actual import. The downloaded copy's local path already carries the right extension (see `download_payment_file_from_url` in commands.rs), so `selectFile` picks it up exactly like a locally-chosen file from here on. */
-  async function handleDownloadFromUrl() {
-    const targetUrl = urlInput.trim();
-    if (!targetUrl) return;
-    setUrlError(null);
-    setUrlDownloading(true);
-    try {
-      const result = await downloadPaymentFileFromUrl(targetUrl);
-      await selectFile(result.path);
-    } catch (e) {
-      setUrlError(String(e instanceof Error ? e.message : e));
-    } finally {
-      setUrlDownloading(false);
-    }
+  async function handleDownloadFromUrl(url: string) {
+    const result = await downloadPaymentFileFromUrl(url);
+    await selectFile(result.path);
   }
 
   async function handlePickFile() {
     const path = await pickPaymentFile();
     if (!path) return;
     await selectFile(path);
-  }
-
-  function startEditingSheetName(sheetName: string) {
-    setEditingSheetName(sheetName);
-    setEditingSheetNameDraft(sheetName);
   }
 
   /** Includes or excludes a single sheet from the import — independent of whatever it's mirroring, since that's just where its mapping comes from, not a shared identity. */
@@ -454,18 +424,12 @@ export default function PaymentTemplateWizard({
     });
   }
 
-  function renameSheet(oldName: string, rawNewName: string) {
+  function renameSheet(oldName: string, rawNewName: string): boolean {
     const newName = rawNewName.trim();
-    if (!newName || newName === oldName) {
-      setEditingSheetName(null);
-      setEditingSheetNameDraft("");
-      return;
-    }
+    if (!newName || newName === oldName) return true;
     if (sheets.includes(newName)) {
       setError(`Já existe uma aba chamada "${newName}".`);
-      setEditingSheetName(oldName);
-      setEditingSheetNameDraft(oldName);
-      return;
+      return false;
     }
 
     setError(null);
@@ -519,8 +483,7 @@ export default function PaymentTemplateWizard({
       return next;
     });
     if (answersTab === oldName) setAnswersTab(newName);
-    setEditingSheetName(null);
-    setEditingSheetNameDraft("");
+    return true;
   }
 
   function addNewSheet() {
@@ -536,8 +499,7 @@ export default function PaymentTemplateWizard({
     setGroupMapping((prev) => ({ ...prev, [sheetName]: {} }));
     setGroupFieldLabels((prev) => ({ ...prev, [sheetName]: {} }));
     setIncludedSheets((prev) => new Set(prev).add(sheetName));
-    setEditingSheetName(sheetName);
-    setEditingSheetNameDraft(sheetName);
+    return sheetName;
   }
 
   /** Sheets currently answering with group `key`. */
@@ -953,231 +915,66 @@ export default function PaymentTemplateWizard({
   const title = readOnly ? "Template de pagamento" : isEditing ? "Editar template de pagamento" : "Novo template de pagamento";
 
   return (
-    <Drawer
+    <WizardDrawer
       open={target !== null}
       onClose={onClose}
       title={title}
-      icon={Table2}
       subtitle={name.trim() || (filePath ? fileNameFromPath(filePath) : "Sem nome")}
-      width="min(1040px, calc(100vw - 24px))"
-      className="wz-drawer"
-      closeOnBackdrop={false}
+      steps={steps.map((s, i) => ({
+        key: s,
+        label: STEP_LABEL_TEXT[s],
+        summary: i <= stepIndex || isEditing ? stepSummary(s) : "—",
+      }))}
+      stepIndex={stepIndex}
+      onStep={(i) => {
+        setError(null);
+        setStepIndex(i);
+      }}
+      error={error}
+      bodyRef={bodyRef}
+      onBack={() => {
+        setError(null);
+        setStepIndex((s) => s - 1);
+      }}
+      backDisabled={busy}
+      next={
+        stepIndex < steps.length - 1
+          ? { label: "Continuar", arrow: true, onClick: handleAdvance, disabled: busy || loadingPreview || (currentStep === "file" && !filePath) }
+          : {
+              label: busy ? "Salvando..." : "Salvar template",
+              // A blocked save explains itself in the error box at the top.
+              onClick: () => {
+                const problem = detailsProblem(name, routes, routeFallback);
+                if (problem) setError(`${problem}.`);
+                else handleSave();
+              },
+              disabled: readOnly || busy,
+              title: readOnly ? READ_ONLY_TITLE : undefined,
+            }
+      }
     >
-      <div className="wz">
-        <aside className="wz-rail">
-          <nav className="wz-steps" aria-label="Passos">
-            {steps.map((s, i) => {
-              const done = i < stepIndex;
-              const current = i === stepIndex;
-              return (
-                <button
-                  key={s}
-                  type="button"
-                  className={`wz-step${done ? " done" : ""}${current ? " current" : ""}`}
-                  aria-current={current ? "step" : undefined}
-                  disabled={!done}
-                  onClick={() => {
-                    setError(null);
-                    setStepIndex(i);
-                  }}
-                >
-                  <i aria-hidden="true">{done ? <Check size={12} strokeWidth={3} /> : i + 1}</i>
-                  <span>
-                    {STEP_LABEL_TEXT[s]}
-                    <small>{done || current || isEditing ? stepSummary(s) : "—"}</small>
-                  </span>
-                </button>
-              );
-            })}
-          </nav>
-          <div className="wz-rail-foot">
-            <button type="button" className="ghost wz-cancel" onClick={onClose}>
-              Cancelar
-            </button>
-          </div>
-        </aside>
-
-        <div className="wz-main">
-          <div className="wz-top">
-            Passo {stepIndex + 1} de {steps.length} · {STEP_LABEL_TEXT[currentStep]}
-          </div>
-
-          <div className="wz-body" ref={bodyRef}>
-        {error && <div className="error-box wz-error">{error}</div>}
-
         {currentStep === "file" && (
-          <div className="tmap">
-            <h2 className="tmap-title">Qual planilha usar de exemplo?</h2>
-            <p className="tmap-lead">Ela serve só para montar o template e não fica guardada.</p>
-
-            {filePath || loadingPreview ? (
-              <div className="tfile-card">
-                <span className="tfile-kind">{(fileKind ?? "").toUpperCase()}</span>
-                <div className="tfile-info">
-                  <b>{filePath ? fileNameFromPath(filePath) : "Planilha"}</b>
-                  {loadingPreview ? (
-                    <>
-                      <span>Lendo a planilha…</span>
-                      <span className="tfile-bar" aria-hidden="true">
-                        <i />
-                      </span>
-                    </>
-                  ) : (
-                    <span>
-                      {fileKind === "csv"
-                        ? "Arquivo CSV"
-                        : `${sheets.length} ${sheets.length === 1 ? "aba encontrada" : "abas encontradas"}`}
-                    </span>
-                  )}
-                </div>
-                {!loadingPreview && (
-                  <button type="button" className="secondary" onClick={() => setFilePath(null)}>
-                    Trocar
-                  </button>
-                )}
-              </div>
-            ) : (
-              <>
-                <div
-                  className={`tfile-drop${dragOver ? " over" : ""}`}
-                  onClick={handlePickFile}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setDragOver(true);
-                  }}
-                  onDragLeave={() => setDragOver(false)}
-                  onDrop={handleDrop}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      handlePickFile();
-                    }
-                  }}
-                >
-                  <span className="tfile-icon" aria-hidden="true">
-                    <UploadCloud size={20} />
-                  </span>
-                  <div className="tfile-info">
-                    <b>Arraste a planilha aqui</b>
-                    <span>.xlsx, .xls, .ods ou .csv</span>
-                  </div>
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handlePickFile();
-                    }}
-                  >
-                    Escolher arquivo
-                  </button>
-                </div>
-
-                <div className="tfile-or">ou pelo link</div>
-                <div className="tfile-url">
-                  <input
-                    type="url"
-                    className="tdet-input"
-                    placeholder="Cole o link de download (OneDrive, Google Drive, …)"
-                    value={urlInput}
-                    onChange={(e) => setUrlInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleDownloadFromUrl();
-                    }}
-                    disabled={urlDownloading}
-                    aria-label="Link da planilha"
-                  />
-                  <button type="button" className="secondary" onClick={handleDownloadFromUrl} disabled={!urlInput.trim() || urlDownloading}>
-                    {urlDownloading ? "Baixando…" : "Baixar"}
-                  </button>
-                </div>
-                {urlError ? <div className="error-box">{urlError}</div> : <p className="tfile-hint">O link precisa abrir o arquivo sem pedir login.</p>}
-              </>
-            )}
-
-            {filePath && !loadingPreview && fileKind !== "csv" && sheets.length > 0 && (
-              <div className="tfile-tabs">
-                {sheets.map((s) => (
-                  <span key={s}>{s}</span>
-                ))}
-              </div>
-            )}
-          </div>
+          <SampleFileStep
+            filePath={filePath}
+            fileKind={fileKind}
+            loading={loadingPreview}
+            sheets={sheets}
+            onPick={handlePickFile}
+            onDrop={handleDrop}
+            onReset={() => setFilePath(null)}
+            onDownload={handleDownloadFromUrl}
+          />
         )}
 
         {currentStep === "sheets" && (
-          <div className="tmap">
-            <h2 className="tmap-title">Quais abas importar?</h2>
-            <p className="tmap-lead">
-              {includedSheets.size} de {sheets.length} {sheets.length === 1 ? "aba marcada" : "abas marcadas"}. Dois cliques no nome
-              para renomear.
-            </p>
-            <div className="tmap-sheets">
-              {sheets.map((s) => {
-                const on = includedSheets.has(s);
-                return (
-                  <div key={s} className={`tmap-sheet${on ? "" : " off"}`} onClick={() => toggleSheetIncluded(s)}>
-                    <input
-                      type="checkbox"
-                      checked={on}
-                      onChange={() => toggleSheetIncluded(s)}
-                      onClick={(e) => e.stopPropagation()}
-                      aria-label={on ? `Não importar "${s}"` : `Importar "${s}"`}
-                    />
-                    {editingSheetName === s ? (
-                      <input
-                        autoFocus
-                        type="text"
-                        className="tmap-rename"
-                        value={editingSheetNameDraft}
-                        onChange={(e) => setEditingSheetNameDraft(e.target.value)}
-                        onBlur={() => renameSheet(s, editingSheetNameDraft)}
-                        onClick={(e) => e.stopPropagation()}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            renameSheet(s, editingSheetNameDraft);
-                          } else if (e.key === "Escape") {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setEditingSheetName(null);
-                            setEditingSheetNameDraft("");
-                          }
-                        }}
-                      />
-                    ) : (
-                      <span
-                        className="tmap-sheet-name"
-                        title="Dois cliques para renomear"
-                        onDoubleClick={(e) => {
-                          e.stopPropagation();
-                          startEditingSheetName(s);
-                        }}
-                      >
-                        {s}
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      className="tmap-remove"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeSheet(s);
-                      }}
-                      aria-label={`Remover "${s}"`}
-                    >
-                      Remover
-                    </button>
-                  </div>
-                );
-              })}
-              <button type="button" className="tmap-addline" onClick={addNewSheet}>
-                + Adicionar aba
-              </button>
-            </div>
-          </div>
+          <SheetsStep
+            sheets={sheets}
+            included={includedSheets}
+            onToggle={toggleSheetIncluded}
+            onRemove={removeSheet}
+            onAdd={addNewSheet}
+            onRename={renameSheet}
+          />
         )}
 
         {currentStep === "answers" && (
@@ -1317,6 +1114,7 @@ export default function PaymentTemplateWizard({
                       optional={q.optional}
                       columns={columnsOfGroup(tabKey)}
                       mapping={groupMapping[tabKey] ?? {}}
+                      fieldLabel={questionLabel}
                       value={columnOf(groupMapping[tabKey] ?? {}, q.field)}
                       onChange={(col) => setAnswer(tabKey, q.field as PaymentTargetField, col)}
                       example={(col) => exampleOf(tabKey, col)}
@@ -1446,48 +1244,7 @@ export default function PaymentTemplateWizard({
             suggestionsFor={suggestionsFor}
           />
         )}
-          </div>
-
-          <div className="wz-foot">
-            <button
-              type="button"
-              className="ghost"
-              onClick={() => {
-                setError(null);
-                setStepIndex((s) => s - 1);
-              }}
-              disabled={stepIndex === 0 || busy}
-              style={stepIndex === 0 ? { visibility: "hidden" } : undefined}
-            >
-              <ChevronLeft size={15} style={{ marginRight: "0.3rem" }} />
-              Voltar
-            </button>
-            <span className="wz-foot-gap" />
-            {stepIndex < steps.length - 1 ? (
-              <button type="button" onClick={handleAdvance} disabled={busy || loadingPreview || (currentStep === "file" && !filePath)}>
-                Continuar
-                <ChevronRight size={15} style={{ marginLeft: "0.3rem" }} />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  // Explains what's missing in the error box at the top
-                  // instead of a note beside the button.
-                  const problem = detailsProblem(name, routes, routeFallback);
-                  if (problem) setError(`${problem}.`);
-                  else handleSave();
-                }}
-                title={readOnly ? READ_ONLY_TITLE : undefined}
-                disabled={readOnly || busy}
-              >
-                {busy ? "Salvando..." : "Salvar template"}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    </Drawer>
+    </WizardDrawer>
   );
 }
 
@@ -1508,110 +1265,6 @@ function columnOf(mapping: Record<number, PaymentTargetField>, field: PaymentTar
   return entry ? Number(entry[0]) : null;
 }
 
-/** `header`: the column's name in the sample file. `savedName`: the name kept in a saved template, shown only as a hint. */
-type GroupColumn = { index: number; header: string | null; savedName?: string | null };
-
-/** A column chooser in the app's picker style: the column's name, its letter on the right. */
-function ColumnPicker({
-  columns,
-  value,
-  placeholder,
-  noneLabel,
-  usedBy,
-  onChange,
-}: {
-  columns: GroupColumn[];
-  value: number | null;
-  placeholder: string;
-  /** Adds a first "no column" option (e.g. "Não tem"). */
-  noneLabel?: string;
-  /** What other questions already point at each column — a column holds one answer, picking it here moves it. */
-  usedBy: Record<number, string>;
-  onChange: (col: number | null) => void;
-}) {
-  const options: PickerOption[] = [
-    ...(noneLabel ? [{ id: "none", label: noneLabel }] : []),
-    ...columns.map((c) => {
-      const parts = [
-        c.header ? `coluna ${columnLetter(c.index)}` : null,
-        c.savedName ? `“${c.savedName}”` : null,
-        usedBy[c.index] ? `já é ${usedBy[c.index]}` : null,
-      ];
-      return {
-        id: String(c.index),
-        label: c.header ?? `Coluna ${columnLetter(c.index)}`,
-        meta: parts.filter(Boolean).join(" · ") || undefined,
-      };
-    }),
-  ];
-  return (
-    <OptionPicker
-      single
-      showTiles={false}
-      align="left"
-      options={options}
-      selected={new Set(value === null ? [] : [String(value)])}
-      onToggle={(id) => onChange(id === "none" ? null : Number(id))}
-      title="Colunas"
-      allPlaceholder={placeholder}
-      searchPlaceholder="Buscar coluna"
-    />
-  );
-}
-
-function ColumnQuestion({
-  label,
-  hint,
-  optional,
-  columns,
-  mapping,
-  value,
-  onChange,
-  example,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  optional?: boolean;
-  columns: GroupColumn[];
-  /** The group's answers, to flag columns another question already uses. */
-  mapping: Record<number, PaymentTargetField>;
-  value: number | null;
-  onChange: (col: number | null) => void;
-  example: (col: number) => { sheet: string; value: string } | null;
-  children?: ReactNode;
-}) {
-  const ex = value === null ? null : example(value);
-  const usedBy: Record<number, string> = {};
-  for (const [col, field] of Object.entries(mapping)) {
-    if (Number(col) !== value) usedBy[Number(col)] = QUESTION_LABEL[field];
-  }
-  return (
-    <div className={`tmap-q${!optional && value === null ? " miss" : ""}`}>
-      <label>
-        {label}
-        {hint && <small>{hint}</small>}
-      </label>
-      <div className="tmap-pick">
-        <ColumnPicker
-          columns={columns}
-          value={value}
-          placeholder={optional ? "Não tem" : "Escolha a coluna"}
-          noneLabel={optional ? "Não tem" : undefined}
-          usedBy={usedBy}
-          onChange={onChange}
-        />
-        {ex && (
-          <span className="tmap-ex">
-            ex. {ex.sheet}: {ex.value}
-          </span>
-        )}
-        {children}
-      </div>
-    </div>
-  );
-}
-
 const IDENTIFIER_ORDER: IdentifierField[] = ["nome", "cpf", "matricula"];
 
 /** How a column's current answer is named in the pickers ("já é Função"). */
@@ -1625,6 +1278,8 @@ const QUESTION_LABEL: Record<PaymentTargetField, string> = {
   horario: "Horário",
   status: "Status",
 };
+
+const questionLabel = (f: PaymentTargetField) => QUESTION_LABEL[f];
 
 /** Reads a header to tell which kind of identifier a column holds, for a first Colaborador answer. */
 function identifierKindOf(header: string | null): IdentifierField {
@@ -1670,6 +1325,7 @@ function IdentifierQuestions({
         hint="nome, CPF ou matrícula"
         columns={columns}
         mapping={mapping}
+        fieldLabel={questionLabel}
         value={main ? columnOf(mapping, main) : null}
         onChange={(col) => {
           if (col === null) return;
@@ -1714,6 +1370,7 @@ function IdentifierQuestions({
           optional
           columns={columns}
           mapping={mapping}
+          fieldLabel={questionLabel}
           value={columnOf(mapping, f)}
           onChange={(col) => {
             onAnswer(f, col);
