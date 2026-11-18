@@ -1,21 +1,13 @@
 import {
   CheckCircle2,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ChevronUp,
-  Filter,
   FileText,
   FolderOpen,
   Info,
   Link2,
-  ListOrdered,
-  Plus,
   RefreshCw,
-  Route,
   Table2,
-  Tag,
-  Trash2,
   UploadCloud,
   X,
 } from "lucide-react";
@@ -23,6 +15,17 @@ import { useEffect, useState, type DragEvent, type ReactNode } from "react";
 import { READ_ONLY_TITLE, useReadOnly } from "./AreaRoute";
 import Modal, { useModalClose } from "./Modal";
 import OptionPicker, { type PickerOption } from "./OptionPicker";
+import PaymentTemplateDetails, {
+  detailsProblem,
+  effectiveIdentifierOrder,
+  identifierOrderFromSaved,
+  routesFromSaved,
+  statusFromSaved,
+  type Destination,
+  type RouteDraft,
+  type RuleTest,
+  type StatusDraft,
+} from "./PaymentTemplateDetails";
 
 /** Header X, routed through `useModalClose` instead of the raw `onClose` prop so it plays the same animated exit `Modal` already uses for Escape/backdrop. */
 function CloseButton() {
@@ -45,6 +48,8 @@ import {
   createPaymentTemplate,
   listClients,
   listCompanies,
+  listDistinctPaymentShiftLocals,
+  listRolesGlobal,
   updatePaymentTemplate,
   type ClientRow,
   type CompanyRow,
@@ -66,12 +71,9 @@ import {
 import {
   DEFAULT_IDENTIFIER_PRIORITY,
   IDENTIFIER_FIELD_PRECEDENCE,
-  PAYMENT_SHIFT_STATUS_LABELS,
-  PAYMENT_TARGET_FIELDS,
   PAYMENT_TARGET_FIELD_LABELS,
   REQUIRED_PAYMENT_FIELDS,
   SHEET_NAME_RULE_FIELD,
-  type IdentifierAttempt,
   type IdentifierField,
   type PaymentFileKind,
   type PaymentRuleField,
@@ -79,10 +81,8 @@ import {
   type PaymentTargetField,
   type PaymentTemplateGroup,
   type PaymentTemplateRow,
-  type PaymentTemplateRuleKind,
 } from "../lib/types";
 
-const PAYMENT_SHIFT_STATUSES: PaymentShiftStatus[] = ["pendente", "erro", "pago"];
 
 const IDENTIFIER_FIELDS: IdentifierField[] = ["cpf", "matricula", "nome"];
 
@@ -130,55 +130,6 @@ const DELIMITER_OPTIONS = [
 ];
 
 const DATE_FORMAT_OPTIONS = ["DD/MM/YYYY", "DD/MM/YY", "YYYY-MM-DD", "MM/DD/YYYY"];
-
-/** The wizard's editable draft of one `PaymentRuleCondition` — a single field test inside a rule (see `WizardRule`/`WizardStatusRule`). */
-interface WizardRuleCondition {
-  field: PaymentRuleField;
-  /** Raw comma-separated input. */
-  valuesText: string;
-  caseInsensitive: boolean;
-}
-
-function newRuleCondition(): WizardRuleCondition {
-  return { field: PAYMENT_TARGET_FIELDS[0], valuesText: "", caseInsensitive: true };
-}
-
-/** The wizard's editable draft of one step in a template's if/else-if/else routing chain — see `PaymentTemplateRule` in types.ts for the saved shape. */
-interface WizardRule {
-  kind: PaymentTemplateRuleKind;
-  /** ANDed together — empty when `kind === "else"`. */
-  conditions: WizardRuleCondition[];
-  companyId: number | null;
-  clientId: number | null;
-}
-
-function isRuleValid(r: WizardRule): boolean {
-  if (!r.companyId || !r.clientId) return false;
-  if (r.kind === "else") return true;
-  return (
-    r.conditions.length > 0 &&
-    r.conditions.every((c) => c.valuesText.split(",").map((v) => v.trim()).filter(Boolean).length > 0)
-  );
-}
-
-/**
- * The wizard's editable draft of one step in a template's optional
- * if/else-if/else status chain — see `PaymentStatusRule` in types.ts for
- * the saved shape. "Um pra um": a single `status`, always set (there's no
- * empty option among the three), instead of the routing chain's
- * company+client pair.
- */
-interface WizardStatusRule {
-  kind: PaymentTemplateRuleKind;
-  /** ANDed together — empty when `kind === "else"`. */
-  conditions: WizardRuleCondition[];
-  status: PaymentShiftStatus;
-}
-
-/** Unlike `isRuleValid`, a condition's `valuesText` is allowed to be blank here — that's a deliberate "field is empty" test, see `resolvePaymentStatus`. Only guards against a "condition" rule with zero conditions (never matches, see `resolvePaymentStatus`'s own defensive guard). */
-function isStatusRuleValid(r: WizardStatusRule): boolean {
-  return r.kind === "else" || r.conditions.length > 0;
-}
 
 function fileKindFromPath(path: string): PaymentFileKind {
   const ext = path.split(".").pop()?.toLowerCase();
@@ -246,9 +197,14 @@ export default function PaymentTemplateWizard({
 
   const [name, setName] = useState("");
   const [dateFormat, setDateFormat] = useState("DD/MM/YYYY");
-  const [rules, setRules] = useState<WizardRule[]>([]);
-  const [statusRules, setStatusRules] = useState<WizardStatusRule[]>([]);
-  const [identifierAttempts, setIdentifierAttempts] = useState<IdentifierAttempt[]>(DEFAULT_IDENTIFIER_PRIORITY);
+  const [routes, setRoutes] = useState<RouteDraft[]>([]);
+  const [routeFallback, setRouteFallback] = useState<Destination>({ companyId: null, clientId: null });
+  const [statusDrafts, setStatusDrafts] = useState<StatusDraft[]>([]);
+  const [statusFallback, setStatusFallback] = useState<PaymentShiftStatus>("pendente");
+  const [identifierOrder, setIdentifierOrder] = useState<IdentifierField[]>(identifierOrderFromSaved(DEFAULT_IDENTIFIER_PRIORITY));
+  /** Known Funções/Locais from the database, offered in the rule pickers. */
+  const [knownRoles, setKnownRoles] = useState<string[]>([]);
+  const [knownLocals, setKnownLocals] = useState<string[]>([]);
 
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -275,6 +231,10 @@ export default function PaymentTemplateWizard({
   useEffect(() => {
     listCompanies().then(setCompanies);
     listClients().then(setClientsAll);
+    listRolesGlobal()
+      .then((roles) => setKnownRoles(Array.from(new Set(roles.map((r) => r.name)))))
+      .catch(() => {});
+    listDistinctPaymentShiftLocals().then(setKnownLocals).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -291,9 +251,11 @@ export default function PaymentTemplateWizard({
       resetMappingState([]);
       setName("");
       setDateFormat("DD/MM/YYYY");
-      setRules([]);
-      setStatusRules([]);
-      setIdentifierAttempts(DEFAULT_IDENTIFIER_PRIORITY.map((a) => ({ ...a, fields: [...a.fields] })));
+      setRoutes([]);
+      setRouteFallback({ companyId: null, clientId: null });
+      setStatusDrafts([]);
+      setStatusFallback("pendente");
+      setIdentifierOrder(identifierOrderFromSaved(DEFAULT_IDENTIFIER_PRIORITY));
       return;
     }
 
@@ -303,30 +265,13 @@ export default function PaymentTemplateWizard({
     setDelimiter(target.delimiter);
     setName(target.name);
     setDateFormat(target.dateFormat);
-    setRules(
-      target.rules.map((r) => ({
-        kind: r.kind,
-        conditions: r.conditions.map((c) => ({
-          field: c.field,
-          valuesText: c.values.join(", "),
-          caseInsensitive: c.caseInsensitive,
-        })),
-        companyId: r.companyId,
-        clientId: r.clientId,
-      })),
-    );
-    setStatusRules(
-      target.statusRules.map((r) => ({
-        kind: r.kind,
-        conditions: r.conditions.map((c) => ({
-          field: c.field,
-          valuesText: c.values.join(", "),
-          caseInsensitive: c.caseInsensitive,
-        })),
-        status: r.status,
-      })),
-    );
-    setIdentifierAttempts(target.identifierPriority.map((a) => ({ ...a, fields: [...a.fields] })));
+    const savedRoutes = routesFromSaved(target.rules);
+    setRoutes(savedRoutes.routes);
+    setRouteFallback(savedRoutes.fallback);
+    const savedStatus = statusFromSaved(target.statusRules);
+    setStatusDrafts(savedStatus.rules);
+    setStatusFallback(savedStatus.fallback);
+    setIdentifierOrder(identifierOrderFromSaved(target.identifierPriority));
     hydrateFromTemplate(target);
   }, [target]);
 
@@ -818,111 +763,6 @@ export default function PaymentTemplateWizard({
     return hasIdentifier && REQUIRED_PAYMENT_FIELDS.every((f) => fields.has(f));
   }
 
-  const hasElseRule = rules.some((r) => r.kind === "else");
-
-  /** New "condition" rows always land right before the "senão" rule, if one exists — that one always stays last. */
-  function addConditionRule() {
-    const newRule: WizardRule = {
-      kind: "condition",
-      conditions: [newRuleCondition()],
-      companyId: null,
-      clientId: null,
-    };
-    setRules((prev) => {
-      const elseIndex = prev.findIndex((r) => r.kind === "else");
-      if (elseIndex === -1) return [...prev, newRule];
-      return [...prev.slice(0, elseIndex), newRule, ...prev.slice(elseIndex)];
-    });
-  }
-
-  function addElseRule() {
-    setRules((prev) => [...prev, { kind: "else", conditions: [], companyId: null, clientId: null }]);
-  }
-
-  function removeRule(index: number) {
-    setRules((prev) => prev.filter((_, i) => i !== index));
-  }
-
-  function updateRule(index: number, patch: Partial<WizardRule>) {
-    setRules((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
-  }
-
-  function addRuleCondition(ruleIndex: number) {
-    setRules((prev) =>
-      prev.map((r, i) => (i === ruleIndex ? { ...r, conditions: [...r.conditions, newRuleCondition()] } : r)),
-    );
-  }
-
-  function removeRuleCondition(ruleIndex: number, condIndex: number) {
-    setRules((prev) =>
-      prev.map((r, i) => (i === ruleIndex ? { ...r, conditions: r.conditions.filter((_, ci) => ci !== condIndex) } : r)),
-    );
-  }
-
-  function updateRuleCondition(ruleIndex: number, condIndex: number, patch: Partial<WizardRuleCondition>) {
-    setRules((prev) =>
-      prev.map((r, i) =>
-        i === ruleIndex ? { ...r, conditions: r.conditions.map((c, ci) => (ci === condIndex ? { ...c, ...patch } : c)) } : r,
-      ),
-    );
-  }
-
-  const hasStatusElseRule = statusRules.some((r) => r.kind === "else");
-
-  /** Same "always right before senão" placement as `addConditionRule`. */
-  function addStatusConditionRule() {
-    const newRule: WizardStatusRule = {
-      kind: "condition",
-      conditions: [newRuleCondition()],
-      status: "pendente",
-    };
-    setStatusRules((prev) => {
-      const elseIndex = prev.findIndex((r) => r.kind === "else");
-      if (elseIndex === -1) return [...prev, newRule];
-      return [...prev.slice(0, elseIndex), newRule, ...prev.slice(elseIndex)];
-    });
-  }
-
-  function addStatusElseRule() {
-    setStatusRules((prev) => [...prev, { kind: "else", conditions: [], status: "pendente" }]);
-  }
-
-  function removeStatusRule(index: number) {
-    setStatusRules((prev) => prev.filter((_, i) => i !== index));
-  }
-
-  function updateStatusRule(index: number, patch: Partial<WizardStatusRule>) {
-    setStatusRules((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
-  }
-
-  function addStatusRuleCondition(ruleIndex: number) {
-    setStatusRules((prev) =>
-      prev.map((r, i) => (i === ruleIndex ? { ...r, conditions: [...r.conditions, newRuleCondition()] } : r)),
-    );
-  }
-
-  function removeStatusRuleCondition(ruleIndex: number, condIndex: number) {
-    setStatusRules((prev) =>
-      prev.map((r, i) => (i === ruleIndex ? { ...r, conditions: r.conditions.filter((_, ci) => ci !== condIndex) } : r)),
-    );
-  }
-
-  function updateStatusRuleCondition(ruleIndex: number, condIndex: number, patch: Partial<WizardRuleCondition>) {
-    setStatusRules((prev) =>
-      prev.map((r, i) =>
-        i === ruleIndex ? { ...r, conditions: r.conditions.map((c, ci) => (ci === condIndex ? { ...c, ...patch } : c)) } : r,
-      ),
-    );
-  }
-
-  function addIdentifierAttempt() {
-    setIdentifierAttempts((prev) => [...prev, { fields: [], caseInsensitive: true }]);
-  }
-
-  function removeIdentifierAttempt(index: number) {
-    setIdentifierAttempts((prev) => prev.filter((_, i) => i !== index));
-  }
-
   /** `fileKind` itself is never toggled off here — the checkbox for it is disabled-checked in the UI, this only ever runs for the other xlsx/xls/ods kinds. */
   function toggleAcceptedFileKind(kind: PaymentFileKind) {
     setAcceptedFileKinds((prev) => {
@@ -933,40 +773,6 @@ export default function PaymentTemplateWizard({
     });
   }
 
-  function toggleIdentifierField(index: number, field: IdentifierField) {
-    setIdentifierAttempts((prev) =>
-      prev.map((attempt, i) =>
-        i === index
-          ? {
-              ...attempt,
-              fields: attempt.fields.includes(field)
-                ? attempt.fields.filter((f) => f !== field)
-                : [...attempt.fields, field],
-            }
-          : attempt,
-      ),
-    );
-  }
-
-  function toggleIdentifierCaseInsensitive(index: number) {
-    setIdentifierAttempts((prev) =>
-      prev.map((attempt, i) => (i === index ? { ...attempt, caseInsensitive: !attempt.caseInsensitive } : attempt)),
-    );
-  }
-
-  function moveIdentifierAttempt(index: number, direction: -1 | 1) {
-    setIdentifierAttempts((prev) => {
-      const target = index + direction;
-      if (target < 0 || target >= prev.length) return prev;
-      const next = [...prev];
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
-  }
-
-  const isIdentifierPriorityValid =
-    identifierAttempts.length > 0 && identifierAttempts.every((a) => a.fields.length > 0);
-
   // Every group among the sheets actually being imported — csv always has
   // just the one implicit group.
   const includedGroupKeys =
@@ -976,15 +782,6 @@ export default function PaymentTemplateWizard({
 
   const allGroupKeys =
     fileKind === "csv" ? [CSV_GROUP_KEY] : Array.from(new Set(sheets.map((s) => groupKeyOf(s))));
-
-  // Read-only readout of the row-validity filter — there's nothing to
-  // configure here, it's just whichever column each included group already
-  // has mapped to "data" (see the `PaymentTemplateGroup` doc comment).
-  const dataFilterEntries = includedGroupKeys.map((key) => {
-    const m = groupMapping[key] ?? {};
-    const index = Object.entries(m).find(([, field]) => field === "data")?.[0];
-    return { key: groupLabel(key), columnLabel: index !== undefined ? columnLetter(Number(index)) : null };
-  });
 
   const pendingGroups = includedGroupKeys.filter((k) => !isGroupMappingValid(k));
   const tabKey = answersTab && includedGroupKeys.includes(answersTab) ? answersTab : (includedGroupKeys[0] ?? null);
@@ -1004,6 +801,25 @@ export default function PaymentTemplateWizard({
     };
   });
   const badChecks = checks.filter((c) => c.result?.problem);
+
+  /** Identifier columns answered in any included group — what "Como achar o colaborador?" orders. */
+  const mappedIdentifiers = IDENTIFIER_FIELDS.filter((f) => includedGroupKeys.some((k) => columnOf(groupMapping[k] ?? {}, f) !== null));
+
+  /** Values a rule can compare `field` against: what the sample file has in that column (or the sheet names), plus the database's Funções/Locais. */
+  function suggestionsFor(field: PaymentRuleField): string[] {
+    if (field === SHEET_NAME_RULE_FIELD) return sheets.filter((s) => includedSheets.has(s));
+    const found = new Set<string>(field === "funcao" ? knownRoles : field === "local" ? knownLocals : []);
+    for (const { sheet, key } of checks) {
+      const col = columnOf(groupMapping[key] ?? {}, field as PaymentTargetField);
+      if (col === null) continue;
+      for (const row of dataRowsOf(sheetRows[sheet] ?? [])) {
+        const v = (row[col] ?? "").trim();
+        if (v) found.add(v);
+        if (found.size >= 300) break;
+      }
+    }
+    return Array.from(found);
+  }
 
   /** "responder esta aba separado" / "corrigir as respostas" in Conferir: back to Colunas on that sheet's answers. */
   function answerSeparately(sheet: string, shared: boolean) {
@@ -1079,32 +895,23 @@ export default function PaymentTemplateWizard({
         return { sheetNames, excludedSheetNames, fieldMappings };
       });
 
-      const ruleInputs: PaymentTemplateRuleInput[] = rules.map((r) => ({
-        kind: r.kind,
-        conditions:
-          r.kind === "condition"
-            ? r.conditions.map((c) => ({
-                field: c.field,
-                values: c.valuesText.split(",").map((v) => v.trim()).filter(Boolean),
-                caseInsensitive: c.caseInsensitive,
-              }))
-            : [],
+      const test = (t: RuleTest) => ({ field: t.field, values: t.values, caseInsensitive: true });
+      const ruleInputs: PaymentTemplateRuleInput[] = routes.map((r) => ({
+        kind: "condition" as const,
+        conditions: r.tests.map(test),
         companyId: r.companyId!,
         clientId: r.clientId!,
       }));
+      if (routeFallback.companyId !== null && routeFallback.clientId !== null) {
+        ruleInputs.push({ kind: "else", conditions: [], companyId: routeFallback.companyId, clientId: routeFallback.clientId });
+      }
 
-      const statusRuleInputs: PaymentTemplateStatusRuleInput[] = statusRules.map((r) => ({
-        kind: r.kind,
-        conditions:
-          r.kind === "condition"
-            ? r.conditions.map((c) => ({
-                field: c.field,
-                values: c.valuesText.split(",").map((v) => v.trim()).filter(Boolean),
-                caseInsensitive: c.caseInsensitive,
-              }))
-            : [],
+      const statusRuleInputs: PaymentTemplateStatusRuleInput[] = statusDrafts.map((r) => ({
+        kind: "condition" as const,
+        conditions: r.tests.map(test),
         status: r.status,
       }));
+      if (statusRuleInputs.length > 0) statusRuleInputs.push({ kind: "else", conditions: [], status: statusFallback });
 
       const input: PaymentTemplateInput = {
         name: name.trim(),
@@ -1112,7 +919,7 @@ export default function PaymentTemplateWizard({
         acceptedFileKinds: Array.from(new Set([fileKind, ...acceptedFileKinds])),
         delimiter: fileKind === "csv" ? delimiter : null,
         dateFormat,
-        identifierPriority: identifierAttempts,
+        identifierPriority: effectiveIdentifierOrder(identifierOrder, mappedIdentifiers).map((f) => ({ fields: [f], caseInsensitive: true })),
         groups,
         rules: ruleInputs,
         statusRules: statusRuleInputs,
@@ -1616,494 +1423,30 @@ export default function PaymentTemplateWizard({
         )}
 
         {currentStep === "details" && (
-          <div className="details-layout">
-            <aside className="details-sidebar">
-              <div className="glass-panel">
-                <div className="field-code">
-                  <label htmlFor="template-name">Nome do template</label>
-                  <input
-                    id="template-name"
-                    className="glass-input"
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Ex.: Folha mensal — Provedor X"
-                  />
-                </div>
-                <div className="field-code">
-                  <label htmlFor="template-date-format">Formato de data</label>
-                  <select
-                    id="template-date-format"
-                    className="glass-input"
-                    value={dateFormat}
-                    onChange={(e) => setDateFormat(e.target.value)}
-                  >
-                    {DATE_FORMAT_OPTIONS.map((f) => (
-                      <option key={f} value={f}>
-                        {f}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="field-code">
-                  <label>Formatos aceitos</label>
-                  {fileKind === "csv" ? (
-                    <p className="glass-panel-desc" style={{ margin: 0 }}>
-                      CSV — um arquivo de texto delimitado não pode ser combinado com planilhas.
-                    </p>
-                  ) : (
-                    <>
-                      <p className="glass-panel-desc" style={{ margin: "0 0 0.4rem" }}>
-                        Este template foi montado com um arquivo {fileKind?.toUpperCase()}. Um arquivo Excel
-                        (XLSX/XLS) ou ODS com as mesmas colunas é lido exatamente do mesmo jeito — marque
-                        abaixo se, além de {fileKind?.toUpperCase()}, este template também deve aceitar
-                        algum dos outros na hora de importar.
-                      </p>
-                      {(["xlsx", "xls", "ods"] as PaymentFileKind[]).map((k) => (
-                        <label key={k} className="field-code-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={k === fileKind || acceptedFileKinds.has(k)}
-                            disabled={k === fileKind}
-                            onChange={() => toggleAcceptedFileKind(k)}
-                          />
-                          {k.toUpperCase()}
-                        </label>
-                      ))}
-                    </>
-                  )}
-                </div>
-
-                <h4 className="glass-panel-heading" style={{ marginTop: "1.2rem" }}>
-                  <Filter size={16} />
-                  Filtro de linha válida
-                </h4>
-                <p className="glass-panel-desc">
-                  Tipo de filtro: Data (único disponível por enquanto). Uma linha só é
-                  considerada válida quando a coluna abaixo consegue ser interpretada como data,
-                  no formato configurado acima.
-                </p>
-                <div className="filter-entries">
-                  {dataFilterEntries.map((e) => (
-                    <div key={e.key} className="filter-entry">
-                      <span>{e.key}</span>
-                      <span className="filter-entry-col">coluna {e.columnLabel ?? "—"}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </aside>
-
-            <div className="details-main">
-              <section className="glass-panel">
-                <h3 className="glass-panel-heading">
-                  <ListOrdered size={18} />
-                  Prioridade de identificação
-                </h3>
-                <p className="glass-panel-desc">
-                  Cada tentativa é um conjunto de campos que precisam bater juntos, no mesmo
-                  colaborador — tentadas em ordem, a primeira que encontrar um colaborador vence.
-                  Pelo menos uma tentativa é obrigatória.
-                </p>
-
-                {identifierAttempts.map((attempt, i) => (
-                  <div key={i} className="chain-row">
-                    {i > 0 && <div className="chain-connector" />}
-                    <div className="logic-card identifier-attempt">
-                      <div className={`chain-num${i === 0 ? " first" : ""}`}>{i + 1}</div>
-                      <div className="identifier-attempt-fields">
-                        {IDENTIFIER_FIELDS.map((f) => (
-                          <label
-                            key={f}
-                            className={`identifier-field-pill${attempt.fields.includes(f) ? " checked" : ""}`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={attempt.fields.includes(f)}
-                              onChange={() => toggleIdentifierField(i, f)}
-                            />
-                            {PAYMENT_TARGET_FIELD_LABELS[f]}
-                          </label>
-                        ))}
-                        <label className="field-code-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={attempt.caseInsensitive}
-                            onChange={() => toggleIdentifierCaseInsensitive(i)}
-                          />
-                          Ignorar maiúsculas/minúsculas
-                        </label>
-                      </div>
-                      <div className="logic-card-actions">
-                        <button
-                          type="button"
-                          className="ghost"
-                          style={{ padding: "0.3rem" }}
-                          onClick={() => moveIdentifierAttempt(i, -1)}
-                          disabled={i === 0}
-                          aria-label="Mover para cima"
-                          title="Mover para cima"
-                        >
-                          <ChevronUp size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost"
-                          style={{ padding: "0.3rem" }}
-                          onClick={() => moveIdentifierAttempt(i, 1)}
-                          disabled={i === identifierAttempts.length - 1}
-                          aria-label="Mover para baixo"
-                          title="Mover para baixo"
-                        >
-                          <ChevronDown size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost"
-                          style={{ padding: "0.3rem" }}
-                          onClick={() => removeIdentifierAttempt(i)}
-                          aria-label="Remover tentativa"
-                          title="Remover tentativa"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-
-                {identifierAttempts.length === 0 && (
-                  <p className="field-hint" style={{ marginTop: "0.6rem" }}>
-                    Nenhuma tentativa cadastrada — pelo menos uma é obrigatória para salvar.
-                  </p>
-                )}
-
-                <button
-                  type="button"
-                  className="glow-button"
-                  style={{ marginTop: "1rem" }}
-                  onClick={addIdentifierAttempt}
-                >
-                  <Plus size={14} />
-                  Adicionar tentativa
-                </button>
-              </section>
-
-              <section className="glass-panel">
-                <h3 className="glass-panel-heading">
-                  <Route size={18} />
-                  Regras de roteamento (Empresa/Cliente)
-                </h3>
-                <p className="glass-panel-desc">
-                  Decide, linha a linha, a Empresa/Cliente de destino a partir do valor de um
-                  campo já mapeado — avaliadas em ordem, a primeira que bater vence. Sempre
-                  obrigatório, mesmo se o arquivo sempre pertencer a um único cliente (nesse
-                  caso, use só uma regra "senão").
-                </p>
-
-                <div className="rule-list">
-                  {rules.map((rule, i) => (
-                    <div key={i} className="chain-row">
-                      {i > 0 && <div className="chain-connector" />}
-                      <div
-                        className={`logic-card rule-card${rule.kind === "else" ? " rule-card-else" : ""}`}
-                      >
-                        <div className={`chain-num${i === 0 ? " first" : ""}`}>{i + 1}</div>
-                        <div className="rule-card-grid">
-                        {rule.kind === "condition" ? (
-                          <>
-                            {rule.conditions.map((cond, ci) => (
-                              <div key={ci} style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "flex-start" }}>
-                                <div className="field-code" style={{ flex: 1, minWidth: "140px" }}>
-                                  <label>{ci === 0 ? "Se [Campo]" : "E [Campo]"}</label>
-                                  <select
-                                    className="glass-input"
-                                    value={cond.field}
-                                    onChange={(e) => updateRuleCondition(i, ci, { field: e.target.value as PaymentRuleField })}
-                                  >
-                                    {PAYMENT_TARGET_FIELDS.map((f) => (
-                                      <option key={f} value={f}>
-                                        {PAYMENT_TARGET_FIELD_LABELS[f]}
-                                      </option>
-                                    ))}
-                                    <option value={SHEET_NAME_RULE_FIELD}>Aba (guia dentro do arquivo)</option>
-                                  </select>
-                                </div>
-                                <div className="field-code" style={{ flex: 1, minWidth: "160px" }}>
-                                  <label>== [Valores possíveis]</label>
-                                  <input
-                                    className="glass-input"
-                                    type="text"
-                                    value={cond.valuesText}
-                                    onChange={(e) => updateRuleCondition(i, ci, { valuesText: e.target.value })}
-                                    placeholder="Ex.: FLV, Mercearia"
-                                  />
-                                  <label className="field-code-checkbox">
-                                    <input
-                                      type="checkbox"
-                                      checked={cond.caseInsensitive}
-                                      onChange={(e) => updateRuleCondition(i, ci, { caseInsensitive: e.target.checked })}
-                                    />
-                                    Ignorar maiúsculas/minúsculas
-                                  </label>
-                                </div>
-                                <button
-                                  type="button"
-                                  className="ghost"
-                                  style={{ padding: "0.4rem", marginTop: "22px" }}
-                                  onClick={() => removeRuleCondition(i, ci)}
-                                  disabled={rule.conditions.length <= 1}
-                                  aria-label="Remover condição"
-                                  title="Remover condição"
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              </div>
-                            ))}
-                            <button
-                              type="button"
-                              className="glow-button"
-                              style={{ alignSelf: "flex-start" }}
-                              onClick={() => addRuleCondition(i)}
-                            >
-                              <Plus size={12} />
-                              Condição (E)
-                            </button>
-                          </>
-                        ) : (
-                          <span className="rule-card-else-label">
-                            SENÃO — se nenhuma regra acima bater, usa esta
-                          </span>
-                        )}
-                        <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
-                          <div className="field-code consequence" style={{ flex: 1, minWidth: "160px" }}>
-                            <label>Então [Empresa]</label>
-                            <select
-                              className="glass-input"
-                              value={rule.companyId ?? ""}
-                              onChange={(e) =>
-                                updateRule(i, {
-                                  companyId: e.target.value ? Number(e.target.value) : null,
-                                  clientId: null,
-                                })
-                              }
-                            >
-                              <option value="">Selecione</option>
-                              {companies.map((c) => (
-                                <option key={c.id} value={c.id}>
-                                  {c.name}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          <div className="field-code consequence" style={{ flex: 1, minWidth: "160px" }}>
-                            <label>E [Cliente]</label>
-                            <select
-                              className="glass-input"
-                              value={rule.clientId ?? ""}
-                              onChange={(e) =>
-                                updateRule(i, { clientId: e.target.value ? Number(e.target.value) : null })
-                              }
-                              disabled={!rule.companyId}
-                            >
-                              <option value="">Selecione</option>
-                              {clientsAll
-                                .filter((c) => c.companyId === rule.companyId)
-                                .map((c) => (
-                                  <option key={c.id} value={c.id}>
-                                    {c.name}
-                                  </option>
-                                ))}
-                            </select>
-                          </div>
-                        </div>
-                        </div>
-                        <div className="rule-card-delete">
-                          <button
-                            type="button"
-                            className="ghost"
-                            style={{ padding: "0.4rem" }}
-                            onClick={() => removeRule(i)}
-                            aria-label="Remover regra"
-                            title="Remover regra"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {rules.length === 0 && (
-                  <p className="field-hint" style={{ marginTop: "0.6rem" }}>
-                    Nenhuma regra cadastrada — pelo menos uma é obrigatória para salvar.
-                  </p>
-                )}
-
-                <div style={{ display: "flex", gap: "0.6rem", marginTop: "1rem" }}>
-                  <button type="button" className="glow-button" onClick={addConditionRule}>
-                    <Plus size={14} />
-                    Adicionar regra
-                  </button>
-                  {!hasElseRule && (
-                    <button type="button" className="glow-button" onClick={addElseRule}>
-                      <Plus size={14} />
-                      Adicionar "senão"
-                    </button>
-                  )}
-                </div>
-              </section>
-
-              <section className="glass-panel">
-                <h3 className="glass-panel-heading">
-                  <Tag size={18} />
-                  Regras de status
-                </h3>
-                <p className="glass-panel-desc">
-                  Decide, linha a linha, o status inicial do turno a partir do valor de um campo
-                  já mapeado (ex.: uma coluna "Status" da planilha) — avaliadas em ordem, a
-                  primeira que bater vence. Opcional: sem nenhuma regra, ou se nenhuma bater, o
-                  turno entra como "Pendente".
-                </p>
-
-                <div className="rule-list">
-                  {statusRules.map((rule, i) => (
-                    <div key={i} className="chain-row">
-                      {i > 0 && <div className="chain-connector" />}
-                      <div
-                        className={`logic-card rule-card${rule.kind === "else" ? " rule-card-else" : ""}`}
-                      >
-                        <div className={`chain-num${i === 0 ? " first" : ""}`}>{i + 1}</div>
-                        <div className="status-rule-card-grid">
-                          {rule.kind === "condition" ? (
-                            <>
-                              {rule.conditions.map((cond, ci) => (
-                                <div key={ci} style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "flex-start" }}>
-                                  <div className="field-code" style={{ flex: 1, minWidth: "140px" }}>
-                                    <label>{ci === 0 ? "Se [Campo]" : "E [Campo]"}</label>
-                                    <select
-                                      className="glass-input"
-                                      value={cond.field}
-                                      onChange={(e) =>
-                                        updateStatusRuleCondition(i, ci, { field: e.target.value as PaymentRuleField })
-                                      }
-                                    >
-                                      {PAYMENT_TARGET_FIELDS.map((f) => (
-                                        <option key={f} value={f}>
-                                          {PAYMENT_TARGET_FIELD_LABELS[f]}
-                                        </option>
-                                      ))}
-                                      <option value={SHEET_NAME_RULE_FIELD}>Aba (guia dentro do arquivo)</option>
-                                    </select>
-                                  </div>
-                                  <div className="field-code" style={{ flex: 1, minWidth: "160px" }}>
-                                    <label>== [Valores possíveis]</label>
-                                    <input
-                                      className="glass-input"
-                                      type="text"
-                                      value={cond.valuesText}
-                                      onChange={(e) => updateStatusRuleCondition(i, ci, { valuesText: e.target.value })}
-                                      placeholder="Ex.: PAGO, QUITADO"
-                                    />
-                                    <p className="field-hint" style={{ margin: "0.3rem 0 0" }}>
-                                      Em branco, casa quando o campo mapeado vier vazio.
-                                    </p>
-                                    <label className="field-code-checkbox">
-                                      <input
-                                        type="checkbox"
-                                        checked={cond.caseInsensitive}
-                                        onChange={(e) =>
-                                          updateStatusRuleCondition(i, ci, { caseInsensitive: e.target.checked })
-                                        }
-                                      />
-                                      Ignorar maiúsculas/minúsculas
-                                    </label>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    className="ghost"
-                                    style={{ padding: "0.4rem", marginTop: "22px" }}
-                                    onClick={() => removeStatusRuleCondition(i, ci)}
-                                    disabled={rule.conditions.length <= 1}
-                                    aria-label="Remover condição"
-                                    title="Remover condição"
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
-                                </div>
-                              ))}
-                              <button
-                                type="button"
-                                className="glow-button"
-                                style={{ alignSelf: "flex-start" }}
-                                onClick={() => addStatusRuleCondition(i)}
-                              >
-                                <Plus size={12} />
-                                Condição (E)
-                              </button>
-                            </>
-                          ) : (
-                            <span className="rule-card-else-label">
-                              SENÃO — se nenhuma regra acima bater, usa esta
-                            </span>
-                          )}
-                          <div className="field-code consequence">
-                            <label>Então [Status]</label>
-                            <select
-                              className="glass-input"
-                              value={rule.status}
-                              onChange={(e) =>
-                                updateStatusRule(i, { status: e.target.value as PaymentShiftStatus })
-                              }
-                            >
-                              {PAYMENT_SHIFT_STATUSES.map((s) => (
-                                <option key={s} value={s}>
-                                  {PAYMENT_SHIFT_STATUS_LABELS[s]}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        </div>
-                        <div className="rule-card-delete">
-                          <button
-                            type="button"
-                            className="ghost"
-                            style={{ padding: "0.4rem" }}
-                            onClick={() => removeStatusRule(i)}
-                            aria-label="Remover regra"
-                            title="Remover regra"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {statusRules.length === 0 && (
-                  <p className="field-hint" style={{ marginTop: "0.6rem" }}>
-                    Nenhuma regra cadastrada — sem regras, todo turno importado entra como
-                    "Pendente".
-                  </p>
-                )}
-
-                <div style={{ display: "flex", gap: "0.6rem", marginTop: "1rem" }}>
-                  <button type="button" className="glow-button" onClick={addStatusConditionRule}>
-                    <Plus size={14} />
-                    Adicionar regra
-                  </button>
-                  {!hasStatusElseRule && (
-                    <button type="button" className="glow-button" onClick={addStatusElseRule}>
-                      <Plus size={14} />
-                      Adicionar "senão"
-                    </button>
-                  )}
-                </div>
-              </section>
-            </div>
-          </div>
+          <PaymentTemplateDetails
+            name={name}
+            onName={setName}
+            routes={routes}
+            onRoutes={setRoutes}
+            fallback={routeFallback}
+            onFallback={setRouteFallback}
+            statusRules={statusDrafts}
+            onStatusRules={setStatusDrafts}
+            statusFallback={statusFallback}
+            onStatusFallback={setStatusFallback}
+            identifierOrder={identifierOrder}
+            onIdentifierOrder={setIdentifierOrder}
+            mappedIdentifiers={mappedIdentifiers}
+            dateFormat={dateFormat}
+            onDateFormat={setDateFormat}
+            dateFormats={DATE_FORMAT_OPTIONS}
+            fileKind={fileKind}
+            acceptedFileKinds={acceptedFileKinds}
+            onToggleFileKind={toggleAcceptedFileKind}
+            companies={companies}
+            clients={clientsAll}
+            suggestionsFor={suggestionsFor}
+          />
         )}
       </div>
 
@@ -2135,7 +1478,9 @@ export default function PaymentTemplateWizard({
             ? `Falta responder: ${pendingGroups.map(groupLabel).join(", ")}`
             : currentStep === "check" && badChecks.length > 0
               ? "Resolva as abas com problema ou desmarque-as"
-              : ""}
+              : currentStep === "details"
+                ? (detailsProblem(name, routes, routeFallback) ?? "")
+                : ""}
         </span>
         {stepIndex < steps.length - 1 ? (
           <button type="button" onClick={handleAdvance} disabled={busy || loadingPreview}>
@@ -2147,15 +1492,7 @@ export default function PaymentTemplateWizard({
             type="button"
             onClick={handleSave}
             title={readOnly ? READ_ONLY_TITLE : undefined}
-            disabled={
-              readOnly ||
-              busy ||
-              !name.trim() ||
-              rules.length === 0 ||
-              rules.some((r) => !isRuleValid(r)) ||
-              statusRules.some((r) => !isStatusRuleValid(r)) ||
-              !isIdentifierPriorityValid
-            }
+            disabled={readOnly || busy || detailsProblem(name, routes, routeFallback) !== null}
           >
             {busy ? "Salvando..." : "Salvar"}
           </button>

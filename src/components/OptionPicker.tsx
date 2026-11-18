@@ -47,6 +47,10 @@ function normalize(text: string): string {
  * Template): picking a row closes the box, there's no "select all"/"clear"
  * footer, and the closed field shows the chosen option's `meta` on its
  * right.
+ *
+ * `onCreate` lets the person type a value that isn't in the list (e.g. a
+ * spreadsheet value a template rule compares against): the search is always
+ * shown, and a typed text no option matches gets an "Adicionar “...”" row.
  */
 export default function OptionPicker({
   options,
@@ -61,6 +65,7 @@ export default function OptionPicker({
   align = "right",
   single = false,
   showTiles = true,
+  onCreate,
 }: {
   options: PickerOption[];
   selected: Set<string>;
@@ -77,6 +82,8 @@ export default function OptionPicker({
   single?: boolean;
   /** The colored initials before each option — off for short fixed lists (operators, "antes/depois"). */
   showTiles?: boolean;
+  /** Adds the typed text as a new value (see the doc comment above). */
+  onCreate?: (text: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -91,9 +98,18 @@ export default function OptionPicker({
   const listRef = useRef<HTMLDivElement>(null);
   const footerRef = useRef<HTMLDivElement>(null);
 
-  const searchable = options.length >= SEARCH_THRESHOLD;
+  const searchable = options.length >= SEARCH_THRESHOLD || onCreate !== undefined;
   const query = normalize(search.trim());
   const visible = query ? options.filter((o) => normalize(o.label).includes(query) || (o.meta && normalize(o.meta).includes(query))) : options;
+  const creatable = onCreate !== undefined && query !== "" && !options.some((o) => normalize(o.label) === query);
+
+  function create() {
+    if (!onCreate || !creatable) return;
+    onCreate(search.trim());
+    setSearch("");
+    setCursor(-1);
+    if (single) close();
+  }
   const chosen = options.filter((o) => selected.has(o.id));
 
   useEffect(() => {
@@ -166,6 +182,9 @@ export default function OptionPicker({
       if (option) {
         e.preventDefault();
         pick(option.id);
+      } else if (e.key === "Enter" && creatable) {
+        e.preventDefault();
+        create();
       }
     } else if (e.key === "Escape") {
       e.preventDefault();
@@ -230,6 +249,19 @@ export default function OptionPicker({
           )}
 
           <div ref={listRef} className="emp-picker-list" style={{ maxHeight: listMaxHeight }} role="listbox" aria-multiselectable={!single}>
+            {creatable && (
+              <div
+                role="option"
+                aria-selected={false}
+                className={cursor < 0 ? "emp-picker-row emp-picker-row-active" : "emp-picker-row"}
+                onMouseDown={(ev) => ev.preventDefault()}
+                onClick={create}
+              >
+                <span className="emp-picker-who">
+                  <span className="emp-picker-name">Adicionar “{search.trim()}”</span>
+                </span>
+              </div>
+            )}
             {visible.map((o, index) => {
               const header = o.group !== undefined && o.group !== lastGroup ? o.group : null;
               lastGroup = o.group;
@@ -260,7 +292,7 @@ export default function OptionPicker({
                 </div>
               );
             })}
-            {visible.length === 0 && <p className="emp-picker-empty">{search ? `Nada encontrado com “${search}”.` : "Nenhuma opção cadastrada."}</p>}
+            {visible.length === 0 && !creatable && <p className="emp-picker-empty">{search ? `Nada encontrado com “${search}”.` : "Nenhuma opção cadastrada."}</p>}
           </div>
 
           {!single && (

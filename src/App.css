@@ -10155,3 +10155,181 @@ button.tmap-link:hover {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ---------- Payment template: Detalhes ---------- */
+
+.tdet-section {
+  display: grid;
+  gap: 10px;
+}
+
+.tdet-section h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.tdet-sub {
+  margin: 0;
+  color: var(--outline);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+input.tdet-input {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-variant);
+  color: var(--text);
+  font: inherit;
+}
+
+.tdet-dest {
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.tdet-dest small {
+  color: var(--outline);
+  font-weight: 500;
+}
+
+.tdet-dest.missing {
+  color: var(--warning);
+  font-weight: 500;
+}
+
+.vr-rule-invalid {
+  border-color: rgba(251, 191, 36, 0.35);
+}
+
+.tdet-two {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.tdet-placeholder {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px dashed var(--border-soft);
+  border-radius: 7px;
+  color: var(--outline);
+  font-size: 0.85rem;
+}
+
+.vr-row.tdet-else-row {
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 26rem);
+}
+
+.tdet-once {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--card-bg);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.tdet-once b,
+.tdet-id-text b,
+.tdet-empty b {
+  color: var(--text);
+}
+
+.tdet-ids {
+  display: grid;
+  gap: 6px;
+}
+
+.tdet-id {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: var(--card-bg);
+}
+
+.tdet-id-text {
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.tdet-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--card-bg);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.tdet-status-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 9rem) 28px;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+}
+
+.tdet-status-tests {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tdet-status-test {
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr);
+  gap: 6px;
+}
+
+.tdet-arrow {
+  color: var(--outline);
+}
+
+.tdet-more {
+  border-top: 1px solid var(--border-softer);
+  padding-top: 14px;
+}
+
+.tdet-more summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.tdet-more-body {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+@media (max-width: 640px) {
+  .vr-row.tdet-else-row,
+  .tdet-status-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .tdet-two,
+  .tdet-status-test {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.tdet-section > .vr-new {
+  justify-self: start;
+}
