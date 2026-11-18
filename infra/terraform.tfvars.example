@@ -1,0 +1,5 @@
+# Copie para terraform.tfvars (que não vai para o git) e preencha.
+project_id        = "seu-projeto-firebase"
+duckdns_subdomain = "pontoscan"
+duckdns_token     = "cole-o-token-do-duckdns-aqui"
+allowed_emails    = ["voce@gmail.com", "colega@gmail.com"]
