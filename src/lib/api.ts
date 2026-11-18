@@ -4,7 +4,6 @@ import { api, fetchServerFile, rpc } from "./http";
 import type {
   FileHash,
   FileParseResult,
-  PopplerStatus,
   ProviderInfo,
   ReportZipEntry,
   StorageFileEntry,
@@ -23,18 +22,6 @@ export function hashFiles(paths: string[]): Promise<FileHash[]> {
 /** Parses each file independently — check `.error` per result instead of a try/catch around the whole batch. */
 export function parseImport(provider: string, paths: string[]): Promise<FileParseResult[]> {
   return rpc("parseImport", { provider, paths });
-}
-
-/** Opens `path`'s containing folder in the OS file manager ("abrir no explorador de arquivos"). */
-export function revealInFileManager(path: string): Promise<void> {
-  // The web has no file manager to open: the file was already downloaded.
-  void path;
-  return Promise.resolve();
-}
-
-/** Opens the app's whole data folder (DB + imports/) in the OS file manager. */
-export function openAppDataDir(): Promise<void> {
-  return invoke("open_app_data_dir");
 }
 
 /** Raw bytes of a PDF stored on the server, for the in-app viewer to render. */
@@ -198,95 +185,42 @@ export async function generateReportZip(entries: ReportZipEntry[], fileName: str
   await downloadServerFile(path, baseName(fileName));
 }
 
-/** Disk usage of the DB and the copied imported files (PDFs and, when downloaded by link, payment spreadsheets). */
+/** Disk usage of the DB and the copied imported files (PDFs and, when downloaded by link, payment spreadsheets), on the server. */
 export function getStorageUsage(): Promise<StorageUsage> {
-  return invoke("get_storage_usage");
+  return rpc<StorageUsage>("getStorageUsage");
 }
 
 /** Itemized breakdown behind the "Arquivos importados" tile — one entry per file actually inside imports/. */
 export function getImportsFileList(): Promise<StorageFileEntry[]> {
-  return invoke("get_imports_file_list");
+  return rpc<StorageFileEntry[]>("getImportsFileList");
 }
 
-/** Best-effort delete of each path — returns how many bytes were actually freed. */
-export function deletePaths(paths: string[]): Promise<number> {
-  return invoke("delete_paths", { paths });
+/** Deletes imported files on the server (only files inside imports/) — returns how many bytes were actually freed. */
+export function deleteImportedFiles(paths: string[]): Promise<number> {
+  return rpc<number>("deleteImportedFiles", { paths });
 }
 
-/** Empties and recreates the imports/ folder — the file half of "Limpar tudo". */
+/** Empties and recreates the imports/ folder — the file half of "Apagar histórico e arquivos". */
 export function clearImportsDir(): Promise<void> {
-  return invoke("clear_imports_dir");
+  return rpc<void>("clearImportsDir");
 }
 
-/** Zips the DB and/or imports/ to `destZipPath` — the backup offered before "Limpar tudo". Either side can be skipped. */
-export function backupAppData(destZipPath: string, includeDb: boolean, includeFiles: boolean): Promise<void> {
-  return invoke("backup_app_data", { destZipPath, includeDb, includeFiles });
+/** Zips the DB and/or imports/ on the server and downloads the .zip — the backup offered before "Apagar histórico e arquivos". */
+export async function downloadBackup(includeDb: boolean, includeFiles: boolean): Promise<void> {
+  const { path } = await rpc<{ path: string }>("backupAppData", { includeDb, includeFiles });
+  await downloadServerFile(path, "pontoscan-backup.zip");
 }
 
-/** Writes arbitrary bytes to `path` — a caller that already has a concrete destination (e.g. from a save dialog). */
+/** Saves bytes generated in the browser as a download named after `path`'s last component. */
 export function writeBinaryFile(path: string, data: Uint8Array): Promise<void> {
-  // Web: the browser saves the file (named after `path`'s last component).
   downloadBlob(data, baseName(path));
   return Promise.resolve();
 }
 
-/** Copies the live database file to `destPath` — call `checkpointDatabase()` (lib/db) first so it's a complete snapshot. */
-export function exportDatabase(destPath: string): Promise<void> {
-  return invoke("export_database", { destPath });
-}
-
-/** Validates and stages a database file for replacement on the next launch. Relaunch the app right after this resolves. */
-export interface DatabaseImportEvent { label: string; occurredAt: string }
-export function importDatabase(srcPath: string): Promise<DatabaseImportEvent[]> {
-  return invoke("import_database", { srcPath });
-}
-
-export function cancelDatabaseImport(): Promise<void> {
-  return invoke("cancel_database_import");
-}
-
-export interface DatabaseImportResult { success: boolean; message: string; events: DatabaseImportEvent[] }
-export function takeDatabaseImportResult(): Promise<DatabaseImportResult | null> {
-  return invoke("take_database_import_result");
-}
-export function clearDatabaseImportResult(): Promise<void> {
-  return invoke("clear_database_import_result");
-}
-
-/** Whether pdfinfo/pdftotext/pdfseparate/pdfunite were found — checked at startup and on Configurações. */
-export function checkPopplerStatus(): Promise<PopplerStatus> {
-  return invoke("check_poppler_status");
-}
-
-/** Saves (or, passing null, clears) the manual override for where to find the Poppler CLI tools. */
-export function setPopplerDir(dir: string | null): Promise<PopplerStatus> {
-  return invoke("set_poppler_dir", { dir });
-}
-
-/** Snapshots the database into the app's `backups/` folder before a forced delete, with `label` in the file name — resolves to the backup's path. */
-export function backupDatabaseBeforeDelete(label: string): Promise<string> {
-  // The server streams every change to Cloud Storage (Litestream), so there
-  // is no separate pre-delete copy to make.
-  void label;
-  return Promise.resolve("");
-}
-
-/** Whether "Minimizar na bandeja ao fechar" is on — checked on Configurações' mount. */
-export function getCloseToTray(): Promise<boolean> {
-  return invoke("get_close_to_tray");
-}
-
-/** Saves "Minimizar na bandeja ao fechar" — takes effect on the next close, no restart needed. */
-export function setCloseToTray(enabled: boolean): Promise<void> {
-  return invoke("set_close_to_tray", { enabled });
-}
-
-/** Swaps the tray icon (normal/"atenção" badge) and tooltip — reflects the aggregate check state even while the window is hidden. */
-export function setTrayStatus(attention: boolean, tooltip: string): Promise<void> {
-  // No system tray in the browser.
-  void attention;
-  void tooltip;
-  return Promise.resolve();
+/** Downloads a consistent copy of the live database ("Baixar uma cópia do banco"). */
+export async function downloadDatabaseCopy(): Promise<void> {
+  const { path } = await rpc<{ path: string }>("exportDatabase");
+  await downloadServerFile(path, "pontoscan.db");
 }
 
 /** Recently-picked payment template sample file paths, newest first — dead paths already filtered out. */

@@ -47,9 +47,9 @@ cd server && cargo test
 
 ## Migrations
 
-São as mesmas do desktop: os arquivos em `src-tauri/migrations/` e a lista em
-`src-tauri/src/migrations_list.rs`, compartilhada pelos dois. Um banco exportado
-do desktop abre aqui como já migrado. Para criar uma migration nova, adicione
+Ficam em `server/migrations/` e a lista, com a ordem, em `server/src/migrations_list.rs`.
+São as mesmas versões e o mesmo SQL do antigo app desktop, então um banco vindo
+dele abre aqui como já migrado. Para criar uma migration nova, adicione
 o `.sql` **e** a linha na lista. Nunca edite um arquivo ou uma linha que já existe.
 
 ## Login

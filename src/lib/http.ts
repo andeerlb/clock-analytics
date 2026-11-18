@@ -110,3 +110,15 @@ export async function fetchServerFile(path: string): Promise<ArrayBuffer> {
   const response = await send("GET", `/files/content?path=${encodeURIComponent(path)}`);
   return response.arrayBuffer();
 }
+
+/** A file stored on the server, as a `Blob` (large files stay on disk instead of in memory). */
+export async function fetchServerBlob(path: string): Promise<Blob> {
+  const response = await send("GET", `/files/content?path=${encodeURIComponent(path)}`);
+  return response.blob();
+}
+
+/** Git commit the server was built from ("dev" for local builds) — the "Versão" row in Configurações. */
+export async function fetchServerVersion(): Promise<string> {
+  const response = await send("GET", "/version");
+  return (await response.text()).trim();
+}

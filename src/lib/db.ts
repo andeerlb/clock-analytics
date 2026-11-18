@@ -1,6 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
 import { emit } from "./events";
-import Database from "@tauri-apps/plugin-sql";
 import { overtimeMinutesForDay, sumIntervalMinutes } from "./analysis";
 import type { PeriodStatusId } from "./periodStatus";
 import { api, ApiError, rpc } from "./http";
@@ -42,42 +40,9 @@ import type {
   StoredImport,
 } from "./types";
 
-export const DB_URL = "sqlite:pontoscan.db";
-
-let dbPromise: Promise<Database> | null = null;
-
-function getDb(): Promise<Database> {
-  if (!dbPromise) dbPromise = Database.load(DB_URL);
-  return dbPromise;
-}
-
-/** `{ $lastInsertId: n }` stands for the id the batch's own statement `n` (0-based) inserted. */
-type BatchParam = string | number | null | { $lastInsertId: number };
-interface BatchStatement {
-  sql: string;
-  params?: BatchParam[];
-  /** Error to fail (and roll back) the whole batch with when this statement changes no rows. */
-  expectChanges?: string;
-}
-
 /**
- * Runs `statements` as ONE transaction (see `run_write_batch` in
- * src-tauri/src/db_batch.rs) — all of them apply or, on the first error,
- * none do. Use for any write that spans several statements: separate
- * `db.execute` calls can't share a transaction, since the plugin hands each
- * one to whichever pooled connection is free.
- */
-async function runWriteBatch(
-  statements: BatchStatement[],
-): Promise<{ rowsAffected: number; lastInsertId: number }[]> {
-  // The batch runs on the pool `Database.load` registers — make sure it exists.
-  await getDb();
-  return invoke("run_write_batch", { db: DB_URL, statements });
-}
-
-/**
- * Broadcast (via Tauri's global event bus, reaching every open window —
- * the main one and a detached "Conferência de Pagamentos" window alike)
+ * Broadcast (via `lib/events`, reaching every open tab of the app — the
+ * main one and a separate "Conferência de Pagamentos" tab alike)
  * whenever a mutation changes what a `payment_shifts`/`payment_audits`
  * -backed list shows. `PaymentReconciliationScreen`/`PaymentsPage` each
  * listen for this to refetch, instead of the two windows only ever seeing
@@ -1094,14 +1059,7 @@ export interface RedundantOriginal {
 }
 
 export async function findRedundantOriginals(): Promise<RedundantOriginal[]> {
-  const db = await getDb();
-  return db.select<RedundantOriginal[]>(`
-    SELECT sf.id AS sourceFileId, sf.original_pdf_path AS path
-    FROM source_files sf
-    WHERE sf.page_count > 1
-      AND sf.original_pdf_path != ''
-      AND (SELECT COUNT(*) FROM imports i WHERE i.source_file_id = sf.id) = sf.page_count
-  `);
+  return rpc<RedundantOriginal[]>("findRedundantOriginals");
 }
 
 /**
@@ -1112,12 +1070,7 @@ export async function findRedundantOriginals(): Promise<RedundantOriginal[]> {
  */
 export async function markOriginalsRemoved(sourceFileIds: number[]): Promise<void> {
   if (sourceFileIds.length === 0) return;
-  const db = await getDb();
-  const placeholders = sourceFileIds.map((_, i) => `$${i + 1}`).join(", ");
-  await db.execute(
-    `UPDATE source_files SET original_pdf_path = '' WHERE id IN (${placeholders})`,
-    sourceFileIds,
-  );
+  await rpc<void>("markOriginalsRemoved", { sourceFileIds });
 }
 
 export async function listPaymentTemplates(): Promise<PaymentTemplateListRow[]> {
@@ -2114,21 +2067,7 @@ export async function setPaymentVisibleColumns(columns: string[]): Promise<void>
  * first thing to try before "Limpar tudo".
  */
 export async function vacuumDatabase(): Promise<void> {
-  const db = await getDb();
-  await db.execute("VACUUM");
-  await db.execute("PRAGMA wal_checkpoint(TRUNCATE)");
-}
-
-/** Flushes any WAL contents into the main file — call before copying `pontoscan.db` directly (export) so the single file is a complete, self-contained snapshot instead of missing whatever's still sitting in `-wal`. */
-export async function checkpointDatabase(): Promise<void> {
-  const db = await getDb();
-  await db.execute("PRAGMA wal_checkpoint(TRUNCATE)");
-}
-
-/** Closes the live connection — call before replacing the underlying `pontoscan.db` file (import) so nothing here still holds it open when the app relaunches onto the new one. */
-export async function closeDatabase(): Promise<void> {
-  const db = await getDb();
-  await db.close();
+  await rpc<void>("vacuumDatabase");
 }
 
 export interface ClearDataOptions {
@@ -2161,15 +2100,7 @@ export interface DatabaseTableSize {
  * ships, both `sqlx-sqlite`'s bundled SQLite and the system `sqlite3` CLI).
  */
 export async function getDatabaseTableSizes(): Promise<DatabaseTableSize[]> {
-  const db = await getDb();
-  return db.select<DatabaseTableSize[]>(
-    `SELECT m.tbl_name AS tableName, SUM(d.pgsize) AS bytes
-     FROM dbstat d
-     JOIN sqlite_master m ON m.name = d.name
-     WHERE m.type IN ('table', 'index')
-     GROUP BY m.tbl_name
-     ORDER BY bytes DESC`,
-  );
+  return rpc<DatabaseTableSize[]>("getDatabaseTableSizes");
 }
 
 /**
@@ -2181,10 +2112,7 @@ export async function getDatabaseTableSizes(): Promise<DatabaseTableSize[]> {
  * resolve here; the caller falls back to the raw filename in that case.
  */
 export async function getImportedFileNamesByBasename(): Promise<Map<string, string>> {
-  const db = await getDb();
-  const rows = await db.select<{ path: string; fileName: string }[]>(
-    "SELECT original_pdf_path AS path, file_name AS fileName FROM source_files WHERE original_pdf_path != ''",
-  );
+  const rows = await rpc<{ path: string; fileName: string }[]>("listImportedFileNames");
   const byBasename = new Map<string, string>();
   for (const row of rows) {
     const basename = row.path.split(/[/\\]/).pop();
@@ -2208,115 +2136,5 @@ export async function getImportedFileNamesByBasename(): Promise<Map<string, stri
  * two template kinds are independent of that chain and of each other.
  */
 export async function clearAllData(options: ClearDataOptions = {}): Promise<void> {
-  const db = await getDb();
-
-  const keepEmployees = Boolean(options.keepEmployees);
-  const keepClients = Boolean(options.keepClients) || keepEmployees;
-  const keepCompanies = Boolean(options.keepCompanies) || keepClients;
-  const keepPaymentTemplates = Boolean(options.keepPaymentTemplates);
-  const keepEmployeeTemplates = Boolean(options.keepEmployeeTemplates);
-  const keepManuallyEditedShifts = Boolean(options.keepManuallyEditedShifts) && keepEmployees;
-
-  // One transaction (`runWriteBatch`): either everything below is wiped or
-  // nothing is. Separate `db.execute` calls used to leave the data half
-  // deleted when a foreign key failed part-way. Order matters: this
-  // connection enforces foreign keys and none of them cascade, so every
-  // child goes before its parent.
-  const statements: string[] = [
-    "DELETE FROM punches",
-    "DELETE FROM day_records",
-    "DELETE FROM imports",
-    "DELETE FROM import_files",
-    // Self-referencing (previous_shift_id, "Fazer pagamento" history): null
-    // those first, or the bulk delete can trip on its own rows.
-    "UPDATE payment_shifts SET previous_shift_id = NULL WHERE previous_shift_id IS NOT NULL",
-  ];
-
-  // Payment shifts are import history too: always cleared, except, when
-  // asked, the ones edited by hand. What points at a shift that's going
-  // goes first: its audit (NOT NULL) and the check diffs that matched it.
-  const goingShifts = keepManuallyEditedShifts ? "SELECT id FROM payment_shifts WHERE edited_manually = 0" : "SELECT id FROM payment_shifts";
-  statements.push(
-    `DELETE FROM payment_audits WHERE payment_shift_id IN (${goingShifts})`,
-    `UPDATE source_url_check_diffs SET matched_shift_id = NULL WHERE matched_shift_id IN (${goingShifts})`,
-  );
-  if (keepManuallyEditedShifts) {
-    // A kept row loses its links into what's being wiped: source_files always
-    // goes, template_id only survives with keepPaymentTemplates. employee_id
-    // is NOT NULL, which is why keeping these requires keeping employees.
-    statements.push(
-      `UPDATE payment_shifts SET source_file_id = NULL${keepPaymentTemplates ? "" : ", template_id = NULL"} WHERE edited_manually = 1`,
-      "DELETE FROM payment_shifts WHERE edited_manually = 0",
-    );
-  } else {
-    statements.push("DELETE FROM payment_shifts");
-  }
-  statements.push("DELETE FROM source_files");
-
-  const clearedTables = ["punches", "day_records", "imports", "import_files", "payment_shifts", "source_files"];
-
-  // Templates are configuration, not history: optional to keep, and
-  // independent of the companies/clients/employees chain.
-  if (!keepPaymentTemplates) {
-    statements.push(
-      "DELETE FROM payment_template_rules",
-      "DELETE FROM payment_template_status_rules",
-      "DELETE FROM payment_template_fields",
-      "DELETE FROM payment_template_sheets",
-      "DELETE FROM payment_template_groups",
-      "DELETE FROM payment_templates",
-    );
-    clearedTables.push("payment_templates");
-  }
-  if (!keepEmployeeTemplates) {
-    statements.push(
-      "DELETE FROM employee_template_fields",
-      "DELETE FROM employee_template_sheets",
-      "DELETE FROM employee_template_groups",
-      "DELETE FROM employee_templates",
-    );
-    clearedTables.push("employee_templates");
-  }
-
-  if (!keepEmployees) {
-    // Everything with a NOT NULL employee_id goes before the employees,
-    // including their client/empresa links (employee_client_companies).
-    statements.push(
-      "DELETE FROM employee_pix_keys",
-      "DELETE FROM employee_aliases",
-      "DELETE FROM employee_client_companies",
-      "DELETE FROM employees",
-    );
-    clearedTables.push("employee_pix_keys", "employee_aliases", "employee_client_companies", "employees");
-  }
-  if (!keepClients) {
-    // A kept payment template can still point at a client through its
-    // routing rules: drop the rules, keep the template. Clients also own
-    // their value rules. (keepCompanies can only be false when keepClients
-    // is too, so this also covers a company wipe.)
-    statements.push(
-      "DELETE FROM payment_template_rules",
-      "DELETE FROM client_payment_value_rules",
-      "DELETE FROM client_companies",
-      "DELETE FROM clients",
-    );
-    clearedTables.push("client_payment_value_rules", "clients");
-  }
-  if (!keepCompanies) {
-    // Value rules and funções (with their aliases) belong to a company.
-    statements.push("DELETE FROM payment_value_rules", "DELETE FROM role_aliases", "DELETE FROM roles", "DELETE FROM companies");
-    clearedTables.push("payment_value_rules", "role_aliases", "roles", "companies");
-  }
-
-  await runWriteBatch(statements.map((statement) => ({ sql: statement })));
-
-  try {
-    const placeholders = clearedTables.map((_, i) => `$${i + 1}`).join(", ");
-    await db.execute(`DELETE FROM sqlite_sequence WHERE name IN (${placeholders})`, clearedTables);
-  } catch {
-    // No autoincrement table has ever been written to yet — nothing to reset.
-  }
-
-  await db.execute("VACUUM");
-  await db.execute("PRAGMA wal_checkpoint(TRUNCATE)");
+  await rpc<void>("clearAllData", { options });
 }

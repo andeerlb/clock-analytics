@@ -7,7 +7,7 @@
  *   `downloadServerFile()`: the browser saves the file to Downloads (or
  *   asks where, depending on the browser's setting).
  */
-import { fetchServerFile, uploadFiles } from "./http";
+import { fetchServerBlob, uploadFiles } from "./http";
 
 export interface PickOptions {
   /** e.g. [".pdf"] or [".csv", ".xlsx"]. */
@@ -82,8 +82,7 @@ export function downloadBlob(data: Blob | ArrayBuffer | Uint8Array, fileName: st
 
 /** Downloads a file stored on the server under `fileName`. */
 export async function downloadServerFile(path: string, fileName: string): Promise<void> {
-  const bytes = await fetchServerFile(path);
-  downloadBlob(bytes, fileName);
+  downloadBlob(await fetchServerBlob(path), fileName);
 }
 
 /** Last path component, for showing a server path to the user ("…/abc/Espelho.pdf" → "Espelho.pdf"). */
