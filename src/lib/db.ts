@@ -3,8 +3,8 @@ import { emit } from "./events";
 import Database from "@tauri-apps/plugin-sql";
 import { overtimeMinutesForDay, sumIntervalMinutes } from "./analysis";
 import { normalizeCnpj, normalizeCpf, parseTimeToMinutes } from "./format";
-import { PERIOD_STATUS_OPTIONS, type PeriodStatusId } from "./periodStatus";
-import { api } from "./http";
+import type { PeriodStatusId } from "./periodStatus";
+import { api, rpc } from "./http";
 import { detectPixKeyType, type PixKeyType } from "./pix";
 import type {
   ConflictInfo,
@@ -143,63 +143,6 @@ function foldAccentsSql(sqlExpr: string): string {
   return ACCENT_FOLD_PAIRS.reduce((expr, [from, to]) => `REPLACE(${expr}, '${from}', '${to}')`, `LOWER(${sqlExpr})`);
 }
 
-async function upsertEmployee(
-  db: Database,
-  companyId: number,
-  clientId: number,
-  name: string,
-  cpf: string,
-): Promise<number> {
-  // Digits-only, same normalization every other write path to `employees`
-  // applies (createEmployeeManual/updateEmployee/createEmployeesFromImport)
-  // — the PDF parser's own CPF regex allows dots/dashes through, so this is
-  // the only thing standing between a punctuated CPF and a stored row that
-  // `findEmployeeByAttempts`'s digits-only comparison would then silently
-  // never match again.
-  const normalizedCpf = normalizeCpf(cpf);
-  // Scoped to cpf alone — since 0072_employee_client_link.sql a colaborador
-  // is one person globally, not one person per cliente (and, since 0071,
-  // not one person per empresa either). Neither `clientId` nor `companyId`
-  // pick out *which* employee row this is anymore; they're just which
-  // (cliente, empresa) pair this particular timesheet import links them to,
-  // recorded below in `employee_client_companies` alongside every other
-  // pair they've already been imported under. Auto-linking a new pair here
-  // (instead of asking first, the way `createEmployeeManual`/
-  // `findEmployeeByAttempts` do for the same situation) mirrors this
-  // function's own prior behavior: it already silently auto-created a
-  // brand-new employee on an unmatched cpf with no confirmation step, and
-  // importing one specific PDF under an explicitly-chosen cliente/empresa is
-  // already a single deliberate action, not an ambiguous bulk match.
-  const existing = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1", [normalizedCpf]);
-  let employeeId: number;
-  if (existing.length > 0) {
-    employeeId = existing[0].id;
-    await db.execute("UPDATE employees SET name = $1 WHERE id = $2", [name, employeeId]);
-  } else {
-    const result = await db.execute("INSERT INTO employees (name, cpf) VALUES ($1, $2)", [name, normalizedCpf]);
-    employeeId = result.lastInsertId as number;
-  }
-  await db.execute(
-    `INSERT INTO employee_client_companies (employee_id, client_id, company_id) VALUES ($1, $2, $3)
-     ON CONFLICT (employee_id, client_id, company_id) DO NOTHING`,
-    [employeeId, clientId, companyId],
-  );
-  return employeeId;
-}
-
-async function upsertImportFile(db: Database, fileName: string, fileHash: string): Promise<number> {
-  const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM import_files WHERE file_hash = $1",
-    [fileHash],
-  );
-  if (existing.length > 0) return existing[0].id;
-  const result = await db.execute(
-    "INSERT INTO import_files (file_name, file_hash) VALUES ($1, $2)",
-    [fileName, fileHash],
-  );
-  return result.lastInsertId as number;
-}
-
 /**
  * Logs one import attempt — called right after parsing, regardless of
  * outcome, so the import history reflects every file that was ever
@@ -224,47 +167,7 @@ export async function logSourceFile(input: {
   sourceLastModified?: string | null;
   sourceContentLength?: number | null;
 }): Promise<number> {
-  const db = await getDb();
-  await db.execute(
-    `INSERT INTO source_files
-       (file_name, file_hash, page_count, provider, import_type, status, error_message, original_pdf_path,
-        source_url, source_etag, source_last_modified, source_content_length)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-     ON CONFLICT(file_hash) DO UPDATE SET
-       file_name = excluded.file_name,
-       page_count = excluded.page_count,
-       provider = excluded.provider,
-       import_type = excluded.import_type,
-       status = excluded.status,
-       error_message = excluded.error_message,
-       original_pdf_path = excluded.original_pdf_path,
-       source_url = excluded.source_url,
-       source_etag = excluded.source_etag,
-       source_last_modified = excluded.source_last_modified,
-       source_content_length = excluded.source_content_length,
-       imported_at = datetime('now')`,
-    [
-      input.fileName,
-      input.fileHash,
-      input.pageCount,
-      input.provider,
-      input.importType,
-      input.status,
-      input.errorMessage,
-      input.originalPdfPath,
-      input.sourceUrl ?? null,
-      input.sourceEtag ?? null,
-      input.sourceLastModified ?? null,
-      input.sourceContentLength ?? null,
-    ],
-  );
-  // `lastInsertId` isn't reliable across the ON CONFLICT DO UPDATE path, so
-  // look the row up explicitly rather than trust it.
-  const row = await db.select<{ id: number }[]>(
-    "SELECT id FROM source_files WHERE file_hash = $1",
-    [input.fileHash],
-  );
-  return row[0].id;
+  return rpc<number>("logSourceFile", { input });
 }
 
 /**
@@ -274,7 +177,7 @@ export async function logSourceFile(input: {
  * that case it should still be reprocessable.
  */
 export async function markSourceFileSaved(fileHash: string): Promise<void> {
-  await runWriteBatch(markSourceFilesSavedStatements([fileHash]));
+  await rpc<void>("markSourceFileSaved", { fileHash });
 }
 
 /** `markSourceFileSaved` as batch statements, for a save that must mark its files in the same transaction as the rows it wrote. */
@@ -285,25 +188,8 @@ function markSourceFilesSavedStatements(fileHashes: Iterable<string>): BatchStat
   }));
 }
 
-/**
- * Deletes an import and its day_records/punches. Cascades are done by hand
- * rather than relying on `ON DELETE CASCADE`, since sqlite only enforces
- * foreign keys when `PRAGMA foreign_keys = ON` was set on the connection,
- * which isn't guaranteed here.
- */
-function deleteImportStatements(importId: number): BatchStatement[] {
-  return [
-    {
-      sql: "DELETE FROM punches WHERE day_record_id IN (SELECT id FROM day_records WHERE import_id = $1)",
-      params: [importId],
-    },
-    { sql: "DELETE FROM day_records WHERE import_id = $1", params: [importId] },
-    { sql: "DELETE FROM imports WHERE id = $1", params: [importId] },
-  ];
-}
-
 export async function deleteImport(importId: number): Promise<void> {
-  await runWriteBatch(deleteImportStatements(importId));
+  await rpc<void>("deleteImport", { importId });
 }
 
 /**
@@ -326,31 +212,11 @@ export async function saveParsedTimesheet(
   replaceImportId?: number,
   sourceFileId?: number,
 ): Promise<number> {
-  const db = await getDb();
-
-  // A client can be linked to more than one company, so the pairing has to
-  // be validated explicitly rather than derived.
-  const link = await db.select<{ clientId: number }[]>(
-    "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
-    [clientId, companyId],
-  );
-  if (link.length === 0) {
-    throw new Error("Esse cliente não está vinculado à empresa selecionada.");
-  }
-
-  const employeeId = await upsertEmployee(
-    db,
-    companyId,
-    clientId,
-    sheet.employee.name,
-    sheet.employee.cpf,
-  );
-  const importFileId = await upsertImportFile(db, sheet.originalFileName, sheet.originalFileHash);
-
   // Computed once, here, at import time, over the whole (fixed) period —
   // the UI reads these instead of scanning day_records on every render.
   // `maxPunches` floors at 4 (2 pairs), matching the fixed grid the PDF
-  // itself always has, even on days that leave it unfilled.
+  // itself always has, even on days that leave it unfilled. Pure
+  // computation, so it stays here (analysis.ts) and the server stores it.
   let maxPunches = 4;
   let totalWorkedMinutes = 0;
   let overtimeMinutes = 0;
@@ -380,27 +246,16 @@ export async function saveParsedTimesheet(
     if (day.punches.length % 2 !== 0) pendingCount++;
   }
 
-  // The replaced import's removal and the new import's rows go in one
-  // transaction, so a failure part-way never leaves the old import gone
-  // with only half of the new one written.
-  const statements: BatchStatement[] = replaceImportId !== undefined ? deleteImportStatements(replaceImportId) : [];
-  const importStatementIndex = statements.length;
-  statements.push({
-    sql: `INSERT INTO imports
-       (provider, employee_id, client_id, company_id, period_start, period_end, original_pdf_path, import_file_id,
-        source_file_id, max_punches, total_worked_minutes, overtime_minutes, absence_minutes,
-        late_minutes, regular_minutes, interval_minutes, pending_count)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
-    params: [
-      sheet.provider,
-      employeeId,
-      clientId,
-      companyId,
-      sheet.period.start,
-      sheet.period.end,
-      sheet.originalPdfPath,
-      importFileId,
-      sourceFileId ?? null,
+  // The server validates the cliente/empresa pair, upserts the employee and
+  // import file, and removes `replaceImportId` + writes the new rows, all in
+  // one transaction.
+  return rpc<number>("saveParsedTimesheet", {
+    sheet,
+    clientId,
+    companyId,
+    replaceImportId: replaceImportId ?? null,
+    sourceFileId: sourceFileId ?? null,
+    aggregates: {
       maxPunches,
       totalWorkedMinutes,
       overtimeMinutes,
@@ -409,38 +264,8 @@ export async function saveParsedTimesheet(
       regularMinutes,
       intervalMinutes,
       pendingCount,
-    ],
+    },
   });
-
-  for (const day of sheet.days) {
-    const dayStatementIndex = statements.length;
-    statements.push({
-      sql: `INSERT INTO day_records
-         (import_id, date, weekday, total_worked_minutes, normal_hours_minutes, absence_minutes, observation)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      params: [
-        { $lastInsertId: importStatementIndex },
-        day.date,
-        day.weekday,
-        day.totalWorkedMinutes,
-        day.normalHoursMinutes,
-        day.absenceMinutes,
-        day.observation,
-      ],
-    });
-
-    for (let i = 0; i < day.punches.length; i++) {
-      statements.push({
-        sql: "INSERT INTO punches (day_record_id, punch_time, sequence_index) VALUES ($1, $2, $3)",
-        params: [{ $lastInsertId: dayStatementIndex }, day.punches[i], i],
-      });
-    }
-  }
-
-  const results = await runWriteBatch(statements);
-  const importId = results[importStatementIndex].lastInsertId;
-
-  return importId;
 }
 
 export interface CompanyRow {
@@ -1198,57 +1023,8 @@ export async function reassignEmployeeHistoryToClientCompany(
   ]);
 }
 
-const IMPORT_SELECT_COLUMNS = `
-  i.id AS importId,
-  i.provider AS provider,
-  i.employee_id AS employeeId,
-  e.name AS employeeName,
-  e.cpf AS employeeCpf,
-  c.id AS companyId,
-  c.name AS companyName,
-  cl.id AS clientId,
-  cl.name AS clientName,
-  i.period_start AS periodStart,
-  i.period_end AS periodEnd,
-  i.original_pdf_path AS originalPdfPath,
-  sf.original_pdf_path AS sourceOriginalPdfPath,
-  i.max_punches AS maxPunches,
-  i.total_worked_minutes AS totalWorkedMinutes,
-  i.overtime_minutes AS overtimeMinutes,
-  i.absence_minutes AS absenceMinutes,
-  i.late_minutes AS lateMinutes,
-  i.regular_minutes AS regularMinutes,
-  i.interval_minutes AS intervalMinutes,
-  i.pending_count AS pendingCount,
-  i.imported_at AS importedAt
-`;
-
-const IMPORT_FROM_CLAUSE = `
-  FROM imports i
-  JOIN employees e ON e.id = i.employee_id
-  JOIN companies c ON c.id = i.company_id
-  LEFT JOIN clients cl ON cl.id = i.client_id
-  LEFT JOIN source_files sf ON sf.id = i.source_file_id
-`;
-
-/** Which raw `imports` column(s) each "Status no período" checkbox reads — must stay in sync with `PERIOD_STATUS_OPTIONS`' `matches` functions, which do the same test in JS on already-fetched rows. */
-const STATUS_SQL_CONDITIONS: Record<PeriodStatusId, string> = {
-  overtime: "i.overtime_minutes > 0",
-  absence: "i.absence_minutes > 0",
-  late: "i.late_minutes > 0",
-  regular: "i.regular_minutes > 0",
-  "no-punch": "i.total_worked_minutes = 0",
-  pending: "i.pending_count > 0",
-  interval: "i.interval_minutes > 0",
-};
-
 export async function getImportById(id: number): Promise<StoredImport | null> {
-  const db = await getDb();
-  const rows = await db.select<StoredImport[]>(
-    `SELECT ${IMPORT_SELECT_COLUMNS} ${IMPORT_FROM_CLAUSE} WHERE i.id = $1`,
-    [id],
-  );
-  return rows[0] ?? null;
+  return rpc<StoredImport | null>("getImportById", { id });
 }
 
 export interface ListImportsQuery {
@@ -1266,38 +1042,13 @@ export interface ListImportsQuery {
 
 type ImportScopeQuery = Pick<ListImportsQuery, "employeeIds" | "companyIds" | "clientIds" | "periodStart" | "periodEnd">;
 
-/** Everything but "Status no período": colaborador, empresa, cliente and the period overlap. */
-function importScopeConditions(query: ImportScopeQuery): { conditions: string[]; params: (string | number)[] } {
-  const conditions: string[] = [];
-  const params: (string | number)[] = [];
-
-  const employeeClause = inClause("e.id", query.employeeIds ?? [], params);
-  if (employeeClause) conditions.push(employeeClause);
-  const companyClause = inClause("c.id", query.companyIds ?? [], params);
-  if (companyClause) conditions.push(companyClause);
-  const clientClause = inClause("cl.id", query.clientIds ?? [], params);
-  if (clientClause) conditions.push(clientClause);
-
-  params.push(query.periodStart, query.periodEnd);
-  conditions.push(`i.period_end >= $${params.length - 1} AND i.period_start <= $${params.length}`);
-
-  return { conditions, params };
-}
-
 /**
  * How many imports in scope match each "Status no período" category, for
  * the counts on the status chips. Ignores the status filter itself, so
  * each count says what picking that chip alone would bring in.
  */
 export async function countImportsByStatus(query: ImportScopeQuery): Promise<Record<PeriodStatusId, number>> {
-  const db = await getDb();
-  const { conditions, params } = importScopeConditions(query);
-  const ids = Object.keys(STATUS_SQL_CONDITIONS) as PeriodStatusId[];
-  const sums = ids.map((id, index) => `COALESCE(SUM(CASE WHEN ${STATUS_SQL_CONDITIONS[id]} THEN 1 ELSE 0 END), 0) AS s${index}`).join(", ");
-  const rows = await db.select<Record<string, number>[]>(`SELECT ${sums} ${IMPORT_FROM_CLAUSE} WHERE ${conditions.join(" AND ")}`, params);
-  const counts = {} as Record<PeriodStatusId, number>;
-  ids.forEach((id, index) => (counts[id] = rows[0]?.[`s${index}`] ?? 0));
-  return counts;
+  return rpc<Record<PeriodStatusId, number>>("countImportsByStatus", { query });
 }
 
 /**
@@ -1309,36 +1060,7 @@ export async function countImportsByStatus(query: ImportScopeQuery): Promise<Rec
  */
 export async function listImports(query: ListImportsQuery): Promise<PagedResult<StoredImport>> {
   if (query.statuses.length === 0) return { rows: [], total: 0 };
-
-  const db = await getDb();
-  const { conditions, params } = importScopeConditions(query);
-
-  if (query.statuses.length < PERIOD_STATUS_OPTIONS.length) {
-    conditions.push(`(${query.statuses.map((s) => STATUS_SQL_CONDITIONS[s]).join(" OR ")})`);
-  }
-
-  const whereClause = `WHERE ${conditions.join(" AND ")}`;
-
-  const countRows = await db.select<{ count: number }[]>(
-    `SELECT COUNT(*) AS count ${IMPORT_FROM_CLAUSE} ${whereClause}`,
-    params,
-  );
-  const total = countRows[0]?.count ?? 0;
-
-  const paginate = query.page !== undefined && query.pageSize !== undefined;
-  const limitClause = paginate ? `LIMIT $${params.length + 1} OFFSET $${params.length + 2}` : "";
-  const limitParams = paginate ? [query.pageSize!, query.page! * query.pageSize!] : [];
-
-  const rows = await db.select<StoredImport[]>(
-    `SELECT ${IMPORT_SELECT_COLUMNS}
-     ${IMPORT_FROM_CLAUSE}
-     ${whereClause}
-     ORDER BY i.imported_at DESC
-     ${limitClause}`,
-    [...params, ...limitParams],
-  );
-
-  return { rows, total };
+  return rpc<PagedResult<StoredImport>>("listImports", { query });
 }
 
 interface DayRecordFilters {
@@ -1353,82 +1075,7 @@ interface DayRecordFilters {
 export async function listStoredDayRecords(
   filters: DayRecordFilters,
 ): Promise<StoredDayRecord[]> {
-  const db = await getDb();
-
-  const conditions: string[] = [];
-  const params: unknown[] = [];
-  if (filters.importId !== undefined) {
-    params.push(filters.importId);
-    conditions.push(`i.id = $${params.length}`);
-  }
-  if (filters.companyId !== undefined) {
-    params.push(filters.companyId);
-    conditions.push(`c.id = $${params.length}`);
-  }
-  if (filters.clientId !== undefined) {
-    params.push(filters.clientId);
-    conditions.push(`cl.id = $${params.length}`);
-  }
-  if (filters.periodStart !== undefined) {
-    params.push(filters.periodStart);
-    conditions.push(`d.date >= $${params.length}`);
-  }
-  if (filters.periodEnd !== undefined) {
-    params.push(filters.periodEnd);
-    conditions.push(`d.date <= $${params.length}`);
-  }
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-
-  const rows = await db.select<Omit<StoredDayRecord, "punches">[]>(
-    `
-    SELECT
-      d.id AS dayRecordId,
-      d.import_id AS importId,
-      e.id AS employeeId,
-      e.name AS employeeName,
-      e.cpf AS employeeCpf,
-      c.id AS companyId,
-      c.name AS companyName,
-      cl.id AS clientId,
-      cl.name AS clientName,
-      i.original_pdf_path AS originalPdfPath,
-      d.date AS date,
-      d.weekday AS weekday,
-      d.total_worked_minutes AS totalWorkedMinutes,
-      d.normal_hours_minutes AS normalHoursMinutes,
-      d.absence_minutes AS absenceMinutes,
-      d.observation AS observation
-    FROM day_records d
-    JOIN imports i ON i.id = d.import_id
-    JOIN employees e ON e.id = i.employee_id
-    JOIN companies c ON c.id = i.company_id
-    LEFT JOIN clients cl ON cl.id = i.client_id
-    ${where}
-    ORDER BY e.name, d.date
-    `,
-    params,
-  );
-
-  if (rows.length === 0) return [];
-
-  const dayRecordIds = rows.map((r) => r.dayRecordId);
-  const placeholders = dayRecordIds.map((_, i) => `$${i + 1}`).join(", ");
-  const punchRows = await db.select<
-    { dayRecordId: number; punchTime: string; sequenceIndex: number }[]
-  >(
-    `SELECT day_record_id AS dayRecordId, punch_time AS punchTime, sequence_index AS sequenceIndex
-     FROM punches WHERE day_record_id IN (${placeholders}) ORDER BY day_record_id, sequence_index`,
-    dayRecordIds,
-  );
-
-  const punchesByDay = new Map<number, string[]>();
-  for (const p of punchRows) {
-    const list = punchesByDay.get(p.dayRecordId) ?? [];
-    list.push(p.punchTime);
-    punchesByDay.set(p.dayRecordId, list);
-  }
-
-  return rows.map((r) => ({ ...r, punches: punchesByDay.get(r.dayRecordId) ?? [] }));
+  return rpc<StoredDayRecord[]>("listStoredDayRecords", { filters });
 }
 
 /**
@@ -1448,56 +1095,8 @@ export async function findDuplicateFiles(
   hashes: string[],
 ): Promise<Map<string, DuplicateFileInfo>> {
   if (hashes.length === 0) return new Map();
-  const db = await getDb();
-
-  const placeholders = hashes.map((_, i) => `$${i + 1}`).join(", ");
-  const sourceRows = await db.select<
-    { fileHash: string; fileName: string; importedAt: string; pageCount: number }[]
-  >(
-    `SELECT file_hash AS fileHash, file_name AS fileName, imported_at AS importedAt,
-            page_count AS pageCount
-     FROM source_files WHERE file_hash IN (${placeholders}) AND saved_at IS NOT NULL`,
-    hashes,
-  );
-  if (sourceRows.length === 0) return new Map();
-
-  const singlePageHashes = sourceRows.filter((r) => r.pageCount === 1).map((r) => r.fileHash);
-  const employeesByHash = new Map<
-    string,
-    { importId: number; employeeName: string; companyName: string }[]
-  >();
-  if (singlePageHashes.length > 0) {
-    const ph = singlePageHashes.map((_, i) => `$${i + 1}`).join(", ");
-    const empRows = await db.select<
-      { fileHash: string; importId: number; employeeName: string; companyName: string }[]
-    >(
-      `
-      SELECT f.file_hash AS fileHash, i.id AS importId, e.name AS employeeName, c.name AS companyName
-      FROM import_files f
-      JOIN imports i ON i.import_file_id = f.id
-      JOIN employees e ON e.id = i.employee_id
-      JOIN companies c ON c.id = e.company_id
-      WHERE f.file_hash IN (${ph})
-      `,
-      singlePageHashes,
-    );
-    for (const row of empRows) {
-      const list = employeesByHash.get(row.fileHash) ?? [];
-      list.push({ importId: row.importId, employeeName: row.employeeName, companyName: row.companyName });
-      employeesByHash.set(row.fileHash, list);
-    }
-  }
-
-  const byHash = new Map<string, DuplicateFileInfo>();
-  for (const row of sourceRows) {
-    byHash.set(row.fileHash, {
-      fileName: row.fileName,
-      importedAt: row.importedAt,
-      pageCount: row.pageCount,
-      employees: employeesByHash.get(row.fileHash) ?? [],
-    });
-  }
-  return byHash;
+  const byHash = await rpc<Record<string, DuplicateFileInfo>>("findDuplicateFiles", { hashes });
+  return new Map(Object.entries(byHash));
 }
 
 /**
@@ -1518,23 +1117,13 @@ export async function findConflictingImport(
   periodStart: string,
   periodEnd: string,
 ): Promise<{ importId: number; periodStart: string; periodEnd: string; importedAt: string } | null> {
-  const db = await getDb();
-  const rows = await db.select<
-    { importId: number; periodStart: string; periodEnd: string; importedAt: string }[]
-  >(
-    `
-    SELECT i.id AS importId, i.period_start AS periodStart, i.period_end AS periodEnd,
-           i.imported_at AS importedAt
-    FROM imports i
-    JOIN employees e ON e.id = i.employee_id
-    WHERE e.cpf = $1 AND i.client_id = $2 AND i.company_id = $3
-      AND i.period_start <= $5 AND i.period_end >= $4
-    ORDER BY i.imported_at DESC
-    LIMIT 1
-    `,
-    [employeeCpf, clientId, companyId, periodStart, periodEnd],
-  );
-  return rows[0] ?? null;
+  return rpc<{ importId: number; periodStart: string; periodEnd: string; importedAt: string } | null>("findConflictingImport", {
+    employeeCpf,
+    clientId,
+    companyId,
+    periodStart,
+    periodEnd,
+  });
 }
 
 /**
@@ -1547,27 +1136,7 @@ export async function findConflicts(
   clientId: number,
   companyId: number,
 ): Promise<ConflictInfo[]> {
-  const conflicts: ConflictInfo[] = [];
-  for (let i = 0; i < sheets.length; i++) {
-    const sheet = sheets[i];
-    const existing = await findConflictingImport(
-      sheet.employee.cpf,
-      clientId,
-      companyId,
-      sheet.period.start,
-      sheet.period.end,
-    );
-    if (existing) {
-      conflicts.push({
-        sheetIndex: i,
-        existingImportId: existing.importId,
-        existingPeriodStart: existing.periodStart,
-        existingPeriodEnd: existing.periodEnd,
-        existingImportedAt: existing.importedAt,
-      });
-    }
-  }
-  return conflicts;
+  return rpc<ConflictInfo[]>("findConflicts", { sheets, clientId, companyId });
 }
 
 export interface ImportFilesQuery {
@@ -1591,18 +1160,7 @@ export interface ImportFileCounts {
 
 /** Per-filter counts for the import history's chips (unaffected by search). */
 export async function countImportFiles(importType: ImportType): Promise<ImportFileCounts> {
-  const db = await getDb();
-  const rows = await db.select<ImportFileCounts[]>(
-    `SELECT
-      COUNT(*) AS total,
-      COALESCE(SUM(CASE WHEN source_url IS NOT NULL THEN 1 ELSE 0 END), 0) AS link,
-      COALESCE(SUM(CASE WHEN source_url IS NULL THEN 1 ELSE 0 END), 0) AS local,
-      COALESCE(SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END), 0) AS problems
-    FROM source_files
-    WHERE import_type = $1`,
-    [importType],
-  );
-  return rows[0] ?? { total: 0, link: 0, local: 0, problems: 0 };
+  return rpc<ImportFileCounts>("countImportFiles", { importType });
 }
 
 /**
@@ -1610,53 +1168,7 @@ export async function countImportFiles(importType: ImportType): Promise<ImportFi
  * recent first — filtered and paginated in SQL, not in memory.
  */
 export async function listImportFiles(query: ImportFilesQuery): Promise<PagedResult<ImportFileRow>> {
-  const db = await getDb();
-  const conditions = ["sf.import_type = $1"];
-  const params: (string | number)[] = [query.importType];
-
-  const search = query.search?.trim();
-  if (search) {
-    params.push(search);
-    const n = params.length;
-    conditions.push(`(LOWER(sf.file_name) LIKE '%' || LOWER($${n}) || '%' OR LOWER(sf.provider) LIKE '%' || LOWER($${n}) || '%')`);
-  }
-  if (query.source === "link") conditions.push("sf.source_url IS NOT NULL");
-  if (query.source === "local") conditions.push("sf.source_url IS NULL");
-  if (query.problemsOnly) conditions.push("sf.status <> 'success'");
-
-  const whereClause = `WHERE ${conditions.join(" AND ")}`;
-
-  const countRows = await db.select<{ count: number }[]>(
-    `SELECT COUNT(*) AS count FROM source_files sf ${whereClause}`,
-    params,
-  );
-  const total = countRows[0]?.count ?? 0;
-
-  const rawRows = await db.select<(Omit<ImportFileRow, "checkDisabled"> & { checkDisabled: number })[]>(
-    `SELECT
-      sf.id,
-      sf.file_name AS fileName,
-      sf.file_hash AS fileHash,
-      sf.provider,
-      sf.import_type AS importType,
-      sf.status,
-      sf.error_message AS errorMessage,
-      sf.original_pdf_path AS originalPdfPath,
-      sf.page_count AS pageCount,
-      sf.imported_at AS importedAt,
-      sf.saved_at AS savedAt,
-      sf.source_url AS sourceUrl,
-      COALESCE(sus.check_disabled, 0) AS checkDisabled
-    FROM source_files sf
-    LEFT JOIN source_url_settings sus ON sus.source_url = sf.source_url
-    ${whereClause}
-    ORDER BY sf.imported_at DESC
-    LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-    [...params, query.pageSize, query.page * query.pageSize],
-  );
-  const rows: ImportFileRow[] = rawRows.map((r) => ({ ...r, checkDisabled: Boolean(r.checkDisabled) }));
-
-  return { rows, total };
+  return rpc<PagedResult<ImportFileRow>>("listImportFiles", { query });
 }
 
 export type UrlCheckResult = "changed" | "unchanged" | "unknown" | "error";

@@ -1,10 +1,9 @@
-import { save } from "@tauri-apps/plugin-dialog";
-import { ChevronLeft, ChevronRight, Download, FolderOpen, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, X } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { useEffect, useRef, useState } from "react";
-import { copyPdfTo, readPdfBytes, revealInFileManager } from "../lib/api";
+import { copyPdfTo, readPdfBytes } from "../lib/api";
 import { sanitizeFileName } from "../lib/format";
 import Modal, { ModalClose } from "./Modal";
 
@@ -34,7 +33,7 @@ export default function PdfViewerModal({
   /** `null` keeps the modal unmounted/closed. */
   path: string | null;
   title?: string;
-  /** Hide "Baixar" — for a file whose save location the user already picked themselves (e.g. a just-generated report), where downloading a second copy would be redundant. "Ver no explorador" still makes sense there, to locate what was already saved. */
+  /** Hide "Baixar" — for a file whose save location the user already picked themselves (e.g. a just-generated report), where downloading a second copy would be redundant. */
   allowDownload?: boolean;
   onClose: () => void;
 }) {
@@ -44,7 +43,6 @@ export default function PdfViewerModal({
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const [revealing, setRevealing] = useState(false);
   const [pageSize, setPageSize] = useState<{ width: number; height: number } | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -184,29 +182,12 @@ export default function PdfViewerModal({
     setDownloading(true);
     setDownloadError(null);
     try {
-      const destPath = await save({
-        defaultPath: `${sanitizeFileName(title ?? "documento")}.pdf`,
-        filters: [{ name: "PDF", extensions: ["pdf"] }],
-      });
-      if (!destPath) return;
-      await copyPdfTo(path, destPath);
+      // No save dialog on the web: the browser downloads it under the suggested name.
+      await copyPdfTo(path, `${sanitizeFileName(title ?? "documento")}.pdf`);
     } catch (e) {
       setDownloadError(String(e));
     } finally {
       setDownloading(false);
-    }
-  }
-
-  async function handleReveal() {
-    if (!path) return;
-    setRevealing(true);
-    setDownloadError(null);
-    try {
-      await revealInFileManager(path);
-    } catch (e) {
-      setDownloadError(String(e));
-    } finally {
-      setRevealing(false);
     }
   }
 
@@ -257,16 +238,6 @@ export default function PdfViewerModal({
                     </button>
                   </div>
                 )}
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={handleReveal}
-                  disabled={revealing || !doc}
-                  title="Ver no explorador de arquivos"
-                >
-                  <FolderOpen size={15} style={{ marginRight: "0.4rem" }} />
-                  Ver no explorador
-                </button>
                 {allowDownload && (
                   <button
                     type="button"
