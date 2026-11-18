@@ -27,7 +27,6 @@ import {
   type EmployeeDeletionImpact,
   type EmployeePixKeyRow,
 } from "../lib/db";
-import { backupDatabaseBeforeDelete } from "../lib/api";
 import { formatCurrencyBRL, maskCpf } from "../lib/format";
 import { detectPixKeyType, PIX_KEY_TYPE_LABELS, PIX_KEY_TYPES, type PixKeyType } from "../lib/pix";
 
@@ -94,8 +93,8 @@ export default function EmployeeFormPage() {
   // "Excluir colaborador" — irreversible, wipes payment_shifts/imports too
   // (see `deleteEmployee`). A colaborador who was ever paid can only go
   // through "Excluir mesmo assim": the modal shows exactly what would be
-  // erased, the name has to be typed to confirm, and a backup of the
-  // database is taken right before.
+  // erased and the name has to be typed to confirm (the server's database is
+  // backed up continuously, so there's no per-delete backup on the web).
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteImpact, setDeleteImpact] = useState<EmployeeDeletionImpact | null>(null);
   const [deleteTypedName, setDeleteTypedName] = useState("");
@@ -118,7 +117,6 @@ export default function EmployeeFormPage() {
     setDeleteError(null);
     try {
       if (forceDelete) {
-        await backupDatabaseBeforeDelete(name);
         await deleteEmployee(Number(id), { allowPaid: true });
       } else {
         await deleteEmployee(Number(id));
@@ -665,9 +663,6 @@ export default function EmployeeFormPage() {
             <li>{deleteImpact.timesheets} {deleteImpact.timesheets === 1 ? "cartão de ponto" : "cartões de ponto"}</li>
             <li>{deleteImpact.pixKeys} {deleteImpact.pixKeys === 1 ? "chave PIX" : "chaves PIX"}</li>
           </ul>
-          <p className="muted" style={{ marginTop: 0 }}>
-            Antes de excluir, uma cópia de segurança do banco é salva na pasta <span className="mono">backups/</span> dos dados do app.
-          </p>
           <div className="field">
             <label htmlFor="delete-confirm-name">
               Digite <strong>{name}</strong> para confirmar
