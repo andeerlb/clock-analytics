@@ -105,3 +105,23 @@ gcloud compute ssh tapago --zone us-east1-b --tunnel-through-iap -- sudo google_
   `us-west1`/`us-central1`/`us-east1` e de `pd-standard` até 30 GB, passa a ser cobrado.
 - Os dados ficam no disco da VM **e** no bucket. Se a VM for apagada e recriada, o
   serviço restaura o banco do bucket ao subir.
+
+## Substituir o banco (restauração ou dados de outro lugar)
+
+Não há tela para isso: é manutenção, feita daqui com o `gcloud` logado.
+
+```sh
+cd infra
+./replace-database.sh caminho/para/banco.db
+```
+
+O script confere o arquivo, para o servidor e o backup contínuo, guarda o banco atual na
+VM (`/var/lib/tapago/tapago.db.antes-<data>`), coloca o novo no lugar, zera a réplica
+antiga do backup (que recomeça a partir do banco novo), sobe o servidor (que aplica as
+migrations que faltarem), **recoloca as pessoas de "Usuários e perfis"** que estavam no
+banco anterior e mostra os números. Os admins iniciais (`TAPAGO_ALLOWED_EMAILS`) não
+dependem do banco.
+
+Para voltar atrás, rode o mesmo script com a cópia `tapago.db.antes-<data>` (copie-a da
+VM antes com `gcloud compute scp`).
+
