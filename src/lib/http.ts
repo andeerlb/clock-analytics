@@ -26,6 +26,13 @@ export function setAuthFailureHandler(handler: AuthFailureHandler): void {
   authFailureHandler = handler;
 }
 
+let permissionDeniedHandler: () => void = () => {};
+
+/** Set by `AuthProvider`: a request the profile doesn't allow re-reads the profile. */
+export function setPermissionDeniedHandler(handler: () => void): void {
+  permissionDeniedHandler = handler;
+}
+
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -49,13 +56,21 @@ async function send(method: string, path: string, body?: BodyInit, contentType?:
 
   if (!response.ok) {
     let message = `Erro ${response.status} no servidor.`;
+    let reason: string | undefined;
     try {
       const data = await response.json();
       if (typeof data?.error === "string") message = data.error;
+      if (typeof data?.reason === "string") reason = data.reason;
     } catch {
       // Not JSON (proxy error page, etc.) — keep the generic message.
     }
-    if (response.status === 401 || response.status === 403) authFailureHandler(response.status);
+    if (response.status === 403 && reason === "permission") {
+      // Signed in, but the profile doesn't allow this: show the message and
+      // re-read the profile (it may have just changed), don't sign out.
+      permissionDeniedHandler();
+    } else if (response.status === 401 || response.status === 403) {
+      authFailureHandler(response.status);
+    }
     throw new ApiError(message, response.status);
   }
   return response;

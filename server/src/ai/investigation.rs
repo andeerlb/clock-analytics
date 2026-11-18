@@ -623,11 +623,16 @@ const BLOCKED_COLUMNS: &[&str] = &[
     "source_url",
     "source_etag",
     "employee_name",
+    // Who saved a downloaded spreadsheet: a person's name or e-mail.
+    "saved_by",
 ];
+
+/// Tables the model can't read at all: who may sign in, and their e-mails.
+const BLOCKED_TABLES: &[&str] = &["app_users"];
 
 fn column_allowed(table: &str, column: &str) -> bool {
     let (table, column) = (table.to_ascii_lowercase(), column.to_ascii_lowercase());
-    if BLOCKED_COLUMNS.contains(&column.as_str()) {
+    if BLOCKED_COLUMNS.contains(&column.as_str()) || BLOCKED_TABLES.contains(&table.as_str()) {
         return false;
     }
     !matches!(

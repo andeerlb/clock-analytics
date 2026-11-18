@@ -385,6 +385,27 @@ button.app-nav-toggle:hover {
   min-width: 0;
 }
 
+/* "Somente visualização": the profile can view this area but not change it. */
+.page-head-readonly {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  white-space: nowrap;
+}
+
+/* A page the profile has no access to (see AreaRoute). */
+.access-denied {
+  display: grid;
+  gap: 0.4rem;
+  justify-items: center;
+  text-align: center;
+  padding: 3rem 1rem;
+}
+
 .page-head-title h2 {
   margin: 0;
   font-size: 1.4rem;
@@ -9510,3 +9531,53 @@ tr.virtual-spacer td {
   font-size: 12.5px;
   color: var(--outline);
 }
+
+/* ---- Usuários e perfis ---- */
+.users-row { flex-wrap: wrap; }
+.users-email { overflow-wrap: anywhere; }
+.users-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface-container);
+}
+.users-add input { flex: 1; min-width: 14rem; }
+.users-profiles {
+  display: grid;
+  grid-template-columns: 13.5rem minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .users-profiles { grid-template-columns: minmax(0, 1fr); }
+}
+.users-profile-list .users-profile-active { background: var(--accent-soft); }
+.users-profile-name { flex: 1; min-width: 10rem; }
+.users-section { display: block; padding: 0.9rem 1rem 0.2rem; }
+.users-profile-actions { justify-content: flex-end; gap: 0.5rem; flex-wrap: wrap; }
+.users-hint { font-size: 0.82rem; margin-top: 0.75rem; }
+.users-seg {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--surface-container);
+}
+.users-seg button {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.3rem 0.65rem;
+  border-radius: 6px;
+}
+.users-seg button[aria-pressed="true"] {
+  background: var(--surface-bright);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
+}
+.users-seg button:disabled { cursor: not-allowed; opacity: 0.7; }

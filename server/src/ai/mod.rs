@@ -200,7 +200,7 @@ mod tests {
     const KEY: &str = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz-WXYZ";
 
     async fn save(state: &AppState, key: &str, email: &str) -> ApiResult<StatusCode> {
-        ai_set_api_key(State(state.clone()), Extension(AuthUser { email: email.into() }), Json(SetKeyArgs { api_key: key.into() })).await
+        ai_set_api_key(State(state.clone()), Extension(AuthUser { email: email.into(), initial_admin: true }), Json(SetKeyArgs { api_key: key.into() })).await
     }
 
     async fn status(state: &AppState) -> Value {
@@ -242,7 +242,7 @@ mod tests {
     #[tokio::test]
     async fn clearing_removes_the_key_and_is_fine_when_there_is_none() {
         let state = AppState::for_tests().await;
-        let clear = || ai_clear_api_key(State(state.clone()), Extension(AuthUser { email: "ana@empresa.com".into() }));
+        let clear = || ai_clear_api_key(State(state.clone()), Extension(AuthUser { email: "ana@empresa.com".into(), initial_admin: true }));
         assert_eq!(clear().await.unwrap(), StatusCode::NO_CONTENT);
         save(&state, KEY, "ana@empresa.com").await.unwrap();
         clear().await.unwrap();

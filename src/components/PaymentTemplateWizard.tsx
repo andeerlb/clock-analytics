@@ -23,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState, type DragEvent } from "react";
+import { READ_ONLY_TITLE, useReadOnly } from "./AreaRoute";
 import Modal, { useModalClose } from "./Modal";
 
 /** Header X, routed through `useModalClose` instead of the raw `onClose` prop so it plays the same animated exit `Modal` already uses for Escape/backdrop. */
@@ -239,6 +240,7 @@ export default function PaymentTemplateWizard({
   const [urlError, setUrlError] = useState<string | null>(null);
 
   const isEditing = target !== null && target !== "new";
+  const readOnly = useReadOnly();
   const steps: WizardStep[] = isEditing ? ["mapping", "details"] : ["file", "mapping", "details"];
   const currentStep = steps[stepIndex];
 
@@ -972,7 +974,7 @@ export default function PaymentTemplateWizard({
         onClick={(e) => e.stopPropagation()}
       >
         <strong style={{ fontSize: "0.95rem" }}>
-          {isEditing ? "Editar template de pagamento" : "Novo template de pagamento"}
+          {readOnly ? "Template de pagamento" : isEditing ? "Editar template de pagamento" : "Novo template de pagamento"}
         </strong>
         <CloseButton />
       </div>
@@ -1919,7 +1921,9 @@ export default function PaymentTemplateWizard({
           <button
             type="button"
             onClick={handleSave}
+            title={readOnly ? READ_ONLY_TITLE : undefined}
             disabled={
+              readOnly ||
               busy ||
               !name.trim() ||
               rules.length === 0 ||

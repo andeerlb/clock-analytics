@@ -28,16 +28,18 @@ pub struct Config {
 
 #[derive(Debug, Clone)]
 pub enum AuthConfig {
-    /// Production: verify Firebase ID tokens and only let in the listed
-    /// e-mails. Firebase lets *any* Google account sign in, so the
-    /// allowlist is what actually decides who can use the system.
+    /// Production: verify Firebase ID tokens. `allowed_emails` are the
+    /// initial admins (always Admin); everyone else needs to be registered
+    /// on "Usuários e perfis" (see `access.rs`).
     Firebase {
         project_id: String,
         allowed_emails: HashSet<String>,
     },
     /// Local development only (debug builds): every request is treated as
-    /// this user, no token needed.
-    DevBypass { email: String },
+    /// this user, no token needed. `admin`: an initial admin, unless
+    /// PONTOSCAN_ALLOWED_EMAILS is also set and doesn't list it (to try a
+    /// profile registered on "Usuários e perfis").
+    DevBypass { email: String, admin: bool },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -79,10 +81,23 @@ impl Config {
 }
 
 impl AuthConfig {
+    /// Always Admin, whatever "Usuários e perfis" says, so nobody gets locked out.
+    pub fn initial_admins(&self) -> Vec<String> {
+        let mut emails: Vec<String> = match self {
+            AuthConfig::Firebase { allowed_emails, .. } => allowed_emails.iter().cloned().collect(),
+            AuthConfig::DevBypass { email, admin: true } => vec![email.clone()],
+            AuthConfig::DevBypass { admin: false, .. } => Vec::new(),
+        };
+        emails.sort();
+        emails
+    }
+
     fn from_env() -> Result<Self, ConfigError> {
         if let Some(email) = var("PONTOSCAN_DEV_USER_EMAIL") {
             if cfg!(debug_assertions) {
-                return Ok(AuthConfig::DevBypass { email: email.to_lowercase() });
+                let email = email.to_lowercase();
+                let admin = var("PONTOSCAN_ALLOWED_EMAILS").is_none_or(|list| list.split(',').any(|e| e.trim().eq_ignore_ascii_case(&email)));
+                return Ok(AuthConfig::DevBypass { email, admin });
             }
             // A release binary must never run without real auth, even if the
             // variable leaked into its environment.

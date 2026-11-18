@@ -1,9 +1,10 @@
 //! Login. The browser signs in with Google through Firebase Authentication
 //! and sends the resulting Firebase ID token on every API call
 //! (`Authorization: Bearer <token>`). This module checks that token
-//! (signature, audience, issuer, expiry) and then the e-mail allowlist —
-//! Firebase accepts *any* Google account, so the allowlist is what keeps
-//! everyone else out.
+//! (signature, audience, issuer, expiry) and tells who is calling. Firebase
+//! accepts *any* Google account: whether that person may use the system, and
+//! what they may do, is decided next by `access::authorize` (initial admins
+//! from the configuration, everyone else from "Usuários e perfis").
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -35,6 +36,8 @@ const LEEWAY_SECS: u64 = 60;
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub email: String,
+    /// Listed in `PONTOSCAN_ALLOWED_EMAILS` (or the dev user): always Admin.
+    pub initial_admin: bool,
 }
 
 pub struct Authenticator {
@@ -43,7 +46,7 @@ pub struct Authenticator {
 
 enum Mode {
     Firebase { verifier: FirebaseVerifier, allowed_emails: HashSet<String> },
-    DevBypass { email: String },
+    DevBypass { email: String, admin: bool },
 }
 
 impl Authenticator {
@@ -53,9 +56,9 @@ impl Authenticator {
                 verifier: FirebaseVerifier::new(project_id.clone()),
                 allowed_emails: allowed_emails.clone(),
             },
-            AuthConfig::DevBypass { email } => {
+            AuthConfig::DevBypass { email, admin } => {
                 tracing::warn!(%email, "login desativado (modo de desenvolvimento): toda requisição entra como este usuário");
-                Mode::DevBypass { email: email.clone() }
+                Mode::DevBypass { email: email.clone(), admin: *admin }
             }
         };
         Authenticator { mode }
@@ -73,7 +76,7 @@ impl Authenticator {
 
     pub async fn authenticate(&self, authorization: Option<&str>) -> Result<AuthUser, ApiError> {
         match &self.mode {
-            Mode::DevBypass { email } => Ok(AuthUser { email: email.clone() }),
+            Mode::DevBypass { email, admin } => Ok(AuthUser { email: email.clone(), initial_admin: *admin }),
             Mode::Firebase { verifier, allowed_emails } => {
                 let token = authorization
                     .and_then(|h| h.strip_prefix("Bearer "))
@@ -85,11 +88,8 @@ impl Authenticator {
                 if email.is_empty() || !claims.email_verified.unwrap_or(false) {
                     return Err(ApiError::Forbidden);
                 }
-                if !allowed_emails.contains(&email) {
-                    tracing::warn!(%email, "login recusado: e-mail fora da lista de acesso");
-                    return Err(ApiError::Forbidden);
-                }
-                Ok(AuthUser { email })
+                let initial_admin = allowed_emails.contains(&email);
+                Ok(AuthUser { email, initial_admin })
             }
         }
     }
@@ -272,6 +272,7 @@ mod tests {
     async fn accepts_a_valid_token_for_an_allowed_email_case_insensitively() {
         let user = check(good_claims("ana@exemplo.com")).await.unwrap();
         assert_eq!(user.email, "ana@exemplo.com");
+        assert!(user.initial_admin);
     }
 
     #[tokio::test]
@@ -280,8 +281,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_an_email_outside_the_allowlist() {
-        assert!(matches!(check(good_claims("intruso@gmail.com")).await, Err(ApiError::Forbidden)));
+    async fn an_email_outside_the_initial_admins_is_identified_but_not_an_admin() {
+        // Whether it may use the system at all is `access::authorize`'s call.
+        let user = check(good_claims("intruso@gmail.com")).await.unwrap();
+        assert_eq!(user.email, "intruso@gmail.com");
+        assert!(!user.initial_admin);
     }
 
     #[tokio::test]

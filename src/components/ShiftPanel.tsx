@@ -43,7 +43,9 @@ import {
   shiftValue,
 } from "../lib/format";
 import { detectPixKeyType, PIX_KEY_TYPE_LABELS, PIX_KEY_TYPES, type PixKeyType } from "../lib/pix";
+import { useAccess } from "../contexts/AuthContext";
 import type { PaymentShiftRow, PaymentShiftStatus, ShiftPeriod } from "../lib/types";
+import { READ_ONLY_TITLE, useReadOnly } from "./AreaRoute";
 import Avatar from "./Avatar";
 import CurrencyInput from "./CurrencyInput";
 import DatePicker from "./DatePicker";
@@ -445,6 +447,7 @@ function DataTab({
   importedAt,
   canEdit,
   blocked,
+  readOnly,
   busy,
   onSave,
   setFooter,
@@ -454,6 +457,8 @@ function DataTab({
   importedAt: string | null;
   canEdit: boolean;
   blocked: boolean;
+  /** The profile can only view Pagamentos: details shown, nothing to edit. */
+  readOnly: boolean;
   busy: boolean;
   onSave: (fields: ShiftEditFields) => void;
   setFooter: (footer: ReactNode) => void;
@@ -512,7 +517,7 @@ function DataTab({
 
   return (
     <>
-      {!canEdit && (
+      {!canEdit && !readOnly && (
         <Notice tone="info" icon={Info}>
           {blocked
             ? "Revise a alteração encontrada na fonte (aba Pagamento) antes de editar este turno."
@@ -656,6 +661,10 @@ export default function ShiftPanel({
     if (shiftProp) setShown(shiftProp);
   }, [shiftProp]);
   const shift = shown;
+  const readOnly = useReadOnly();
+  const { canEdit: canEditArea } = useAccess();
+  // A new PIX key is saved in the colaborador's Cadastro, and only matters when paying.
+  const canAddPix = !readOnly && canEditArea("cadastros");
 
   const suggested = shift ? shiftValue(shift, rules?.valueRules ?? null) : null;
   const suggestedDigits = suggested !== null ? String(Math.round(suggested * 100)) : "";
@@ -720,7 +729,7 @@ export default function ShiftPanel({
   const appliedChanges = changes.filter((c) => c.applied);
   const blocked = pendingChanges.length > 0;
   const paid = shift.status === "pago";
-  const canEdit = !blocked && !paid;
+  const canEdit = !blocked && !paid && !readOnly;
   const firstName = shift.employeeName.split(" ")[0];
   const amountValid = digits !== "";
 
@@ -849,7 +858,7 @@ export default function ShiftPanel({
         </button>
       </>
     ) : (
-      <button type="button" className="outline" onClick={() => setConfirmingRevert(true)}>
+      <button type="button" className="outline" onClick={() => setConfirmingRevert(true)} disabled={readOnly} title={readOnly ? READ_ONLY_TITLE : undefined}>
         Voltar para pendente
       </button>
     );
@@ -885,7 +894,7 @@ export default function ShiftPanel({
                 onChange={setDigits}
                 placeholder="0,00"
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && amountValid && !busy) {
+                  if (e.key === "Enter" && amountValid && !busy && !readOnly) {
                     e.preventDefault();
                     onConfirmPay(centsMaskToAmount(digits), pix);
                   }
@@ -925,7 +934,7 @@ export default function ShiftPanel({
               {pix ? (
                 <CopyButton text={pix.keyValue} label="Copiar chave PIX" />
               ) : (
-                pixKeys !== null && (
+                pixKeys !== null && canAddPix && (
                   <button type="button" className="sa-copy" onClick={() => setPixAdding(true)}>
                     Cadastrar
                   </button>
@@ -933,7 +942,7 @@ export default function ShiftPanel({
               )}
             </div>
           )}
-          {pixKeys && pixKeys.length > 0 && (
+          {pixKeys && pixKeys.length > 0 && (pixKeys.length > 1 || canAddPix) && (
             <div className="sa-pix-options">
               {pixKeys.length > 1 &&
                 pixKeys.map((k, i) => (
@@ -950,6 +959,7 @@ export default function ShiftPanel({
                     {PIX_KEY_TYPE_LABELS[k.keyType]}
                   </button>
                 ))}
+              {canAddPix && (
               <button
                 type="button"
                 className={pixAdding ? "sa-pix-option sa-pix-option-add sa-pix-option-on" : "sa-pix-option sa-pix-option-add"}
@@ -958,6 +968,7 @@ export default function ShiftPanel({
               >
                 + Nova chave
               </button>
+              )}
             </div>
           )}
           {pixKeys && pixKeys.length > 0 && pixAdding && (
@@ -977,19 +988,24 @@ export default function ShiftPanel({
             </button>
           </div>
         )}
-        <p className="muted sa-small">Confirmar cria um novo registro "Pago". O registro atual fica no histórico.</p>
+        {!readOnly && <p className="muted sa-small">Confirmar cria um novo registro "Pago". O registro atual fica no histórico.</p>}
       </>
     );
     footer = (
       <>
         <span className="sa-spacer" />
-        <button type="button" onClick={() => onConfirmPay(centsMaskToAmount(digits), pix)} disabled={!amountValid || busy}>
+        <button
+          type="button"
+          onClick={() => onConfirmPay(centsMaskToAmount(digits), pix)}
+          disabled={readOnly || !amountValid || busy}
+          title={readOnly ? READ_ONLY_TITLE : undefined}
+        >
           {busy ? "Confirmando..." : "Confirmar pagamento"}
         </button>
       </>
     );
   } else if (tab === "data") {
-    body = <DataTab shift={shift} importedAt={chain && chain.length > 0 ? chain[chain.length - 1].importedAt : null} canEdit={canEdit} blocked={blocked} busy={busy} onSave={onSave} setFooter={setDataFooter} />;
+    body = <DataTab shift={shift} importedAt={chain && chain.length > 0 ? chain[chain.length - 1].importedAt : null} canEdit={canEdit} blocked={blocked} readOnly={readOnly} busy={busy} onSave={onSave} setFooter={setDataFooter} />;
     footer = dataFooter;
   } else {
     const events = history.rows ? historyEvents(history.rows, rules).reverse() : null;
@@ -1062,8 +1078,8 @@ export default function ShiftPanel({
             type="button"
             className="side-panel-icon-button sa-trash-button"
             aria-label="Remover turno"
-            title={blocked ? "Revise a alteração da fonte antes de remover" : "Remover turno"}
-            disabled={blocked || deleting}
+            title={readOnly ? READ_ONLY_TITLE : blocked ? "Revise a alteração da fonte antes de remover" : "Remover turno"}
+            disabled={readOnly || blocked || deleting}
             onClick={() => setDeleting(true)}
           >
             <Trash2 size={16} />

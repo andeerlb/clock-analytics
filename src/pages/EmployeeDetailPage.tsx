@@ -4,6 +4,7 @@ import { useParams } from "react-router-dom";
 import OptionPicker from "../components/OptionPicker";
 import PageHeader from "../components/PageHeader";
 import PdfViewerModal from "../components/PdfViewerModal";
+import { useAccess } from "../contexts/AuthContext";
 import { formatMinutes, isWeekend, overtimeMinutesForDay, sumIntervalMinutes } from "../lib/analysis";
 import { getImportById, listStoredDayRecords } from "../lib/db";
 import { formatDate, formatDateCompact, formatDateTime } from "../lib/format";
@@ -121,6 +122,7 @@ function formatHoursMinutes(totalMinutes: number): string {
 
 export default function EmployeeDetailPage() {
   const { importId } = useParams<{ importId: string }>();
+  const { canExport } = useAccess();
   const [days, setDays] = useState<StoredDayRecord[]>([]);
   const [importInfo, setImportInfo] = useState<StoredImport | null>(null);
   // Nothing picked = every day, same as every other filter in the app.
@@ -401,7 +403,7 @@ export default function EmployeeDetailPage() {
         </div>
       </div>
 
-      <PdfViewerModal path={viewer?.path ?? null} title={viewer?.title} onClose={() => setViewer(null)} />
+      <PdfViewerModal path={viewer?.path ?? null} title={viewer?.title} onClose={() => setViewer(null)} allowDownload={canExport} />
     </div>
   );
 }

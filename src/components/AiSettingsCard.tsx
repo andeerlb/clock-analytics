@@ -1,6 +1,7 @@
 import { KeyRound, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { aiClearApiKey, aiSetApiKey, aiStatus, type AiStatus } from "../lib/api";
+import { READ_ONLY_TITLE, useReadOnly } from "./AreaRoute";
 import ConfirmModal from "./ConfirmModal";
 
 export type AiConnection = "api-key" | "none";
@@ -21,6 +22,9 @@ function formatSavedAt(iso: string): string {
  * Reports whether there is a key so the section list can flag it.
  */
 export default function AiSettingsCard({ onConnectionChange }: { onConnectionChange?: (connection: AiConnection) => void }) {
+  // View-only in Configurações: the key can't be saved or removed.
+  const readOnly = useReadOnly();
+  const roTitle = readOnly ? READ_ONLY_TITLE : undefined;
   const [status, setStatus] = useState<AiStatus | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -109,7 +113,7 @@ export default function AiSettingsCard({ onConnectionChange }: { onConnectionCha
             )}
           </div>
           {hasKey && (
-            <button type="button" className="settings-button settings-button-danger" disabled={busy} onClick={() => setConfirmRemove(true)}>
+            <button type="button" className="settings-button settings-button-danger" disabled={readOnly || busy} title={roTitle} onClick={() => setConfirmRemove(true)}>
               Remover chave
             </button>
           )}
@@ -125,10 +129,12 @@ export default function AiSettingsCard({ onConnectionChange }: { onConnectionCha
               aria-label="Chave de API da Anthropic"
               placeholder={hasKey ? "Colar uma chave nova (substitui a atual)" : "Colar a chave (sk-ant-...)"}
               autoComplete="off"
+              disabled={readOnly}
+              title={roTitle}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
             />
-            <button type="submit" className="settings-button settings-button-primary" disabled={busy || !apiKey.trim()}>
+            <button type="submit" className="settings-button settings-button-primary" disabled={readOnly || busy || !apiKey.trim()} title={roTitle}>
               {busy ? "Salvando..." : "Salvar chave"}
             </button>
           </form>

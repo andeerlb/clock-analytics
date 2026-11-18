@@ -6,9 +6,9 @@ use axum::routing::get;
 use axum::{Extension, Json, Router};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 
-use crate::auth::AuthUser;
+use crate::access::Access;
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
@@ -21,6 +21,7 @@ pub mod payments;
 pub mod roles;
 pub mod storage;
 pub mod timesheets;
+pub mod users;
 
 /// Everything here sits behind `auth::require_auth`.
 pub fn protected() -> Router<AppState> {
@@ -34,6 +35,7 @@ pub fn protected() -> Router<AppState> {
         .merge(payments::router())
         .merge(analytics::router())
         .merge(storage::router())
+        .merge(users::router())
         .merge(crate::remote_checks::router())
         .merge(crate::files::router())
         .merge(crate::ai::router())
@@ -73,8 +75,8 @@ where
 
 /// Who the server thinks is signed in — the frontend uses it to confirm the
 /// e-mail is on the access list right after the Google login.
-async fn me(Extension(user): Extension<AuthUser>) -> Json<Value> {
-    Json(json!({ "email": user.email }))
+async fn me(Extension(access): Extension<Access>) -> Json<Access> {
+    Json(access)
 }
 
 /// Unauthenticated liveness probe for deploy scripts / uptime checks.

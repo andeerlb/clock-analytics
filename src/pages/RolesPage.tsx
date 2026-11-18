@@ -1,6 +1,7 @@
 import { Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useReadOnly } from "../components/AreaRoute";
 import OptionPicker from "../components/OptionPicker";
 import { formatCnpj } from "../lib/format";
 import Pagination from "../components/Pagination";
@@ -19,6 +20,7 @@ const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
  */
 export default function RolesPage() {
   const navigate = useNavigate();
+  const readOnly = useReadOnly();
   const [roles, setRoles] = useState<RoleRow[]>([]);
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -69,10 +71,12 @@ export default function RolesPage() {
         title="Funções"
         subtitle="Cadastro de funções (cargos), por empresa — usado para filtrar turnos por função e para dar match com a coluna Função dos arquivos importados."
         actions={
-          <button type="button" onClick={() => navigate("/roles/new")}>
-            <Plus size={15} />
-            Nova função
-          </button>
+          !readOnly && (
+            <button type="button" onClick={() => navigate("/roles/new")}>
+              <Plus size={15} />
+              Nova função
+            </button>
+          )
         }
       />
 
