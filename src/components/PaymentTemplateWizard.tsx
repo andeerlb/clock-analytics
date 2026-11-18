@@ -772,7 +772,8 @@ export default function PaymentTemplateWizard({
     }
     const labels = groupFieldLabels[key] ?? {};
     const mappedMax = Math.max(-1, ...Object.keys(groupMapping[key] ?? {}).map(Number));
-    return Array.from({ length: Math.max(mappedMax + 6, 12) }, (_, i) => ({ index: i, header: labels[i] ?? null }));
+    // Older templates saved "" (or a stray space) when the column had no name.
+    return Array.from({ length: Math.max(mappedMax + 6, 12) }, (_, i) => ({ index: i, header: labels[i]?.trim() || null }));
   }
 
   /** First value under column `col` in the group's sample sheet, for "ex. em ABA: ...". */
