@@ -1,4 +1,5 @@
 import {
+  Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -36,6 +37,16 @@ function CloseButton() {
     </button>
   );
 }
+/** "Cancelar" at the foot of the steps rail — same animated exit as the X. */
+function CancelButton() {
+  const requestClose = useModalClose();
+  return (
+    <button type="button" className="ghost wz-cancel" onClick={requestClose}>
+      Cancelar
+    </button>
+  );
+}
+
 import {
   addRecentPaymentFile,
   downloadPaymentFileFromUrl,
@@ -279,6 +290,14 @@ export default function PaymentTemplateWizard({
   useEffect(() => {
     if (!target) return;
     listRecentPaymentFiles().then(setRecentFiles);
+  }, [target]);
+
+  // Nothing floats over the wizard: the assistant's button and the pending
+  // updates card hide while it's open (see `body.wizard-open` in App.css).
+  useEffect(() => {
+    if (!target) return;
+    document.body.classList.add("wizard-open");
+    return () => document.body.classList.remove("wizard-open");
   }, [target]);
 
   /** Drag-and-drop on the Arquivo step's dropzone: the dropped file is uploaded, then handled like a picked one. */
@@ -939,41 +958,78 @@ export default function PaymentTemplateWizard({
     }
   }
 
-  /** Checklist of other included sheets that can be merged into (or split out of) the active sheet's group. */
+  /** The line under each step in the rail: what was answered there. */
+  function stepSummary(step: WizardStep): string {
+    switch (step) {
+      case "file":
+        return filePath ? fileNameFromPath(filePath) : "escolha uma planilha";
+      case "sheets":
+        return `${includedSheets.size} de ${sheets.length} ${sheets.length === 1 ? "aba" : "abas"}`;
+      case "answers":
+        if (pendingGroups.length > 0) return "falta responder";
+        return includedGroupKeys.length > 1 ? `${includedGroupKeys.length} grupos respondidos` : "respondido";
+      case "check": {
+        if (badChecks.length > 0) return `${badChecks.length} ${badChecks.length === 1 ? "aba com problema" : "abas com problema"}`;
+        const shifts = checks.reduce((n, c) => n + (c.result?.shifts ?? 0), 0);
+        return `${shifts} ${shifts === 1 ? "turno certo" : "turnos certos"}`;
+      }
+      case "details": {
+        const destinations = routes.length + (routeFallback.clientId !== null ? 1 : 0);
+        return destinations > 0 ? `${destinations} ${destinations === 1 ? "destino" : "destinos"}` : "nome e destino";
+      }
+    }
+  }
+
   if (!target) return null;
 
   return (
     <Modal fullScreen zIndex={100} onClose={onClose}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "0.8rem 1.2rem",
-          background: "var(--card-bg)",
-          borderBottom: "1px solid var(--border)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <strong style={{ fontSize: "0.95rem" }}>
-          {readOnly ? "Template de pagamento" : isEditing ? "Editar template de pagamento" : "Novo template de pagamento"}
-        </strong>
-        <CloseButton />
-      </div>
+      <div className="wz" onClick={(e) => e.stopPropagation()}>
+        <aside className="wz-rail">
+          <div className="wz-name">
+            {readOnly ? "Template de pagamento" : isEditing ? "Editar template" : "Novo template"}
+            <b>{name.trim() || (filePath ? fileNameFromPath(filePath) : "Sem nome")}</b>
+          </div>
+          <nav className="wz-steps" aria-label="Passos">
+            {steps.map((s, i) => {
+              const done = i < stepIndex;
+              const current = i === stepIndex;
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  className={`wz-step${done ? " done" : ""}${current ? " current" : ""}`}
+                  aria-current={current ? "step" : undefined}
+                  disabled={!done}
+                  onClick={() => {
+                    setError(null);
+                    setStepIndex(i);
+                  }}
+                >
+                  <i aria-hidden="true">{done ? <Check size={12} strokeWidth={3} /> : i + 1}</i>
+                  <span>
+                    {STEP_LABEL_TEXT[s]}
+                    <small>{done || current || isEditing ? stepSummary(s) : "—"}</small>
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
+          <div className="wz-rail-foot">
+            <CancelButton />
+          </div>
+        </aside>
 
-      <div className="wizard-steps" onClick={(e) => e.stopPropagation()}>
-        {steps.map((s, i) => (
-          <span key={s} className={`wizard-step${i === stepIndex ? " active" : i < stepIndex ? " done" : ""}`}>
-            {i + 1}. {STEP_LABEL_TEXT[s]}
-          </span>
-        ))}
-      </div>
+        <div className="wz-main">
+          <div className="wz-top">
+            <span className="wz-top-step">
+              Passo {stepIndex + 1} de {steps.length} · {STEP_LABEL_TEXT[currentStep]}
+            </span>
+            <CloseButton />
+          </div>
 
-      <div
-        style={{ flex: 1, overflow: "auto", padding: "1.5rem", background: "var(--bg)", display: "flex", flexDirection: "column", minHeight: 0 }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {error && <div className="error-box" style={{ marginBottom: "1rem" }}>{error}</div>}
+          <div className="wz-body">
+        {error && <div className="error-box wz-error">{error}</div>}
 
         {currentStep === "file" && (
           <div className="details-layout">
@@ -1448,55 +1504,48 @@ export default function PaymentTemplateWizard({
             suggestionsFor={suggestionsFor}
           />
         )}
-      </div>
+          </div>
 
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: "1rem",
-          // Room on the right for the assistant's floating button, which
-          // sits above fullscreen surfaces and would cover "Avançar"/"Salvar".
-          padding: "0.8rem 4.8rem 0.8rem 1.2rem",
-          background: "var(--card-bg)",
-          borderTop: "1px solid var(--border)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          type="button"
-          className="outline"
-          onClick={() => setStepIndex((s) => s - 1)}
-          disabled={stepIndex === 0 || busy}
-        >
-          <ChevronLeft size={15} style={{ marginRight: "0.3rem" }} />
-          Voltar
-        </button>
-        <span className="tmap-note">
-          {currentStep === "answers" && pendingGroups.length > 0
-            ? `Falta responder: ${pendingGroups.map(groupLabel).join(", ")}`
-            : currentStep === "check" && badChecks.length > 0
-              ? "Resolva as abas com problema ou desmarque-as"
-              : currentStep === "details"
-                ? (detailsProblem(name, routes, routeFallback) ?? "")
-                : ""}
-        </span>
-        {stepIndex < steps.length - 1 ? (
-          <button type="button" onClick={handleAdvance} disabled={busy || loadingPreview}>
-            Avançar
-            <ChevronRight size={15} style={{ marginLeft: "0.3rem" }} />
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleSave}
-            title={readOnly ? READ_ONLY_TITLE : undefined}
-            disabled={readOnly || busy || detailsProblem(name, routes, routeFallback) !== null}
-          >
-            {busy ? "Salvando..." : "Salvar"}
-          </button>
-        )}
+          <div className="wz-foot">
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                setError(null);
+                setStepIndex((s) => s - 1);
+              }}
+              disabled={stepIndex === 0 || busy}
+              style={stepIndex === 0 ? { visibility: "hidden" } : undefined}
+            >
+              <ChevronLeft size={15} style={{ marginRight: "0.3rem" }} />
+              Voltar
+            </button>
+            <span className="tmap-note">
+              {currentStep === "answers" && pendingGroups.length > 0
+                ? `Falta responder: ${pendingGroups.map(groupLabel).join(", ")}`
+                : currentStep === "check" && badChecks.length > 0
+                  ? "Resolva as abas com problema ou desmarque-as"
+                  : currentStep === "details"
+                    ? (detailsProblem(name, routes, routeFallback) ?? "")
+                    : ""}
+            </span>
+            {stepIndex < steps.length - 1 ? (
+              <button type="button" onClick={handleAdvance} disabled={busy || loadingPreview}>
+                Continuar
+                <ChevronRight size={15} style={{ marginLeft: "0.3rem" }} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSave}
+                title={readOnly ? READ_ONLY_TITLE : undefined}
+                disabled={readOnly || busy || detailsProblem(name, routes, routeFallback) !== null}
+              >
+                {busy ? "Salvando..." : "Salvar template"}
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </Modal>
   );
