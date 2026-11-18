@@ -22,6 +22,9 @@ thiserror = "2"
 # mismatch.
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "json"] }
 futures-core = "0.3"
+# The assistant's SQLite authorizer (`ai/investigation.rs`): the same
+# libsqlite3-sys sqlx 0.8 links, so this adds no second SQLite.
+libsqlite3-sys = { version = "0.30", default-features = false }
 # Firebase ID tokens are RS256 JWTs signed by Google; v9 uses ring, so no
 # aws-lc / cmake toolchain is needed to build the server.
 jsonwebtoken = "9"

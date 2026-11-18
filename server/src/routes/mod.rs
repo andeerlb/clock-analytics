@@ -34,6 +34,7 @@ pub fn protected() -> Router<AppState> {
         .merge(analytics::router())
         .merge(crate::remote_checks::router())
         .merge(crate::files::router())
+        .merge(crate::ai::router())
 }
 
 /// What a handler answered, as the JSON the browser would have received.

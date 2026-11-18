@@ -1,3 +1,4 @@
+mod ai;
 mod auth;
 mod domain;
 mod config;
