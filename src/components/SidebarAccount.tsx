@@ -8,13 +8,13 @@ const ICON_PROPS = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", 
 
 /**
  * Who is signed in, at the foot of the sidebar. Clicking the card opens the
- * account menu (Configurações, Usuários e perfis, Trocar de conta, Sair) the
+ * account menu (Configurações, Usuários e perfis, Sair) the
  * same way the app's pickers open: the box grows out of the card itself,
  * upward, with the card at its bottom (see `.emp-picker-popover`).
  * Collapsed sidebar: just the avatar.
  */
 export default function SidebarAccount({ collapsed }: { collapsed: boolean }) {
-  const { state, signIn, signOut } = useAuth();
+  const { state, signOut } = useAuth();
   const { access, canView, canManageUsers } = useAccess();
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -101,19 +101,6 @@ export default function SidebarAccount({ collapsed }: { collapsed: boolean }) {
           )}
           {canSwitch ? (
             <>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setOpen(false);
-                  signIn();
-                }}
-              >
-                <svg {...ICON_PROPS}>
-                  <path d="M16 3h5v5M21 3l-7 7M8 21H3v-5M3 21l7-7" />
-                </svg>
-                Trocar de conta
-              </button>
               <div className="sidebar-account-sep" role="separator" />
               <button
                 type="button"
