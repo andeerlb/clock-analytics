@@ -198,6 +198,7 @@ async fn delete_imported_files(State(state): State<AppState>, Json(args): Json<P
     for path in &args.paths {
         match resolve(&state.data_dir, path) {
             Ok(resolved) if resolved.starts_with(&imports) => targets.push(resolved),
+            // uploads/ is reachable too, but only imported files are deleted here.
             Ok(_) => return Err(ApiError::BadRequest("Só arquivos importados podem ser apagados por aqui.".into())),
             Err(ApiError::NotFound(_)) => {}
             Err(error) => return Err(error),
@@ -540,7 +541,9 @@ mod tests {
         assert!(usage["dbBytes"].as_u64().unwrap() > 0);
 
         let outside = path_string(&state.data_dir.join("outro.txt"));
-        assert!(call(&state, delete_imported_files, json!({ "paths": [outside] })).await.is_err());
+        // Outside imports/ is "not found" for the browser: nothing is deleted.
+        assert_eq!(call(&state, delete_imported_files, json!({ "paths": [outside] })).await.unwrap(), json!(0));
+        assert!(state.data_dir.join("outro.txt").exists());
         let a = path_string(&imports.join("a.pdf"));
         let gone = path_string(&imports.join("sumiu.pdf"));
         let freed = call(&state, delete_imported_files, json!({ "paths": [a, gone] })).await.unwrap();

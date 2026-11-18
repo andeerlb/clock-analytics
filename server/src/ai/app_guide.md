@@ -247,34 +247,30 @@ Os totais usam o mesmo valor mostrado em "Pagamentos": turnos pendentes entram p
 
 ## Configurações
 
-Caminho: "Configurações".
+Caminho: "Configurações". No topo há uma busca (Ctrl K) que filtra as opções.
 
-- "Ferramentas de PDF (Poppler)": mostra se o servidor tem as ferramentas de PDF; veja a seção seguinte.
-- "Armazenamento": tamanho de "Banco de dados", "Arquivos importados" e "Total". Clique nos dois primeiros para ver o detalhe.
-- "Manutenção":
-  - "Compactar banco de dados": recupera espaço de registros apagados, sem remover dados.
-  - "Remover originais redundantes": apaga o PDF original de lote quando todas as páginas já foram salvas por colaborador.
-  - "Exportar banco de dados": baixa uma cópia completa do banco num arquivo `.db`, sem mudar nada no app.
-- "Sobre": versão do aplicativo.
+- "Geral" → "Versão": a versão em uso. A web se atualiza sozinha; se algo parecer estranho depois de uma atualização, recarregue a página.
+- "Dados":
+  - "Espaço usado": tamanho do banco de dados e dos arquivos importados, no servidor. Clique em cada parte para ver o que ocupa mais espaço.
+  - "Remover originais repetidos": apaga o PDF original de lote quando todas as páginas já foram salvas por colaborador. Cada colaborador continua com a própria página.
+  - "Compactar o banco": recupera espaço de registros apagados, sem remover dados.
+  - "Baixar uma cópia do banco": baixa um arquivo `.db` com tudo, sem mudar nada no app.
+- "Integrações" → "Assistente com IA": a chave da Anthropic da equipe (veja "Assistente").
 
-### Zona de risco: "Apagar tudo"
+### Zona de risco: "Apagar histórico e arquivos"
 
-Sempre apaga o histórico de importações e todos os PDFs salvos. Antes de apagar, opcionalmente mantém:
-- "Manter empresas", "Manter clientes", "Manter colaboradores". Manter colaboradores exige manter clientes e empresas; manter clientes exige manter empresas.
-- "Manter turnos de pagamento atualizados manualmente (...)": exige manter colaboradores. Preserva apenas turnos com edição manual de dados. Um turno só pago ou revertido, sem nenhum campo corrigido à mão, não é preservado.
-- "Manter templates de pagamento" e "Manter templates de colaboradores": ligadas por padrão.
+Assistente em três passos. Sempre apaga o histórico de importações e todos os arquivos importados. No passo "O que manter" dá para manter:
+- "Empresas", "Clientes", "Colaboradores". Manter colaboradores mantém clientes e empresas; manter clientes mantém empresas.
+- "Turnos de pagamento editados à mão" (pagos, voltados para pendente ou com valor corrigido): exige manter colaboradores.
+- "Modelos de pagamento" e "Modelos de colaboradores": ligados por padrão.
 
-Backup: "Banco" e "PDFs" (ligados por padrão) geram um zip antes de apagar, que é baixado pelo navegador. É preciso digitar APAGAR TUDO.
+No passo "Backup", "Banco de dados" e "Arquivos importados" (ligados por padrão) geram um `.zip` que o navegador baixa antes de apagar. No último passo é preciso digitar APAGAR TUDO.
 
-### Zona de risco: "Importar banco de dados"
-
-Substitui todo o banco atual pelo arquivo `.db` escolhido. É preciso digitar SUBSTITUIR BANCO. O arquivo é validado e o app mostra "Banco pronto para restauração", com contagem de 30 segundos até reiniciar; dá para usar "Reiniciar agora" ou "Cancelar importação". Se houver erro, o banco atual é mantido. Depois de reiniciar, o app mostra "Restauração concluída" ou "Restauração não realizada".
+Não existe mais a opção de substituir o banco por outro arquivo: restaurar um banco é uma tarefa de manutenção no servidor.
 
 ## Poppler (ferramentas de PDF)
 
-Importar e exportar PDFs depende de quatro ferramentas: pdfinfo, pdftotext, pdfseparate e pdfunite. Elas ficam instaladas no servidor; quem usa o aplicativo não instala nada. Se faltar alguma, aparece um aviso no topo com link para "Configurações", e só quem administra o servidor resolve.
-
-Em "Configurações" → "Ferramentas de PDF (Poppler)" cada ferramenta aparece como encontrada ou "não encontrado".
+Importar e exportar PDFs depende de quatro ferramentas: pdfinfo, pdftotext, pdfseparate e pdfunite. Elas ficam instaladas no servidor; quem usa o aplicativo não instala nada nem configura nada. Se faltar alguma, a importação de PDFs mostra erro, e só quem administra o servidor resolve.
 
 ## Atualizações do app
 

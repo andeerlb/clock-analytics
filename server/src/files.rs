@@ -50,15 +50,23 @@ pub fn imports_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("imports")
 }
 
+/// Whether `real` (already canonical) is inside one of the only two folders
+/// the browser may name: `imports/` and `uploads/`. Everything else in the
+/// data folder stays private: the database itself, its WAL, and `secrets/`
+/// (the assistant's API key).
+fn in_shared_folders(data_dir: &Path, real: &Path) -> bool {
+    real.starts_with(imports_dir(data_dir)) || real.starts_with(uploads_dir(data_dir))
+}
+
 /// Turns a path received from the browser into a real file path, refusing
-/// anything that resolves outside the data folder (`..`, symlinks, absolute
-/// paths elsewhere) or that doesn't exist.
+/// anything outside `imports/` and `uploads/` (`..`, symlinks, absolute
+/// paths elsewhere, the database, `secrets/`) or that doesn't exist.
 pub fn resolve(data_dir: &Path, path: &str) -> ApiResult<PathBuf> {
     let not_found = || ApiError::NotFound("Arquivo não encontrado no servidor.".into());
     let candidate = Path::new(path);
     let candidate = if candidate.is_absolute() { candidate.to_path_buf() } else { data_dir.join(candidate) };
     let real = candidate.canonicalize().map_err(|_| not_found())?;
-    if !real.starts_with(data_dir) || !real.is_file() {
+    if !in_shared_folders(data_dir, &real) || !real.is_file() {
         return Err(not_found());
     }
     Ok(real)
@@ -134,7 +142,7 @@ async fn list(State(state): State<AppState>, Json(query): Json<ListQuery>) -> Ap
     let candidate = Path::new(&query.dir);
     let candidate = if candidate.is_absolute() { candidate.to_path_buf() } else { state.data_dir.join(candidate) };
     let dir = candidate.canonicalize().map_err(|_| not_found())?;
-    if !dir.starts_with(state.data_dir.as_path()) || !dir.is_dir() {
+    if !in_shared_folders(&state.data_dir, &dir) || !dir.is_dir() {
         return Err(not_found());
     }
     let wanted: Vec<String> = query.extensions.iter().map(|e| e.trim_start_matches('.').to_ascii_lowercase()).collect();
@@ -243,6 +251,28 @@ mod tests {
         assert!(resolve(&state.data_dir, "imports/../../../../etc/passwd").is_err());
         assert!(resolve(&state.data_dir, "imports/missing.pdf").is_err());
         assert!(resolve(&state.data_dir, "imports").is_err(), "a folder is not a file");
+    }
+
+    /// The database and the assistant's key live in the same data folder, but
+    /// the browser can only reach `imports/` and `uploads/`.
+    #[tokio::test]
+    async fn private_files_in_the_data_dir_are_unreachable() {
+        let state = AppState::for_tests().await;
+        let dir = state.data_dir.as_path();
+        std::fs::create_dir_all(dir.join("secrets")).unwrap();
+        std::fs::write(dir.join("secrets/anthropic-api-key.json"), b"{}").unwrap();
+        std::fs::write(dir.join("pontoscan.db"), b"SQLite format 3").unwrap();
+        std::fs::create_dir_all(dir.join("uploads/x")).unwrap();
+        std::fs::write(dir.join("uploads/x/r.zip"), b"PK").unwrap();
+
+        assert!(resolve(dir, "secrets/anthropic-api-key.json").is_err());
+        assert!(resolve(dir, dir.join("secrets/anthropic-api-key.json").to_str().unwrap()).is_err());
+        assert!(resolve(dir, "imports/../secrets/anthropic-api-key.json").is_err());
+        assert!(resolve(dir, "pontoscan.db").is_err());
+        assert!(resolve(dir, "uploads/x/r.zip").is_ok());
+
+        let listed = list(State(state.clone()), Json(ListQuery { dir: "secrets".into(), extensions: vec!["json".into()] })).await;
+        assert!(listed.is_err(), "the secrets folder can't be listed either");
     }
 
     #[test]

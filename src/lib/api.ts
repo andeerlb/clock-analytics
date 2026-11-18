@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { baseName, downloadBlob, downloadServerFile, pickAndUpload } from "./files";
 import { api, fetchServerFile, rpc } from "./http";
 import type {
