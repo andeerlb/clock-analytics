@@ -223,7 +223,7 @@ async fn remove_role_alias(State(state): State<AppState>, Json(args): Json<Alias
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct FindByNameArgs {
+pub(crate) struct FindByNameArgs {
     company_id: i64,
     #[serde(default)]
     text: Option<String>,
@@ -247,7 +247,7 @@ async fn find_role_by_name_in(db: &SqlitePool, company_id: i64, text: Option<&st
     .await
 }
 
-async fn find_role_by_name(State(state): State<AppState>, Json(args): Json<FindByNameArgs>) -> ApiResult<Json<Option<Row>>> {
+pub(crate) async fn find_role_by_name(State(state): State<AppState>, Json(args): Json<FindByNameArgs>) -> ApiResult<Json<Option<Row>>> {
     Ok(Json(find_role_by_name_in(&state.db, args.company_id, args.text.as_deref()).await?))
 }
 

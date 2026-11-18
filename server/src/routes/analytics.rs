@@ -522,7 +522,7 @@ fn diff_content_fingerprint(row: &Row) -> String {
 }
 
 #[derive(Deserialize)]
-struct IdsArgs {
+pub(crate) struct IdsArgs {
     #[serde(default)]
     ids: Vec<Value>,
 }

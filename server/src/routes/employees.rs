@@ -292,7 +292,7 @@ async fn list_employees_global(State(state): State<AppState>, Json(args): Json<L
 }
 
 #[derive(Deserialize)]
-struct IdsArgs {
+pub(crate) struct IdsArgs {
     ids: Vec<i64>,
 }
 
@@ -862,25 +862,25 @@ async fn find_anywhere_by_attempts_in(db: &SqlitePool, attempts: &[IdentifierAtt
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct FindByAttemptsArgs {
+pub(crate) struct FindByAttemptsArgs {
     client_id: i64,
     company_id: i64,
     attempts: Vec<IdentifierAttempt>,
     values: IdentifierValues,
 }
 
-async fn find_employee_by_attempts(State(state): State<AppState>, Json(args): Json<FindByAttemptsArgs>) -> ApiResult<Json<Value>> {
+pub(crate) async fn find_employee_by_attempts(State(state): State<AppState>, Json(args): Json<FindByAttemptsArgs>) -> ApiResult<Json<Value>> {
     let id = find_by_attempts_in(&state.db, args.client_id, args.company_id, &args.attempts, &args.values).await?;
     Ok(Json(hydrated_or_null(&state.db, id).await?))
 }
 
 #[derive(Deserialize)]
-struct FindAnywhereArgs {
+pub(crate) struct FindAnywhereArgs {
     attempts: Vec<IdentifierAttempt>,
     values: IdentifierValues,
 }
 
-async fn find_employee_anywhere_by_attempts(State(state): State<AppState>, Json(args): Json<FindAnywhereArgs>) -> ApiResult<Json<Value>> {
+pub(crate) async fn find_employee_anywhere_by_attempts(State(state): State<AppState>, Json(args): Json<FindAnywhereArgs>) -> ApiResult<Json<Value>> {
     let id = find_anywhere_by_attempts_in(&state.db, &args.attempts, &args.values).await?;
     Ok(Json(hydrated_or_null(&state.db, id).await?))
 }

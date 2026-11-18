@@ -30,6 +30,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # Domain code carried over from the desktop app (src/core) — same versions.
 regex = "1.13.1"
 chrono = { version = "0.4.45", features = ["serde"] }
+chrono-tz = "0.10"
 uuid = { version = "1.24.0", features = ["v4", "serde"] }
 sha2 = "0.11.0"
 zip = "2"

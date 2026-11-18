@@ -36,6 +36,8 @@ cd server && cargo test
 | `PONTOSCAN_BIND` | `127.0.0.1:8787` | Endereço/porta em que o servidor escuta. |
 | `PONTOSCAN_DB_PATH` | `data/pontoscan.db` | Arquivo SQLite. Criado se não existir. |
 | `PONTOSCAN_DATA_DIR` | pasta do banco | Onde ficam os arquivos: `imports/` (PDFs e planilhas importados, guardados) e `uploads/` (envios temporários, apagados em 24h). |
+| `PONTOSCAN_TIMEZONE` | `America/Sao_Paulo` | Fuso da equipe. Define o "hoje" dos períodos relativos da verificação automática ("Hoje", "Últimos 7 dias", "Mês atual"). |
+| `PONTOSCAN_REMOTE_CHECKS` | `on` | `off` desliga a verificação automática em segundo plano (útil ao testar com uma cópia do banco real, para não baixar as planilhas de verdade). "Conferir agora" continua funcionando. |
 | `PONTOSCAN_STATIC_DIR` | — | Pasta do frontend buildado (`dist/`) para o próprio servidor servir. Vazio = só API (frontend no Firebase Hosting). |
 | `PONTOSCAN_CORS_ORIGINS` | — | Origens que podem chamar a API, separadas por vírgula, ex. `https://pontoscan.web.app`. |
 | `FIREBASE_PROJECT_ID` | — | **Obrigatório em produção.** ID do projeto Firebase cujos tokens de login são aceitos. |

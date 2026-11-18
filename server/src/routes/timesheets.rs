@@ -61,13 +61,13 @@ struct SourceFileInput {
 }
 
 #[derive(Deserialize)]
-struct LogSourceFileArgs {
+pub(crate) struct LogSourceFileArgs {
     input: SourceFileInput,
 }
 
 /// Logs one import attempt; re-processing the same file (same hash)
 /// refreshes the row. Returns the `source_files.id`.
-async fn log_source_file(State(state): State<AppState>, Json(args): Json<LogSourceFileArgs>) -> ApiResult<Json<i64>> {
+pub(crate) async fn log_source_file(State(state): State<AppState>, Json(args): Json<LogSourceFileArgs>) -> ApiResult<Json<i64>> {
     let input = args.input;
     sql::execute(
         &state.db,
@@ -116,11 +116,11 @@ const MARK_SOURCE_FILE_SAVED_SQL: &str = "UPDATE source_files SET saved_at = dat
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct FileHashArgs {
+pub(crate) struct FileHashArgs {
     file_hash: String,
 }
 
-async fn mark_source_file_saved(State(state): State<AppState>, Json(args): Json<FileHashArgs>) -> ApiResult<StatusCode> {
+pub(crate) async fn mark_source_file_saved(State(state): State<AppState>, Json(args): Json<FileHashArgs>) -> ApiResult<StatusCode> {
     sql::run_batch(&state.db, vec![sql::BatchStatement::new(MARK_SOURCE_FILE_SAVED_SQL, params![args.file_hash])]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
