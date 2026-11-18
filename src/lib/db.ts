@@ -2,14 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "./events";
 import Database from "@tauri-apps/plugin-sql";
 import { overtimeMinutesForDay, sumIntervalMinutes } from "./analysis";
-import { normalizeCnpj, normalizeCpf, parseTimeToMinutes } from "./format";
+import { parseTimeToMinutes } from "./format";
 import type { PeriodStatusId } from "./periodStatus";
 import { api, rpc } from "./http";
-import { detectPixKeyType, type PixKeyType } from "./pix";
+import type { PixKeyType } from "./pix";
 import type {
   ConflictInfo,
   DuplicateFileInfo,
-  EmployeeTemplateFieldMapping,
   EmployeeTemplateGroup,
   EmployeeTemplateListRow,
   EmployeeTemplateRow,
@@ -108,39 +107,6 @@ async function runWriteBatch(
 export const PAYMENT_SHIFTS_CHANGED_EVENT = "payment-shifts-changed";
 function notifyPaymentShiftsChanged(): void {
   emit(PAYMENT_SHIFTS_CHANGED_EVENT).catch(() => {});
-}
-
-/**
- * Common PT-BR accented letters folded to their base ASCII form. Both cases
- * are listed explicitly (not just lowercase) because SQLite's built-in
- * `LOWER()` only case-folds ASCII — an uppercase "Ç"/"É"/etc. (the employee
- * directory is all-caps) passes through `LOWER()` unchanged, so it still
- * needs its own `REPLACE()` pair downstream of it.
- */
-const ACCENT_FOLD_PAIRS: [string, string][] = [
-  ["á", "a"], ["à", "a"], ["ã", "a"], ["â", "a"], ["ä", "a"],
-  ["Á", "a"], ["À", "a"], ["Ã", "a"], ["Â", "a"], ["Ä", "a"],
-  ["é", "e"], ["è", "e"], ["ê", "e"], ["ë", "e"],
-  ["É", "e"], ["È", "e"], ["Ê", "e"], ["Ë", "e"],
-  ["í", "i"], ["ì", "i"], ["î", "i"], ["ï", "i"],
-  ["Í", "i"], ["Ì", "i"], ["Î", "i"], ["Ï", "i"],
-  ["ó", "o"], ["ò", "o"], ["õ", "o"], ["ô", "o"], ["ö", "o"],
-  ["Ó", "o"], ["Ò", "o"], ["Õ", "o"], ["Ô", "o"], ["Ö", "o"],
-  ["ú", "u"], ["ù", "u"], ["û", "u"], ["ü", "u"],
-  ["Ú", "u"], ["Ù", "u"], ["Û", "u"], ["Ü", "u"],
-  ["ç", "c"], ["Ç", "c"], ["ñ", "n"], ["Ñ", "n"],
-];
-
-/**
- * Wraps a SQL expression (a column reference or a bound-parameter
- * placeholder) with `LOWER()` plus a chain of `REPLACE()` calls that fold
- * accented PT-BR letters to their base form — SQLite has no built-in accent
- * folding, so a name search needs the *same* chain applied to both sides of
- * a `LIKE` to match case- and accent-insensitively (e.g. "goncalves" against
- * "GONÇALVES").
- */
-function foldAccentsSql(sqlExpr: string): string {
-  return ACCENT_FOLD_PAIRS.reduce((expr, [from, to]) => `REPLACE(${expr}, '${from}', '${to}')`, `LOWER(${sqlExpr})`);
 }
 
 /**
@@ -288,32 +254,6 @@ export interface CompanyDetail extends CompanyRow {
 }
 
 /**
- * One INSERT per rule into `table` (`payment_value_rules` for a company,
- * `client_payment_value_rules` for a client's override), in array order —
- * same evaluation-by-insertion-order convention as the payment-template
- * rule chains, see `resolvePaymentValue`.
- */
-function valueRuleInserts(
-  table: "payment_value_rules" | "client_payment_value_rules",
-  ownerColumn: "company_id" | "client_id",
-  ownerId: BatchParam,
-  rules: PaymentValueRule[],
-): BatchStatement[] {
-  return rules.map((rule) => ({
-    sql: `INSERT INTO ${table} (${ownerColumn}, kind, conditions_json, operator, threshold_minutes, amount)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-    params: [
-      ownerId,
-      rule.kind,
-      rule.kind === "condition" && rule.conditions.length > 0 ? JSON.stringify(rule.conditions) : null,
-      rule.kind === "condition" ? rule.operator : null,
-      rule.kind === "condition" ? rule.thresholdMinutes : null,
-      rule.amount,
-    ],
-  }));
-}
-
-/**
  * Registers a new company. CNPJ is the natural key — registering one that
  * already exists is rejected rather than silently updating the name, since
  * a typo'd CNPJ should surface as an error, not quietly merge into another
@@ -360,14 +300,7 @@ export interface ClientRow {
 }
 
 export async function listClients(): Promise<ClientRow[]> {
-  const db = await getDb();
-  return db.select<ClientRow[]>(`
-    SELECT cl.id, cl.name, cl.cnpj, c.id AS companyId, c.name AS companyName
-    FROM clients cl
-    JOIN client_companies cc ON cc.client_id = cl.id
-    JOIN companies c ON c.id = cc.company_id
-    ORDER BY c.name, cl.name
-  `);
+  return rpc<ClientRow[]>("listClients");
 }
 
 /**
@@ -390,46 +323,7 @@ export async function createClient(
   nightShiftRule: NightShiftRule | null = null,
   valueRules: PaymentValueRule[] = [],
 ): Promise<number> {
-  const db = await getDb();
-  const normalizedCnpj = normalizeCnpj(cnpj);
-  if (normalizedCnpj.length !== 14) {
-    throw new Error("CNPJ deve ter 14 dígitos.");
-  }
-  if (companyIds.length === 0) {
-    throw new Error("Selecione pelo menos uma empresa.");
-  }
-
-  const existing = await db.select<{ id: number }[]>("SELECT id FROM clients WHERE cnpj = $1", [
-    normalizedCnpj,
-  ]);
-
-  const statements: BatchStatement[] = [];
-  let clientId: BatchParam;
-  if (existing.length > 0) {
-    // Linking an existing client to one more empresa isn't an edit of that
-    // client — its rule overrides (if any) are left exactly as they are,
-    // any `nightStartTime`/`valueRules` passed here are silently ignored.
-    clientId = existing[0].id;
-  } else {
-    statements.push({
-      sql: "INSERT INTO clients (name, cnpj, night_start_time, night_end_time, night_shift_rule) VALUES ($1, $2, $3, $4, $5)",
-      params: [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule],
-    });
-    clientId = { $lastInsertId: 0 };
-    statements.push(...valueRuleInserts("client_payment_value_rules", "client_id", clientId, valueRules));
-  }
-
-  for (const companyId of companyIds) {
-    statements.push({
-      sql: `INSERT INTO client_companies (client_id, company_id)
-            SELECT $1, $2
-            WHERE NOT EXISTS (SELECT 1 FROM client_companies WHERE client_id = $1 AND company_id = $2)`,
-      params: [clientId, companyId],
-    });
-  }
-
-  const results = await runWriteBatch(statements);
-  return typeof clientId === "number" ? clientId : results[0].lastInsertId;
+  return rpc<number>("createClient", { companyIds, name, cnpj, nightStartTime, nightEndTime, nightShiftRule, valueRules });
 }
 
 export interface ClientDetail {
@@ -446,48 +340,12 @@ export interface ClientDetail {
 }
 
 export async function getClient(id: number): Promise<ClientDetail> {
-  const db = await getDb();
-  const rows = await db.select<
-    { id: number; name: string; cnpj: string; nightStartTime: string | null; nightEndTime: string | null; nightShiftRule: NightShiftRule | null }[]
-  >(
-    `SELECT id, name, cnpj, night_start_time AS nightStartTime, night_end_time AS nightEndTime,
-            night_shift_rule AS nightShiftRule
-     FROM clients WHERE id = $1`,
-    [id],
-  );
-  if (rows.length === 0) throw new Error("Cliente não encontrado.");
-  const companies = await db.select<{ id: number; name: string }[]>(
-    `SELECT c.id, c.name
-     FROM client_companies cc
-     JOIN companies c ON c.id = cc.company_id
-     WHERE cc.client_id = $1
-     ORDER BY c.name`,
-    [id],
-  );
-  const valueRuleRows = await db.select<(Omit<PaymentValueRule, "conditions"> & { conditionsJson: string | null })[]>(
-    `SELECT kind, conditions_json AS conditionsJson, operator, threshold_minutes AS thresholdMinutes, amount
-     FROM client_payment_value_rules WHERE client_id = $1 ORDER BY id`,
-    [id],
-  );
-  const valueRules: PaymentValueRule[] = valueRuleRows.map(({ conditionsJson, ...rule }) => ({
-    ...rule,
-    conditions: conditionsJson ? JSON.parse(conditionsJson) : [],
-  }));
-  return { ...rows[0], companies, valueRules };
+  return rpc<ClientDetail>("getClient", { id });
 }
 
 /** Links `clientId` to an additional `companyId` — a no-op if already linked. */
 export async function addClientCompany(clientId: number, companyId: number): Promise<void> {
-  const db = await getDb();
-  const existingLink = await db.select<{ clientId: number }[]>(
-    "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
-    [clientId, companyId],
-  );
-  if (existingLink.length > 0) return;
-  await db.execute("INSERT INTO client_companies (client_id, company_id) VALUES ($1, $2)", [
-    clientId,
-    companyId,
-  ]);
+  await rpc<void>("addClientCompany", { clientId, companyId });
 }
 
 /**
@@ -498,25 +356,7 @@ export async function addClientCompany(clientId: number, companyId: number): Pro
  * itself no longer claims to belong to.
  */
 export async function removeClientCompany(clientId: number, companyId: number): Promise<void> {
-  const db = await getDb();
-  const linkCount = await db.select<{ count: number }[]>(
-    "SELECT COUNT(*) AS count FROM client_companies WHERE client_id = $1",
-    [clientId],
-  );
-  if ((linkCount[0]?.count ?? 0) <= 1) {
-    throw new Error("O cliente precisa continuar vinculado a pelo menos uma empresa.");
-  }
-  const employeeCount = await db.select<{ count: number }[]>(
-    "SELECT COUNT(*) AS count FROM employee_client_companies WHERE client_id = $1 AND company_id = $2",
-    [clientId, companyId],
-  );
-  if ((employeeCount[0]?.count ?? 0) > 0) {
-    throw new Error("Existem colaboradores cadastrados para esse cliente nessa empresa — desvincule ou mova-os antes.");
-  }
-  await db.execute("DELETE FROM client_companies WHERE client_id = $1 AND company_id = $2", [
-    clientId,
-    companyId,
-  ]);
+  await rpc<void>("removeClientCompany", { clientId, companyId });
 }
 
 /**
@@ -532,26 +372,7 @@ export async function updateClient(
   nightShiftRule: NightShiftRule | null = null,
   valueRules: PaymentValueRule[] = [],
 ): Promise<void> {
-  const db = await getDb();
-  const normalizedCnpj = normalizeCnpj(cnpj);
-  if (normalizedCnpj.length !== 14) {
-    throw new Error("CNPJ deve ter 14 dígitos.");
-  }
-  const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM clients WHERE cnpj = $1 AND id != $2",
-    [normalizedCnpj, id],
-  );
-  if (existing.length > 0) {
-    throw new Error("Já existe um cliente cadastrado com esse CNPJ.");
-  }
-  await runWriteBatch([
-    {
-      sql: "UPDATE clients SET name = $1, cnpj = $2, night_start_time = $3, night_end_time = $4, night_shift_rule = $5 WHERE id = $6",
-      params: [name.trim(), normalizedCnpj, nightStartTime, nightEndTime, nightShiftRule, id],
-    },
-    { sql: "DELETE FROM client_payment_value_rules WHERE client_id = $1", params: [id] },
-    ...valueRuleInserts("client_payment_value_rules", "client_id", id, valueRules),
-  ]);
+  await rpc<void>("updateClient", { id, name, cnpj, nightStartTime, nightEndTime, nightShiftRule, valueRules });
 }
 
 /** The night-shift window/rule + pay-value chain actually in effect for one (cliente, empresa) pair — the client's own override when it has one, falling back field-by-field (night window) or as a whole chain (value rules) to the company's otherwise. Mirrored in SQL by `shiftPeriodSql` for night-shift classification (the only one of the two ever resolved SQL-side). */
@@ -563,13 +384,7 @@ export interface EffectivePaymentRules {
 }
 
 export async function getEffectivePaymentRules(clientId: number, companyId: number): Promise<EffectivePaymentRules> {
-  const [client, company] = await Promise.all([getClient(clientId), getCompany(companyId)]);
-  return {
-    nightStartTime: client.nightStartTime ?? company.nightStartTime,
-    nightEndTime: client.nightEndTime ?? company.nightEndTime,
-    nightShiftRule: client.nightShiftRule ?? company.nightShiftRule,
-    valueRules: client.valueRules.length > 0 ? client.valueRules : company.valueRules,
-  };
+  return rpc<EffectivePaymentRules>("getEffectivePaymentRules", { clientId, companyId });
 }
 
 /**
@@ -607,57 +422,6 @@ export interface EmployeeRow {
   links: EmployeeClientCompanyLink[];
 }
 
-/**
- * Builds full `EmployeeRow`s (including each one's `links`) for a batch of
- * employee ids in two queries total instead of one per id — every
- * `employees` read path (`getEmployee`, `listEmployeesGlobal`,
- * `findEmployeeByAttempts` and its siblings) goes through this so the
- * "attach links" logic can't drift between them. Order of the returned
- * array is NOT guaranteed to match `employeeIds` — callers that care about
- * order (e.g. `listEmployeesGlobal`'s `ORDER BY name`) re-sort by id
- * themselves.
- */
-async function hydrateEmployeeRows(db: Database, employeeIds: number[]): Promise<EmployeeRow[]> {
-  if (employeeIds.length === 0) return [];
-  const placeholders = employeeIds.map((_, i) => `$${i + 1}`).join(", ");
-  const base = await db.select<{ id: number; name: string; cpf: string }[]>(
-    `SELECT e.id, e.name, e.cpf FROM employees e WHERE e.id IN (${placeholders})`,
-    employeeIds,
-  );
-  const linkRows = await db.select<
-    {
-      employeeId: number;
-      clientId: number;
-      clientName: string;
-      companyId: number;
-      companyName: string;
-      matricula: string | null;
-    }[]
-  >(
-    `SELECT ecc.employee_id AS employeeId, cl.id AS clientId, cl.name AS clientName,
-            c.id AS companyId, c.name AS companyName, ecc.matricula
-     FROM employee_client_companies ecc
-     JOIN clients cl ON cl.id = ecc.client_id
-     JOIN companies c ON c.id = ecc.company_id
-     WHERE ecc.employee_id IN (${placeholders})
-     ORDER BY cl.name, c.name`,
-    employeeIds,
-  );
-  const linksByEmployee = new Map<number, EmployeeClientCompanyLink[]>();
-  for (const row of linkRows) {
-    const list = linksByEmployee.get(row.employeeId) ?? [];
-    list.push({
-      clientId: row.clientId,
-      clientName: row.clientName,
-      companyId: row.companyId,
-      companyName: row.companyName,
-      matricula: row.matricula,
-    });
-    linksByEmployee.set(row.employeeId, list);
-  }
-  return base.map((e) => ({ ...e, links: linksByEmployee.get(e.id) ?? [] }));
-}
-
 export interface EmployeesGlobalQuery {
   /** Substring match on name — case- and accent-insensitive (see `foldAccentsSql`). */
   search?: string;
@@ -681,56 +445,7 @@ export interface EmployeesGlobalQuery {
  * for some other cliente).
  */
 export async function listEmployeesGlobal(query: EmployeesGlobalQuery): Promise<PagedResult<EmployeeRow>> {
-  const db = await getDb();
-  const conditions: string[] = [];
-  const params: (string | number)[] = [];
-
-  const search = query.search?.trim();
-  if (search) {
-    params.push(search);
-    const byName = `${foldAccentsSql("e.name")} LIKE '%' || ${foldAccentsSql(`$${params.length}`)} || '%'`;
-    // A search made only of digits and CPF punctuation also matches the CPF.
-    const cpfDigits = /^[\d.\s-]+$/.test(search) ? search.replace(/\D/g, "") : "";
-    if (cpfDigits.length >= 3) {
-      params.push(cpfDigits);
-      conditions.push(`(${byName} OR REPLACE(REPLACE(e.cpf, '.', ''), '-', '') LIKE '%' || $${params.length} || '%')`);
-    } else {
-      conditions.push(byName);
-    }
-  }
-  const companyClause = inClause("ecc_company.company_id", query.companyIds ?? [], params);
-  if (companyClause) {
-    conditions.push(
-      `EXISTS (SELECT 1 FROM employee_client_companies ecc_company WHERE ecc_company.employee_id = e.id AND ${companyClause})`,
-    );
-  }
-  const clientClause = inClause("ecc_client.client_id", query.clientIds ?? [], params);
-  if (clientClause) {
-    conditions.push(
-      `EXISTS (SELECT 1 FROM employee_client_companies ecc_client WHERE ecc_client.employee_id = e.id AND ${clientClause})`,
-    );
-  }
-
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const from = `FROM employees e`;
-
-  const countRows = await db.select<{ count: number }[]>(`SELECT COUNT(*) AS count ${from} ${whereClause}`, params);
-  const total = countRows[0]?.count ?? 0;
-
-  const idRows = await db.select<{ id: number }[]>(
-    `SELECT e.id
-     ${from}
-     ${whereClause}
-     ORDER BY e.name
-     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-    [...params, query.pageSize, query.page * query.pageSize],
-  );
-
-  const hydrated = await hydrateEmployeeRows(db, idRows.map((r) => r.id));
-  const byId = new Map(hydrated.map((r) => [r.id, r]));
-  const rows = idRows.map((r) => byId.get(r.id)!);
-
-  return { rows, total };
+  return rpc<PagedResult<EmployeeRow>>("listEmployeesGlobal", { query });
 }
 
 /**
@@ -742,8 +457,7 @@ export async function listEmployeesGlobal(query: EmployeesGlobalQuery): Promise<
  */
 export async function getEmployeesByIds(ids: number[]): Promise<EmployeeRow[]> {
   if (ids.length === 0) return [];
-  const db = await getDb();
-  return hydrateEmployeeRows(db, ids);
+  return rpc<EmployeeRow[]>("getEmployeesByIds", { ids });
 }
 
 /**
@@ -762,36 +476,11 @@ export async function createEmployeeManual(
   cpf: string,
   matricula: string | null = null,
 ): Promise<number> {
-  const db = await getDb();
-  const normalizedCpf = normalizeCpf(cpf);
-  if (normalizedCpf.length !== 11) {
-    throw new Error("CPF deve ter 11 dígitos.");
-  }
-
-  const link = await db.select<{ clientId: number }[]>(
-    "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
-    [clientId, companyId],
-  );
-  if (link.length === 0) {
-    throw new Error("Esse cliente não está vinculado à empresa selecionada.");
-  }
-
-  const existing = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1", [normalizedCpf]);
-  if (existing.length > 0) {
-    throw new Error("Já existe um colaborador com esse CPF.");
-  }
-
-  const result = await db.execute("INSERT INTO employees (name, cpf) VALUES ($1, $2)", [name.trim(), normalizedCpf]);
-  const employeeId = result.lastInsertId as number;
-  await linkEmployeeToClientCompany(employeeId, clientId, companyId, matricula);
-  return employeeId;
+  return rpc<number>("createEmployeeManual", { clientId, companyId, name, cpf, matricula });
 }
 
 export async function getEmployee(id: number): Promise<EmployeeRow> {
-  const db = await getDb();
-  const rows = await hydrateEmployeeRows(db, [id]);
-  if (rows.length === 0) throw new Error("Colaborador não encontrado.");
-  return rows[0];
+  return rpc<EmployeeRow>("getEmployee", { id });
 }
 
 /**
@@ -810,20 +499,7 @@ export async function linkEmployeeToClientCompany(
   companyId: number,
   matricula: string | null = null,
 ): Promise<void> {
-  const db = await getDb();
-  const link = await db.select<{ clientId: number }[]>(
-    "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
-    [clientId, companyId],
-  );
-  if (link.length === 0) {
-    throw new Error("Esse cliente não está vinculado à empresa selecionada.");
-  }
-
-  await db.execute(
-    `INSERT INTO employee_client_companies (employee_id, client_id, company_id, matricula) VALUES ($1, $2, $3, $4)
-     ON CONFLICT (employee_id, client_id, company_id) DO UPDATE SET matricula = excluded.matricula`,
-    [employeeId, clientId, companyId, matricula?.trim() || null],
-  );
+  await rpc<void>("linkEmployeeToClientCompany", { employeeId, clientId, companyId, matricula });
 }
 
 /** Just the matrícula for one of a colaborador's (cliente, empresa) links — the rest of `employee_client_companies` isn't user-editable after creation (the link itself is added/removed via `linkEmployeeToClientCompany`/`unlinkEmployeeClientCompany`). */
@@ -833,11 +509,7 @@ export async function updateEmployeeClientCompanyMatricula(
   companyId: number,
   matricula: string | null,
 ): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    "UPDATE employee_client_companies SET matricula = $1 WHERE employee_id = $2 AND client_id = $3 AND company_id = $4",
-    [matricula?.trim() || null, employeeId, clientId, companyId],
-  );
+  await rpc<void>("updateEmployeeClientCompanyMatricula", { employeeId, clientId, companyId, matricula });
 }
 
 /**
@@ -847,18 +519,7 @@ export async function updateEmployeeClientCompanyMatricula(
  * pair).
  */
 export async function unlinkEmployeeClientCompany(employeeId: number, clientId: number, companyId: number): Promise<void> {
-  const db = await getDb();
-  const count = await db.select<{ n: number }[]>(
-    "SELECT COUNT(*) AS n FROM employee_client_companies WHERE employee_id = $1",
-    [employeeId],
-  );
-  if ((count[0]?.n ?? 0) <= 1) {
-    throw new Error("O colaborador precisa estar vinculado a pelo menos um cliente/empresa.");
-  }
-  await db.execute(
-    "DELETE FROM employee_client_companies WHERE employee_id = $1 AND client_id = $2 AND company_id = $3",
-    [employeeId, clientId, companyId],
-  );
+  await rpc<void>("unlinkEmployeeClientCompany", { employeeId, clientId, companyId });
 }
 
 /**
@@ -869,24 +530,7 @@ export async function unlinkEmployeeClientCompany(employeeId: number, clientId: 
  * anymore — CPF alone is (see 0072_employee_client_link.sql).
  */
 export async function updateEmployee(id: number, name: string, cpf: string): Promise<void> {
-  const db = await getDb();
-  const normalizedCpf = normalizeCpf(cpf);
-  if (normalizedCpf.length !== 11) {
-    throw new Error("CPF deve ter 11 dígitos.");
-  }
-
-  const current = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE id = $1", [id]);
-  if (current.length === 0) throw new Error("Colaborador não encontrado.");
-
-  const existing = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1 AND id != $2", [
-    normalizedCpf,
-    id,
-  ]);
-  if (existing.length > 0) {
-    throw new Error("Já existe um colaborador com esse CPF.");
-  }
-
-  await db.execute("UPDATE employees SET name = $1, cpf = $2 WHERE id = $3", [name.trim(), normalizedCpf, id]);
+  await rpc<void>("updateEmployee", { id, name, cpf });
 }
 
 /**
@@ -914,49 +558,11 @@ export interface EmployeeDeletionImpact {
 
 /** What `deleteEmployee` would erase — shown before a delete so the user sees exactly what goes with it. */
 export async function getEmployeeDeletionImpact(employeeId: number): Promise<EmployeeDeletionImpact> {
-  const db = await getDb();
-  const rows = await db.select<EmployeeDeletionImpact[]>(
-    `SELECT
-       (SELECT COUNT(*) FROM payment_shifts WHERE employee_id = $1 AND status = 'pago') AS paymentRecords,
-       (SELECT COUNT(*) FROM payment_shifts ps WHERE ps.employee_id = $1 AND ${HEAD_SHIFT_CONDITION}) AS shifts,
-       (SELECT COUNT(*) FROM payment_shifts ps WHERE ps.employee_id = $1 AND ps.status = 'pago' AND ${HEAD_SHIFT_CONDITION}) AS paidShifts,
-       (SELECT COALESCE(SUM(ps.amount), 0) FROM payment_shifts ps WHERE ps.employee_id = $1 AND ps.status = 'pago' AND ${HEAD_SHIFT_CONDITION}) AS paidAmount,
-       (SELECT COUNT(*) FROM imports WHERE employee_id = $1) AS timesheets,
-       (SELECT COUNT(*) FROM employee_pix_keys WHERE employee_id = $1) AS pixKeys`,
-    [employeeId],
-  );
-  return rows[0];
+  return rpc<EmployeeDeletionImpact>("getEmployeeDeletionImpact", { employeeId });
 }
 
 export async function deleteEmployee(employeeId: number, options: { allowPaid?: boolean } = {}): Promise<void> {
-  // A payment that was made is a financial record — refused unless the
-  // user explicitly forced it ("Excluir mesmo assim", which also takes a
-  // backup first — see EmployeeFormPage).
-  if (!options.allowPaid) {
-    const { paymentRecords } = await getEmployeeDeletionImpact(employeeId);
-    if (paymentRecords > 0) {
-      throw new Error(
-        `Este colaborador tem ${paymentRecords} ${paymentRecords === 1 ? "registro de pagamento" : "registros de pagamento"} no histórico e não pode ser excluído sem confirmação — isso apagaria pagamentos já feitos.`,
-      );
-    }
-  }
-
-  const params = [employeeId];
-  await runWriteBatch([
-    {
-      sql: `DELETE FROM punches WHERE day_record_id IN (
-       SELECT id FROM day_records WHERE import_id IN (SELECT id FROM imports WHERE employee_id = $1)
-     )`,
-      params,
-    },
-    { sql: "DELETE FROM day_records WHERE import_id IN (SELECT id FROM imports WHERE employee_id = $1)", params },
-    { sql: "DELETE FROM imports WHERE employee_id = $1", params },
-    { sql: "DELETE FROM payment_shifts WHERE employee_id = $1", params },
-    { sql: "DELETE FROM employee_aliases WHERE employee_id = $1", params },
-    { sql: "DELETE FROM employee_pix_keys WHERE employee_id = $1", params },
-    { sql: "DELETE FROM employee_client_companies WHERE employee_id = $1", params },
-    { sql: "DELETE FROM employees WHERE id = $1", params },
-  ]);
+  await rpc<void>("deleteEmployee", { employeeId, options });
 }
 
 /**
@@ -990,37 +596,7 @@ export async function reassignEmployeeHistoryToClientCompany(
   periodStart: string | null,
   periodEnd: string | null,
 ): Promise<void> {
-  const shiftConditions = ["employee_id = $3"];
-  const shiftParams: (string | number)[] = [newClientId, newCompanyId, employeeId];
-  if (periodStart) {
-    shiftParams.push(periodStart);
-    shiftConditions.push(`work_date >= $${shiftParams.length}`);
-  }
-  if (periodEnd) {
-    shiftParams.push(periodEnd);
-    shiftConditions.push(`work_date <= $${shiftParams.length}`);
-  }
-
-  const importConditions = ["employee_id = $3"];
-  const importParams: (string | number)[] = [newClientId, newCompanyId, employeeId];
-  if (periodEnd) {
-    importParams.push(periodEnd);
-    importConditions.push(`period_start <= $${importParams.length}`);
-  }
-  if (periodStart) {
-    importParams.push(periodStart);
-    importConditions.push(`period_end >= $${importParams.length}`);
-  }
-  await runWriteBatch([
-    {
-      sql: `UPDATE payment_shifts SET client_id = $1, company_id = $2 WHERE ${shiftConditions.join(" AND ")}`,
-      params: shiftParams,
-    },
-    {
-      sql: `UPDATE imports SET client_id = $1, company_id = $2 WHERE ${importConditions.join(" AND ")}`,
-      params: importParams,
-    },
-  ]);
+  await rpc<void>("reassignEmployeeHistoryToClientCompany", { employeeId, newClientId, newCompanyId, periodStart, periodEnd });
 }
 
 export async function getImportById(id: number): Promise<StoredImport | null> {
@@ -2513,70 +2089,11 @@ export async function deletePaymentPdfTemplate(id: number): Promise<void> {
 }
 
 export async function listEmployeeTemplates(): Promise<EmployeeTemplateListRow[]> {
-  const db = await getDb();
-  const rows = await db.select<(Omit<EmployeeTemplateListRow, "acceptedFileKinds"> & { acceptedFileKindsJson: string | null })[]>(`
-    SELECT et.id, et.name, et.file_kind AS fileKind, et.accepted_file_kinds_json AS acceptedFileKindsJson, et.updated_at AS updatedAt
-    FROM employee_templates et
-    ORDER BY et.updated_at DESC
-  `);
-  return rows.map(({ acceptedFileKindsJson, ...r }) => ({
-    ...r,
-    acceptedFileKinds: parseAcceptedFileKinds(r.fileKind, acceptedFileKindsJson),
-  }));
+  return rpc<EmployeeTemplateListRow[]>("listEmployeeTemplates");
 }
 
 export async function getEmployeeTemplate(id: number): Promise<EmployeeTemplateRow> {
-  const db = await getDb();
-  const rows = await db.select<
-    (Omit<EmployeeTemplateRow, "groups" | "identifierPriority" | "acceptedFileKinds"> & {
-      identifierPriority: string;
-      acceptedFileKindsJson: string | null;
-    })[]
-  >(
-    `SELECT et.id, et.name, et.file_kind AS fileKind, et.accepted_file_kinds_json AS acceptedFileKindsJson, et.delimiter,
-            et.identifier_priority AS identifierPriority,
-            et.created_at AS createdAt, et.updated_at AS updatedAt
-     FROM employee_templates et
-     WHERE et.id = $1`,
-    [id],
-  );
-  if (rows.length === 0) throw new Error("Template não encontrado.");
-
-  const groupRows = await db.select<{ id: number; headerRow: number | null }[]>(
-    "SELECT id, header_row AS headerRow FROM employee_template_groups WHERE template_id = $1",
-    [id],
-  );
-  const groups: EmployeeTemplateGroup[] = [];
-  for (const g of groupRows) {
-    const sheetRows = await db.select<{ sheetName: string; included: number }[]>(
-      `SELECT sheet_name AS sheetName, included
-       FROM employee_template_sheets
-       WHERE group_id = $1
-       ORDER BY sheet_name`,
-      [g.id],
-    );
-    const fieldMappings = await db.select<EmployeeTemplateFieldMapping[]>(
-      `SELECT column_letter AS columnLetter, target_field AS targetField, header_label AS headerLabel
-       FROM employee_template_fields
-       WHERE group_id = $1
-       ORDER BY column_letter`,
-      [g.id],
-    );
-    groups.push({
-      sheetNames: sheetRows.filter((r) => r.included).map((r) => r.sheetName),
-      excludedSheetNames: sheetRows.filter((r) => !r.included).map((r) => r.sheetName),
-      fieldMappings,
-      headerRow: g.headerRow,
-    });
-  }
-
-  const { acceptedFileKindsJson, ...row } = rows[0];
-  return {
-    ...row,
-    identifierPriority: JSON.parse(rows[0].identifierPriority) as IdentifierAttempt[],
-    acceptedFileKinds: parseAcceptedFileKinds(row.fileKind, acceptedFileKindsJson),
-    groups,
-  };
+  return rpc<EmployeeTemplateRow>("getEmployeeTemplate", { id });
 }
 
 export interface EmployeeTemplateInput {
@@ -2588,88 +2105,12 @@ export interface EmployeeTemplateInput {
   groups: EmployeeTemplateGroup[];
 }
 
-function pushEmployeeTemplateGroupInserts(
-  statements: BatchStatement[],
-  templateId: BatchParam,
-  groups: EmployeeTemplateGroup[],
-): void {
-  for (const group of groups) {
-    const groupId = { $lastInsertId: statements.length };
-    statements.push({
-      sql: "INSERT INTO employee_template_groups (template_id, header_row) VALUES ($1, $2)",
-      params: [templateId, group.headerRow],
-    });
-    for (const sheetName of group.sheetNames) {
-      statements.push({
-        sql: "INSERT INTO employee_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 1)",
-        params: [groupId, sheetName],
-      });
-    }
-    for (const sheetName of group.excludedSheetNames) {
-      statements.push({
-        sql: "INSERT INTO employee_template_sheets (group_id, sheet_name, included) VALUES ($1, $2, 0)",
-        params: [groupId, sheetName],
-      });
-    }
-    for (const mapping of group.fieldMappings) {
-      statements.push({
-        sql: `INSERT INTO employee_template_fields (group_id, column_letter, target_field, header_label)
-         VALUES ($1, $2, $3, $4)`,
-        params: [groupId, mapping.columnLetter, mapping.targetField, mapping.headerLabel],
-      });
-    }
-  }
-}
-
-/** Deletes every group under a template, and (via their group_id) every sheet/field row under those groups. */
-function deleteEmployeeTemplateGroupsStatements(templateId: number): BatchStatement[] {
-  const groupIds = "SELECT id FROM employee_template_groups WHERE template_id = $1";
-  return [
-    { sql: `DELETE FROM employee_template_fields WHERE group_id IN (${groupIds})`, params: [templateId] },
-    { sql: `DELETE FROM employee_template_sheets WHERE group_id IN (${groupIds})`, params: [templateId] },
-    { sql: "DELETE FROM employee_template_groups WHERE template_id = $1", params: [templateId] },
-  ];
-}
-
 export async function createEmployeeTemplate(input: EmployeeTemplateInput): Promise<number> {
-  const statements: BatchStatement[] = [
-    {
-      sql: `INSERT INTO employee_templates (name, file_kind, accepted_file_kinds_json, delimiter, identifier_priority)
-     VALUES ($1, $2, $3, $4, $5)`,
-      params: [
-        input.name,
-        input.fileKind,
-        JSON.stringify(input.acceptedFileKinds),
-        input.delimiter,
-        JSON.stringify(input.identifierPriority),
-      ],
-    },
-  ];
-  pushEmployeeTemplateGroupInserts(statements, { $lastInsertId: 0 }, input.groups);
-  const results = await runWriteBatch(statements);
-  return results[0].lastInsertId;
+  return rpc<number>("createEmployeeTemplate", { input });
 }
 
 export async function updateEmployeeTemplate(id: number, input: EmployeeTemplateInput): Promise<void> {
-  const statements: BatchStatement[] = [
-    {
-      sql: `UPDATE employee_templates SET
-       name = $1, file_kind = $2, accepted_file_kinds_json = $3, delimiter = $4,
-       identifier_priority = $5, updated_at = datetime('now')
-     WHERE id = $6`,
-      params: [
-        input.name,
-        input.fileKind,
-        JSON.stringify(input.acceptedFileKinds),
-        input.delimiter,
-        JSON.stringify(input.identifierPriority),
-        id,
-      ],
-    },
-    ...deleteEmployeeTemplateGroupsStatements(id),
-  ];
-  pushEmployeeTemplateGroupInserts(statements, id, input.groups);
-  await runWriteBatch(statements);
+  await rpc<void>("updateEmployeeTemplate", { id, input });
 }
 
 /**
@@ -2679,10 +2120,7 @@ export async function updateEmployeeTemplate(id: number, input: EmployeeTemplate
  * template that created them.
  */
 export async function deleteEmployeeTemplate(id: number): Promise<void> {
-  await runWriteBatch([
-    ...deleteEmployeeTemplateGroupsStatements(id),
-    { sql: "DELETE FROM employee_templates WHERE id = $1", params: [id] },
-  ]);
+  await rpc<void>("deleteEmployeeTemplate", { id });
 }
 
 export interface EmployeeImportRow {
@@ -2709,77 +2147,8 @@ export interface EmployeeImportRow {
  * `findEmployeeAnywhereByAttempts`.
  */
 export async function createEmployeesFromImport(rows: EmployeeImportRow[], savedFileHashes: Iterable<string> = []): Promise<void> {
-  const db = await getDb();
-
-  // Everything is checked and resolved with reads first, then written as
-  // one transaction (together with marking `savedFileHashes` saved) — a bad
-  // row anywhere fails the import before anything is written, instead of
-  // leaving the rows before it saved and the rest not.
-  const pairKeys = new Set(rows.map((r) => `${r.clientId}:${r.companyId}`));
-  for (const key of pairKeys) {
-    const [clientId, companyId] = key.split(":").map(Number);
-    const link = await db.select<{ clientId: number }[]>(
-      "SELECT client_id AS clientId FROM client_companies WHERE client_id = $1 AND company_id = $2",
-      [clientId, companyId],
-    );
-    if (link.length === 0) throw new Error("Esse cliente não está vinculado à empresa selecionada.");
-  }
-
-  const statements: BatchStatement[] = [];
-  // A CPF new to the database can appear on more than one row (the same
-  // person under several cliente/empresa pairs) — the first row creates the
-  // colaborador, the later ones reuse it.
-  const createdByCpf = new Map<string, BatchParam>();
-  for (const row of rows) {
-    const normalizedCpf = row.cpf === null ? "" : normalizeCpf(row.cpf);
-    const existingId =
-      row.employeeId ??
-      (await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1", [normalizedCpf]))[0]?.id ??
-      null;
-    let employeeId: BatchParam;
-    if (existingId !== null) {
-      employeeId = existingId;
-      if (row.name?.trim()) {
-        statements.push({ sql: "UPDATE employees SET name = $1 WHERE id = $2", params: [row.name.trim(), employeeId] });
-      }
-      if (row.cpf !== null) {
-        if (normalizedCpf.length !== 11) throw new Error("CPF mapeado deve ter 11 dígitos.");
-        const cpfOwner = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE cpf = $1 AND id != $2", [
-          normalizedCpf,
-          employeeId,
-        ]);
-        if (cpfOwner.length > 0) throw new Error("O CPF mapeado já pertence a outro colaborador.");
-        statements.push({ sql: "UPDATE employees SET cpf = $1 WHERE id = $2", params: [normalizedCpf, employeeId] });
-      }
-    } else if (createdByCpf.has(normalizedCpf)) {
-      employeeId = createdByCpf.get(normalizedCpf)!;
-    } else {
-      if (normalizedCpf.length !== 11 || !row.name?.trim()) {
-        throw new Error("Para criar um colaborador novo, a linha precisa ter CPF válido e Nome.");
-      }
-      employeeId = { $lastInsertId: statements.length };
-      statements.push({ sql: "INSERT INTO employees (name, cpf) VALUES ($1, $2)", params: [row.name.trim(), normalizedCpf] });
-      createdByCpf.set(normalizedCpf, employeeId);
-    }
-
-    // An existing link keeps its matrícula unless the template maps one.
-    statements.push({
-      sql: `INSERT INTO employee_client_companies (employee_id, client_id, company_id, matricula) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (employee_id, client_id, company_id) DO ${row.matriculaMapped ? "UPDATE SET matricula = excluded.matricula" : "NOTHING"}`,
-      params: [employeeId, row.clientId, row.companyId, row.matricula?.trim() || null],
-    });
-    for (const rawKey of row.pixKeys) {
-      const keyValue = rawKey.trim();
-      if (!keyValue) throw new Error("Informe uma chave PIX.");
-      statements.push({
-        sql: `INSERT INTO employee_pix_keys (employee_id, key_value, key_type) VALUES ($1, $2, $3)
-     ON CONFLICT(employee_id, key_value) DO UPDATE SET key_type = excluded.key_type`,
-        params: [employeeId, keyValue, detectPixKeyType(keyValue)],
-      });
-    }
-  }
-  statements.push(...markSourceFilesSavedStatements(savedFileHashes));
-  await runWriteBatch(statements);
+  // `savedFileHashes` may be a Set, which JSON can't carry — send it as an array.
+  await rpc<void>("createEmployeesFromImport", { rows, savedFileHashes: Array.from(savedFileHashes) });
 }
 
 export interface EmployeePixKeyRow {
@@ -2790,33 +2159,19 @@ export interface EmployeePixKeyRow {
 }
 
 export async function listEmployeePixKeys(employeeId: number): Promise<EmployeePixKeyRow[]> {
-  const db = await getDb();
-  return db.select<EmployeePixKeyRow[]>(
-    `SELECT id, employee_id AS employeeId, key_value AS keyValue, key_type AS keyType
-     FROM employee_pix_keys WHERE employee_id = $1 ORDER BY id`,
-    [employeeId],
-  );
+  return rpc<EmployeePixKeyRow[]>("listEmployeePixKeys", { employeeId });
 }
 
 export async function addEmployeePixKey(employeeId: number, rawValue: string, keyType?: PixKeyType): Promise<void> {
-  const db = await getDb();
-  const keyValue = rawValue.trim();
-  if (!keyValue) throw new Error("Informe uma chave PIX.");
-  await db.execute(
-    `INSERT INTO employee_pix_keys (employee_id, key_value, key_type) VALUES ($1, $2, $3)
-     ON CONFLICT(employee_id, key_value) DO UPDATE SET key_type = excluded.key_type`,
-    [employeeId, keyValue, keyType ?? detectPixKeyType(keyValue)],
-  );
+  await rpc<void>("addEmployeePixKey", { employeeId, rawValue, keyType });
 }
 
 export async function updateEmployeePixKeyType(id: number, keyType: PixKeyType): Promise<void> {
-  const db = await getDb();
-  await db.execute("UPDATE employee_pix_keys SET key_type = $1 WHERE id = $2", [keyType, id]);
+  await rpc<void>("updateEmployeePixKeyType", { id, keyType });
 }
 
 export async function removeEmployeePixKey(id: number): Promise<void> {
-  const db = await getDb();
-  await db.execute("DELETE FROM employee_pix_keys WHERE id = $1", [id]);
+  await rpc<void>("removeEmployeePixKey", { id });
 }
 
 export interface EmployeeAliasRow {
@@ -2827,11 +2182,7 @@ export interface EmployeeAliasRow {
 
 /** Every "possível nome" registered for one colaborador, most recent first. */
 export async function listEmployeeAliases(employeeId: number): Promise<EmployeeAliasRow[]> {
-  const db = await getDb();
-  return db.select<EmployeeAliasRow[]>(
-    `SELECT id, employee_id AS employeeId, alias FROM employee_aliases WHERE employee_id = $1 ORDER BY id DESC`,
-    [employeeId],
-  );
+  return rpc<EmployeeAliasRow[]>("listEmployeeAliases", { employeeId });
 }
 
 /**
@@ -2851,22 +2202,7 @@ export async function findEmployeeAliasOwner(
   employeeId: number,
   alias: string,
 ): Promise<{ id: number; name: string } | null> {
-  const db = await getDb();
-  const rows = await db.select<{ id: number; name: string }[]>(
-    `SELECT DISTINCT e.id, e.name
-     FROM employee_aliases ea
-     JOIN employees e ON e.id = ea.employee_id
-     WHERE lower(ea.alias) = lower($1)
-       AND e.id != $2
-       AND EXISTS (
-         SELECT 1 FROM employee_client_companies mine
-         JOIN employee_client_companies theirs
-           ON theirs.client_id = mine.client_id AND theirs.company_id = mine.company_id
-         WHERE mine.employee_id = $2 AND theirs.employee_id = e.id
-       )`,
-    [alias.trim(), employeeId],
-  );
-  return rows[0] ?? null;
+  return rpc<{ id: number; name: string } | null>("findEmployeeAliasOwner", { employeeId, alias });
 }
 
 /**
@@ -2878,30 +2214,11 @@ export async function findEmployeeAliasOwner(
  * that share the same raw name.
  */
 export async function addEmployeeAlias(employeeId: number, alias: string): Promise<void> {
-  const db = await getDb();
-  const trimmed = alias.trim();
-  if (!trimmed) throw new Error("Nome não pode ser vazio.");
-
-  const employeeRows = await db.select<{ id: number }[]>("SELECT id FROM employees WHERE id = $1", [employeeId]);
-  if (employeeRows.length === 0) throw new Error("Colaborador não encontrado.");
-
-  const owner = await findEmployeeAliasOwner(employeeId, trimmed);
-  if (owner) {
-    throw new Error(`Esse nome já está vinculado a ${owner.name}.`);
-  }
-
-  const alreadyMine = await db.select<{ id: number }[]>(
-    "SELECT id FROM employee_aliases WHERE employee_id = $1 AND lower(alias) = lower($2)",
-    [employeeId, trimmed],
-  );
-  if (alreadyMine.length > 0) return;
-
-  await db.execute("INSERT INTO employee_aliases (employee_id, alias) VALUES ($1, $2)", [employeeId, trimmed]);
+  await rpc<void>("addEmployeeAlias", { employeeId, alias });
 }
 
 export async function removeEmployeeAlias(aliasId: number): Promise<void> {
-  const db = await getDb();
-  await db.execute("DELETE FROM employee_aliases WHERE id = $1", [aliasId]);
+  await rpc<void>("removeEmployeeAlias", { aliasId });
 }
 
 export interface RoleRow {
@@ -2916,62 +2233,24 @@ export interface RoleRow {
  * that empresa serves).
  */
 export async function listRoles(companyId: number): Promise<RoleRow[]> {
-  const db = await getDb();
-  return db.select<RoleRow[]>(
-    `SELECT id, company_id AS companyId, name FROM roles WHERE company_id = $1 ORDER BY name`,
-    [companyId],
-  );
+  return rpc<RoleRow[]>("listRoles", { companyId });
 }
 
 /** Every função across every empresa — the Pagamentos "Função" filter's option list, narrowed client-side to whichever empresas are currently selected (same pattern `clientOptions` already uses for Cliente vs Empresa). */
 export async function listRolesGlobal(): Promise<RoleRow[]> {
-  const db = await getDb();
-  return db.select<RoleRow[]>(`SELECT id, company_id AS companyId, name FROM roles ORDER BY name`);
+  return rpc<RoleRow[]>("listRolesGlobal");
 }
 
 export async function getRole(id: number): Promise<RoleRow> {
-  const db = await getDb();
-  const rows = await db.select<RoleRow[]>(
-    `SELECT id, company_id AS companyId, name FROM roles WHERE id = $1`,
-    [id],
-  );
-  if (rows.length === 0) throw new Error("Função não encontrada.");
-  return rows[0];
+  return rpc<RoleRow>("getRole", { id });
 }
 
 export async function createRole(companyId: number, name: string): Promise<number> {
-  const db = await getDb();
-  const trimmed = name.trim();
-  if (!trimmed) throw new Error("Nome não pode ser vazio.");
-
-  const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM roles WHERE company_id = $1 AND lower(name) = lower($2)",
-    [companyId, trimmed],
-  );
-  if (existing.length > 0) throw new Error("Já existe uma função com esse nome para essa empresa.");
-
-  const result = await db.execute("INSERT INTO roles (company_id, name) VALUES ($1, $2)", [companyId, trimmed]);
-  return result.lastInsertId as number;
+  return rpc<number>("createRole", { companyId, name });
 }
 
 export async function updateRole(id: number, name: string): Promise<void> {
-  const db = await getDb();
-  const trimmed = name.trim();
-  if (!trimmed) throw new Error("Nome não pode ser vazio.");
-
-  const current = await db.select<{ companyId: number }[]>(
-    "SELECT company_id AS companyId FROM roles WHERE id = $1",
-    [id],
-  );
-  if (current.length === 0) throw new Error("Função não encontrada.");
-
-  const existing = await db.select<{ id: number }[]>(
-    "SELECT id FROM roles WHERE company_id = $1 AND lower(name) = lower($2) AND id != $3",
-    [current[0].companyId, trimmed, id],
-  );
-  if (existing.length > 0) throw new Error("Já existe uma função com esse nome para essa empresa.");
-
-  await db.execute("UPDATE roles SET name = $1 WHERE id = $2", [trimmed, id]);
+  await rpc<void>("updateRole", { id, name });
 }
 
 /**
@@ -2982,11 +2261,7 @@ export async function updateRole(id: number, name: string): Promise<void> {
  * being deleted along with the função.
  */
 export async function deleteRole(roleId: number): Promise<void> {
-  await runWriteBatch([
-    { sql: "UPDATE payment_shifts SET role_id = NULL WHERE role_id = $1", params: [roleId] },
-    { sql: "DELETE FROM role_aliases WHERE role_id = $1", params: [roleId] },
-    { sql: "DELETE FROM roles WHERE id = $1", params: [roleId] },
-  ]);
+  await rpc<void>("deleteRole", { roleId });
 }
 
 export interface RoleAliasRow {
@@ -2997,11 +2272,7 @@ export interface RoleAliasRow {
 
 /** Every "possível nome" registered for one função, most recent first. */
 export async function listRoleAliases(roleId: number): Promise<RoleAliasRow[]> {
-  const db = await getDb();
-  return db.select<RoleAliasRow[]>(
-    `SELECT id, role_id AS roleId, alias FROM role_aliases WHERE role_id = $1 ORDER BY id DESC`,
-    [roleId],
-  );
+  return rpc<RoleAliasRow[]>("listRoleAliases", { roleId });
 }
 
 /**
@@ -3011,15 +2282,7 @@ export async function listRoleAliases(roleId: number): Promise<RoleAliasRow[]> {
  * accepted for name search elsewhere.
  */
 export async function findRoleAliasOwner(companyId: number, alias: string): Promise<{ id: number; name: string } | null> {
-  const db = await getDb();
-  const rows = await db.select<{ id: number; name: string }[]>(
-    `SELECT r.id, r.name
-     FROM role_aliases ra
-     JOIN roles r ON r.id = ra.role_id
-     WHERE r.company_id = $1 AND lower(ra.alias) = lower($2)`,
-    [companyId, alias.trim()],
-  );
-  return rows[0] ?? null;
+  return rpc<{ id: number; name: string } | null>("findRoleAliasOwner", { companyId, alias });
 }
 
 /**
@@ -3029,28 +2292,11 @@ export async function findRoleAliasOwner(companyId: number, alias: string): Prom
  * `addEmployeeAlias`.
  */
 export async function addRoleAlias(roleId: number, alias: string): Promise<void> {
-  const db = await getDb();
-  const trimmed = alias.trim();
-  if (!trimmed) throw new Error("Nome não pode ser vazio.");
-
-  const roleRows = await db.select<{ companyId: number }[]>(
-    "SELECT company_id AS companyId FROM roles WHERE id = $1",
-    [roleId],
-  );
-  if (roleRows.length === 0) throw new Error("Função não encontrada.");
-
-  const owner = await findRoleAliasOwner(roleRows[0].companyId, trimmed);
-  if (owner && owner.id !== roleId) {
-    throw new Error(`Esse nome já está vinculado à função ${owner.name}.`);
-  }
-  if (owner) return;
-
-  await db.execute("INSERT INTO role_aliases (role_id, alias) VALUES ($1, $2)", [roleId, trimmed]);
+  await rpc<void>("addRoleAlias", { roleId, alias });
 }
 
 export async function removeRoleAlias(aliasId: number): Promise<void> {
-  const db = await getDb();
-  await db.execute("DELETE FROM role_aliases WHERE id = $1", [aliasId]);
+  await rpc<void>("removeRoleAlias", { aliasId });
 }
 
 /**
@@ -3060,97 +2306,7 @@ export async function removeRoleAlias(aliasId: number): Promise<void> {
  * text). Case-insensitive, same as the "nome" tentativa there.
  */
 export async function findRoleByName(companyId: number, text: string | null): Promise<RoleRow | null> {
-  const trimmed = text?.trim();
-  if (!trimmed) return null;
-  const db = await getDb();
-  const rows = await db.select<RoleRow[]>(
-    `SELECT r.id, r.company_id AS companyId, r.name
-     FROM roles r
-     WHERE r.company_id = $1
-       AND (lower(r.name) = lower($2) OR EXISTS (
-         SELECT 1 FROM role_aliases ra WHERE ra.role_id = r.id AND lower(ra.alias) = lower($2)
-       ))`,
-    [companyId, trimmed],
-  );
-  return rows[0] ?? null;
-}
-
-/**
- * Walks a template's `identifierPriority` against a base `SELECT e.id ...`
- * (caller-supplied, already scoped however that variant needs), trying each
- * tentativa in order — every field within one tentativa must match the
- * *same* employee (an AND); the first tentativa that finds someone wins (an
- * OR across tentativas). A tentativa is skipped outright if any of its
- * fields has no raw value for this row — there's nothing to match on.
- * `matricula` lives on `employee_client_companies` now (per cliente+empresa
- * pair), not `employees` — `matriculaCondition` builds that field's SQL
- * condition given a `$n` placeholder and the tentativa's `caseInsensitive`
- * flag, since the two callers need different scopes: `findEmployeeByAttempts`
- * already joined one specific pair (`ecc`) so it can compare that column
- * directly, while `findEmployeeAnywhereByAttempts` has no pair in scope and
- * needs an `EXISTS` across all of an employee's pairs instead. Returns the
- * first matching employee's id, hydrated by the caller.
- */
-async function findEmployeeIdByAttempts(
-  db: Database,
-  baseSelect: string,
-  baseParams: (string | number)[],
-  attempts: IdentifierAttempt[],
-  values: { cpf: string | null; matricula: string | null; nome: string | null },
-  matriculaCondition: (placeholder: string, caseInsensitive: boolean) => string,
-): Promise<number | null> {
-  for (const attempt of attempts) {
-    if (attempt.fields.length === 0) continue;
-    const conditions: string[] = [];
-    const params: (string | number)[] = [...baseParams];
-    let skip = false;
-
-    for (const field of attempt.fields) {
-      if (field === "cpf") {
-        // Always digit-normalized — case doesn't apply.
-        const normalized = values.cpf ? normalizeCpf(values.cpf) : "";
-        if (normalized.length !== 11) {
-          skip = true;
-          break;
-        }
-        params.push(normalized);
-        conditions.push(`e.cpf = $${params.length}`);
-      } else if (field === "matricula") {
-        const trimmed = values.matricula?.trim();
-        if (!trimmed) {
-          skip = true;
-          break;
-        }
-        params.push(trimmed);
-        conditions.push(matriculaCondition(`$${params.length}`, attempt.caseInsensitive));
-      } else {
-        const trimmed = values.nome?.trim();
-        if (!trimmed) {
-          skip = true;
-          break;
-        }
-        // Matches the colaborador's own name, or any "possível nome"
-        // (employee_aliases) registered for them — same caseInsensitive
-        // setting governs both, so a tentativa doesn't need a second flag.
-        params.push(trimmed);
-        const nameParam = params.length;
-        params.push(trimmed);
-        const aliasParam = params.length;
-        const nameCmp = attempt.caseInsensitive ? `lower(e.name) = lower($${nameParam})` : `e.name = $${nameParam}`;
-        const aliasCmp = attempt.caseInsensitive
-          ? `lower(ea.alias) = lower($${aliasParam})`
-          : `ea.alias = $${aliasParam}`;
-        conditions.push(
-          `(${nameCmp} OR EXISTS (SELECT 1 FROM employee_aliases ea WHERE ea.employee_id = e.id AND ${aliasCmp}))`,
-        );
-      }
-    }
-
-    if (skip) continue;
-    const rows = await db.select<{ id: number }[]>(`${baseSelect} AND ${conditions.join(" AND ")}`, params);
-    if (rows.length > 0) return rows[0].id;
-  }
-  return null;
+  return rpc<RoleRow | null>("findRoleByName", { companyId, text });
 }
 
 /**
@@ -3178,17 +2334,7 @@ export async function findEmployeeByAttempts(
   attempts: IdentifierAttempt[],
   values: { cpf: string | null; matricula: string | null; nome: string | null },
 ): Promise<EmployeeRow | null> {
-  const db = await getDb();
-  const select = `SELECT e.id
-    FROM employees e
-    JOIN employee_client_companies ecc ON ecc.employee_id = e.id AND ecc.client_id = $1 AND ecc.company_id = $2
-    WHERE 1=1`;
-  const id = await findEmployeeIdByAttempts(db, select, [clientId, companyId], attempts, values, (p, ci) =>
-    ci ? `lower(ecc.matricula) = lower(${p})` : `ecc.matricula = ${p}`,
-  );
-  if (id === null) return null;
-  const rows = await hydrateEmployeeRows(db, [id]);
-  return rows[0] ?? null;
+  return rpc<EmployeeRow | null>("findEmployeeByAttempts", { clientId, companyId, attempts, values });
 }
 
 /**
@@ -3210,15 +2356,7 @@ export async function findEmployeeAnywhereByAttempts(
   attempts: IdentifierAttempt[],
   values: { cpf: string | null; matricula: string | null; nome: string | null },
 ): Promise<EmployeeRow | null> {
-  const db = await getDb();
-  const select = `SELECT e.id FROM employees e WHERE 1=1`;
-  const id = await findEmployeeIdByAttempts(db, select, [], attempts, values, (p, ci) => {
-    const cmp = ci ? `lower(ecc.matricula) = lower(${p})` : `ecc.matricula = ${p}`;
-    return `EXISTS (SELECT 1 FROM employee_client_companies ecc WHERE ecc.employee_id = e.id AND ${cmp})`;
-  });
-  if (id === null) return null;
-  const rows = await hydrateEmployeeRows(db, [id]);
-  return rows[0] ?? null;
+  return rpc<EmployeeRow | null>("findEmployeeAnywhereByAttempts", { attempts, values });
 }
 
 export interface DuplicatePaymentShiftMatch {
