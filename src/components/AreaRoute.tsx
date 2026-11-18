@@ -1,6 +1,6 @@
 import { createContext, useContext, type ReactNode } from "react";
 import { useAccess } from "../contexts/AuthContext";
-import { areaLabel, type Area } from "../lib/access";
+import { AREAS, areaLabel, type Area } from "../lib/access";
 
 /** The area of the page being shown, and whether the profile only lets it be viewed. */
 const AreaContext = createContext<{ area: Area | null; readOnly: boolean }>({ area: null, readOnly: false });
@@ -16,7 +16,9 @@ export default function AreaRoute({ area, needEdit = false, children }: { area: 
   const { canView, canEdit } = useAccess();
   if (!canView(area)) return <AccessDenied title={`Você não tem acesso a ${areaLabel(area)}`} />;
   if (needEdit && !canEdit(area)) return <AccessDenied title={`Seu perfil só permite visualizar ${areaLabel(area)}`} />;
-  return <AreaContext.Provider value={{ area, readOnly: !canEdit(area) }}>{children}</AreaContext.Provider>;
+  // Análises has nothing to edit: it's never "view-only" for anyone.
+  const editable = AREAS.find((a) => a.id === area)?.editable ?? true;
+  return <AreaContext.Provider value={{ area, readOnly: editable && !canEdit(area) }}>{children}</AreaContext.Provider>;
 }
 
 export function AccessDenied({ title }: { title: string }) {
