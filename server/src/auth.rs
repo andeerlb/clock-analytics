@@ -46,7 +46,7 @@ pub struct Authenticator {
 
 enum Mode {
     Firebase { verifier: FirebaseVerifier, allowed_emails: HashSet<String> },
-    DevBypass { email: String },
+    DevBypass { email: String, admin: bool },
 }
 
 impl Authenticator {
@@ -56,9 +56,9 @@ impl Authenticator {
                 verifier: FirebaseVerifier::new(project_id.clone()),
                 allowed_emails: allowed_emails.clone(),
             },
-            AuthConfig::DevBypass { email } => {
+            AuthConfig::DevBypass { email, admin } => {
                 tracing::warn!(%email, "login desativado (modo de desenvolvimento): toda requisição entra como este usuário");
-                Mode::DevBypass { email: email.clone() }
+                Mode::DevBypass { email: email.clone(), admin: *admin }
             }
         };
         Authenticator { mode }
@@ -76,7 +76,7 @@ impl Authenticator {
 
     pub async fn authenticate(&self, authorization: Option<&str>) -> Result<AuthUser, ApiError> {
         match &self.mode {
-            Mode::DevBypass { email } => Ok(AuthUser { email: email.clone(), initial_admin: true }),
+            Mode::DevBypass { email, admin } => Ok(AuthUser { email: email.clone(), initial_admin: *admin }),
             Mode::Firebase { verifier, allowed_emails } => {
                 let token = authorization
                     .and_then(|h| h.strip_prefix("Bearer "))

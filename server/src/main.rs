@@ -191,7 +191,7 @@ mod tests {
 
     #[tokio::test]
     async fn dev_bypass_reaches_the_handlers_end_to_end() {
-        let cfg = config(AuthConfig::DevBypass { email: "dev@local".into() });
+        let cfg = config(AuthConfig::DevBypass { email: "dev@local".into(), admin: true });
         let app = app(&cfg, AppState::for_tests().await, Arc::new(Authenticator::new(&cfg.auth)));
 
         let create = Request::post("/api/companies")

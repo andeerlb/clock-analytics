@@ -41,8 +41,8 @@ cd server && cargo test
 | `PONTOSCAN_STATIC_DIR` | — | Pasta do frontend buildado (`dist/`) para o próprio servidor servir. Vazio = só API (frontend no Firebase Hosting). |
 | `PONTOSCAN_CORS_ORIGINS` | — | Origens que podem chamar a API, separadas por vírgula, ex. `https://pontoscan.web.app`. |
 | `FIREBASE_PROJECT_ID` | — | **Obrigatório em produção.** ID do projeto Firebase cujos tokens de login são aceitos. |
-| `PONTOSCAN_ALLOWED_EMAILS` | — | **Obrigatório em produção.** E-mails que podem entrar, separados por vírgula. O Firebase aceita qualquer conta Google; é esta lista que barra os demais. |
-| `PONTOSCAN_DEV_USER_EMAIL` | — | Desliga o login e trata toda requisição como este e-mail. **Só funciona em build de desenvolvimento**; um build de release se recusa a subir com ela definida. |
+| `PONTOSCAN_ALLOWED_EMAILS` | — | **Obrigatório em produção.** Admins iniciais, separados por vírgula: sempre Admin, para ninguém ficar trancado do lado de fora. As demais pessoas são cadastradas pela tela "Usuários e perfis"; o Firebase aceita qualquer conta Google, e quem não está em nenhuma das duas listas é barrado. |
+| `PONTOSCAN_DEV_USER_EMAIL` | — | Desliga o login e trata toda requisição como este e-mail, como admin. **Só funciona em build de desenvolvimento**; um build de release se recusa a subir com ela definida. Para testar outro perfil, defina também `PONTOSCAN_ALLOWED_EMAILS` sem esse e-mail e cadastre-o na tela com o perfil desejado. |
 | `RUST_LOG` | `info,tower_http=info,sqlx=warn` | Nível de log. |
 
 ## Migrations

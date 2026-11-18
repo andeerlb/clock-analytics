@@ -40,12 +40,12 @@ variable "firebase_project_id" {
 }
 
 variable "allowed_emails" {
-  description = "E-mails que podem entrar no sistema."
+  description = "Admins iniciais: sempre Admin no sistema. As demais pessoas são cadastradas pela tela Usuários e perfis."
   type        = list(string)
 
   validation {
     condition     = length(var.allowed_emails) > 0
-    error_message = "Informe pelo menos um e-mail; sem nenhum, ninguém entra."
+    error_message = "Informe pelo menos um e-mail; sem nenhum admin inicial, ninguém consegue cadastrar os outros."
   }
 }
 
