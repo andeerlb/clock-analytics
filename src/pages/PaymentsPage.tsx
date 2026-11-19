@@ -1132,6 +1132,19 @@ export default function PaymentsPage() {
   const flatColumns = PAGE_COLUMNS.filter((c) => visibleColumns.has(c.id));
   const flatWeightSum = flatColumns.reduce((sum, c) => sum + (FLAT_COLUMN_WEIGHTS[c.id] ?? 1), 0);
   const flatBodyRef = useRef<HTMLTableSectionElement>(null);
+  // On a phone the status tabs scroll sideways: keep the selected one in view
+  // (it can be "Pagos", past the screen's edge).
+  const viewRowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const row = viewRowRef.current;
+    const tab = row?.querySelector<HTMLElement>('.payments-tab[aria-selected="true"]');
+    if (!row || !tab || row.scrollWidth <= row.clientWidth) return;
+    const rowBox = row.getBoundingClientRect();
+    const tabBox = tab.getBoundingClientRect();
+    const margin = 16;
+    if (tabBox.left < rowBox.left + margin) row.scrollBy({ left: tabBox.left - rowBox.left - margin, behavior: "smooth" });
+    else if (tabBox.right > rowBox.right - margin) row.scrollBy({ left: tabBox.right - rowBox.right + margin, behavior: "smooth" });
+  }, [selectedStatuses]);
   const virtual = useVirtualRows(grouped ? 0 : flatRows.length, flatBodyRef);
   // The observer only fires when the sentinel *enters* the margin — if it's
   // still in view after a load (tall window, few rows), keep going.
@@ -1279,7 +1292,7 @@ export default function PaymentsPage() {
         )}
       </div>
 
-      <div className="payments-view-row">
+      <div className="payments-view-row" ref={viewRowRef}>
         <div className="payments-tabs" role="tablist" aria-label="Status">
           {statusTabs.map((tab) => (
             <button

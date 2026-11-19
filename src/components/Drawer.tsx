@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { useSheetDrag } from "../lib/useSheetDrag";
 import { createPortal } from "react-dom";
 import { X, type LucideIcon } from "lucide-react";
 
@@ -48,6 +49,8 @@ export default function Drawer({
   closeOnBackdrop?: boolean;
 }) {
   const [rendered, setRendered] = useState(open);
+  // On a phone the sheet opens from the bottom and closes by dragging it down.
+  const sheet = useSheetDrag<HTMLDivElement>(onClose);
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
@@ -112,6 +115,7 @@ export default function Drawer({
     // Drawer opened from inside a fullScreen Modal doesn't also close that
     // Modal via React's portal-follows-the-component-tree bubbling.
     <div
+      ref={sheet.scrimRef}
       className={`drawer-overlay${visible ? " drawer-overlay-visible" : ""}`}
       onClick={(e) => {
         e.stopPropagation();
@@ -119,13 +123,15 @@ export default function Drawer({
       }}
     >
       <div
+        ref={sheet.sheetRef}
         className={`drawer-panel drawer-panel-${side}${visible ? " drawer-panel-visible" : ""}${className ? ` ${className}` : ""}`}
         style={{ width }}
         role="dialog"
         aria-label={title}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="drawer-header">
+        <div className="sheet-grab" aria-hidden="true" {...sheet.handlers} />
+        <div className="drawer-header" {...sheet.handlers}>
           {header ?? (
             <div className="drawer-head">
               {Icon && (
@@ -139,7 +145,7 @@ export default function Drawer({
               </div>
             </div>
           )}
-          <button type="button" className="ghost drawer-close" onClick={onClose} aria-label="Fechar" title="Fechar">
+          <button type="button" className="ghost drawer-close sheet-close" onClick={onClose} aria-label="Fechar" title="Fechar">
             <X size={16} />
           </button>
         </div>
