@@ -11434,6 +11434,12 @@ button.app-nav-count {
     padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   }
 
+  /* No dragging the assistant's width on a phone: the handle would push the
+     sheet 12px to the right and past the screen's edge. */
+  .ai-resize-handle {
+    display: none;
+  }
+
   /* Arquivo step: the drop area stacks on a phone. */
   .tfile-icon {
     display: none;
