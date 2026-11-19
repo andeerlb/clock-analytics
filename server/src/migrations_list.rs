@@ -86,4 +86,5 @@ migration_list! {
     (77, "payment_shifts.previous_shift_id becomes UNIQUE — a shift has at most one successor, so two writers acting on the same shift at once can't fork its history; any fork already in the data is repaired first by detaching every successor but the earliest (nothing deleted)", "0077_unique_previous_shift.sql"),
     (78, "who saved the spreadsheet version a remote check looked at (saved_by/saved_at, from the file's own properties) on source_url_check_log, and on each diff the one who saved the version where that change first showed up", "0078_check_saved_by.sql"),
     (79, "who can sign in and what each person can do: access_profiles (per-area none/view/edit plus export, AI and user management; a fixed Admin) and app_users (e-mail and profile); the server's initial admins stay in its configuration", "0079_access_profiles.sql"),
+    (80, "activity_log: who changed what and when, with the before/after of each field, kept forever; known_users (the name each person goes by); payment_shifts.created_by (who wrote each version of a turno)", "0080_activity_log.sql"),
 }

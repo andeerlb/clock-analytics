@@ -810,3 +810,17 @@ export function shiftValue(
   if (valueRules === null || duration === null) return null;
   return resolvePaymentValue(valueRules, duration, shift);
 }
+
+/** SQLite UTC datetime → "agora", "há 5 min", "há 3 h", "ontem", "há 4 dias", else "12/11/2026". */
+export function formatTimeAgo(sqliteDatetime: string, now: Date = new Date()): string {
+  const date = parseSqliteDateTime(sqliteDatetime);
+  const minutes = Math.floor((now.getTime() - date.getTime()) / 60000);
+  if (minutes < 1) return "agora";
+  if (minutes < 60) return `há ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24 && date.getDate() === now.getDate()) return `há ${hours} h`;
+  const days = Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() - new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()) / 86400000);
+  if (days <= 1) return "ontem";
+  if (days < 7) return `há ${days} dias`;
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
+}

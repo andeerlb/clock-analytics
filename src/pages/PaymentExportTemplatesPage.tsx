@@ -1,4 +1,5 @@
 import { Copy, Eye, FileSpreadsheet, FileText, Pencil, Plus, Trash2 } from "lucide-react";
+import { UpdatedByCell, useLastActivity } from "../components/ActivityInfo";
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
@@ -29,6 +30,8 @@ export default function PaymentExportTemplatesPage() {
   const readOnly = useReadOnly();
   const [excelTemplates, setExcelTemplates] = useState<PaymentExportTemplateListRow[]>([]);
   const [pdfTemplates, setPdfTemplates] = useState<PaymentPdfTemplateListRow[]>([]);
+  const excelActivity = useLastActivity("exportTemplate", excelTemplates.map((t) => t.id));
+  const pdfActivity = useLastActivity("pdfTemplate", pdfTemplates.map((t) => t.id));
   const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<{ kind: TemplateKind; id: number; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [cloningId, setCloningId] = useState<string | null>(null);
@@ -115,7 +118,7 @@ export default function PaymentExportTemplatesPage() {
           <thead>
             <tr>
               <th>Nome</th>
-              <th>Atualizado em</th>
+              <th>Atualizado</th>
               <th>Ações</th>
             </tr>
           </thead>
@@ -128,7 +131,9 @@ export default function PaymentExportTemplatesPage() {
   const excelRows = excelTemplates.length === 0 ? null : excelTemplates.map((t) => (
     <tr key={t.id}>
       <td>{t.name}</td>
-      <td>{formatDateTime(t.updatedAt)}</td>
+      <td>
+        <UpdatedByCell info={excelActivity.get(String(t.id))} fallback={formatDateTime(t.updatedAt)} />
+      </td>
       <td>{actionButtons("excel", t.id, t.name, `/payments/export-templates/${t.id}`)}</td>
     </tr>
   ));
@@ -136,7 +141,9 @@ export default function PaymentExportTemplatesPage() {
   const pdfRows = pdfTemplates.length === 0 ? null : pdfTemplates.map((t) => (
     <tr key={t.id}>
       <td>{t.name}</td>
-      <td>{formatDateTime(t.updatedAt)}</td>
+      <td>
+        <UpdatedByCell info={pdfActivity.get(String(t.id))} fallback={formatDateTime(t.updatedAt)} />
+      </td>
       <td>{actionButtons("pdf", t.id, t.name, `/payments/pdf-templates/${t.id}`)}</td>
     </tr>
   ));

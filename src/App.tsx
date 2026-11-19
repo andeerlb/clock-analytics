@@ -32,6 +32,7 @@ import RoleFormPage from "./pages/RoleFormPage";
 import RolesPage from "./pages/RolesPage";
 import SettingsPage from "./pages/SettingsPage";
 import UsersPage from "./pages/UsersPage";
+import ActivityPage from "./pages/ActivityPage";
 import { useAccess } from "./contexts/AuthContext";
 import AnalyticsPage from "./pages/AnalyticsPage";
 
@@ -39,6 +40,12 @@ import AnalyticsPage from "./pages/AnalyticsPage";
 function UsersRoute() {
   const { canManageUsers } = useAccess();
   return canManageUsers ? <UsersPage /> : <AccessDenied title="Você não tem acesso a Usuários e perfis" />;
+}
+
+/** "Atividade": who changed what — for the same profiles as "Usuários e perfis". */
+function ActivityRoute() {
+  const { canManageUsers } = useAccess();
+  return canManageUsers ? <ActivityPage /> : <AccessDenied title="Você não tem acesso à Atividade" />;
 }
 
 function AppShell() {
@@ -65,6 +72,7 @@ function AppShell() {
           <Route path="/roles/:id" element={<AreaRoute area="cadastros"><RoleFormPage /></AreaRoute>} />
           <Route path="/import" element={<ImportChooserPage />} />
           <Route path="/users" element={<UsersRoute />} />
+          <Route path="/activity" element={<ActivityRoute />} />
           <Route path="/import/timesheet" element={<AreaRoute area="espelhos" needEdit><ImportTimesheetPage /></AreaRoute>} />
           <Route path="/import/payments" element={<AreaRoute area="pagamentos" needEdit><ImportPaymentsPage /></AreaRoute>} />
           <Route path="/import/payments/templates" element={<AreaRoute area="pagamentos"><PaymentTemplatesPage /></AreaRoute>} />

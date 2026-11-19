@@ -231,6 +231,10 @@ fn rpc_rule(name: &str) -> &'static [Req] {
         "listAppUsers" | "addAppUser" | "setAppUserProfile" | "removeAppUser" | "listAccessProfiles" | "createAccessProfile"
         | "updateAccessProfile" | "deleteAccessProfile" => &[Users],
 
+        // --- Atividade: the whole log is for who manages users; "atualizado por" in the lists is for everyone ---
+        "listActivity" | "listActivityFilters" => &[Users],
+        "listLastActivity" => &[View(ANY_AREA)],
+
         _ => &[AdminOnly],
     }
 }
@@ -421,7 +425,7 @@ mod tests {
         use axum::body::Body;
         use http_body_util::BodyExt;
         use tower::ServiceExt;
-        let user = AuthUser { email: email.into(), initial_admin: false };
+        let user = AuthUser { email: email.into(), name: None, initial_admin: false };
         let app = crate::routes::protected()
             .route_layer(axum::middleware::from_fn_with_state(state.clone(), authorize))
             .layer(axum::middleware::from_fn(move |mut req: Request, next: Next| {

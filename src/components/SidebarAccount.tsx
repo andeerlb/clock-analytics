@@ -8,7 +8,7 @@ const ICON_PROPS = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", 
 
 /**
  * Who is signed in, at the foot of the sidebar. Clicking the card opens the
- * account menu (Configurações, Usuários e perfis, Sair) the
+ * account menu (Configurações, Usuários e perfis, Atividade, Sair) the
  * same way the app's pickers open: the box grows out of the card itself,
  * upward, with the card at its bottom (see `.emp-picker-popover`).
  * Collapsed sidebar: just the avatar.
@@ -43,7 +43,7 @@ export default function SidebarAccount({ collapsed }: { collapsed: boolean }) {
   if (state.status !== "ready") return null;
   const { name, email } = state.user;
   const canSwitch = AUTH_MODE === "firebase";
-  const onAccountPage = pathname.startsWith("/settings") || pathname.startsWith("/users");
+  const onAccountPage = pathname.startsWith("/settings") || pathname.startsWith("/users") || pathname.startsWith("/activity");
 
   function go(to: string) {
     setOpen(false);
@@ -97,6 +97,14 @@ export default function SidebarAccount({ collapsed }: { collapsed: boolean }) {
                 <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM19 8v6M22 11h-6" />
               </svg>
               Usuários e perfis
+            </button>
+          )}
+          {canManageUsers && (
+            <button type="button" role="menuitem" className={pathname.startsWith("/activity") ? "active" : undefined} onClick={() => go("/activity")}>
+              <svg {...ICON_PROPS}>
+                <path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2" />
+              </svg>
+              Atividade
             </button>
           )}
           {canSwitch ? (

@@ -1028,7 +1028,10 @@ export default function ShiftPanel({
                       </span>
                     )}
                   </div>
-                  <div className="sa-tl-when">{formatDateTime(ev.row.importedAt)}</div>
+                  <div className="sa-tl-when">
+                    {formatDateTime(ev.row.importedAt)}
+                    {ev.row.createdByName && <> · por {ev.row.createdByName}</>}
+                  </div>
                   {ev.row.status === "erro" && ev.row.errorMessage && (
                     <div className="sa-small" style={{ color: "var(--danger)" }}>
                       {ev.row.errorMessage}

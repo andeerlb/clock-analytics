@@ -1,4 +1,5 @@
 import { Building2, Plus } from "lucide-react";
+import { UpdatedByCell, useLastActivity } from "../components/ActivityInfo";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useReadOnly } from "../components/AreaRoute";
@@ -10,6 +11,7 @@ export default function CompaniesPage() {
   const navigate = useNavigate();
   const readOnly = useReadOnly();
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
+  const lastActivity = useLastActivity("company", companies.map((c) => c.id));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,6 +54,7 @@ export default function CompaniesPage() {
                   <th>Empresa</th>
                   <th>CNPJ</th>
                   <th>Horário noturno</th>
+                  <th>Atualizado</th>
                 </tr>
               </thead>
               <tbody>
@@ -68,6 +71,9 @@ export default function CompaniesPage() {
                     <td className="mono">{formatCnpj(c.cnpj)}</td>
                     <td className="mono">
                       {c.nightStartTime}–{c.nightEndTime}
+                    </td>
+                    <td>
+                      <UpdatedByCell info={lastActivity.get(String(c.id))} />
                     </td>
                   </tr>
                 ))}

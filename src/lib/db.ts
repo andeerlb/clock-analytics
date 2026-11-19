@@ -2069,3 +2069,75 @@ export async function getImportedFileNamesByBasename(): Promise<Map<string, stri
   return byBasename;
 }
 
+
+/* ---------- Atividade (who changed what) ---------- */
+
+export interface ActivityChange {
+  field: string;
+  before: string;
+  after: string;
+}
+
+export interface ActivityItem {
+  id: number;
+  label: string;
+}
+
+/** One line of "Atividade": a person (or the automatic verification) changed a record. */
+export interface ActivityRow {
+  id: number;
+  /** UTC, "YYYY-MM-DD HH:MM:SS". */
+  at: string;
+  /** `null` for the automatic verification. */
+  actorEmail: string | null;
+  actorName: string;
+  area: string;
+  /** The operation, e.g. "markPaymentShiftPaid". */
+  action: string;
+  /** How it reads: "marcou como pago o turno de". */
+  verb: string;
+  entityType: string | null;
+  entityId: string | null;
+  entityLabel: string | null;
+  summary: string | null;
+  changes: ActivityChange[];
+  items: ActivityItem[];
+}
+
+export interface ActivityQuery {
+  /** An e-mail, or "system" for the automatic verification. */
+  actor?: string | null;
+  area?: string | null;
+  /** "YYYY-MM-DD". */
+  from?: string | null;
+  to?: string | null;
+  entityType?: string | null;
+  entityId?: string | null;
+  beforeId?: number | null;
+  limit?: number;
+}
+
+export async function listActivity(query: ActivityQuery): Promise<{ rows: ActivityRow[]; hasMore: boolean }> {
+  return rpc("listActivity", { ...query });
+}
+
+export async function listActivityFilters(): Promise<{ people: { email: string; name: string }[]; hasSystem: boolean; areas: string[] }> {
+  return rpc("listActivityFilters", {});
+}
+
+/** Who last changed (and who first recorded) each record of a list. */
+export interface LastActivity {
+  entityId: string;
+  actorName: string;
+  at: string;
+  firstActorName: string;
+  firstAt: string;
+  firstVerb: string;
+  /** How many lines the log has for this record. */
+  total: number;
+}
+
+export async function listLastActivity(entityType: string, ids: (number | string)[]): Promise<LastActivity[]> {
+  if (ids.length === 0) return [];
+  return rpc<LastActivity[]>("listLastActivity", { entityType, ids });
+}

@@ -683,9 +683,11 @@ pub(crate) async fn history_impl(state: &AppState, shift_id: i64) -> ApiResult<V
        JOIN chain ON chain.id = ps.id
        WHERE ps.previous_shift_id IS NOT NULL
      )
-     SELECT {PAYMENT_SHIFT_SELECT_COLUMNS}
+     SELECT {PAYMENT_SHIFT_SELECT_COLUMNS},
+            ps.created_by AS createdBy, COALESCE(ku.name, ps.created_by) AS createdByName
      {PAYMENT_SHIFT_FROM_CLAUSE}
      JOIN chain ON chain.id = ps.id
+     LEFT JOIN known_users ku ON ku.email = ps.created_by
      ORDER BY ps.id DESC"
         ),
         &params![shift_id],

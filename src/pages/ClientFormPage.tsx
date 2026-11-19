@@ -1,4 +1,5 @@
 import { Building2, Calculator, Info, Moon, Plus, X } from "lucide-react";
+import { RecordActivityFooter } from "../components/ActivityInfo";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
@@ -418,6 +419,7 @@ export default function ClientFormPage() {
           </FormPanel>
 
         </form>
+        {isEditing && <RecordActivityFooter entityType="client" id={id} />}
         </fieldset>
       )}
     </div>

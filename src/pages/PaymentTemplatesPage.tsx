@@ -1,4 +1,5 @@
 import { Eye, Pencil, Plus, Trash2 } from "lucide-react";
+import { UpdatedByCell, useLastActivity } from "../components/ActivityInfo";
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
@@ -21,6 +22,7 @@ export default function PaymentTemplatesPage() {
   const navigate = useNavigate();
   const readOnly = useReadOnly();
   const [templates, setTemplates] = useState<PaymentTemplateListRow[]>([]);
+  const lastActivity = useLastActivity("paymentTemplate", templates.map((t) => t.id));
   const [wizardTarget, setWizardTarget] = useState<PaymentTemplateRow | "new" | null>(null);
   const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<PaymentTemplateListRow | null>(null);
   const [busy, setBusy] = useState(false);
@@ -107,7 +109,7 @@ export default function PaymentTemplatesPage() {
                 <tr>
                   <th>Nome</th>
                   <th>Formatos aceitos</th>
-                  <th>Atualizado em</th>
+                  <th>Atualizado</th>
                   <th>Ações</th>
                 </tr>
               </thead>
@@ -116,7 +118,9 @@ export default function PaymentTemplatesPage() {
                   <tr key={t.id}>
                     <td>{t.name}</td>
                     <td>{Array.from(new Set(t.acceptedFileKinds.map((k) => FILE_KIND_LABELS[k] ?? k))).join(", ")}</td>
-                    <td>{formatDateTime(t.updatedAt)}</td>
+                    <td>
+                      <UpdatedByCell info={lastActivity.get(String(t.id))} fallback={formatDateTime(t.updatedAt)} />
+                    </td>
                     <td>
                       <span style={{ display: "flex", gap: "0.3rem" }}>
                         <button

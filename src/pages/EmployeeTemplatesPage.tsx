@@ -1,4 +1,5 @@
 import { Eye, Pencil, Plus, Trash2 } from "lucide-react";
+import { UpdatedByCell, useLastActivity } from "../components/ActivityInfo";
 import { useEffect, useState } from "react";
 import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
 import ConfirmModal from "../components/ConfirmModal";
@@ -18,6 +19,7 @@ const FILE_KIND_LABELS: Record<string, string> = {
 export default function EmployeeTemplatesPage() {
   const readOnly = useReadOnly();
   const [templates, setTemplates] = useState<EmployeeTemplateListRow[]>([]);
+  const lastActivity = useLastActivity("employeeTemplate", templates.map((t) => t.id));
   const [wizardTarget, setWizardTarget] = useState<EmployeeTemplateRow | "new" | null>(null);
   const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<EmployeeTemplateListRow | null>(null);
   const [busy, setBusy] = useState(false);
@@ -88,7 +90,7 @@ export default function EmployeeTemplatesPage() {
                 <tr>
                   <th>Nome</th>
                   <th>Formatos aceitos</th>
-                  <th>Atualizado em</th>
+                  <th>Atualizado</th>
                   <th>Ações</th>
                 </tr>
               </thead>
@@ -97,7 +99,9 @@ export default function EmployeeTemplatesPage() {
                   <tr key={t.id}>
                     <td>{t.name}</td>
                     <td>{Array.from(new Set(t.acceptedFileKinds.map((k) => FILE_KIND_LABELS[k] ?? k))).join(", ")}</td>
-                    <td>{formatDateTime(t.updatedAt)}</td>
+                    <td>
+                      <UpdatedByCell info={lastActivity.get(String(t.id))} fallback={formatDateTime(t.updatedAt)} />
+                    </td>
                     <td>
                       <span style={{ display: "flex", gap: "0.3rem" }}>
                         <button

@@ -1,4 +1,5 @@
 import { Info, Plus, Tags, Trash2, X } from "lucide-react";
+import { RecordActivityFooter } from "../components/ActivityInfo";
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import ConfirmModal from "../components/ConfirmModal";
@@ -212,6 +213,7 @@ export default function RoleFormPage() {
                 </button>
               )}
             </form>
+            {isEditing && <RecordActivityFooter entityType="role" id={id} />}
           </FormPanel>
         )}
 

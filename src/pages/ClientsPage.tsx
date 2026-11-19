@@ -1,4 +1,5 @@
 import { Plus, Users } from "lucide-react";
+import { UpdatedByCell, useLastActivity } from "../components/ActivityInfo";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useReadOnly } from "../components/AreaRoute";
@@ -42,6 +43,7 @@ export default function ClientsPage() {
   }, []);
 
   const clients = useMemo(() => groupByClient(rawClients), [rawClients]);
+  const lastActivity = useLastActivity("client", clients.map((c) => c.id));
 
   return (
     <div>
@@ -75,6 +77,7 @@ export default function ClientsPage() {
                   <th>Cliente</th>
                   <th>CNPJ</th>
                   <th>Empresa</th>
+                  <th>Atualizado</th>
                 </tr>
               </thead>
               <tbody>
@@ -90,6 +93,9 @@ export default function ClientsPage() {
                     </td>
                     <td className="mono">{formatCnpj(c.cnpj)}</td>
                     <td>{c.companyNames.join(", ")}</td>
+                    <td>
+                      <UpdatedByCell info={lastActivity.get(String(c.id))} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
