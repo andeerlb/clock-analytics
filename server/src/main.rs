@@ -1,3 +1,4 @@
+mod activity;
 mod ai;
 mod access;
 mod auth;
@@ -63,6 +64,8 @@ pub fn app(config: &Config, state: AppState, auth: Arc<Authenticator>) -> Router
     let state = state.with_initial_admins(config.auth.initial_admins());
     // Layers run bottom-up: who is calling (auth), then what they may do (access).
     let api = routes::protected()
+        // Innermost: records what changed, once the caller is known and allowed.
+        .route_layer(middleware::from_fn_with_state(state.clone(), activity::record))
         .route_layer(middleware::from_fn_with_state(state.clone(), access::authorize))
         .route_layer(middleware::from_fn_with_state(auth, auth::require_auth))
         .route("/health", get(routes::health))

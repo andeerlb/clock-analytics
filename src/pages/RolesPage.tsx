@@ -1,4 +1,5 @@
 import { Plus, Search } from "lucide-react";
+import { UpdatedByCell, useLastActivity } from "../components/ActivityInfo";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useReadOnly } from "../components/AreaRoute";
@@ -64,6 +65,7 @@ export default function RolesPage() {
   const total = filtered.length;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const pageItems = filtered.slice(page * pageSize, page * pageSize + pageSize);
+  const lastActivity = useLastActivity("role", pageItems.map((r) => r.id));
 
   return (
     <div>
@@ -148,6 +150,7 @@ export default function RolesPage() {
                   <tr>
                     <th>Função</th>
                     <th>Empresa</th>
+                    <th>Atualizado</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -157,6 +160,9 @@ export default function RolesPage() {
                         <Link to={`/roles/${r.id}`}>{r.name}</Link>
                       </td>
                       <td>{companyNameById.get(r.companyId) ?? "—"}</td>
+                      <td>
+                        <UpdatedByCell info={lastActivity.get(String(r.id))} />
+                      </td>
                     </tr>
                   ))}
                 </tbody>

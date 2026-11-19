@@ -1,4 +1,5 @@
 import { Plus, Search } from "lucide-react";
+import { UpdatedByCell, useLastActivity } from "../components/ActivityInfo";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Avatar from "../components/Avatar";
@@ -15,6 +16,7 @@ export default function EmployeesPage() {
   const navigate = useNavigate();
   const readOnly = useReadOnly();
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
+  const lastActivity = useLastActivity("employee", employees.map((e) => e.id));
   const [total, setTotal] = useState(0);
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
@@ -199,6 +201,7 @@ export default function EmployeesPage() {
                     <th>CPF</th>
                     <th>Cliente</th>
                     <th>Empresas</th>
+                    <th>Atualizado</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -216,6 +219,9 @@ export default function EmployeesPage() {
                         <td className="mono">{formatCpf(e.cpf)}</td>
                         <td>{distinctClients.join(", ")}</td>
                         <td>{distinctCompanies.join(", ")}</td>
+                        <td>
+                          <UpdatedByCell info={lastActivity.get(String(e.id))} />
+                        </td>
                       </tr>
                     );
                   })}

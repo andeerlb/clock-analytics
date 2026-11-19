@@ -1,4 +1,5 @@
 import { Briefcase, Info, KeyRound, Plus, Tags, Trash2, X } from "lucide-react";
+import { RecordActivityFooter } from "../components/ActivityInfo";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import ConfirmModal from "../components/ConfirmModal";
@@ -427,6 +428,7 @@ export default function EmployeeFormPage() {
                 </button>
               )}
             </form>
+            {isEditing && <RecordActivityFooter entityType="employee" id={id} />}
           </FormPanel>
         )}
 

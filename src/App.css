@@ -10754,3 +10754,318 @@ span.tfile-bar {
 .extras-card-row > span:last-child {
   overflow-wrap: anywhere;
 }
+
+/* ---------- Atividade ---------- */
+
+.act-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.act-filter {
+  width: 220px;
+}
+
+.act-entity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.act-entity-chip b {
+  color: var(--text);
+}
+
+.act-entity-chip button {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--outline);
+}
+
+.act-entity-chip button:hover {
+  background: var(--surface-container-high);
+  color: var(--text);
+}
+
+.act-day {
+  margin: 18px 0 8px;
+  color: var(--outline);
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.act-list {
+  display: grid;
+  gap: 2px;
+}
+
+.act-line {
+  border-radius: 10px;
+}
+
+.act-line.open,
+.act-line:hover {
+  background: var(--card-bg);
+}
+
+button.act-row {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  box-shadow: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: 400;
+  text-align: left;
+}
+
+button.act-row:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.act-avatar {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: #101013;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.act-avatar-system {
+  background: var(--surface-container-high);
+  color: var(--text-muted);
+}
+
+.act-what {
+  min-width: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.act-what b,
+.act-obj {
+  color: var(--text);
+}
+
+.act-what b {
+  font-weight: 600;
+}
+
+.act-summary {
+  color: var(--text-muted);
+}
+
+.act-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--outline);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.act-tag {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--surface-container-high);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.act-detail {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px 54px;
+}
+
+table.act-diff {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.act-diff th {
+  padding: 4px 8px;
+  color: var(--outline);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.act-diff td {
+  padding: 6px 8px;
+  border-top: 1px solid var(--border-softer);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.act-diff td:first-child {
+  width: 140px;
+  color: var(--outline);
+}
+
+.act-diff td.act-old {
+  color: var(--danger);
+  text-decoration: line-through;
+  text-decoration-color: rgba(248, 113, 113, 0.5);
+}
+
+.act-diff td.act-new {
+  color: var(--success);
+}
+
+.act-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.act-items span {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--surface-container-high);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.act-group {
+  display: grid;
+  gap: 4px;
+}
+
+.act-group-row {
+  display: grid;
+  grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
+  gap: 12px;
+  font-size: 0.8rem;
+}
+
+a.act-group-label {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.act-group-changes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--text-muted);
+}
+
+.act-group-changes s {
+  color: var(--danger);
+}
+
+.act-group-changes ins {
+  color: var(--success);
+  text-decoration: none;
+}
+
+a.act-link {
+  justify-self: start;
+  color: var(--text);
+  font-size: 0.8rem;
+  text-decoration: underline;
+  text-decoration-color: var(--outline);
+  text-underline-offset: 2px;
+}
+
+.act-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+/* "Atualizado" in the cadastro lists, and the footer inside a record. */
+.updated-by {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.updated-by-avatar {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: #101013;
+  font-size: 0.55rem;
+  font-weight: 800;
+}
+
+.record-activity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-softer);
+  border-radius: 10px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.record-activity b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+a.record-activity-link {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--outline);
+  text-underline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  button.act-row {
+    grid-template-columns: 30px minmax(0, 1fr);
+  }
+
+  .act-meta {
+    grid-column: 2;
+  }
+
+  .act-detail {
+    padding-left: 12px;
+  }
+
+  .act-group-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

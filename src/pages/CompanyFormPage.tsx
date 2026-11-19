@@ -1,4 +1,5 @@
 import { Building2, Calculator, Moon } from "lucide-react";
+import { RecordActivityFooter } from "../components/ActivityInfo";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useReadOnly } from "../components/AreaRoute";
@@ -166,6 +167,7 @@ export default function CompanyFormPage() {
           </FormPanel>
 
         </form>
+        {isEditing && <RecordActivityFooter entityType="company" id={id} />}
         </fieldset>
       )}
     </div>

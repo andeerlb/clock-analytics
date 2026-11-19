@@ -742,6 +742,32 @@ export default function PaymentsPage() {
   // Only opens the same confirmation as the row's own menu: nothing is paid
   // until the user confirms it. The shift may not be in the current table, so
   // its value rules are loaded here for the suggested amount.
+  // "Abrir turno" from Atividade (`?shift=<id>`): the turno's panel, on its history.
+  const shiftParam = searchParams.get("shift");
+  useEffect(() => {
+    const shiftId = Number(shiftParam);
+    if (!shiftParam || !Number.isSafeInteger(shiftId)) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const shift = await getPaymentShift(shiftId);
+        const rules = await getEffectivePaymentRules(shift.clientId, shift.companyId);
+        if (cancelled) return;
+        setRulesByPair((prev) => new Map(prev).set(`${shift.clientId}:${shift.companyId}`, rules));
+        setPanelTab("history");
+        openShiftPanel(shift, shift.companyId, grouped ? { employeeId: shift.employeeId, competencia: shift.workDate.slice(0, 7) } : null);
+      } catch (e) {
+        if (!cancelled) setListError(String(e));
+      } finally {
+        if (!cancelled) setSearchParams({}, { replace: true });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shiftParam]);
+
   const payParam = searchParams.get("pay");
   useEffect(() => {
     const shiftId = Number(payParam);

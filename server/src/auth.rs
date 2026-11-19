@@ -36,6 +36,9 @@ const LEEWAY_SECS: u64 = 60;
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub email: String,
+    /// The name on the Google account, when the token carries one — what
+    /// the activity log shows for this person.
+    pub name: Option<String>,
     /// Listed in `TAPAGO_ALLOWED_EMAILS` (or the dev user): always Admin.
     pub initial_admin: bool,
 }
@@ -76,7 +79,7 @@ impl Authenticator {
 
     pub async fn authenticate(&self, authorization: Option<&str>) -> Result<AuthUser, ApiError> {
         match &self.mode {
-            Mode::DevBypass { email, admin } => Ok(AuthUser { email: email.clone(), initial_admin: *admin }),
+            Mode::DevBypass { email, admin } => Ok(AuthUser { email: email.clone(), name: None, initial_admin: *admin }),
             Mode::Firebase { verifier, allowed_emails } => {
                 let token = authorization
                     .and_then(|h| h.strip_prefix("Bearer "))
@@ -89,7 +92,8 @@ impl Authenticator {
                     return Err(ApiError::Forbidden);
                 }
                 let initial_admin = allowed_emails.contains(&email);
-                Ok(AuthUser { email, initial_admin })
+                let name = claims.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(str::to_owned);
+                Ok(AuthUser { email, name, initial_admin })
             }
         }
     }
@@ -111,6 +115,8 @@ struct FirebaseClaims {
     auth_time: u64,
     email: Option<String>,
     email_verified: Option<bool>,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 struct CachedKeys {
