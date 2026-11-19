@@ -1,4 +1,5 @@
 import { ArrowRight, ChevronDown, Loader2, Lock, MessageCircle, PanelTop, Plus, SquarePen, ArrowUp, X } from "lucide-react";
+import { useSheetDrag } from "../lib/useSheetDrag";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAccess } from "../contexts/AuthContext";
@@ -260,6 +261,8 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
   const paymentsFilters = usePaymentsFilters();
   const libraryFilters = useLibraryFilters();
   const [open, setOpen] = useState(false);
+  // On a phone the assistant opens from the bottom and closes by dragging it down.
+  const sheet = useSheetDrag<HTMLDivElement>(() => setOpen(false));
   // Stays mounted through the closing slide; `visible` is what drives it.
   const [rendered, setRendered] = useState(false);
   const [visible, setVisible] = useState(false);
@@ -529,7 +532,7 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
         {/* Phone only (see App.css): the assistant opens over the page there, so the page behind is frosted and a tap on it closes it. */}
         {rendered && <div className={visible ? "sheet-scrim sheet-scrim-visible" : "sheet-scrim"} onClick={() => setOpen(false)} aria-hidden="true" />}
         {rendered && (
-          <div className={visible ? "ai-side ai-side-visible" : "ai-side"} style={{ width: visible ? panelWidth + PANEL_COLUMN_EXTRA : 0 }}>
+          <div ref={sheet.sheetRef} className={visible ? "ai-side ai-side-visible" : "ai-side"} style={{ width: visible ? panelWidth + PANEL_COLUMN_EXTRA : 0 }}>
             <div
               className="ai-resize-handle"
               role="separator"
@@ -545,7 +548,8 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
               onKeyDown={handleResizeKey}
             />
             <section className="ai-panel" aria-label="Assistente" style={{ width: panelWidth }}>
-              <header className="ai-panel-header">
+              <div className="sheet-grab" aria-hidden="true" {...sheet.handlers} />
+              <header className="ai-panel-header" {...sheet.handlers}>
                 <span className="ai-panel-title">Assistente</span>
                 <div className="ai-panel-header-actions">
                   <span className="ai-tooltip-anchor">
@@ -559,7 +563,7 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
                   <button type="button" className="ai-icon-button" aria-label="Nova conversa" title="Nova conversa" onClick={handleNewConversation} disabled={messages.length === 0 && !shift}>
                     <SquarePen size={16} />
                   </button>
-                  <button type="button" className="ai-icon-button" aria-label="Fechar assistente" title="Fechar" onClick={() => setOpen(false)}>
+                  <button type="button" className="ai-icon-button sheet-close" aria-label="Fechar assistente" title="Fechar" onClick={() => setOpen(false)}>
                     <X size={16} />
                   </button>
                 </div>

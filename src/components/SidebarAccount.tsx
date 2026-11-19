@@ -12,8 +12,11 @@ const ICON_PROPS = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", 
  * same way the app's pickers open: the box grows out of the card itself,
  * upward, with the card at its bottom (see `.emp-picker-popover`).
  * Collapsed sidebar: just the avatar.
+ *
+ * `placement="topbar"` is the phone layout's version: only the avatar, at
+ * the right of `MobileTopBar`, and the menu drops down from it.
  */
-export default function SidebarAccount({ collapsed }: { collapsed: boolean }) {
+export default function SidebarAccount({ collapsed, placement = "sidebar" }: { collapsed: boolean; placement?: "sidebar" | "topbar" }) {
   const { state, signOut } = useAuth();
   const { access, canView, canManageUsers } = useAccess();
   const navigate = useNavigate();
@@ -50,7 +53,21 @@ export default function SidebarAccount({ collapsed }: { collapsed: boolean }) {
     navigate(to);
   }
 
-  const card = (inMenu: boolean) => (
+  const card = (inMenu: boolean) =>
+    placement === "topbar" ? (
+      <button
+        type="button"
+        className="mobile-topbar-account"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Conta: ${email}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="avatar" style={{ background: colorForName(email) }}>
+          {initials(name)}
+        </span>
+      </button>
+    ) : (
     <button
       type="button"
       className={`sidebar-account-trigger${onAccountPage && !inMenu ? " current" : ""}`}
@@ -71,13 +88,13 @@ export default function SidebarAccount({ collapsed }: { collapsed: boolean }) {
         <path d="M7 15l5-5 5 5" />
       </svg>
     </button>
-  );
+    );
 
   return (
-    <div className="sidebar-account" ref={rootRef}>
+    <div className={placement === "topbar" ? "sidebar-account sidebar-account-topbar" : "sidebar-account"} ref={rootRef}>
       {card(false)}
       {open && (
-        <div className="sidebar-account-menu" role="menu">
+        <div className={placement === "topbar" ? "sidebar-account-menu sidebar-account-menu-top" : "sidebar-account-menu"} role="menu">
           <div className="sidebar-account-menu-head">
             <b>{name}</b>
             <small>{email}</small>
@@ -128,7 +145,7 @@ export default function SidebarAccount({ collapsed }: { collapsed: boolean }) {
           ) : (
             <p className="sidebar-account-dev">Modo de desenvolvimento: login desativado.</p>
           )}
-          {card(true)}
+          {placement === "sidebar" && card(true)}
         </div>
       )}
     </div>

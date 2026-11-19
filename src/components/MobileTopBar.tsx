@@ -1,17 +1,15 @@
-import { useAuth } from "../contexts/AuthContext";
-import { colorForName, initials } from "../lib/avatar";
+import SidebarAccount from "./SidebarAccount";
 import { usePendingChangesCount } from "../lib/pendingChanges";
 
 /**
  * The phone layout's top bar (hidden on wider screens, see App.css): ☰
  * opens the menu over the page — a yellow dot on it when there are
- * "atualizações pendentes" — then the app's name and who is signed in
- * (which opens the menu too, where the account is).
+ * "atualizações pendentes" — and, on the right, the signed-in person's
+ * avatar, which opens the account menu (Configurações, Usuários
+ * e perfis, Atividade, Sair).
  */
 export default function MobileTopBar({ onMenu }: { onMenu: () => void }) {
-  const { state } = useAuth();
   const pending = usePendingChangesCount();
-  const user = state.status === "ready" ? state.user : null;
   return (
     <header className="mobile-topbar">
       <button type="button" className="mobile-topbar-menu" onClick={onMenu} aria-label={pending > 0 ? `Abrir menu — ${pending} atualizações pendentes` : "Abrir menu"}>
@@ -20,19 +18,8 @@ export default function MobileTopBar({ onMenu }: { onMenu: () => void }) {
         </svg>
         {pending > 0 && <span className="mobile-topbar-dot" aria-hidden="true" />}
       </button>
-      <span className="mobile-topbar-brand">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM3 9h18M9 3v18" />
-        </svg>
-        Tá Pago
-      </span>
-      {user && (
-        <button type="button" className="mobile-topbar-account" onClick={onMenu} aria-label={`Conta: ${user.email}`}>
-          <span className="avatar" style={{ background: colorForName(user.email) }}>
-            {initials(user.name)}
-          </span>
-        </button>
-      )}
+      <span className="mobile-topbar-spacer" />
+      <SidebarAccount collapsed={false} placement="topbar" />
     </header>
   );
 }

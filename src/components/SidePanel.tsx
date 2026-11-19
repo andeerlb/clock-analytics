@@ -1,4 +1,5 @@
 import { X, type LucideIcon } from "lucide-react";
+import { useSheetDrag } from "../lib/useSheetDrag";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
@@ -53,6 +54,8 @@ export default function SidePanel({
   const slot = useContext(SidePanelSlotContext);
   // Stays mounted through the closing slide; `visible` is what drives it.
   const [rendered, setRendered] = useState(open);
+  // On a phone the panel opens from the bottom and closes by dragging it down.
+  const sheet = useSheetDrag<HTMLDivElement>(onClose);
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
@@ -85,12 +88,13 @@ export default function SidePanel({
     <>
     {/* Phone only (see App.css): the panel opens over the page there, so the page behind is frosted and a tap on it closes the panel. */}
     <div className={visible ? "sheet-scrim sheet-scrim-visible" : "sheet-scrim"} onClick={onClose} aria-hidden="true" />
-    <div className={visible ? "side-column side-column-visible" : "side-column"} style={{ width: visible ? width + COLUMN_EXTRA : 0 }}>
+    <div ref={sheet.sheetRef} className={visible ? "side-column side-column-visible" : "side-column"} style={{ width: visible ? width + COLUMN_EXTRA : 0 }}>
       {/* Keys pressed in the panel stay in it: a page's own shortcuts
           (Conferência confirms the selected payment on Enter) must not
           fire from a filter button. */}
       <section className="side-panel" aria-label={title} style={{ width }} onKeyDown={(e) => e.stopPropagation()}>
-        <header className="side-panel-header">
+        <div className="sheet-grab" aria-hidden="true" {...sheet.handlers} />
+        <header className="side-panel-header" {...sheet.handlers}>
           <span className="side-panel-title">
             {Icon && (
               <span className={iconTone === "danger" ? "side-panel-icon side-panel-icon-danger" : "side-panel-icon"} aria-hidden="true">
@@ -102,7 +106,7 @@ export default function SidePanel({
           </span>
           <div className="side-panel-header-actions">
             {actions}
-            <button type="button" className="side-panel-icon-button" aria-label="Fechar" title="Fechar" onClick={onClose}>
+            <button type="button" className="side-panel-icon-button sheet-close" aria-label="Fechar" title="Fechar" onClick={onClose}>
               <X size={16} />
             </button>
           </div>

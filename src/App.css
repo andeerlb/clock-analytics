@@ -11142,13 +11142,22 @@ button.app-nav-count {
     background: var(--warning);
   }
 
-  .mobile-topbar-brand {
-    display: flex;
+  .mobile-topbar-spacer {
     flex: 1;
-    align-items: center;
-    gap: 8px;
-    font-size: 0.95rem;
-    font-weight: 700;
+  }
+
+  /* The account lives on the top bar's avatar on a phone, not at the foot of the menu. */
+  .app-nav .sidebar-account {
+    display: none;
+  }
+
+  .sidebar-account-menu.sidebar-account-menu-top {
+    top: calc(100% + 6px);
+    right: 0;
+    bottom: auto;
+    left: auto;
+    width: min(280px, calc(100vw - 24px));
+    animation-name: emp-picker-grow;
   }
 
   .mobile-topbar-account .avatar {
@@ -11377,15 +11386,6 @@ button.app-nav-count {
     transform: translateY(105%);
   }
 
-  .drawer-panel::before {
-    content: "";
-    flex: none;
-    width: 40px;
-    height: 4px;
-    margin: 8px auto 0;
-    border-radius: 2px;
-    background: #3b3b44;
-  }
 
   .drawer-panel-visible {
     transform: translateY(0);
@@ -11399,6 +11399,45 @@ button.app-nav-count {
 /* Behind a docked panel on a phone: the same frosted backdrop as the Drawers. */
 .sheet-scrim {
   display: none;
+}
+
+/* The bottom sheet's grab handle (phone only): drag it, or the header, down to close. */
+.sheet-grab {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .sheet-grab {
+    position: relative;
+    display: block;
+    flex: none;
+    height: 20px;
+    touch-action: none;
+    cursor: grab;
+  }
+
+  .sheet-grab::after {
+    content: "";
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    width: 40px;
+    height: 4px;
+    margin-left: -20px;
+    border-radius: 2px;
+    background: #4a4a54;
+  }
+
+  .drawer-header,
+  .side-panel-header,
+  .ai-panel-header {
+    touch-action: none;
+  }
+
+  /* A bottom sheet closes by dragging it down (or tapping outside): no X. */
+  .sheet-close {
+    display: none !important;
+  }
 }
 
 /* Docked panels (turno, Conferência, the assistant) open from the bottom on a phone too. */
