@@ -82,6 +82,9 @@ export default function SidePanel({
   if (!rendered || !slot) return null;
 
   return createPortal(
+    <>
+    {/* Phone only (see App.css): the panel opens over the page there, so the page behind is frosted and a tap on it closes the panel. */}
+    <div className={visible ? "sheet-scrim sheet-scrim-visible" : "sheet-scrim"} onClick={onClose} aria-hidden="true" />
     <div className={visible ? "side-column side-column-visible" : "side-column"} style={{ width: visible ? width + COLUMN_EXTRA : 0 }}>
       {/* Keys pressed in the panel stay in it: a page's own shortcuts
           (Conferência confirms the selected payment on Enter) must not
@@ -108,7 +111,8 @@ export default function SidePanel({
         <div className="side-panel-body">{children}</div>
         {footer && <footer className="side-panel-footer">{footer}</footer>}
       </section>
-    </div>,
+    </div>
+    </>,
     slot,
   );
 }

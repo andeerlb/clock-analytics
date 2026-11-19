@@ -11396,8 +11396,35 @@ button.app-nav-count {
   }
 }
 
+/* Behind a docked panel on a phone: the same frosted backdrop as the Drawers. */
+.sheet-scrim {
+  display: none;
+}
+
 /* Docked panels (turno, Conferência, the assistant) open from the bottom on a phone too. */
 @media (max-width: 640px) {
+  .sheet-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 290;
+    display: block;
+    background: rgba(8, 8, 10, 0);
+    -webkit-backdrop-filter: blur(0) saturate(100%);
+    backdrop-filter: blur(0) saturate(100%);
+    pointer-events: none;
+    transition:
+      background 0.22s ease,
+      backdrop-filter 0.22s ease,
+      -webkit-backdrop-filter 0.22s ease;
+  }
+
+  .sheet-scrim.sheet-scrim-visible {
+    background: rgba(8, 8, 10, 0.35);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(14px) saturate(140%);
+    pointer-events: auto;
+  }
+
   .side-column,
   .ai-side {
     position: fixed;
