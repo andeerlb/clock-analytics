@@ -1,10 +1,14 @@
 import { ChevronDown, Clock3, DollarSign, Download, Loader2, Table2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import Drawer from "./Drawer";
+import { SHEET_QUERY } from "../lib/useSheetDrag";
+import { useMediaQuery } from "../lib/useMediaQuery";
 
 /**
  * The one "Exportar" button of Pagamentos, replacing three separate ones:
  * the template export (Excel or PDF, picked in its own drawer) and the two
- * fixed reports, each with a line saying what it produces.
+ * fixed reports, each with a line saying what it produces. On a phone the
+ * options open in a bottom sheet (the app's Drawer) instead of a dropdown.
  */
 export default function PaymentsExportMenu({
   onTemplateExport,
@@ -26,9 +30,11 @@ export default function PaymentsExportMenu({
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const busy = generatingValueReport || generatingShiftReport;
+  const asSheet = useMediaQuery(SHEET_QUERY);
 
   useEffect(() => {
-    if (!open) return;
+    // The bottom sheet handles its own outside taps and Escape.
+    if (!open || asSheet) return;
     function onClickOutside(e: MouseEvent) {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     }
@@ -44,7 +50,7 @@ export default function PaymentsExportMenu({
       document.removeEventListener("mousedown", onClickOutside);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open]);
+  }, [open, asSheet]);
 
   function pick(action: () => void) {
     setOpen(false);
@@ -71,6 +77,28 @@ export default function PaymentsExportMenu({
     },
   ];
 
+  const countTitle =
+    shiftCount === null ? "Com os turnos filtrados" : `Com ${shiftCount === 1 ? "o turno filtrado" : `os ${shiftCount} turnos filtrados`}`;
+  const options = items.map((item, index) => (
+    <div key={item.key}>
+      {index === 1 && (
+        <>
+          <div className="payments-export-sep" />
+          <div className="zip-menu-title">Relatórios prontos</div>
+        </>
+      )}
+      <button type="button" role="menuitem" className="zip-menu-option" onClick={() => pick(item.action)} disabled={item.busy}>
+        <span className="payments-export-icon" aria-hidden="true">
+          {item.busy ? <Loader2 size={15} className="ai-spin" /> : <item.icon size={15} />}
+        </span>
+        <span className="zip-menu-text">
+          <span className="zip-menu-option-title">{item.title}</span>
+          <span className="zip-menu-option-description">{item.description}</span>
+        </span>
+      </button>
+    </div>
+  ));
+
   return (
     <div className="zip-split" ref={rootRef}>
       <button
@@ -85,31 +113,18 @@ export default function PaymentsExportMenu({
         {busy ? "Gerando..." : "Exportar"}
         <ChevronDown size={14} strokeWidth={2.4} />
       </button>
-      {open && (
+      {open && !asSheet && (
         <div className="zip-menu" role="menu">
-          <div className="zip-menu-title">
-            {shiftCount === null ? "Com os turnos filtrados" : `Com ${shiftCount === 1 ? "o turno filtrado" : `os ${shiftCount} turnos filtrados`}`}
-          </div>
-          {items.map((item, index) => (
-            <div key={item.key}>
-              {index === 1 && (
-                <>
-                  <div className="payments-export-sep" />
-                  <div className="zip-menu-title">Relatórios prontos</div>
-                </>
-              )}
-              <button type="button" role="menuitem" className="zip-menu-option" onClick={() => pick(item.action)} disabled={item.busy}>
-                <span className="payments-export-icon" aria-hidden="true">
-                  {item.busy ? <Loader2 size={15} className="ai-spin" /> : <item.icon size={15} />}
-                </span>
-                <span className="zip-menu-text">
-                  <span className="zip-menu-option-title">{item.title}</span>
-                  <span className="zip-menu-option-description">{item.description}</span>
-                </span>
-              </button>
-            </div>
-          ))}
+          <div className="zip-menu-title">{countTitle}</div>
+          {options}
         </div>
+      )}
+      {asSheet && (
+        <Drawer open={open} onClose={() => setOpen(false)} title="Exportar" icon={Download} subtitle={countTitle}>
+          <div className="export-sheet" role="menu">
+            {options}
+          </div>
+        </Drawer>
       )}
     </div>
   );

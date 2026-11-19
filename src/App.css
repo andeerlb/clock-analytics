@@ -11146,6 +11146,14 @@ button.app-nav-count {
     flex: 1;
   }
 
+  /* "Exportar" (Pagamentos) and "Gerar zip" (Cartão Ponto) sit at the left on a
+     phone: their menu opens from the button's left edge, as wide as fits. */
+  .zip-menu {
+    right: auto;
+    left: 0;
+    width: min(340px, calc(100vw - 28px));
+  }
+
   /* The account lives on the top bar's avatar on a phone, not at the foot of the menu. */
   .app-nav .sidebar-account {
     display: none;
@@ -11235,11 +11243,27 @@ button.app-nav-count {
     font-size: 1.35rem;
   }
 
-  /* Pagamentos: status tabs and view switch scroll sideways instead of wrapping into a tall block. */
+  /* Pagamentos: status tabs and view switch scroll sideways instead of
+     wrapping into a tall block, edge to edge of the screen (out past the
+     page's side padding, which they keep as their own inner padding). */
   .payments-view-row {
     flex-wrap: nowrap;
     overflow-x: auto;
     scrollbar-width: none;
+    margin-left: calc(-1 * max(14px, env(safe-area-inset-left, 0px)));
+    margin-right: calc(-1 * max(14px, env(safe-area-inset-right, 0px)));
+    padding-left: max(14px, env(safe-area-inset-left, 0px));
+    padding-right: max(14px, env(safe-area-inset-right, 0px));
+    scroll-padding-inline: max(14px, env(safe-area-inset-left, 0px));
+  }
+
+  /* No scrollbars anywhere on a phone: everything still scrolls, by touch. */
+  * {
+    scrollbar-width: none;
+  }
+
+  *::-webkit-scrollbar {
+    display: none;
   }
 
   .payments-view-row::-webkit-scrollbar {
@@ -11271,19 +11295,30 @@ button.app-nav-count {
     display: block;
   }
 
+  /* Three lines of running text: who + status / date · time · hours … value /
+     local · função. A flex row that wraps, with two full-width breaks
+     (::before and ::after) between the lines. */
   .payments-flat-table tr.payments-row-clickable {
-    display: grid;
-    grid-template-columns: auto auto auto minmax(0, 1fr) auto;
-    grid-template-areas:
-      "who who who who status"
-      "date time hours . value"
-      "local local func func func";
+    display: flex;
+    flex-wrap: wrap;
     align-content: center;
-    gap: 4px 8px;
+    align-items: center;
+    column-gap: 6px;
+    row-gap: 5px;
     height: 106px;
     padding: 10px 14px;
     border-bottom: 1px solid var(--border-softer);
   }
+
+  .payments-flat-table tr.payments-row-clickable::before,
+  .payments-flat-table tr.payments-row-clickable::after {
+    content: "";
+    flex-basis: 100%;
+    height: 0;
+  }
+
+  .payments-flat-table tr.payments-row-clickable::before { order: 3; }
+  .payments-flat-table tr.payments-row-clickable::after { order: 8; }
 
   .payments-flat-table tr.payments-row-clickable td {
     display: block;
@@ -11297,14 +11332,14 @@ button.app-nav-count {
     white-space: nowrap;
   }
 
-  .payments-flat-table td[data-col="colaborador"] { grid-area: who; color: var(--text); font-size: 0.92rem; }
-  .payments-flat-table td[data-col="status"] { grid-area: status; justify-self: end; }
-  .payments-flat-table td[data-col="data"] { grid-area: date; }
-  .payments-flat-table td[data-col="horario"] { grid-area: time; }
-  .payments-flat-table td[data-col="horas"] { grid-area: hours; }
-  .payments-flat-table td[data-col="valor"] { grid-area: value; color: var(--text); font-weight: 600; }
-  .payments-flat-table td[data-col="local"] { grid-area: local; }
-  .payments-flat-table td[data-col="funcao"] { grid-area: func; }
+  .payments-flat-table td[data-col="colaborador"] { order: 1; flex: 1 1 0; color: var(--text); font-size: 0.92rem; }
+  .payments-flat-table td[data-col="status"] { order: 2; flex: none; }
+  .payments-flat-table td[data-col="data"] { order: 4; flex: none; }
+  .payments-flat-table td[data-col="horario"] { order: 5; flex: none; }
+  .payments-flat-table td[data-col="horas"] { order: 6; flex: none; }
+  .payments-flat-table td[data-col="valor"] { order: 7; flex: none; margin-left: auto; color: var(--text); font-weight: 600; }
+  .payments-flat-table td[data-col="local"] { order: 9; flex: 0 1 auto; }
+  .payments-flat-table td[data-col="funcao"] { order: 10; flex: 0 1 auto; }
   .payments-flat-table td[data-col="horario"]::before,
   .payments-flat-table td[data-col="horas"]::before,
   .payments-flat-table td[data-col="funcao"]::before {
@@ -11316,6 +11351,11 @@ button.app-nav-count {
   .payments-flat-table td[data-col="extras"],
   .payments-flat-table .payments-error-reason {
     display: none !important;
+  }
+
+  /* The open turno's left stripe marks it beside the panel on a computer; on a phone the panel covers the page. */
+  .payments-flat-table tr.row-active td:first-child {
+    box-shadow: none;
   }
 
   .payments-flat-table td[data-col="colaborador"] .avatar {
@@ -11373,9 +11413,11 @@ button.app-nav-count {
 
 /* Side sheets (Drawer) open from the bottom on a phone, full width. */
 @media (max-width: 640px) {
+  /* As tall as the content, up to just below the top bar; past that it scrolls inside. */
   .drawer-panel,
   .drawer-panel-left {
-    top: calc(36px + env(safe-area-inset-top, 0px));
+    top: auto;
+    max-height: calc(100dvh - 36px - env(safe-area-inset-top, 0px));
     right: 0;
     bottom: 0;
     left: 0;
@@ -11389,6 +11431,12 @@ button.app-nav-count {
 
   .drawer-panel-visible {
     transform: translateY(0);
+  }
+
+  .drawer-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
   }
 
   .drawer-footer {
@@ -11464,16 +11512,18 @@ button.app-nav-count {
     pointer-events: auto;
   }
 
+  /* As tall as the content, up to just below the top bar; past that it scrolls inside. */
   .side-column,
   .ai-side {
     position: fixed;
-    top: calc(36px + env(safe-area-inset-top, 0px));
+    top: auto;
     right: 0;
     bottom: 0;
     left: 0;
     z-index: 300;
     width: 100% !important;
     height: auto;
+    max-height: calc(100dvh - 36px - env(safe-area-inset-top, 0px));
     padding: 0;
     transform: translateY(105%);
     transition: transform 0.26s cubic-bezier(0.32, 0.72, 0, 1);
@@ -11484,9 +11534,15 @@ button.app-nav-count {
     transform: translateY(0);
   }
 
+  .side-panel-body,
+  .ai-panel-messages {
+    flex: 1 1 auto;
+  }
+
   .side-panel,
   .ai-panel {
     width: 100% !important;
+    max-height: 100%;
     min-width: 0;
     max-width: none;
     margin: 0;
@@ -11510,4 +11566,15 @@ button.app-nav-count {
   .tfile-icon {
     display: none;
   }
+}
+
+/* "Exportar" as a bottom sheet on a phone: the dropdown's options, full width. */
+.export-sheet {
+  display: grid;
+  gap: 2px;
+}
+
+.export-sheet .zip-menu-option {
+  width: 100%;
+  padding: 12px 10px;
 }

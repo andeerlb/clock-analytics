@@ -115,6 +115,7 @@ export default function Drawer({
     // Drawer opened from inside a fullScreen Modal doesn't also close that
     // Modal via React's portal-follows-the-component-tree bubbling.
     <div
+      ref={sheet.scrimRef}
       className={`drawer-overlay${visible ? " drawer-overlay-visible" : ""}`}
       onClick={(e) => {
         e.stopPropagation();

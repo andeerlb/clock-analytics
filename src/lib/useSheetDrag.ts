@@ -14,13 +14,16 @@ const CLOSE_VELOCITY = 0.6;
  * (Drawer, the docked side panel, the assistant). Spread `handlers` on the
  * grab handle and the header; the element in `sheetRef` (the one whose
  * `transform` slides the sheet in) follows the finger, and on release it
- * either closes (`onClose`) or slides back. Presses on buttons, inputs and
+ * either closes (`onClose`) or slides back. The frosted backdrop in
+ * `scrimRef` (when given) clears as the sheet goes down: its blur and dim
+ * follow how far it has been dragged. Presses on buttons, inputs and
  * links are left alone, so the header's own controls keep working. Does
  * nothing on wider screens.
  */
 export function useSheetDrag<T extends HTMLElement>(onClose: () => void) {
   const enabled = useMediaQuery(SHEET_QUERY);
   const sheetRef = useRef<T | null>(null);
+  const scrimRef = useRef<HTMLDivElement | null>(null);
   const drag = useRef<{ startY: number; startT: number; lastY: number; lastT: number; dy: number } | null>(null);
 
   function onPointerDown(e: PointerEvent<HTMLElement>) {
@@ -29,6 +32,7 @@ export function useSheetDrag<T extends HTMLElement>(onClose: () => void) {
     const now = performance.now();
     drag.current = { startY: e.clientY, startT: now, lastY: e.clientY, lastT: now, dy: 0 };
     sheetRef.current.style.transition = "none";
+    if (scrimRef.current) scrimRef.current.style.transition = "none";
     e.currentTarget.setPointerCapture(e.pointerId);
   }
 
@@ -40,6 +44,15 @@ export function useSheetDrag<T extends HTMLElement>(onClose: () => void) {
     d.lastY = e.clientY;
     d.lastT = performance.now();
     sheet.style.transform = `translateY(${d.dy}px)`;
+    const scrim = scrimRef.current;
+    if (scrim) {
+      // 1 with the sheet in place, 0 when it's dragged all the way down.
+      const left = Math.max(0, 1 - d.dy / Math.max(1, sheet.offsetHeight));
+      const filter = `blur(${(14 * left).toFixed(1)}px) saturate(${(100 + 40 * left).toFixed(0)}%)`;
+      scrim.style.backdropFilter = filter;
+      scrim.style.setProperty("-webkit-backdrop-filter", filter);
+      scrim.style.background = `rgba(8, 8, 10, ${(0.35 * left).toFixed(3)})`;
+    }
   }
 
   function finish(e: PointerEvent<HTMLElement>, cancelled: boolean) {
@@ -54,12 +67,20 @@ export function useSheetDrag<T extends HTMLElement>(onClose: () => void) {
     // animates from where the finger left it, closed or back in place.
     sheet.style.transition = "";
     sheet.style.transform = "";
+    const scrim = scrimRef.current;
+    if (scrim) {
+      scrim.style.transition = "";
+      scrim.style.backdropFilter = "";
+      scrim.style.removeProperty("-webkit-backdrop-filter");
+      scrim.style.background = "";
+    }
     if (!cancelled && (d.dy >= CLOSE_DISTANCE_PX || fast)) onClose();
   }
 
   return {
     enabled,
     sheetRef,
+    scrimRef,
     handlers: {
       onPointerDown,
       onPointerMove,

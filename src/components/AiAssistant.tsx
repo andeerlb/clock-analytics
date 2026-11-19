@@ -530,7 +530,7 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
         </SidePanelSlotContext.Provider>
         <div ref={setSidePanelSlot} className="side-panel-slot" />
         {/* Phone only (see App.css): the assistant opens over the page there, so the page behind is frosted and a tap on it closes it. */}
-        {rendered && <div className={visible ? "sheet-scrim sheet-scrim-visible" : "sheet-scrim"} onClick={() => setOpen(false)} aria-hidden="true" />}
+        {rendered && <div ref={sheet.scrimRef} className={visible ? "sheet-scrim sheet-scrim-visible" : "sheet-scrim"} onClick={() => setOpen(false)} aria-hidden="true" />}
         {rendered && (
           <div ref={sheet.sheetRef} className={visible ? "ai-side ai-side-visible" : "ai-side"} style={{ width: visible ? panelWidth + PANEL_COLUMN_EXTRA : 0 }}>
             <div
