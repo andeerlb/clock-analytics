@@ -1,4 +1,5 @@
 import { Bell, CheckCheck, ChevronDown, ChevronRight, Clock3 } from "lucide-react";
+import { OPEN_PENDING_CHANGES_EVENT, setPendingChangesCount } from "../lib/pendingChanges";
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAccess } from "../contexts/AuthContext";
@@ -162,6 +163,17 @@ export default function PendingChangesTab() {
   // new to alert about) UNLESS the Drawer is already open, in which case it
   // stays open rather than yanking itself shut mid-review.
   const unseenRows = rows.filter((r) => r.dismissedAt === null);
+
+  // The phone menu shows this number (the floating card is hidden there)
+  // and opens the review Drawer through an event.
+  useEffect(() => {
+    setPendingChangesCount(unseenRows.length);
+  }, [unseenRows.length]);
+  useEffect(() => {
+    const onOpen = () => setOpen(true);
+    window.addEventListener(OPEN_PENDING_CHANGES_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_PENDING_CHANGES_EVENT, onOpen);
+  }, []);
 
   if (location.pathname === "/remote-updates/imports") return null;
   if (unseenRows.length === 0 && !open) return null;

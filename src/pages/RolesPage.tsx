@@ -145,7 +145,7 @@ export default function RolesPage() {
         {total > 0 && (
           <>
             <div className="table-scroll">
-              <table>
+              <table className="mobile-cards">
                 <thead>
                   <tr>
                     <th>Função</th>

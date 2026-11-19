@@ -185,25 +185,25 @@ const ShiftRow = memo(function ShiftRow({
       style={isBlocked ? { background: "var(--warning-soft)" } : hasApplied ? { background: "var(--accent-soft)" } : undefined}
     >
       {showIdentity && col("colaborador") && (
-        <td>
+        <td data-col="colaborador">
           <div className="person-cell">
             <Avatar name={s.employeeName} />
             <span className="person-cell-name">{s.employeeName}</span>
           </div>
         </td>
       )}
-      {showIdentity && col("cliente") && <td>{s.clientName}</td>}
-      {showIdentity && col("empresa") && <td>{s.companyName}</td>}
-      {col("data") && <td>{formatDateAbbrevYY(s.workDate)}</td>}
-      {col("local") && <td>{s.local}</td>}
-      {col("funcao") && <td>{s.role}</td>}
+      {showIdentity && col("cliente") && <td data-col="cliente">{s.clientName}</td>}
+      {showIdentity && col("empresa") && <td data-col="empresa">{s.companyName}</td>}
+      {col("data") && <td data-col="data">{formatDateAbbrevYY(s.workDate)}</td>}
+      {col("local") && <td data-col="local">{s.local}</td>}
+      {col("funcao") && <td data-col="funcao">{s.role}</td>}
       {col("horario") && (
-        <td>{hasSchedule ? `${formatMinutesAsTime(s.scheduleStartMinutes!)} – ${formatMinutesAsTime(s.scheduleEndMinutes!)}` : "—"}</td>
+        <td data-col="horario">{hasSchedule ? `${formatMinutesAsTime(s.scheduleStartMinutes!)} – ${formatMinutesAsTime(s.scheduleEndMinutes!)}` : "—"}</td>
       )}
-      {col("horas") && <td>{duration !== null ? formatMinutesAsTime(duration) : "—"}</td>}
-      {col("valor") && <td className="num-cell">{value !== null ? formatCurrencyBRL(value) : "—"}</td>}
+      {col("horas") && <td data-col="horas">{duration !== null ? formatMinutesAsTime(duration) : "—"}</td>}
+      {col("valor") && <td data-col="valor" className="num-cell">{value !== null ? formatCurrencyBRL(value) : "—"}</td>}
       {col("status") && (
-        <td>
+        <td data-col="status">
           <span className={badge.className} title={s.status === "erro" ? s.errorMessage ?? undefined : undefined}>
             {badge.label}
           </span>
@@ -215,7 +215,7 @@ const ShiftRow = memo(function ShiftRow({
         </td>
       )}
       {col("extras") && (
-        <td>
+        <td data-col="extras">
           <ExtrasCell extras={s.extraData} />
         </td>
       )}
