@@ -114,7 +114,7 @@ export default function PaymentExportTemplatesPage() {
     if (rows === null) return <p className="muted" style={{ padding: "1.4rem" }}>{emptyMessage}</p>;
     return (
       <div className="table-scroll">
-        <table>
+        <table className="mobile-cards">
           <thead>
             <tr>
               <th>Nome</th>

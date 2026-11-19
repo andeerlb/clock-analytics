@@ -1,4 +1,5 @@
-import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { HashRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import "./App.css";
 import { AiAssistantProvider } from "./components/AiAssistant";
 import AreaRoute, { AccessDenied } from "./components/AreaRoute";
@@ -33,6 +34,7 @@ import RolesPage from "./pages/RolesPage";
 import SettingsPage from "./pages/SettingsPage";
 import UsersPage from "./pages/UsersPage";
 import ActivityPage from "./pages/ActivityPage";
+import MobileTopBar from "./components/MobileTopBar";
 import { useAccess } from "./contexts/AuthContext";
 import AnalyticsPage from "./pages/AnalyticsPage";
 
@@ -50,11 +52,23 @@ function ActivityRoute() {
 
 function AppShell() {
   const { canView } = useAccess();
+  // Phone layout: the menu slides in over the page; any navigation closes it.
+  const [navOpen, setNavOpen] = useState(false);
+  const { pathname } = useLocation();
+  useEffect(() => setNavOpen(false), [pathname]);
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setNavOpen(false);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [navOpen]);
   // The "atualizações pendentes" card reads the automatic check's results.
   const followsRemoteChecks = canView("verificacao") || canView("pagamentos") || canView("analises");
   return (
-    <div className="app-shell">
-      <Sidebar />
+    <div className={navOpen ? "app-shell nav-open" : "app-shell"}>
+      <MobileTopBar onMenu={() => setNavOpen(true)} />
+      <Sidebar mobileOpen={navOpen} onCloseMobile={() => setNavOpen(false)} />
+      <div className="app-nav-scrim" onClick={() => setNavOpen(false)} aria-hidden="true" />
       <main className="app-content">
         <Routes>
           <Route path="/" element={<AreaRoute area="espelhos"><LibraryPage /></AreaRoute>} />

@@ -71,7 +71,7 @@ export default function ClientsPage() {
         )}
         {clients.length > 0 && (
           <div className="table-scroll">
-            <table>
+            <table className="mobile-cards">
               <thead>
                 <tr>
                   <th>Cliente</th>

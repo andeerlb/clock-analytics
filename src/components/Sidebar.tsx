@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { openPendingChanges, usePendingChangesCount } from "../lib/pendingChanges";
+import { PHONE_QUERY, useMediaQuery } from "../lib/useMediaQuery";
 import { NavLink } from "react-router-dom";
 import SidebarAccount from "./SidebarAccount";
 import { useAccess } from "../contexts/AuthContext";
@@ -80,8 +82,16 @@ const REMOTE_STATUS_META: Record<RemoteStatus, { label: string; color: string; p
   idle: { label: "Nenhuma configurada", color: "var(--outline)" },
 };
 
-export default function Sidebar() {
-  const [collapsed, setCollapsed] = useState(readSavedCollapsed);
+/**
+ * On a phone (`PHONE_QUERY`) the menu isn't a column beside the page: it
+ * slides in over it from the ☰ of `MobileTopBar` (`mobileOpen`), always
+ * expanded, and the toggle closes it.
+ */
+export default function Sidebar({ mobileOpen = false, onCloseMobile }: { mobileOpen?: boolean; onCloseMobile?: () => void }) {
+  const [savedCollapsed, setCollapsed] = useState(readSavedCollapsed);
+  const phone = useMediaQuery(PHONE_QUERY);
+  const collapsed = phone ? false : savedCollapsed;
+  const pendingCount = usePendingChangesCount();
   const { remoteUpdates, trackedFiles, reimportConfigs, checking, tickError } = useRemoteFileUpdates();
   const { canView, canEdit } = useAccess();
   const visible = (to: string, area: Area | null) => (area ? canView(area) : to === "/import" && IMPORT_AREAS.some(canEdit));
@@ -108,6 +118,10 @@ export default function Sidebar() {
   const { label: statusLabel, color: remoteDotColor, pulse: remoteDotPulsing } = REMOTE_STATUS_META[remoteStatus];
 
   function toggleCollapsed() {
+    if (phone) {
+      onCloseMobile?.();
+      return;
+    }
     const next = !collapsed;
     setCollapsed(next);
     try {
@@ -118,7 +132,7 @@ export default function Sidebar() {
   }
 
   return (
-    <nav className={collapsed ? "app-nav collapsed" : "app-nav"}>
+    <nav className={`app-nav${collapsed ? " collapsed" : ""}${mobileOpen ? " mobile-open" : ""}`} aria-hidden={phone && !mobileOpen ? true : undefined}>
       <div className="app-brand">
         <MenuIcon path={ICONS.brand} size={18} className="app-nav-label" />
         <span className="app-brand-name app-nav-label">Tá Pago</span>
@@ -126,7 +140,7 @@ export default function Sidebar() {
           type="button"
           className="app-nav-toggle"
           aria-label={collapsed ? "Abrir menu" : "Fechar menu"}
-          aria-expanded={!collapsed}
+          aria-expanded={phone ? mobileOpen : !collapsed}
           title={collapsed ? "Abrir menu" : "Fechar menu"}
           onClick={toggleCollapsed}
         >
@@ -172,6 +186,21 @@ export default function Sidebar() {
             />
           </span>
           <span className="app-nav-label">Verificação automática</span>
+          {phone && pendingCount > 0 && (
+            <button
+              type="button"
+              className="app-nav-count"
+              aria-label={`${pendingCount} atualizações pendentes — revisar`}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onCloseMobile?.();
+                openPendingChanges();
+              }}
+            >
+              {pendingCount}
+            </button>
+          )}
         </NavLink>
         )}
 

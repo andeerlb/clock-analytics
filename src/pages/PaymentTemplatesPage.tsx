@@ -104,7 +104,7 @@ export default function PaymentTemplatesPage() {
           </p>
         ) : (
           <div className="table-scroll">
-            <table>
+            <table className="mobile-cards">
               <thead>
                 <tr>
                   <th>Nome</th>

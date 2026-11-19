@@ -11069,3 +11069,373 @@ a.record-activity-link {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* =====================================================================
+   Phone layout (≤ 760px): a top bar instead of the menu column, the menu
+   over the page, panels opening from the bottom, tables as cards.
+   ===================================================================== */
+
+.mobile-topbar,
+.app-nav-scrim {
+  display: none;
+}
+
+/* The "atualizações pendentes" count next to Verificação automática (phone menu only). */
+button.app-nav-count {
+  margin-left: auto;
+  min-width: 24px;
+  padding: 1px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--warning-soft);
+  box-shadow: none;
+  color: var(--warning);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    flex-direction: column;
+  }
+
+  .mobile-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 120;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: calc(8px + env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) 8px max(12px, env(safe-area-inset-left, 0px));
+    border-bottom: 1px solid var(--border-softer);
+    background: var(--bg);
+  }
+
+  button.mobile-topbar-menu,
+  button.mobile-topbar-account {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 10px;
+    background: none;
+    box-shadow: none;
+    color: var(--text);
+  }
+
+  button.mobile-topbar-menu:active,
+  button.mobile-topbar-account:active {
+    background: var(--card-bg);
+  }
+
+  .mobile-topbar-dot {
+    position: absolute;
+    top: 8px;
+    right: 7px;
+    width: 9px;
+    height: 9px;
+    border: 2px solid var(--bg);
+    border-radius: 50%;
+    background: var(--warning);
+  }
+
+  .mobile-topbar-brand {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.95rem;
+    font-weight: 700;
+  }
+
+  .mobile-topbar-account .avatar {
+    width: 30px;
+    height: 30px;
+    font-size: 0.7rem;
+  }
+
+  /* The menu: over the page, from the left. */
+  .app-nav,
+  .app-nav.collapsed {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 400;
+    width: min(300px, 84vw);
+    height: 100dvh;
+    padding: calc(12px + env(safe-area-inset-top, 0px)) 10px calc(12px + env(safe-area-inset-bottom, 0px)) max(10px, env(safe-area-inset-left, 0px));
+    transform: translateX(-105%);
+    transition: transform 0.26s cubic-bezier(0.32, 0.72, 0, 1);
+    box-shadow: 0 0 60px rgba(0, 0, 0, 0.55);
+  }
+
+  .app-nav.mobile-open {
+    transform: translateX(0);
+  }
+
+  .app-nav-link {
+    min-height: 44px;
+    font-size: 14.5px;
+  }
+
+  .app-nav-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 390;
+    display: block;
+    background: rgba(5, 5, 6, 0.45);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.22s ease;
+  }
+
+  .app-shell.nav-open .app-nav-scrim {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .app-content {
+    padding: 1rem max(14px, env(safe-area-inset-right, 0px)) 5rem max(14px, env(safe-area-inset-left, 0px));
+  }
+
+  /* Pending updates live in the menu (count) and the ☰ (dot) on a phone. */
+  .pending-changes-card {
+    display: none !important;
+  }
+
+  /* Always in the corner on a phone (a docked panel opens over the page there,
+     not beside it), and out of the way while one is open. */
+  .ai-launcher {
+    right: max(12px, env(safe-area-inset-right, 0px)) !important;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    width: 42px;
+    height: 42px;
+  }
+
+  .ai-launcher.beside-panel {
+    display: none;
+  }
+
+  .page-head h1 {
+    font-size: 1.35rem;
+  }
+
+  /* Pagamentos: status tabs and view switch scroll sideways instead of wrapping into a tall block. */
+  .payments-view-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .payments-view-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .payments-tabs,
+  .payments-view-right {
+    flex: none;
+  }
+
+  .payments-tab {
+    white-space: nowrap;
+  }
+
+  /* Pagamentos (by turno): each row is a card — who + status, when + value, where. */
+  .payments-flat-table,
+  .payments-flat-table tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .payments-flat-table colgroup,
+  .payments-flat-table thead {
+    display: none;
+  }
+
+  .payments-flat-table tr {
+    display: block;
+  }
+
+  .payments-flat-table tr.payments-row-clickable {
+    display: grid;
+    grid-template-columns: auto auto auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "who who who who status"
+      "date time hours . value"
+      "local local func func func";
+    align-content: center;
+    gap: 4px 8px;
+    height: 106px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-softer);
+  }
+
+  .payments-flat-table tr.payments-row-clickable td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .payments-flat-table td[data-col="colaborador"] { grid-area: who; color: var(--text); font-size: 0.92rem; }
+  .payments-flat-table td[data-col="status"] { grid-area: status; justify-self: end; }
+  .payments-flat-table td[data-col="data"] { grid-area: date; }
+  .payments-flat-table td[data-col="horario"] { grid-area: time; }
+  .payments-flat-table td[data-col="horas"] { grid-area: hours; }
+  .payments-flat-table td[data-col="valor"] { grid-area: value; color: var(--text); font-weight: 600; }
+  .payments-flat-table td[data-col="local"] { grid-area: local; }
+  .payments-flat-table td[data-col="funcao"] { grid-area: func; }
+  .payments-flat-table td[data-col="horario"]::before,
+  .payments-flat-table td[data-col="horas"]::before,
+  .payments-flat-table td[data-col="funcao"]::before {
+    content: "· ";
+  }
+
+  .payments-flat-table td[data-col="cliente"],
+  .payments-flat-table td[data-col="empresa"],
+  .payments-flat-table td[data-col="extras"],
+  .payments-flat-table .payments-error-reason {
+    display: none !important;
+  }
+
+  .payments-flat-table td[data-col="colaborador"] .avatar {
+    width: 26px;
+    height: 26px;
+    font-size: 0.65rem;
+  }
+
+  /* Cadastro lists (tables marked `mobile-cards`): the first cell as the
+     title, the others on one line under it. */
+  table.mobile-cards,
+  table.mobile-cards tbody,
+  table.mobile-cards tr {
+    display: block;
+    width: 100%;
+  }
+
+  table.mobile-cards thead {
+    display: none;
+  }
+
+  table.mobile-cards tr {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border-softer);
+  }
+
+  table.mobile-cards tr:last-child {
+    border-bottom: 0;
+  }
+
+  table.mobile-cards td {
+    display: inline;
+    padding: 0;
+    border: 0;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+
+  table.mobile-cards td:first-child {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--text);
+    font-size: 0.92rem;
+  }
+
+  table.mobile-cards td:not(:first-child) + td::before {
+    content: " · ";
+    color: var(--outline);
+  }
+
+  table.mobile-cards td:empty {
+    display: none;
+  }
+}
+
+/* Side sheets (Drawer) open from the bottom on a phone, full width. */
+@media (max-width: 640px) {
+  .drawer-panel,
+  .drawer-panel-left {
+    top: calc(36px + env(safe-area-inset-top, 0px));
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100% !important;
+    max-width: none;
+    border-bottom: 0;
+    border-radius: 18px 18px 0 0;
+    transform: translateY(105%);
+  }
+
+  .drawer-panel::before {
+    content: "";
+    flex: none;
+    width: 40px;
+    height: 4px;
+    margin: 8px auto 0;
+    border-radius: 2px;
+    background: #3b3b44;
+  }
+
+  .drawer-panel-visible {
+    transform: translateY(0);
+  }
+
+  .drawer-footer {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* Docked panels (turno, Conferência, the assistant) open from the bottom on a phone too. */
+@media (max-width: 640px) {
+  .side-column,
+  .ai-side {
+    position: fixed;
+    top: calc(36px + env(safe-area-inset-top, 0px));
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 300;
+    width: 100% !important;
+    height: auto;
+    padding: 0;
+    transform: translateY(105%);
+    transition: transform 0.26s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  .side-column.side-column-visible,
+  .ai-side.ai-side-visible {
+    transform: translateY(0);
+  }
+
+  .side-panel,
+  .ai-panel {
+    width: 100% !important;
+    min-width: 0;
+    max-width: none;
+    margin: 0;
+    border-bottom: 0;
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.5);
+  }
+
+  .side-panel-footer,
+  .ai-panel form {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Arquivo step: the drop area stacks on a phone. */
+  .tfile-icon {
+    display: none;
+  }
+}

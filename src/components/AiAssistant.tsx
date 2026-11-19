@@ -717,7 +717,7 @@ export function AiAssistantProvider({ children }: { children: ReactNode }) {
       {!open && canUseAi && (
         <button
           type="button"
-          className="ai-launcher"
+          className={sidePanelWidth > 0 ? "ai-launcher beside-panel" : "ai-launcher"}
           aria-label="Abrir assistente"
           title="Assistente"
           onClick={() => setOpen(true)}

@@ -48,7 +48,7 @@ export default function CompaniesPage() {
         )}
         {companies.length > 0 && (
           <div className="table-scroll">
-            <table>
+            <table className="mobile-cards">
               <thead>
                 <tr>
                   <th>Empresa</th>
