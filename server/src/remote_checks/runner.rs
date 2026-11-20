@@ -478,9 +478,9 @@ async fn save_check_diffs(state: &AppState, check_log_id: i64, source_url: &str,
         return Ok(());
     }
     let mut tx = state.db.begin().await?;
-    // Changes this check is the first to find (not seen before, not dismissed):
-    // what goes to "Atividade".
-    let mut first_found = 0usize;
+    // Finding a change isn't an activity: "Atividade" lists what changed in
+    // the data, and a check only reports. Whoever accepts a change shows up
+    // there (acceptShiftChange is logged like any other edit).
     for e in entries {
         let fingerprint = diff_content_fingerprint(e);
         let dismissed_match = sql::select(
@@ -502,9 +502,6 @@ async fn save_check_diffs(state: &AppState, check_log_id: i64, source_url: &str,
             &params![source_url, check_log_id, fingerprint],
         )
         .await?;
-        if earlier.is_none() && dismissed_match.is_empty() && e.change_kind != "error" {
-            first_found += 1;
-        }
         let (saved_by, saved_at) = match &earlier {
             Some(row) => (row.get("savedBy").cloned().unwrap_or(Value::Null), row.get("savedAt").cloned().unwrap_or(Value::Null)),
             None => (json!(author.and_then(|a| a.saved_by.clone())), json!(author.and_then(|a| a.saved_at.clone()))),
@@ -547,14 +544,6 @@ async fn save_check_diffs(state: &AppState, check_log_id: i64, source_url: &str,
         }
     }
     tx.commit().await?;
-    if first_found > 0 {
-        let file = sql::select_one(&state.db, "SELECT file_name AS f FROM source_url_check_log WHERE id = $1", &params![check_log_id])
-            .await?
-            .and_then(|r| r.get("f").and_then(Value::as_str).map(str::to_owned))
-            .unwrap_or_else(|| source_url.to_owned());
-        let summary = format!("{first_found} {}", if first_found == 1 { "alteração" } else { "alterações" });
-        crate::activity::record_system(state, "Verificação", "remoteCheck", "encontrou alterações em", &file, Some(&summary)).await?;
-    }
     Ok(())
 }
 

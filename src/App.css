@@ -11869,21 +11869,6 @@ button.tcd-card:hover .tcd-chev {
   color: var(--text-muted);
 }
 
-.tcd-tag {
-  display: inline-block;
-  padding: 2px 7px;
-  border-radius: 6px;
-  background: var(--surface-container-high);
-  color: var(--text-muted);
-  font-size: 0.74rem;
-  font-weight: 600;
-}
-
-.tcd-tag-auto {
-  background: var(--warning-soft);
-  color: var(--warning);
-}
-
 .tcd-hint {
   margin: 6px 2px 0;
   color: var(--outline);

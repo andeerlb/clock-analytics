@@ -214,17 +214,6 @@ async fn write(
     Ok(())
 }
 
-/// A line written by the server on its own (the automatic verification).
-pub async fn record_system(state: &AppState, area: &str, action: &str, verb: &str, label: &str, summary: Option<&str>) -> ApiResult<()> {
-    sql::execute(
-        &state.db,
-        "INSERT INTO activity_log (actor_email, actor_name, area, action, verb, entity_label, summary) VALUES (NULL, 'Verificação automática', $1, $2, $3, $4, $5)",
-        &params![area, action, verb, label, summary],
-    )
-    .await?;
-    Ok(())
-}
-
 fn count_text(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
