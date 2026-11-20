@@ -65,19 +65,27 @@ async fn list_roles(State(state): State<AppState>, Json(args): Json<CompanyIdArg
 }
 
 async fn list_roles_global(State(state): State<AppState>) -> ApiResult<Json<Vec<Row>>> {
+    Ok(Json(list_roles_global_in(&state.db).await?))
+}
+
+pub(crate) async fn list_roles_global_in(db: &SqlitePool) -> ApiResult<Vec<Row>> {
     // Função lives on the turno, not the colaborador, so "colaboradores" here
-    // means distinct people with at least one live turno in this função.
-    Ok(Json(
-        sql::select(
-            &state.db,
-            "SELECT r.id, r.company_id AS companyId, r.name,
-               (SELECT COUNT(DISTINCT ps.employee_id) FROM payment_shifts ps WHERE ps.role_id = r.id AND ps.deleted_at IS NULL) AS employeeCount,
-               (SELECT COUNT(*) FROM payment_shifts ps WHERE ps.role_id = r.id AND ps.deleted_at IS NULL) AS shiftCount
-             FROM roles r ORDER BY r.name",
+    // means distinct people with at least one live turno in this função. Only
+    // each turno's current version counts: a paid or edited turno has older
+    // rows in its history, and one moved to another função still has its old
+    // função on them.
+    let head = crate::routes::payments::head_shift_condition();
+    Ok(sql::select(
+            db,
+            &format!(
+                "SELECT r.id, r.company_id AS companyId, r.name,
+               (SELECT COUNT(DISTINCT ps.employee_id) FROM payment_shifts ps WHERE ps.role_id = r.id AND {head}) AS employeeCount,
+               (SELECT COUNT(*) FROM payment_shifts ps WHERE ps.role_id = r.id AND {head}) AS shiftCount
+             FROM roles r ORDER BY r.name"
+            ),
             &[],
         )
-        .await?,
-    ))
+        .await?)
 }
 
 async fn get_role(State(state): State<AppState>, Json(args): Json<IdArgs>) -> ApiResult<Json<Value>> {

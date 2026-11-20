@@ -257,6 +257,49 @@ async fn duplicates_match_the_same_named_role_of_another_company_and_report_the_
     assert!(import::find_duplicates_impl(&state, &[other]).await.unwrap().is_empty(), "a different função is a different turno");
 }
 
+#[tokio::test]
+async fn funcao_and_cliente_counts_only_see_each_turnos_current_version() {
+    let state = AppState::for_tests().await;
+    let s = seed(&state).await;
+    let porteiro = exec(&state, &format!("INSERT INTO roles (company_id, name) VALUES ({}, 'Porteiro')", s.company)).await;
+
+    // Paid: two versions, one turno.
+    save(&state, vec![shift_input(&s, None)], vec![]).await.unwrap();
+    shifts::mark_paid_impl(&state, only_shift_id(&state).await, 100.0).await.unwrap();
+    // Edited into another função: the old version still says Vigilante.
+    save(&state, vec![PaymentShiftInput { work_date: "2026-10-06".into(), ..shift_input(&s, None) }], vec![]).await.unwrap();
+    let moved = only_shift_id(&state).await;
+    shifts::edit_impl(
+        &state,
+        moved,
+        &EditFields {
+            work_date: "2026-10-06".into(),
+            local: "Portaria".into(),
+            role: "Porteiro".into(),
+            schedule_start_minutes: Some(420),
+            schedule_end_minutes: Some(1140),
+            amount: None,
+        },
+    )
+    .await
+    .unwrap();
+    // Removed: not a turno anymore.
+    save(&state, vec![PaymentShiftInput { work_date: "2026-10-07".into(), ..shift_input(&s, None) }], vec![]).await.unwrap();
+    shifts::delete_shift_impl(&state, only_shift_id(&state).await).await.unwrap();
+
+    let roles = crate::routes::roles::list_roles_global_in(&state.db).await.unwrap();
+    let counts = |id: i64| {
+        let r = roles.iter().find(|r| r["id"] == json!(id)).unwrap();
+        (r["shiftCount"].as_i64().unwrap(), r["employeeCount"].as_i64().unwrap())
+    };
+    assert_eq!(counts(s.role), (1, 1), "Vigilante: only the paid turno");
+    assert_eq!(counts(porteiro), (1, 1), "Porteiro: the turno edited into it");
+
+    exec(&state, &format!("INSERT INTO client_companies (client_id, company_id) VALUES ({}, {})", s.client, s.company)).await;
+    let clients = crate::routes::clients::list_clients_in(&state.db).await.unwrap();
+    assert_eq!(clients[0]["shiftCount"], json!(2), "paid + edited, not every version and not the removed one");
+}
+
 // --- transitions --------------------------------------------------------------------
 
 #[tokio::test]

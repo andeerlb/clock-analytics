@@ -26,22 +26,30 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn list_clients(State(state): State<AppState>) -> ApiResult<Json<Vec<Row>>> {
-    Ok(Json(
-        sql::select(
-            &state.db,
+    Ok(Json(list_clients_in(&state.db).await?))
+}
+
+/// Turnos count only each one's current version (see `head_shift_condition`):
+/// older versions of a paid/edited turno, or of one moved to another
+/// cliente, aren't turnos of their own.
+pub(crate) async fn list_clients_in(db: &SqlitePool) -> ApiResult<Vec<Row>> {
+    let head = crate::routes::payments::head_shift_condition();
+    Ok(sql::select(
+        db,
+        &format!(
             "
     SELECT cl.id, cl.name, cl.cnpj, c.id AS companyId, c.name AS companyName,
       (SELECT COUNT(DISTINCT ecc.employee_id) FROM employee_client_companies ecc WHERE ecc.client_id = cl.id) AS employeeCount,
-      (SELECT COUNT(*) FROM payment_shifts ps WHERE ps.client_id = cl.id AND ps.deleted_at IS NULL) AS shiftCount
+      (SELECT COUNT(*) FROM payment_shifts ps WHERE ps.client_id = cl.id AND {head}) AS shiftCount
     FROM clients cl
     JOIN client_companies cc ON cc.client_id = cl.id
     JOIN companies c ON c.id = cc.company_id
     ORDER BY c.name, cl.name
-  ",
-            &[],
-        )
-        .await?,
-    ))
+  "
+        ),
+        &[],
+    )
+    .await?)
 }
 
 /// `valueRuleInserts("client_payment_value_rules", "client_id", ...)`: one
