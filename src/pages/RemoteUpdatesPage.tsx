@@ -203,7 +203,7 @@ export default function RemoteUpdatesPage() {
   const readOnly = useReadOnly();
   const roTitle = readOnly ? READ_ONLY_TITLE : undefined;
   // Accepting a change, deleting a turno or reimporting writes to Pagamentos.
-  const { canEdit } = useAccess();
+  const { canEdit, canView } = useAccess();
   const canPay = canEdit("pagamentos");
   const payTitle = canPay ? undefined : NO_PAYMENT_EDIT_TITLE;
   // "Visto"/"Ignorar" is allowed with "Editar" in either area.
@@ -725,15 +725,34 @@ export default function RemoteUpdatesPage() {
               <section className="rv-more-section">
                 <span className="rv-section-label">Modelo da planilha</span>
                 <div className="rv-opts">
-                  <div className="rv-opts-row">
-                    <span className="rv-more-icon" aria-hidden="true">
-                      <FileSpreadsheet size={15} />
-                    </span>
-                    <span className="rv-text">
-                      <span className="rv-opts-title">{c.templateName ?? "Modelo removido"}</span>
-                      <span className="rv-opts-desc">Para usar outro modelo, crie uma nova regra.</span>
-                    </span>
-                  </div>
+                  {c.templateName !== null && canView("pagamentos") ? (
+                    // Opens the template's editor on Templates de pagamento.
+                    <button
+                      type="button"
+                      className="rv-opts-row rv-history-row"
+                      onClick={() => navigate("/import/payments/templates", { state: { openTemplateId: c.templateId } })}
+                      title="Abrir o template"
+                    >
+                      <span className="rv-more-icon" aria-hidden="true">
+                        <FileSpreadsheet size={15} />
+                      </span>
+                      <span className="rv-text">
+                        <span className="rv-opts-title">{c.templateName}</span>
+                        <span className="rv-opts-desc">Para usar outro modelo, crie uma nova regra.</span>
+                      </span>
+                      <ChevronRight size={16} className="muted" aria-hidden="true" />
+                    </button>
+                  ) : (
+                    <div className="rv-opts-row">
+                      <span className="rv-more-icon" aria-hidden="true">
+                        <FileSpreadsheet size={15} />
+                      </span>
+                      <span className="rv-text">
+                        <span className="rv-opts-title">{c.templateName ?? "Modelo removido"}</span>
+                        <span className="rv-opts-desc">Para usar outro modelo, crie uma nova regra.</span>
+                      </span>
+                    </div>
+                  )}
                 </div>
               </section>
 

@@ -54,10 +54,6 @@ export default function TemplateChecksDrawer({
           )}
           <span className="k">Última conferência</span>
           <span className="v">{c.lastCheckedAt ? formatTimeAgo(c.lastCheckedAt) : "ainda não conferiu"}</span>
-          <span className="k">Quando acha mudança</span>
-          <span className="v">
-            <span className={c.autoApplyEnabled ? "tcd-tag tcd-tag-auto" : "tcd-tag"}>{c.autoApplyEnabled ? "atualiza sozinha" : "espera você revisar"}</span>
-          </span>
         </span>
       </>
     );
