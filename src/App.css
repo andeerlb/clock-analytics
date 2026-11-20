@@ -11702,3 +11702,219 @@ td.count-col {
   width: 100%;
   padding: 12px 10px;
 }
+
+/* ---------- Templates de pagamento: verificações automáticas ---------- */
+
+/* "Verificação automática" column: count + green dot if any rule is active. */
+.tcd-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--surface-container);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.tcd-count:hover {
+  background: var(--surface-container-high);
+}
+
+.tcd-count-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.tcd-count.is-off .tcd-count-dot {
+  background: var(--outline);
+}
+
+.tcd-count-sub {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.tcd-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tcd-section {
+  margin-top: 4px;
+  color: var(--outline);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+/* One rule: the whole card opens it on Verificação automática. */
+.tcd-card {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--card-bg);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+
+button.tcd-card {
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+button.tcd-card:hover {
+  border-color: var(--border);
+  background: var(--surface-container);
+}
+
+button.tcd-card:hover .tcd-chev {
+  color: var(--text);
+  transform: translateX(2px);
+}
+
+.tcd-top {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.tcd-file-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.tcd-name {
+  min-width: 0;
+}
+
+.tcd-name b,
+.tcd-name span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tcd-name b {
+  font-size: 0.9rem;
+}
+
+.tcd-name span {
+  color: var(--outline);
+  font-size: 0.76rem;
+}
+
+.tcd-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tcd-pill-on {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.tcd-pill-off {
+  background: var(--surface-container-high);
+  color: var(--text-muted);
+}
+
+.tcd-chev {
+  color: var(--outline);
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+
+.tcd-kvs {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 7px 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+  font-size: 0.8rem;
+}
+
+.tcd-kvs .k {
+  color: var(--outline);
+}
+
+.tcd-kvs .v {
+  text-align: right;
+}
+
+.tcd-card.is-off .tcd-name b,
+.tcd-card.is-off .tcd-kvs .v {
+  color: var(--text-muted);
+}
+
+.tcd-tag {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--surface-container-high);
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.tcd-tag-auto {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.tcd-hint {
+  margin: 6px 2px 0;
+  color: var(--outline);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.tcd-delete-warn {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: 10px;
+  background: var(--warning-soft);
+  font-size: 0.84rem;
+}
+
+.tcd-delete-warn p {
+  margin: 0 0 6px;
+  color: var(--warning);
+}
+
+.tcd-delete-warn ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.tcd-card,
+  .tcd-chev {
+    transition: none;
+  }
+}

@@ -1,13 +1,16 @@
 import { Eye, Pencil, Plus, Trash2 } from "lucide-react";
 import { UpdatedByCell, useLastActivity } from "../components/ActivityInfo";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
 import ConfirmModal from "../components/ConfirmModal";
 import PageHeader from "../components/PageHeader";
 import PaymentTemplateWizard from "../components/PaymentTemplateWizard";
-import { deletePaymentTemplate, getPaymentTemplate, listPaymentTemplates } from "../lib/db";
-import { formatDateTime } from "../lib/format";
+import TemplateChecksDrawer, { describeReimportPeriod } from "../components/TemplateChecksDrawer";
+import { useAccess } from "../contexts/AuthContext";
+import { useRemoteFileUpdates } from "../contexts/RemoteFileUpdatesContext";
+import { deletePaymentTemplate, getPaymentTemplate, listPaymentTemplates, type ReimportConfig } from "../lib/db";
+import { formatDateTime, resolveReimportConfigLabel } from "../lib/format";
 import type { PaymentTemplateListRow, PaymentTemplateRow } from "../lib/types";
 
 const FILE_KIND_LABELS: Record<string, string> = {
@@ -27,6 +30,30 @@ export default function PaymentTemplatesPage() {
   const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<PaymentTemplateListRow | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Which Verificação automática rules read their file through each template.
+  const { reimportConfigs, trackedFiles } = useRemoteFileUpdates();
+  const { canView } = useAccess();
+  const canOpenChecks = canView("verificacao");
+  const configsByTemplate = useMemo(() => {
+    const map = new Map<number, ReimportConfig[]>();
+    for (const c of reimportConfigs) map.set(c.templateId, [...(map.get(c.templateId) ?? []), c]);
+    return map;
+  }, [reimportConfigs]);
+  const [checksTemplate, setChecksTemplate] = useState<PaymentTemplateListRow | null>(null);
+  function fileNameOf(sourceUrl: string): string {
+    const tracked = trackedFiles.find((f) => f.sourceUrl === sourceUrl);
+    if (tracked?.fileName) return tracked.fileName;
+    try {
+      return decodeURIComponent(new URL(sourceUrl).pathname.split("/").pop() || sourceUrl);
+    } catch {
+      return sourceUrl;
+    }
+  }
+  function openChecksPage(configId?: number) {
+    navigate("/remote-updates/imports", configId !== undefined ? { state: { openConfigId: configId } } : undefined);
+  }
+  const deleteTargetConfigs = confirmDeleteTarget ? (configsByTemplate.get(confirmDeleteTarget.id) ?? []) : [];
 
   useEffect(() => {
     refreshTemplates();
@@ -109,6 +136,7 @@ export default function PaymentTemplatesPage() {
                 <tr>
                   <th>Nome</th>
                   <th>Formatos aceitos</th>
+                  <th>Verificação automática</th>
                   <th>Atualizado</th>
                   <th>Ações</th>
                 </tr>
@@ -118,6 +146,9 @@ export default function PaymentTemplatesPage() {
                   <tr key={t.id}>
                     <td>{t.name}</td>
                     <td>{Array.from(new Set(t.acceptedFileKinds.map((k) => FILE_KIND_LABELS[k] ?? k))).join(", ")}</td>
+                    <td>
+                      <ChecksCount configs={configsByTemplate.get(t.id) ?? []} onOpen={() => setChecksTemplate(t)} />
+                    </td>
                     <td>
                       <UpdatedByCell info={lastActivity.get(String(t.id))} fallback={formatDateTime(t.updatedAt)} />
                     </td>
@@ -163,16 +194,58 @@ export default function PaymentTemplatesPage() {
         }}
       />
 
+      <TemplateChecksDrawer
+        open={checksTemplate !== null}
+        onClose={() => setChecksTemplate(null)}
+        templateName={checksTemplate?.name ?? ""}
+        configs={checksTemplate ? (configsByTemplate.get(checksTemplate.id) ?? []) : []}
+        fileNameOf={fileNameOf}
+        onOpenConfig={canOpenChecks ? (c) => openChecksPage(c.id) : null}
+        onOpenPage={canOpenChecks ? () => openChecksPage() : null}
+      />
+
       {confirmDeleteTarget && (
         <ConfirmModal
           title="Excluir template"
           message={`Tem certeza que deseja excluir "${confirmDeleteTarget.name}"? Turnos já importados com este template continuam guardados, só deixam de referenciá-lo.`}
-          confirmLabel={busy ? "Excluindo..." : "Excluir"}
+          confirmLabel={busy ? "Excluindo..." : deleteTargetConfigs.length > 0 ? "Excluir mesmo assim" : "Excluir"}
           confirmDisabled={busy}
           onConfirm={handleDeleteTemplate}
           onCancel={() => setConfirmDeleteTarget(null)}
-        />
+        >
+          {deleteTargetConfigs.length > 0 && (
+            <div className="tcd-delete-warn">
+              <p>
+                {deleteTargetConfigs.length === 1
+                  ? "1 verificação automática usa este template e para de funcionar:"
+                  : `${deleteTargetConfigs.length} verificações automáticas usam este template e param de funcionar:`}
+              </p>
+              <ul>
+                {deleteTargetConfigs.map((c) => (
+                  <li key={c.id}>
+                    <b>{resolveReimportConfigLabel(c)}</b> · {fileNameOf(c.sourceUrl)} <span className="muted">· {describeReimportPeriod(c)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </ConfirmModal>
       )}
     </div>
+  );
+}
+
+/** The "Verificação automática" cell: how many rules use the template (green dot if any is active), or "—". */
+function ChecksCount({ configs, onOpen }: { configs: ReimportConfig[]; onOpen: () => void }) {
+  if (configs.length === 0) return <span className="muted">—</span>;
+  const active = configs.filter((c) => !c.checkDisabled).length;
+  const sub =
+    active === configs.length ? (active === 1 ? "ativa" : "ativas") : active === 0 ? (configs.length === 1 ? "pausada" : "pausadas") : `${active} ${active === 1 ? "ativa" : "ativas"}`;
+  return (
+    <button type="button" className={`tcd-count${active === 0 ? " is-off" : ""}`} onClick={onOpen} title="Ver as verificações automáticas que usam este template">
+      <span className="tcd-count-dot" aria-hidden="true" />
+      {configs.length}
+      <span className="tcd-count-sub">{sub}</span>
+    </button>
   );
 }
