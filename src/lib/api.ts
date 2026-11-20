@@ -166,6 +166,8 @@ export interface AppliedPaymentRow {
   fields: Record<string, string>;
   /** columnLetter -> raw text value, for every non-blank column the template left unmapped ("Ignorar") — kept for history instead of discarded. */
   extraFields: Record<string, string>;
+  /** columnLetter -> "time" | "date" | "datetime", for the `extraFields` cells that are Excel date/time cells (their raw text is the serial, e.g. 0.25). */
+  extraKinds: Record<string, string>;
 }
 
 /** Reads every row of a real payment file per a saved template's column mapping — the actual import-execution step. */

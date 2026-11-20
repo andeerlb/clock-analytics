@@ -1,3 +1,4 @@
+import type { ExtraColumnInfo } from "./extraColumns";
 /** A page of `rows` out of `total` matching rows — `total` is pre-filter/pagination, for computing page count. */
 export interface PagedResult<T> {
   rows: T[];
@@ -572,6 +573,8 @@ export interface PaymentShiftRow {
   previousShiftId: number | null;
   /** columnLetter -> raw text value, for every non-blank column the template left unmapped ("Ignorar") on this row — kept for history/audit instead of discarded. `null` when there was nothing left unmapped (or it was all blank). */
   extraData: Record<string, string> | null;
+  /** What each `extraData` column is (header text, Excel date/time kind), from the file+aba this turno was imported from — see `extraColumnEntries`. `null`/empty when unknown. */
+  extraColumns?: Record<string, ExtraColumnInfo> | null;
   /** True when this row (or one it replaced) was hand-edited via "Editar valor" (`editPaymentShift`) — "Fazer pagamento" and "Voltar para pendente" only inherit it, never set it. A reprocessed import match refuses to supersede one of these unless "Manter registros atualizados manualmente" is off; a `'pago'` row is protected regardless (see `isProtectedDuplicateMatch` in ImportPaymentsPage). */
   editedManually: boolean;
   /** Who wrote this version (import, edit, payment...) — only on `getPaymentShiftHistory` rows; `null` for versions written before it was recorded. */

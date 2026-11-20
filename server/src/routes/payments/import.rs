@@ -334,12 +334,26 @@ pub(crate) struct PaymentShiftInput {
     pub source_sheet_name: Option<String>,
 }
 
+/// One unmapped column of one imported file+aba — see
+/// 0081_source_file_columns.sql.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SourceColumnInput {
+    pub source_file_id: i64,
+    pub sheet_name: Option<String>,
+    pub column_letter: String,
+    pub header: Option<String>,
+    pub kind: Option<String>,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SaveShiftsArgs {
     pub rows: Vec<PaymentShiftInput>,
     #[serde(default)]
     pub saved_file_hashes: Vec<String>,
+    #[serde(default)]
+    pub source_columns: Vec<SourceColumnInput>,
 }
 
 /// One transaction for the whole import. A row reprocessing an existing shift
@@ -382,6 +396,16 @@ pub(crate) async fn save_shifts_impl(state: &AppState, args: &SaveShiftsArgs) ->
             )
             .expect_changes(SHIFT_ALREADY_SUPERSEDED_ERROR),
         );
+    }
+    // Same file saved again (a reimport of identical bytes reuses its
+    // source_files row): the newest reading wins.
+    for c in &args.source_columns {
+        statements.push(BatchStatement::new(
+            "INSERT INTO source_file_columns (source_file_id, sheet_name, column_letter, header, kind)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT(source_file_id, sheet_name, column_letter) DO UPDATE SET header = excluded.header, kind = excluded.kind",
+            params![c.source_file_id, c.sheet_name.clone().unwrap_or_default(), c.column_letter, c.header, c.kind],
+        ));
     }
     for hash in &args.saved_file_hashes {
         statements.push(BatchStatement::new("UPDATE source_files SET saved_at = datetime('now') WHERE file_hash = $1", params![hash]));

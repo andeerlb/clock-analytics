@@ -173,6 +173,25 @@ pub fn preview(
 /// same value `apply_template` reads for "data" — the template wizard
 /// checks a sheet's dates on these rows. A time-only cell becomes `HH:MM`,
 /// a date with a time `YYYY-MM-DD HH:MM`.
+/// What kind of Excel date/time cell this is — "time" (a bare time of day),
+/// "datetime" or "date" — or `None` for anything else. The unmapped columns
+/// keep the cell's raw text (an Excel serial like `0.25`) so the automatic
+/// verification keeps comparing like with like; this lets the screen show
+/// that serial as what it is (06:00) instead.
+fn datetime_kind(cell: &calamine::Data) -> Option<&'static str> {
+    if !cell.is_datetime() {
+        return None;
+    }
+    let dt = cell.as_datetime()?;
+    Some(if dt.date() <= chrono::NaiveDate::from_ymd_opt(1899, 12, 31).expect("valid date") {
+        "time"
+    } else if dt.time() != chrono::NaiveTime::MIN {
+        "datetime"
+    } else {
+        "date"
+    })
+}
+
 fn preview_cell(cell: &calamine::Data) -> String {
     if cell.is_datetime() {
         if let Some(dt) = cell.as_datetime() {
@@ -219,6 +238,10 @@ pub struct AppliedPaymentRow {
     /// nobody thought to map. Blank cells are left out, same as a
     /// genuinely blank row never becoming an `AppliedPaymentRow` at all.
     pub extra_fields: HashMap<String, String>,
+    /// columnLetter -> "time" | "date" | "datetime", for the `extra_fields`
+    /// cells that are Excel date/time cells (see `datetime_kind`). Always
+    /// empty for csv, which has no cell types.
+    pub extra_kinds: HashMap<String, String>,
 }
 
 /// Spreadsheet-style column letter ("A", "Z", "AA") -> 0-indexed column
@@ -325,7 +348,7 @@ pub fn apply_template(
                 .map(|(idx, value)| (column_letter(idx), value.trim().to_string()))
                 .filter(|(_, value)| !value.is_empty())
                 .collect();
-            out.push(AppliedPaymentRow { sheet_name: None, row_number, fields, extra_fields });
+            out.push(AppliedPaymentRow { sheet_name: None, row_number, fields, extra_fields, extra_kinds: HashMap::new() });
         }
         return Ok(out);
     }
@@ -382,11 +405,18 @@ pub fn apply_template(
                     .map(|(idx, cell)| (column_letter(idx), cell.to_string().trim().to_string()))
                     .filter(|(_, value)| !value.is_empty())
                     .collect();
+                let extra_kinds: HashMap<String, String> = row
+                    .iter()
+                    .enumerate()
+                    .filter(|(idx, _)| !mapped_indices.contains(idx))
+                    .filter_map(|(idx, cell)| datetime_kind(cell).map(|kind| (column_letter(idx), kind.to_string())))
+                    .collect();
                 out.push(AppliedPaymentRow {
                     sheet_name: Some(sheet_name.clone()),
                     row_number,
                     fields,
                     extra_fields,
+                    extra_kinds,
                 });
             }
         }
@@ -408,6 +438,18 @@ mod preview_cell_tests {
         assert_eq!(preview_cell(&date_cell(46346.0)), "2026-11-20");
         assert_eq!(preview_cell(&date_cell(46346.5)), "2026-11-20 12:00");
         assert_eq!(preview_cell(&date_cell(0.3125)), "07:30");
+    }
+
+    #[test]
+    fn datetime_kinds() {
+        use super::datetime_kind;
+        assert_eq!(datetime_kind(&date_cell(0.25)), Some("time"));
+        // What extra_data stores for such a cell — the screen converts it.
+        assert_eq!(date_cell(0.25).to_string(), "0.25");
+        assert_eq!(datetime_kind(&date_cell(46346.0)), Some("date"));
+        assert_eq!(datetime_kind(&date_cell(46346.5)), Some("datetime"));
+        assert_eq!(datetime_kind(&Data::Float(0.25)), None);
+        assert_eq!(datetime_kind(&Data::String("06:00".into())), None);
     }
 
     #[test]

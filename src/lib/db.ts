@@ -1,3 +1,4 @@
+import type { SourceColumnInput } from "./extraColumns";
 import { emit } from "./events";
 import { overtimeMinutesForDay, sumIntervalMinutes } from "./analysis";
 import type { PeriodStatusId } from "./periodStatus";
@@ -1620,8 +1621,12 @@ export interface PaymentShiftInput {
 }
 
 /** Bulk-inserts shifts — `valor` and any further `pago` transition still happen in a later step. Never sets `edited_manually` — that's exclusively for the manual transition functions above, never for anything import-originated. */
-export async function savePaymentShifts(rows: PaymentShiftInput[], savedFileHashes: Iterable<string> = []): Promise<void> {
-  await rpc<void>("savePaymentShifts", { rows, savedFileHashes: Array.from(savedFileHashes) });
+export async function savePaymentShifts(
+  rows: PaymentShiftInput[],
+  savedFileHashes: Iterable<string> = [],
+  sourceColumns: SourceColumnInput[] = [],
+): Promise<void> {
+  await rpc<void>("savePaymentShifts", { rows, savedFileHashes: Array.from(savedFileHashes), sourceColumns });
 }
 
 /**

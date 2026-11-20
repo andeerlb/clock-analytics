@@ -4,7 +4,7 @@
 
 use serde_json::{json, Value};
 
-use super::import::{self, DuplicateCandidate, PaymentShiftInput, SaveShiftsArgs, SHIFT_ALREADY_SUPERSEDED_ERROR};
+use super::import::{self, DuplicateCandidate, PaymentShiftInput, SaveShiftsArgs, SourceColumnInput, SHIFT_ALREADY_SUPERSEDED_ERROR};
 use super::shifts::{self, AutoSyncArgs, AutoSyncFields, EditFields, PagedQuery};
 use super::templates::{self, ConfigTable, ConfigTemplateInput, PaymentTemplateInput};
 use super::{parse_time_to_minutes, ShiftQuery};
@@ -58,7 +58,7 @@ fn shift_input(s: &Seed, previous: Option<i64>) -> PaymentShiftInput {
 }
 
 async fn save(state: &AppState, rows: Vec<PaymentShiftInput>, hashes: Vec<&str>) -> Result<(), ApiError> {
-    import::save_shifts_impl(state, &SaveShiftsArgs { rows, saved_file_hashes: hashes.into_iter().map(String::from).collect() }).await
+    import::save_shifts_impl(state, &SaveShiftsArgs { rows, saved_file_hashes: hashes.into_iter().map(String::from).collect(), source_columns: vec![] }).await
 }
 
 async fn only_shift_id(state: &AppState) -> i64 {
@@ -94,6 +94,38 @@ async fn save_inserts_shifts_and_marks_the_file_saved_in_one_go() {
     let stored: String = sqlx::query_scalar("SELECT extra_data FROM payment_shifts").fetch_one(&state.db).await.unwrap();
     assert_eq!(stored, r#"{"H":"obs","A":"1"}"#, "key order kept, as JSON.stringify wrote it");
     assert_eq!(count(&state, "SELECT COUNT(*) FROM source_files WHERE saved_at IS NOT NULL").await, 1);
+}
+
+#[tokio::test]
+async fn extra_columns_come_from_the_file_and_aba_and_survive_new_versions() {
+    let state = AppState::for_tests().await;
+    let s = seed(&state).await;
+    let column = |letter: &str, header: Option<&str>, kind: Option<&str>| SourceColumnInput {
+        source_file_id: s.source_file,
+        sheet_name: Some("Out".into()),
+        column_letter: letter.into(),
+        header: header.map(String::from),
+        kind: kind.map(String::from),
+    };
+    let args = SaveShiftsArgs {
+        rows: vec![shift_input(&s, None)],
+        saved_file_hashes: vec![],
+        source_columns: vec![column("H", Some("Entrada real"), Some("time")), column("A", None, None)],
+    };
+    import::save_shifts_impl(&state, &args).await.unwrap();
+    let original = only_shift_id(&state).await;
+    let expected = json!({ "H": { "header": "Entrada real", "kind": "time" }, "A": { "header": null, "kind": null } });
+    assert_eq!(shifts::get_shift_impl(&state, original).await.unwrap()["extraColumns"], expected);
+
+    // A new version (paid) keeps pointing at the same file+aba.
+    let paid = shifts::mark_paid_impl(&state, original, 10.0).await.unwrap();
+    assert_eq!(shifts::get_shift_impl(&state, paid).await.unwrap()["extraColumns"], expected);
+
+    // Saving the same file again updates instead of duplicating.
+    let again = SaveShiftsArgs { rows: vec![], saved_file_hashes: vec![], source_columns: vec![column("H", Some("Entrada"), Some("time"))] };
+    import::save_shifts_impl(&state, &again).await.unwrap();
+    assert_eq!(count(&state, "SELECT COUNT(*) FROM source_file_columns").await, 2);
+    assert_eq!(shifts::get_shift_impl(&state, paid).await.unwrap()["extraColumns"]["H"]["header"], "Entrada");
 }
 
 #[tokio::test]

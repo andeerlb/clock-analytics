@@ -1,3 +1,5 @@
+import ExtraColumnsList from "./ExtraColumnsList";
+import { extraColumnEntries } from "../lib/extraColumns";
 import {
   AlertTriangle,
   BriefcaseBusiness,
@@ -377,7 +379,7 @@ function useShiftHistory(shiftId: number | null) {
 function OriginSection({ shift, importedAt }: { shift: PaymentShiftRow; importedAt: string | null }) {
   // Lexicographic order alone misorders past column Z ("AA" < "B") — sort
   // by letter count first so single-letter columns come before double.
-  const extras = shift.extraData ? Object.entries(shift.extraData).sort(([a], [b]) => a.length - b.length || a.localeCompare(b)) : [];
+  const extras = extraColumnEntries(shift.extraData, shift.extraColumns);
   const rows: { label: string; value: ReactNode }[] = [];
   if (importedAt) rows.push({ label: "Importado em", value: formatDateTime(importedAt) });
   if (shift.sourceFileName) {
@@ -426,16 +428,12 @@ function OriginSection({ shift, importedAt }: { shift: PaymentShiftRow; imported
       {extras.length > 0 && (
         <>
           <div className="sa-section-label" style={{ marginTop: 14 }}>
-            Colunas não mapeadas
+            Outras colunas da planilha
           </div>
-          <div className="sa-details">
-            {extras.map(([key, value]) => (
-              <div key={key} className="sa-detail-row">
-                <span className="muted">{/^[A-Z]+$/i.test(key) ? `Coluna ${key}` : key}</span>
-                <span>{value}</span>
-              </div>
-            ))}
+          <div className="sa-details xcol-details">
+            <ExtraColumnsList entries={extras} />
           </div>
+          <p className="xcol-help">O template não usa estas colunas. Elas ficam guardadas só para consulta e não entram no valor nem no status.</p>
         </>
       )}
     </div>

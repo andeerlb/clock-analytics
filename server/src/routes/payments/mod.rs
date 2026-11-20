@@ -52,9 +52,10 @@ pub(crate) fn bool_field(row: &mut Row, key: &str) {
     row.insert(key.to_owned(), Value::Bool(truthy));
 }
 
-/// `parsePaymentShiftRow`: `extraData` parsed, `editedManually` as a boolean.
+/// `parsePaymentShiftRow`: `extraData`/`extraColumns` parsed, `editedManually` as a boolean.
 pub(crate) fn parse_shift_row(mut row: Row) -> ApiResult<Value> {
     parse_json_field(&mut row, "extraData")?;
+    parse_json_field(&mut row, "extraColumns")?;
     bool_field(&mut row, "editedManually");
     Ok(Value::Object(row))
 }
@@ -104,7 +105,10 @@ pub(crate) const PAYMENT_SHIFT_SELECT_COLUMNS: &str = "
   ps.previous_shift_id AS previousShiftId, ps.extra_data AS extraData,
   ps.edited_manually AS editedManually,
   ps.source_row_number AS sourceRowNumber, ps.source_sheet_name AS sourceSheetName,
-  sf.file_name AS sourceFileName, sf.source_url AS sourceUrl
+  sf.file_name AS sourceFileName, sf.source_url AS sourceUrl,
+  (SELECT json_group_object(sfc.column_letter, json_object('header', sfc.header, 'kind', sfc.kind))
+     FROM source_file_columns sfc
+     WHERE sfc.source_file_id = ps.source_file_id AND sfc.sheet_name = IFNULL(ps.source_sheet_name, '')) AS extraColumns
 ";
 
 pub(crate) const PAYMENT_SHIFT_FROM_CLAUSE: &str = "

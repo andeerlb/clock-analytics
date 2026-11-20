@@ -17,6 +17,8 @@ import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
 import Avatar from "../components/Avatar";
 import Drawer from "../components/Drawer";
 import ColumnPicker from "../components/ColumnPicker";
+import ExtraColumnsList from "../components/ExtraColumnsList";
+import { extraColumnEntries } from "../lib/extraColumns";
 import PageHeader from "../components/PageHeader";
 import PaymentExportDrawer from "../components/PaymentExportDrawer";
 import PaymentsExportMenu from "../components/PaymentsExportMenu";
@@ -160,8 +162,8 @@ const ShiftRow = memo(function ShiftRow({
   visibleColumns: Set<string>;
   /** What the last automatic verification found different for this shift (if anything) — see `listLatestFieldDiffsForShifts`. */
   changes: ShiftFieldDiffRow[];
-  /** Stable across renders (see `handleOpenRow`), so the memo holds. */
-  onOpen: (shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) => void;
+  /** Stable across renders (see `handleOpenRow`), so the memo holds. `tab` opens the panel on that tab instead of the current one. */
+  onOpen: (shift: PaymentShiftRow, companyId: number, groupRef: GroupRef, tab?: ShiftPanelTab) => void;
   /** This row's turno is the one open in the panel (or was, last) — kept highlighted. */
   active: boolean;
 }) {
@@ -175,13 +177,13 @@ const ShiftRow = memo(function ShiftRow({
   const isBlocked = changes.some((c) => !c.applied);
   const hasApplied = changes.some((c) => c.applied);
   const col = (id: string) => visibleColumns.has(id);
+  const groupRef: GroupRef =
+    groupEmployeeId !== undefined && groupCompetencia !== undefined ? { employeeId: groupEmployeeId, competencia: groupCompetencia } : null;
 
   return (
     <tr
       className={active ? "row-active payments-row-clickable" : "payments-row-clickable"}
-      onClick={() =>
-        onOpen(s, companyId, groupEmployeeId !== undefined && groupCompetencia !== undefined ? { employeeId: groupEmployeeId, competencia: groupCompetencia } : null)
-      }
+      onClick={() => onOpen(s, companyId, groupRef)}
       style={isBlocked ? { background: "var(--warning-soft)" } : hasApplied ? { background: "var(--accent-soft)" } : undefined}
     >
       {showIdentity && col("colaborador") && (
@@ -216,7 +218,7 @@ const ShiftRow = memo(function ShiftRow({
       )}
       {col("extras") && (
         <td data-col="extras">
-          <ExtrasCell extras={s.extraData} />
+          <ExtrasCell shift={s} onOpen={() => onOpen(s, companyId, groupRef, "data")} />
         </td>
       )}
     </tr>
@@ -227,23 +229,40 @@ const ShiftRow = memo(function ShiftRow({
  * The "Extras" column: how many of the file's columns the template left
  * unmapped on this turno, with an icon; hovering (or focusing) it lists
  * them. Empty when there's nothing extra. The full list is also in the
- * turno's panel (Dados → Colunas não mapeadas).
+ * turno's panel (Dados → Colunas não mapeadas), which clicking it opens.
  */
-function ExtrasCell({ extras }: { extras: Record<string, string> | null }) {
+function ExtrasCell({ shift, onOpen }: { shift: PaymentShiftRow; onOpen: () => void }) {
   // The card is portaled and fixed-positioned: the table's cells and
   // scroll area clip anything that overflows them.
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
-  const entries = extras ? Object.entries(extras).sort(([a], [b]) => a.length - b.length || a.localeCompare(b)) : [];
+  const entries = extraColumnEntries(shift.extraData, shift.extraColumns);
   if (entries.length === 0) return null;
-  const label = (key: string) => (/^[A-Z]+$/i.test(key) ? `Coluna ${key}` : key);
+  const origin = [shift.sourceSheetName && `Aba ${shift.sourceSheetName}`, shift.sourceRowNumber !== null && `linha ${shift.sourceRowNumber}`]
+    .filter(Boolean)
+    .join(" · ");
   const show = (e: { currentTarget: HTMLElement }) => setAnchor(e.currentTarget.getBoundingClientRect());
   const hide = () => setAnchor(null);
   const below = anchor ? anchor.bottom + 220 < window.innerHeight : true;
   return (
     <span
       className="extras-cell"
+      role="button"
       tabIndex={0}
-      aria-label={`${entries.length} ${entries.length === 1 ? "coluna não mapeada" : "colunas não mapeadas"}`}
+      onClick={(e) => {
+        // The row's own click would open the panel on whatever tab it was on.
+        e.stopPropagation();
+        hide();
+        onOpen();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          e.stopPropagation();
+          hide();
+          onOpen();
+        }
+      }}
+      aria-label={`${entries.length} ${entries.length === 1 ? "coluna não mapeada" : "colunas não mapeadas"} — abrir em Dados`}
       onMouseEnter={show}
       onMouseLeave={hide}
       onFocus={show}
@@ -261,13 +280,14 @@ function ExtrasCell({ extras }: { extras: Record<string, string> | null }) {
               ...(below ? { top: anchor.bottom + 6 } : { bottom: window.innerHeight - anchor.top + 6 }),
             }}
           >
-            <span className="extras-card-title">Colunas não mapeadas</span>
-            {entries.map(([key, value]) => (
-              <span key={key} className="extras-card-row">
-                <span>{label(key)}</span>
-                <span>{value}</span>
+            <span className="extras-card-head">
+              <span className="extras-card-title">Outras colunas da planilha</span>
+              <span className="extras-card-sub">
+                {entries.length === 1 ? "1 coluna que o template não usa" : `${entries.length} colunas que o template não usa`} · só para consulta
               </span>
-            ))}
+            </span>
+            <ExtraColumnsList entries={entries} />
+            {origin && <span className="extras-card-foot">{origin}</span>}
           </span>,
           document.body,
         )}
@@ -877,8 +897,9 @@ export default function PaymentsPage() {
     return (shift.status === "pendente" || shift.status === "erro") && !(shiftDiffs.get(shift.id) ?? []).some((c) => !c.applied);
   }
 
-  function openShiftPanel(shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) {
+  function openShiftPanel(shift: PaymentShiftRow, companyId: number, groupRef: GroupRef, tab?: ShiftPanelTab) {
     setActionError(null);
+    if (tab) setPanelTab(tab);
     setActiveShiftId(shift.id);
     setOpenShift({ shift, companyId, groupRef });
   }
@@ -887,8 +908,8 @@ export default function PaymentsPage() {
   // don't all re-render whenever the page does.
   const openShiftPanelRef = useRef(openShiftPanel);
   openShiftPanelRef.current = openShiftPanel;
-  const handleOpenRow = useCallback((shift: PaymentShiftRow, companyId: number, groupRef: GroupRef) => {
-    openShiftPanelRef.current(shift, companyId, groupRef);
+  const handleOpenRow = useCallback((shift: PaymentShiftRow, companyId: number, groupRef: GroupRef, tab?: ShiftPanelTab) => {
+    openShiftPanelRef.current(shift, companyId, groupRef, tab);
   }, []);
 
   function closePanelIfShowing(shiftId: number) {

@@ -21,6 +21,7 @@ import ImportHistoryDrawer from "../components/ImportHistoryDrawer";
 import EmployeePicker from "../components/EmployeePicker";
 import { periodPresets } from "../components/LibraryFiltersPanel";
 import OptionPicker from "../components/OptionPicker";
+import { buildSourceColumns } from "../lib/extraColumns";
 import PageHeader from "../components/PageHeader";
 import Pagination from "../components/Pagination";
 import PeriodPicker, { type PeriodPreset } from "../components/PeriodPicker";
@@ -201,6 +202,8 @@ interface PaymentPreviewRow {
   paymentStatus: PaymentShiftStatus;
   /** Every non-blank column the template left unmapped on this row — kept for history/audit instead of discarded. */
   extraFields: Record<string, string>;
+  /** Which `extraFields` cells are Excel date/time cells — see `buildSourceColumns`. */
+  extraKinds: Record<string, string>;
   category: RowCategory;
   /** Set alongside `isDuplicate`/`category === "duplicate"` — the current payment_shifts row this one matches (see `findDuplicatePaymentShifts`), linked via `previousShiftId` if reprocessed. `null` for every other category. */
   matchedShiftId: number | null;
@@ -988,6 +991,7 @@ export default function ImportPaymentsPage() {
               workDateRaw,
               paymentStatus: resolvePaymentStatus(selectedTemplate.statusRules, fieldsWithSheet) ?? "pendente",
               extraFields: applied_row.extraFields,
+              extraKinds: applied_row.extraKinds ?? {},
               // Filled in below, once `findDuplicatePaymentShifts` has actually run against the batch.
               matchedShiftId: null,
               matchedEditedManually: false,
@@ -1703,7 +1707,13 @@ export default function ImportPaymentsPage() {
         });
         savedFileHashes.add(fileHash);
       }
-      await savePaymentShifts(shiftInputs, savedFileHashes);
+      // What each unmapped column is (header, date/time kind), per file+aba —
+      // only for files whose shifts are actually being saved.
+      const sourceColumns = fileResults.flatMap((result) => {
+        const id = sourceFileIdByHash.get(result.fileHash);
+        return id !== undefined && savedFileHashes.has(result.fileHash) ? buildSourceColumns(id, result.rows) : [];
+      });
+      await savePaymentShifts(shiftInputs, savedFileHashes, sourceColumns);
 
       // A URL not yet tracked becomes tracked — with its first reimport
       // config, from what this save just used — only if "Rastrear
