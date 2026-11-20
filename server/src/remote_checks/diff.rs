@@ -433,7 +433,8 @@ pub async fn compute_reimport_diff(state: &AppState, config: &ReimportConfig, do
     for (i, c) in deduped.iter().enumerate() {
         let ignored_here = ignored_by_sheet.get(c.sheet_name.as_deref().unwrap_or(""));
         let mut current: Option<CurrentShift> = None;
-        // Only for the position fallback: the row's own identity changed.
+        // Only for the position fallback (same colaborador, same day, not
+        // pago — see `PositionArgs`): the row's horário/local/função changed.
         let mut report_identity_field_changes = false;
 
         if let Some(&shift_id) = matches.get(&i) {
@@ -444,7 +445,13 @@ pub async fn compute_reimport_diff(state: &AppState, config: &ReimportConfig, do
             let positional = call(
                 state,
                 payments::import::find_payment_shift_by_position,
-                json!({ "sourceUrl": source_url, "sheetName": c.sheet_name, "rowNumber": c.row_number }),
+                json!({
+                    "sourceUrl": source_url,
+                    "sheetName": c.sheet_name,
+                    "rowNumber": c.row_number,
+                    "employeeId": c.employee_id,
+                    "workDate": c.work_date,
+                }),
             )
             .await?;
             if let Some(shift_id) = int(&positional, "shiftId") {

@@ -647,3 +647,33 @@ async fn tracking_a_url_creates_its_first_config() {
     .unwrap();
     assert_eq!(row, ("fixed".into(), 5, 0, 0, 1));
 }
+
+// --- findPaymentShiftByPosition -------------------------------------------------
+
+async fn by_position(state: &AppState, extra: Value) -> Value {
+    let mut args = json!({ "sourceUrl": "https://x/p.xlsx", "sheetName": "Out", "rowNumber": 2 });
+    args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    let args: import::PositionArgs = serde_json::from_value(args).unwrap();
+    import::find_payment_shift_by_position(axum::extract::State(state.clone()), axum::Json(args)).await.unwrap().0
+}
+
+#[tokio::test]
+async fn position_only_matches_the_same_colaborador_on_the_same_day_and_never_a_paid_turno() {
+    let state = AppState::for_tests().await;
+    let s = seed(&state).await;
+    save(&state, vec![shift_input(&s, None)], vec![]).await.unwrap();
+    let id = only_shift_id(&state).await;
+    let other = exec(&state, "INSERT INTO employees (name, cpf) VALUES ('BIA', '98765432100')").await;
+
+    // Describing what used to be on the line: no filter.
+    assert_eq!(by_position(&state, json!({})).await["shiftId"], json!(id));
+    // Same colaborador, same day (horário corrected on the line): still the same turno.
+    assert_eq!(by_position(&state, json!({ "employeeId": s.employee, "workDate": "2026-10-05" })).await["shiftId"], json!(id));
+    // The line now holds another day, or someone else: not this turno.
+    assert!(by_position(&state, json!({ "employeeId": s.employee, "workDate": "2026-10-09" })).await.is_null());
+    assert!(by_position(&state, json!({ "employeeId": other, "workDate": "2026-10-05" })).await.is_null());
+
+    // A paid turno is never retargeted by position.
+    shifts::mark_paid_impl(&state, id, 10.0).await.unwrap();
+    assert!(by_position(&state, json!({ "employeeId": s.employee, "workDate": "2026-10-05" })).await.is_null());
+}

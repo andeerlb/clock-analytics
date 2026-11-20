@@ -169,9 +169,31 @@ pub(crate) struct PositionArgs {
     source_url: String,
     sheet_name: Option<String>,
     row_number: f64,
+    /// The colaborador and date the file's row now has. When given, the
+    /// position only counts for that same colaborador on that same day, and
+    /// never for a `pago` turno: a row number isn't a stable identity (rows
+    /// get inserted/removed above it, or a sheet is reused week after week),
+    /// so without this a different turno that merely sits on the same line
+    /// would be "updated" into this one — even someone else's, even paid.
+    /// Omitted only to *describe* what used to be on a line (a message).
+    #[serde(default)]
+    employee_id: Option<i64>,
+    #[serde(default)]
+    work_date: Option<String>,
 }
 
 pub(crate) async fn find_payment_shift_by_position(State(state): State<AppState>, Json(args): Json<PositionArgs>) -> ApiResult<Json<Value>> {
+    let mut params = params![args.source_url, args.sheet_name, args.row_number];
+    let mut same_turno = String::new();
+    if let Some(employee_id) = args.employee_id {
+        params.push(json!(employee_id));
+        params.push(json!(args.work_date));
+        same_turno = format!(
+            "AND ps.employee_id = ${} AND ps.work_date = ${} AND ps.status <> 'pago'",
+            params.len() - 1,
+            params.len()
+        );
+    }
     let row = sql::select_one(
         &state.db,
         &format!(
@@ -186,11 +208,12 @@ pub(crate) async fn find_payment_shift_by_position(State(state): State<AppState>
      WHERE sf.source_url = $1
        AND IFNULL(ps.source_sheet_name, '') = IFNULL($2, '')
        AND ps.source_row_number = $3
+       {same_turno}
        AND {STRUCTURAL_HEAD_CONDITION}
      ORDER BY ps.id DESC
      LIMIT 1"
         ),
-        &params![args.source_url, args.sheet_name, args.row_number],
+        &params,
     )
     .await?;
     Ok(Json(match row {
