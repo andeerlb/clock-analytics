@@ -1555,8 +1555,10 @@ export async function findPaymentShiftByPosition(
   sourceUrl: string,
   sheetName: string | null,
   rowNumber: number,
+  /** Only the same colaborador on the same day, never a pago turno — see the server's `PositionArgs`. */
+  sameTurno: { employeeId: number; workDate: string },
 ): Promise<PositionMatchedShift | null> {
-  return rpc<PositionMatchedShift | null>("findPaymentShiftByPosition", { sourceUrl, sheetName, rowNumber });
+  return rpc<PositionMatchedShift | null>("findPaymentShiftByPosition", { sourceUrl, sheetName, rowNumber, ...sameTurno });
 }
 
 export interface SourceUrlHeadShift {

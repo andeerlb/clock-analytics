@@ -1145,8 +1145,11 @@ export default function ImportPaymentsPage() {
           const url = urlSourceByPath.get(result.path)?.url;
           if (!url) continue;
           for (const r of result.rows) {
-            if (r.category !== "valid" || !r.workDate) continue;
-            const positional = await findPaymentShiftByPosition(url, r.sheetName, r.rowNumber);
+            if (r.category !== "valid" || !r.workDate || !r.employee) continue;
+            const positional = await findPaymentShiftByPosition(url, r.sheetName, r.rowNumber, {
+              employeeId: r.employee.id,
+              workDate: r.workDate,
+            });
             if (positional) accountedForIds.add(positional.shiftId);
           }
         }
