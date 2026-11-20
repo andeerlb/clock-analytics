@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronRight, ExternalLink, FileSpreadsheet, Plus, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { READ_ONLY_TITLE, useReadOnly } from "../components/AreaRoute";
 import ChangeCards, { authorKey, NO_PAYMENT_EDIT_TITLE, savedWhen, UNNAMED_AUTHOR } from "../components/ChangeCards";
 import ConfirmModal from "../components/ConfirmModal";
@@ -261,6 +261,18 @@ export default function RemoteUpdatesPage() {
     setDaysEditing(false);
     setSheet(next);
   }
+
+  // Deep link (e.g. a rule clicked on Templates de pagamento): opens that
+  // rule's sheet once the configs are loaded, then clears the state so a
+  // reload or back doesn't reopen it.
+  const location = useLocation();
+  useEffect(() => {
+    const configId = (location.state as { openConfigId?: number } | null)?.openConfigId;
+    if (configId === undefined || !reimportConfigs.some((c) => c.id === configId)) return;
+    navigate(location.pathname, { replace: true, state: null });
+    openSheet({ kind: "rule", configId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state, reimportConfigs]);
 
   const configsByUrl = useMemo(() => {
     const map = new Map<string, ReimportConfig[]>();
