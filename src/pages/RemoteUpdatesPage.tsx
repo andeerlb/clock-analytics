@@ -186,7 +186,7 @@ type Sheet =
   | { kind: "rule"; configId: number }
   | { kind: "file"; sourceUrl: string }
   | { kind: "new-rule"; sourceUrl: string }
-  | { kind: "review"; configId: number; mode: "pending" | "applied" }
+  | { kind: "review"; configId: number; mode: "pending" | "applied"; fromRule?: boolean }
   | { kind: "check"; configId: number; entry: UrlCheckLogEntry };
 
 /**
@@ -658,8 +658,26 @@ export default function RemoteUpdatesPage() {
     const file = fileOf(c.sourceUrl);
     const { error } = rowsFor(c);
     const errorMessage = error?.message || (file?.lastResult === "error" ? file.lastErrorMessage : null);
+    const pendingCount = countItems(rowsFor(c).pending);
     return (
       <div className="rv-sheet">
+        {pendingCount > 0 && !c.checkDisabled && (
+          <div className="rv-banner rv-banner-warn rv-banner-row">
+            <span className="rv-text">
+              <strong>
+                {pendingCount} {pendingCount === 1 ? "mudança para revisar" : "mudanças para revisar"}
+              </strong>
+              <span>encontradas {ago(c.lastCheckedAt, now)}</span>
+            </span>
+            <button
+              type="button"
+              className="settings-button settings-button-primary"
+              onClick={() => openSheet({ kind: "review", configId: c.id, mode: "pending", fromRule: true })}
+            >
+              Revisar <ChevronRight size={14} />
+            </button>
+          </div>
+        )}
         {errorMessage && (
           <div className="rv-banner rv-banner-bad">
             <strong>Não deu pra conferir a planilha</strong>
@@ -1009,27 +1027,25 @@ export default function RemoteUpdatesPage() {
       Abrir link <ExternalLink size={11} />
     </button>
   );
-  /** "Regra: Modelo Atlas · mês atual · ver as outras regras" when the spreadsheet has several rules. */
-  const ruleSub = (c: ReimportConfig, extra?: string) => {
-    const siblings = configsByUrl.get(c.sourceUrl) ?? [];
-    if (siblings.length < 2) return extra ? <>{extra}</> : linkTo(c.sourceUrl);
-    return (
-      <>
-        Regra: {ruleName(c)} · {periodText(settingsOf(c))}
-        {extra ? ` · ${extra}` : ""} ·{" "}
-        <button type="button" className="rv-link" onClick={() => openSheet({ kind: "file", sourceUrl: c.sourceUrl })}>
-          ver as outras regras
-        </button>
-      </>
-    );
-  };
 
   if (sheet?.kind === "rule" && sheetConfig) {
     const file = fileOf(sheetConfig.sourceUrl);
     const siblings = configsByUrl.get(sheetConfig.sourceUrl) ?? [];
-    sheetTitle = file?.fileName ?? "Planilha";
-    sheetFileName = sheetTitle;
-    sheetSub = ruleSub(sheetConfig);
+    // The rule first, its spreadsheet second: one file can have several rules.
+    sheetTitle = ruleName(sheetConfig);
+    sheetFileName = file?.fileName ?? "Planilha";
+    sheetSub = (
+      <>
+        {file?.fileName ?? "Planilha"} · {periodText(settingsOf(sheetConfig))} ·{" "}
+        {siblings.length > 1 ? (
+          <button type="button" className="rv-link" onClick={() => openSheet({ kind: "file", sourceUrl: sheetConfig.sourceUrl })}>
+            ver as outras regras
+          </button>
+        ) : (
+          linkTo(sheetConfig.sourceUrl)
+        )}
+      </>
+    );
     sheetBody = renderRuleSheet(sheetConfig);
     sheetFooter = (
       <>
@@ -1093,7 +1109,17 @@ export default function RemoteUpdatesPage() {
           ? `${n} ${n === 1 ? "mudança para revisar" : "mudanças para revisar"}`
           : "Tudo revisado";
     const siblings = configsByUrl.get(reviewConfig.sourceUrl) ?? [];
-    sheetSub = `${file?.fileName ?? ""}${siblings.length > 1 ? ` · ${ruleName(reviewConfig)}` : ""} · encontradas ${ago(reviewConfig.lastCheckedAt, now)}`;
+    const found = `${file?.fileName ?? ""}${siblings.length > 1 ? ` · ${ruleName(reviewConfig)}` : ""} · encontradas ${ago(reviewConfig.lastCheckedAt, now)}`;
+    sheetSub = sheet.fromRule ? (
+      <>
+        <button type="button" className="rv-link" onClick={() => openSheet({ kind: "rule", configId: reviewConfig.id })}>
+          ← Voltar para a regra
+        </button>{" "}
+        · {found}
+      </>
+    ) : (
+      found
+    );
     sheetBody = renderReview(reviewConfig, sheet.mode);
     const fieldShifts = new Set(pending.filter((r) => r.changeKind === "field" && r.matchedShiftId !== null).map((r) => r.matchedShiftId)).size;
     sheetFooter =
