@@ -51,6 +51,16 @@ export function periodPresets(): PeriodPreset[] {
   ];
 }
 
+/** "Hoje" and "Ontem" — single-day shortcuts that screens put before `periodPresets()`. */
+export function dayPresets(): PeriodPreset[] {
+  const today = toIso(todayUtc());
+  const yesterday = addDaysIso(today, -1);
+  return [
+    { label: "Hoje", start: today, end: today },
+    { label: "Ontem", start: yesterday, end: yesterday },
+  ];
+}
+
 export function periodText(start: string, end: string): string {
   if (!start && !end) return "Todo o período";
   if (start && end) return formatPeriodShort(start, end);

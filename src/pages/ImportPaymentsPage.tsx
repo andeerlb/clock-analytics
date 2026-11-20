@@ -19,8 +19,7 @@ import Avatar from "../components/Avatar";
 import ConfirmModal from "../components/ConfirmModal";
 import ImportHistoryDrawer from "../components/ImportHistoryDrawer";
 import EmployeePicker from "../components/EmployeePicker";
-import { periodPresets } from "../components/LibraryFiltersPanel";
-import { addDaysIso, toIso, todayUtc } from "../lib/calendar";
+import { dayPresets, periodPresets } from "../components/LibraryFiltersPanel";
 import OptionPicker from "../components/OptionPicker";
 import { buildSourceColumns } from "../lib/extraColumns";
 import PageHeader from "../components/PageHeader";
@@ -122,9 +121,7 @@ const IMPORT_MAX_DAYS = 31;
 
 /** The import's Período is required and at most a month, so the shortcuts lead with single days (Hoje, Ontem); the longer ones from Pagamentos are dropped by the picker's `maxDays`. */
 function importPeriodPresets(): PeriodPreset[] {
-  const today = toIso(todayUtc());
-  const yesterday = addDaysIso(today, -1);
-  return [{ label: "Hoje", start: today, end: today }, { label: "Ontem", start: yesterday, end: yesterday }, ...periodPresets()];
+  return [...dayPresets(), ...periodPresets()];
 }
 
 /** Starts on "Mês atual" — there's no "whole file" import anymore. */
