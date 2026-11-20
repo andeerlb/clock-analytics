@@ -1,5 +1,5 @@
 import { parseDateWithFormat, parseScheduleToMinutes } from "./format";
-import type { EmployeeTargetField, IdentifierField, PaymentTargetField } from "./types";
+import type { EmployeeTargetField, IdentifierField, IgnoredColumnField, PaymentTargetField } from "./types";
 
 /**
  * Helpers behind the payment template's "Onde está cada informação?" flow:
@@ -171,7 +171,7 @@ export interface SheetCheck {
  * someone have no readable date (or, past that, no readable time range) —
  * the usual sign that a shared answer doesn't fit this sheet.
  */
-export function checkSheet(rows: string[][], mapping: Record<number, PaymentTargetField>, dateFormat: string): SheetCheck {
+export function checkSheet(rows: string[][], mapping: Record<number, PaymentTargetField | IgnoredColumnField>, dateFormat: string): SheetCheck {
   const colOf = (field: PaymentTargetField) => {
     const entry = Object.entries(mapping).find(([, f]) => f === field);
     return entry ? Number(entry[0]) : null;
@@ -256,7 +256,7 @@ export interface EmployeeSheetCheck {
 }
 
 /** Reads a sheet's rows with its answers: how many people it has, and whether its CPF column holds CPFs. */
-export function checkEmployeeSheet(rows: string[][], mapping: Record<number, EmployeeTargetField>): EmployeeSheetCheck {
+export function checkEmployeeSheet(rows: string[][], mapping: Record<number, EmployeeTargetField | IgnoredColumnField>): EmployeeSheetCheck {
   const colOf = (field: EmployeeTargetField) => {
     const entry = Object.entries(mapping).find(([, f]) => f === field);
     return entry ? Number(entry[0]) : null;

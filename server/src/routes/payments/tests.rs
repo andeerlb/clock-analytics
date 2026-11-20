@@ -4,7 +4,7 @@
 
 use serde_json::{json, Value};
 
-use super::import::{self, DuplicateCandidate, PaymentShiftInput, SaveShiftsArgs, SHIFT_ALREADY_SUPERSEDED_ERROR};
+use super::import::{self, DuplicateCandidate, PaymentShiftInput, SaveShiftsArgs, SourceColumnInput, SHIFT_ALREADY_SUPERSEDED_ERROR};
 use super::shifts::{self, AutoSyncArgs, AutoSyncFields, EditFields, PagedQuery};
 use super::templates::{self, ConfigTable, ConfigTemplateInput, PaymentTemplateInput};
 use super::{parse_time_to_minutes, ShiftQuery};
@@ -58,7 +58,7 @@ fn shift_input(s: &Seed, previous: Option<i64>) -> PaymentShiftInput {
 }
 
 async fn save(state: &AppState, rows: Vec<PaymentShiftInput>, hashes: Vec<&str>) -> Result<(), ApiError> {
-    import::save_shifts_impl(state, &SaveShiftsArgs { rows, saved_file_hashes: hashes.into_iter().map(String::from).collect() }).await
+    import::save_shifts_impl(state, &SaveShiftsArgs { rows, saved_file_hashes: hashes.into_iter().map(String::from).collect(), source_columns: vec![] }).await
 }
 
 async fn only_shift_id(state: &AppState) -> i64 {
@@ -94,6 +94,56 @@ async fn save_inserts_shifts_and_marks_the_file_saved_in_one_go() {
     let stored: String = sqlx::query_scalar("SELECT extra_data FROM payment_shifts").fetch_one(&state.db).await.unwrap();
     assert_eq!(stored, r#"{"H":"obs","A":"1"}"#, "key order kept, as JSON.stringify wrote it");
     assert_eq!(count(&state, "SELECT COUNT(*) FROM source_files WHERE saved_at IS NOT NULL").await, 1);
+}
+
+#[tokio::test]
+async fn extra_columns_come_from_the_file_and_aba_and_survive_new_versions() {
+    let state = AppState::for_tests().await;
+    let s = seed(&state).await;
+    let column = |letter: &str, header: Option<&str>, kind: Option<&str>| SourceColumnInput {
+        source_file_id: s.source_file,
+        sheet_name: Some("Out".into()),
+        column_letter: letter.into(),
+        header: header.map(String::from),
+        kind: kind.map(String::from),
+    };
+    let args = SaveShiftsArgs {
+        rows: vec![shift_input(&s, None)],
+        saved_file_hashes: vec![],
+        source_columns: vec![column("H", Some("Entrada real"), Some("time")), column("A", None, None)],
+    };
+    import::save_shifts_impl(&state, &args).await.unwrap();
+    let original = only_shift_id(&state).await;
+    let expected = json!({ "H": { "header": "Entrada real", "kind": "time" }, "A": { "header": null, "kind": null } });
+    assert_eq!(shifts::get_shift_impl(&state, original).await.unwrap()["extraColumns"], expected);
+
+    // A new version (paid) keeps pointing at the same file+aba.
+    let paid = shifts::mark_paid_impl(&state, original, 10.0).await.unwrap();
+    assert_eq!(shifts::get_shift_impl(&state, paid).await.unwrap()["extraColumns"], expected);
+
+    // Saving the same file again updates instead of duplicating.
+    let again = SaveShiftsArgs { rows: vec![], saved_file_hashes: vec![], source_columns: vec![column("H", Some("Entrada"), Some("time"))] };
+    import::save_shifts_impl(&state, &again).await.unwrap();
+    assert_eq!(count(&state, "SELECT COUNT(*) FROM source_file_columns").await, 2);
+    assert_eq!(shifts::get_shift_impl(&state, paid).await.unwrap()["extraColumns"]["H"]["header"], "Entrada");
+}
+
+#[tokio::test]
+async fn a_turno_knows_which_columns_its_template_ignores_for_its_aba() {
+    let state = AppState::for_tests().await;
+    let s = seed(&state).await;
+    let template = exec(&state, "INSERT INTO payment_templates (name, file_kind) VALUES ('T', 'xlsx')").await;
+    let out = exec(&state, &format!("INSERT INTO payment_template_groups (template_id) VALUES ({template})")).await;
+    exec(&state, &format!("INSERT INTO payment_template_sheets (group_id, sheet_name) VALUES ({out}, 'Out')")).await;
+    exec(&state, &format!("INSERT INTO payment_template_fields (group_id, column_letter, target_field) VALUES ({out}, 'E', 'ignorar'), ({out}, 'A', 'nome')")).await;
+    // Another aba's group ignores something else: not this turno's business.
+    let other = exec(&state, &format!("INSERT INTO payment_template_groups (template_id) VALUES ({template})")).await;
+    exec(&state, &format!("INSERT INTO payment_template_sheets (group_id, sheet_name) VALUES ({other}, 'Nov')")).await;
+    exec(&state, &format!("INSERT INTO payment_template_fields (group_id, column_letter, target_field) VALUES ({other}, 'G', 'ignorar')")).await;
+
+    save(&state, vec![PaymentShiftInput { template_id: Some(template), ..shift_input(&s, None) }], vec![]).await.unwrap();
+    let shift = shifts::get_shift_impl(&state, only_shift_id(&state).await).await.unwrap();
+    assert_eq!(shift["ignoredColumns"], json!(["E"]));
 }
 
 #[tokio::test]
@@ -176,6 +226,35 @@ async fn duplicates_follow_the_chain_to_the_head_and_flag_identity_changes() {
     shifts::delete_shift_impl(&state, edited).await.unwrap();
     let found = import::find_duplicates_impl(&state, &[candidate(&s, "Portaria")]).await.unwrap();
     assert!(found[0].1.deleted, "a soft-deleted chain is still found, flagged");
+}
+
+#[tokio::test]
+async fn duplicates_match_the_same_named_role_of_another_company_and_report_the_route() {
+    let state = AppState::for_tests().await;
+    let s = seed(&state).await;
+    save(&state, vec![shift_input(&s, None)], vec![]).await.unwrap();
+    let original = only_shift_id(&state).await;
+
+    // A corrected routing rule now sends the row to another empresa, whose own
+    // função is named differently but shares the "VIG" apelido.
+    let other_company = exec(&state, "INSERT INTO companies (name, cnpj) VALUES ('Beta', '55444333000122')").await;
+    let other_role = exec(&state, &format!("INSERT INTO roles (company_id, name) VALUES ({other_company}, 'vig')")).await;
+    let unrelated_role = exec(&state, &format!("INSERT INTO roles (company_id, name) VALUES ({other_company}, 'Porteiro')")).await;
+
+    let moved = DuplicateCandidate { role_id: Some(other_role as f64), ..candidate(&s, "Portaria") };
+    let found = import::find_duplicates_impl(&state, &[moved]).await.unwrap();
+    assert_eq!(found.len(), 1, "same função by apelido is still the same turno");
+    let m = &found[0].1;
+    assert_eq!(m.shift_id, original);
+    assert!(!m.identity_changed, "a função equivalent by name is not a manual identity change");
+    assert_eq!(m.company_id, Some(s.company));
+    assert_eq!(m.company_name.as_deref(), Some("Acme"));
+    assert_eq!(m.client_id, Some(s.client));
+    assert_eq!(m.client_name.as_deref(), Some("Cliente"));
+    assert_eq!(m.role_name.as_deref(), Some("Vigilante"));
+
+    let other = DuplicateCandidate { role_id: Some(unrelated_role as f64), ..candidate(&s, "Portaria") };
+    assert!(import::find_duplicates_impl(&state, &[other]).await.unwrap().is_empty(), "a different função is a different turno");
 }
 
 // --- transitions --------------------------------------------------------------------

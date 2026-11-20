@@ -2583,6 +2583,42 @@ button.preview-chip[aria-pressed="true"] {
   background: var(--danger);
 }
 
+.row-state-route::before {
+  background: #c4b5fd;
+}
+
+/* "Roteamento mudou" rows: the saved value struck through, the new one under it. */
+.route-change {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.25;
+}
+
+.route-change-from {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-decoration: line-through;
+}
+
+.route-change-to {
+  color: #c4b5fd;
+  font-weight: 600;
+}
+
+.route-change-to::before {
+  content: "→ ";
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.route-change-note {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
 .table-card .table-scroll {
   overflow-x: auto;
 }
@@ -10705,23 +10741,31 @@ span.tfile-bar {
   font-size: 0.8rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  cursor: default;
+  cursor: pointer;
+  /* A bigger hover target than the icon + digit alone; the negative margin
+     keeps the column's text where it was. */
+  padding: 5px 10px;
+  margin: -5px -10px;
+  border-radius: 999px;
+  transition: background-color 0.15s ease;
+}
+
+.extras-cell:hover,
+.extras-cell:focus-visible {
+  background: rgba(147, 197, 253, 0.14);
 }
 
 .extras-cell:focus-visible {
   outline: 2px solid var(--outline);
   outline-offset: 2px;
-  border-radius: 4px;
 }
 
 .extras-card {
   position: fixed;
   z-index: 300;
   display: grid;
-  gap: 4px;
-  width: 280px;
+  width: 320px;
   pointer-events: none;
-  padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--card-bg);
@@ -10732,27 +10776,91 @@ span.tfile-bar {
   white-space: normal;
 }
 
-.extras-card-title {
-  margin-bottom: 2px;
-  color: var(--outline);
-  font-size: 0.7rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.extras-card-row {
+.extras-card-head {
   display: grid;
-  grid-template-columns: 90px minmax(0, 1fr);
-  gap: 8px;
-  font-size: 0.8rem;
+  gap: 2px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border);
 }
 
-.extras-card-row > span:first-child {
+.extras-card-title {
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.extras-card-sub {
+  color: var(--outline);
+  font-size: 0.74rem;
+}
+
+.extras-card .xcol-list {
+  padding: 6px;
+}
+
+.extras-card-foot {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--outline);
+  font-size: 0.74rem;
+}
+
+/* "Outras colunas da planilha" (ExtraColumnsList): letter badge, header, value. */
+.xcol-list {
+  display: grid;
+  gap: 2px;
+}
+
+.xcol-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  font-size: 0.82rem;
+}
+
+.xcol-letter {
+  padding: 2px 0;
+  border-radius: 5px;
+  background: var(--surface-container-high, rgba(255, 255, 255, 0.06));
+  color: var(--text-muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.7rem;
+  text-align: center;
+}
+
+.xcol-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.xcol-name-unknown {
   color: var(--outline);
 }
 
-.extras-card-row > span:last-child {
+.xcol-value {
+  max-width: 170px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
   overflow-wrap: anywhere;
+}
+
+.xcol-details {
+  padding: 4px 6px;
+}
+
+.xcol-details .xcol-row + .xcol-row {
+  border-top: 1px solid #26262a;
+}
+
+.xcol-help {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
 }
 
 /* ---------- Atividade ---------- */

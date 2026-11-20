@@ -142,6 +142,7 @@ fn field_label(field: &str) -> &str {
         "matricula" => "Matrícula",
         "pix" => "PIX",
         "aba" => "Aba",
+        "ignorar" => "Ignorada",
         other => other,
     }
 }

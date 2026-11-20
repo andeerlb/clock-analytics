@@ -409,8 +409,29 @@ pub async fn compute_reimport_diff(state: &AppState, config: &ReimportConfig, do
         applied: false,
     };
 
+    // Columns the template answers "Ignorar", per aba ('' for a csv's one
+    // group): a turno saved before one was ignored still has its value, and
+    // the file no longer brings it — that's not a change worth reporting.
+    let mut ignored_by_sheet: HashMap<String, HashSet<String>> = HashMap::new();
+    for g in &template.groups {
+        let ignored: HashSet<String> = g
+            .field_mappings
+            .iter()
+            .filter(|fm| fm.target_field == crate::domain::spreadsheet::IGNORED_COLUMN_FIELD)
+            .map(|fm| fm.column_letter.clone())
+            .collect();
+        if ignored.is_empty() {
+            continue;
+        }
+        let sheets: Vec<String> = if g.sheet_names.is_empty() { vec![String::new()] } else { g.sheet_names.clone() };
+        for sheet in sheets {
+            ignored_by_sheet.entry(sheet).or_default().extend(ignored.iter().cloned());
+        }
+    }
+
     let mut entries: Vec<DiffEntry> = Vec::new();
     for (i, c) in deduped.iter().enumerate() {
+        let ignored_here = ignored_by_sheet.get(c.sheet_name.as_deref().unwrap_or(""));
         let mut current: Option<CurrentShift> = None;
         // Only for the position fallback: the row's own identity changed.
         let mut report_identity_field_changes = false;
@@ -478,7 +499,7 @@ pub async fn compute_reimport_diff(state: &AppState, config: &ReimportConfig, do
         let mut extra_keys: Vec<&String> = current_extra.keys().collect();
         extra_keys.extend(fresh_extra.keys().filter(|k| !current_extra.contains_key(*k)));
         for key in extra_keys {
-            if PROVENANCE_EXTRA_KEYS.contains(&key.as_str()) {
+            if PROVENANCE_EXTRA_KEYS.contains(&key.as_str()) || ignored_here.is_some_and(|set| set.contains(key)) {
                 continue;
             }
             let old = current_extra.get(key).cloned().unwrap_or(Value::Null);

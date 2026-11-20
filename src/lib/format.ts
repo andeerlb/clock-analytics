@@ -392,6 +392,15 @@ export function columnLetter(index0: number): string {
   return letters;
 }
 
+/** The inverse of `columnLetter`: "A" -> 0, "AA" -> 26; `null` for anything that isn't 1–3 letters. */
+export function columnIndexFromLetter(letters: string): number | null {
+  const l = letters.trim().toUpperCase();
+  if (!/^[A-Z]{1,3}$/.test(l)) return null;
+  let n = 0;
+  for (const ch of l) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+
 /**
  * Normalizes a raw "data" field from an applied payment template into an
  * ISO (YYYY-MM-DD) date, or `null` if it can't be parsed — a row that

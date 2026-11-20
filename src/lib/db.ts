@@ -1,3 +1,4 @@
+import type { SourceColumnInput } from "./extraColumns";
 import { emit } from "./events";
 import { overtimeMinutesForDay, sumIntervalMinutes } from "./analysis";
 import type { PeriodStatusId } from "./periodStatus";
@@ -1457,6 +1458,13 @@ export interface DuplicatePaymentShiftMatch {
    * don't matter once this is true).
    */
   deleted: boolean;
+  /** The matched head's own empresa/cliente — compared with what the template's routing resolves to now ("Roteamento mudou"). `null` on a row saved before those were snapshotted. */
+  companyId: number | null;
+  companyName: string | null;
+  clientId: number | null;
+  clientName: string | null;
+  /** The matched head's função name — differs from the row's when the new route moved it to another empresa (matching compares função by name/apelido, not id). */
+  roleName: string | null;
 }
 
 /**
@@ -1613,8 +1621,12 @@ export interface PaymentShiftInput {
 }
 
 /** Bulk-inserts shifts — `valor` and any further `pago` transition still happen in a later step. Never sets `edited_manually` — that's exclusively for the manual transition functions above, never for anything import-originated. */
-export async function savePaymentShifts(rows: PaymentShiftInput[], savedFileHashes: Iterable<string> = []): Promise<void> {
-  await rpc<void>("savePaymentShifts", { rows, savedFileHashes: Array.from(savedFileHashes) });
+export async function savePaymentShifts(
+  rows: PaymentShiftInput[],
+  savedFileHashes: Iterable<string> = [],
+  sourceColumns: SourceColumnInput[] = [],
+): Promise<void> {
+  await rpc<void>("savePaymentShifts", { rows, savedFileHashes: Array.from(savedFileHashes), sourceColumns });
 }
 
 /**
