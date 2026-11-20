@@ -4972,6 +4972,13 @@ button.side-panel-icon-button:disabled {
   color: #55555e;
 }
 
+.period-day-disabled button,
+.period-day-disabled button:hover {
+  color: #3a3a42;
+  background: transparent;
+  cursor: not-allowed;
+}
+
 .period-day-today button {
   box-shadow: inset 0 0 0 1px #5a5a64;
 }

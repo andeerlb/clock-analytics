@@ -6,7 +6,7 @@ import type { ClientRow, CompanyRow, RoleRow } from "../lib/db";
 import { formatCnpj } from "../lib/format";
 import type { PaymentShiftStatus, ShiftPeriod } from "../lib/types";
 import EmployeeMultiSelectDropdown from "./EmployeeMultiSelectDropdown";
-import { Chip, FieldLabel, namesOrCount, periodPresets, periodText, toggled, useSelectedEmployeeNames } from "./LibraryFiltersPanel";
+import { Chip, FieldLabel, namesOrCount, dayPresets, periodPresets, periodText, toggled, useSelectedEmployeeNames } from "./LibraryFiltersPanel";
 import OptionPicker, { type PickerOption } from "./OptionPicker";
 import PeriodPicker, { type PeriodPreset } from "./PeriodPicker";
 import ScheduleTimePicker, { scheduleTimeSentence } from "./ScheduleTimePicker";
@@ -15,7 +15,7 @@ import SidePanel from "./SidePanel";
 
 /** Pagamentos starts with no period at all, so "Todo o período" leads the shortcuts. */
 function paymentsPeriodPresets(): PeriodPreset[] {
-  return [{ label: "Todo o período", start: "", end: "" }, ...periodPresets()];
+  return [{ label: "Todo o período", start: "", end: "" }, ...dayPresets(), ...periodPresets()];
 }
 
 const STATUS_CHIPS: { id: PaymentShiftStatus; label: string; color: string }[] = [

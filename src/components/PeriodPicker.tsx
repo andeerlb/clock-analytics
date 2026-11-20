@@ -49,6 +49,10 @@ function dayCount(start: string, end: string): number {
   return Math.round((parseIso(end).getTime() - parseIso(start).getTime()) / DAY_MS) + 1;
 }
 
+function shiftIso(iso: string, days: number): string {
+  return toIso(new Date(parseIso(iso).getTime() + days * DAY_MS));
+}
+
 function monthOf(iso: string): Date {
   const d = parseIso(iso);
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
@@ -59,19 +63,25 @@ function monthOf(iso: string): Date {
  * sentence ("Mês atual 1 a 16 de nov.", plus the day count); opened, it
  * grows into a box like the other pickers, with Início/Fim you can type
  * into, the shortcuts and a single month that fits the panel. The filter
- * only changes once both ends are set.
+ * only changes once both ends are set. With `maxDays`, the range can't
+ * be longer than that: while picking the end, days too far from the start
+ * are disabled, a typed end is pulled back to the limit, and shortcuts
+ * longer than it aren't offered.
  */
 export default function PeriodPicker({
   start,
   end,
   onChange,
-  presets,
+  presets: allPresets,
+  maxDays,
 }: {
   start: string;
   end: string;
   onChange: (start: string, end: string) => void;
   presets: PeriodPreset[];
+  maxDays?: number;
 }) {
+  const presets = maxDays ? allPresets.filter((p) => !p.start || !p.end || dayCount(p.start, p.end) <= maxDays) : allPresets;
   const [open, setOpen] = useState(false);
   const [draftStart, setDraftStart] = useState(start);
   const [draftEnd, setDraftEnd] = useState(end);
@@ -119,7 +129,12 @@ export default function PeriodPicker({
   }
 
   function apply(nextStart: string, nextEnd: string) {
-    const [a, b] = nextEnd < nextStart ? [nextEnd, nextStart] : [nextStart, nextEnd];
+    let [a, b] = nextEnd < nextStart ? [nextEnd, nextStart] : [nextStart, nextEnd];
+    // Too long: keep the end that was just set and pull the other one in.
+    if (maxDays && dayCount(a, b) > maxDays) {
+      if (b === nextEnd) a = shiftIso(b, -(maxDays - 1));
+      else b = shiftIso(a, maxDays - 1);
+    }
     setDraftStart(a);
     setDraftEnd(b);
     if (a !== start || b !== end) onChange(a, b);
@@ -301,9 +316,17 @@ export default function PeriodPicker({
               if (iso === rangeLow && (rangeHigh || previewEnd)) classes.push("period-day-start");
               if (iso === rangeHigh) classes.push("period-day-end");
               if (iso === draftStart && !draftEnd && !previewEnd) classes.push("period-day-start", "period-day-end");
+              const tooFar = !!maxDays && editing === "end" && !!draftStart && !draftEnd && Math.abs(dayCount(draftStart, iso) - 1) >= maxDays;
+              if (tooFar) classes.push("period-day-disabled");
               return (
                 <span key={iso} className={classes.join(" ")}>
-                  <button type="button" onClick={() => pickDay(iso)} onMouseEnter={() => setHover(iso)}>
+                  <button
+                    type="button"
+                    disabled={tooFar}
+                    title={tooFar ? `No máximo ${maxDays} dias` : undefined}
+                    onClick={() => pickDay(iso)}
+                    onMouseEnter={() => setHover(tooFar ? null : iso)}
+                  >
                     {Number(iso.slice(8))}
                   </button>
                 </span>
@@ -315,7 +338,9 @@ export default function PeriodPicker({
             <span className="period-summary">
               {draftStart && draftEnd
                 ? `${dayCount(draftStart, draftEnd)} ${dayCount(draftStart, draftEnd) === 1 ? "dia" : "dias"} · ${formatPeriodShort(draftStart, draftEnd)}`
-                : "Escolha o fim do período"}
+                : maxDays
+                  ? `Escolha o fim do período (até ${maxDays} dias)`
+                  : "Escolha o fim do período"}
             </span>
             <button type="button" className="emp-picker-done" onClick={close}>
               Pronto
