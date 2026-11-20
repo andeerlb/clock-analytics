@@ -47,6 +47,31 @@ pub(crate) struct DuplicateMatch {
     pub status: String,
     pub identity_changed: bool,
     pub deleted: bool,
+    /// The head row's own empresa/cliente — the import compares them with
+    /// what the template's routing resolves to *now* ("Roteamento mudou").
+    pub company_id: Option<i64>,
+    pub company_name: Option<String>,
+    pub client_id: Option<i64>,
+    pub client_name: Option<String>,
+    /// The head row's função, as `roles.name` — differs from the
+    /// candidate's when the route moved it to another empresa.
+    pub role_name: Option<String>,
+}
+
+/// Whether the função ids `$a` and `$b` are "the same função" for matching:
+/// the same id, both empty, or — since a função is cadastrada per empresa —
+/// any name/apelido of one equal (trimmed, case-insensitive) to any
+/// name/apelido of the other. Without that, a turno a corrected routing rule
+/// moves to another empresa would resolve to that empresa's own "Açougue"
+/// (another id) and stop matching the one already saved, so reimporting
+/// would duplicate it instead of reprocessing it.
+fn role_equivalent_sql(a: &str, b: &str) -> String {
+    format!(
+        "(IFNULL({a}, -1) = IFNULL({b}, -1) OR EXISTS (
+           SELECT 1 FROM role_names x JOIN role_names y ON x.n = y.n
+           WHERE x.role_id = {a} AND y.role_id = {b}
+         ))"
+    )
 }
 
 #[derive(Deserialize)]
@@ -64,11 +89,16 @@ fn num(value: &Value) -> Option<f64> {
 /// rebuilds its `Map<number, DuplicatePaymentShiftMatch>` from them.
 pub(crate) async fn find_duplicates_impl(state: &AppState, rows: &[DuplicateCandidate]) -> ApiResult<Vec<(usize, DuplicateMatch)>> {
     let mut matches = Vec::new();
+    let role_match = role_equivalent_sql("ps.role_id", "$4");
     let sql_text = format!(
-        "WITH RECURSIVE lineage(id) AS (
+        "WITH RECURSIVE role_names(role_id, n) AS (
+         SELECT id, lower(trim(name)) FROM roles
+         UNION SELECT role_id, lower(trim(alias)) FROM role_aliases
+       ),
+       lineage(id) AS (
          SELECT ps.id FROM payment_shifts ps
          WHERE ps.employee_id = $1 AND ps.work_date = $2 AND ps.local = $3
-           AND IFNULL(ps.role_id, -1) = IFNULL($4, -1)
+           AND {role_match}
            AND IFNULL(ps.schedule_start_minutes, -1) = IFNULL($5, -1)
            AND IFNULL(ps.schedule_end_minutes, -1) = IFNULL($6, -1)
          UNION ALL
@@ -77,8 +107,14 @@ pub(crate) async fn find_duplicates_impl(state: &AppState, rows: &[DuplicateCand
        )
        SELECT ps.id, ps.edited_manually AS editedManually, ps.status, ps.deleted_at AS deletedAt,
               ps.work_date AS currentWorkDate, ps.local AS currentLocal, ps.role_id AS currentRoleId,
-              ps.schedule_start_minutes AS currentScheduleStart, ps.schedule_end_minutes AS currentScheduleEnd
+              ps.schedule_start_minutes AS currentScheduleStart, ps.schedule_end_minutes AS currentScheduleEnd,
+              CASE WHEN {role_match} THEN 1 ELSE 0 END AS roleMatches,
+              ps.company_id AS companyId, c.name AS companyName,
+              ps.client_id AS clientId, cl.name AS clientName, r.name AS roleName
        FROM payment_shifts ps
+       LEFT JOIN companies c ON c.id = ps.company_id
+       LEFT JOIN clients cl ON cl.id = ps.client_id
+       LEFT JOIN roles r ON r.id = ps.role_id
        WHERE ps.id IN (SELECT id FROM lineage) AND {STRUCTURAL_HEAD_CONDITION}
        ORDER BY ps.id DESC
        LIMIT 1"
@@ -97,7 +133,7 @@ pub(crate) async fn find_duplicates_impl(state: &AppState, rows: &[DuplicateCand
         };
         let identity_changed = head.get("currentWorkDate").and_then(Value::as_str) != Some(r.work_date.as_str())
             || head.get("currentLocal").and_then(Value::as_str) != Some(r.local.as_str())
-            || num(&field(&head, "currentRoleId")) != r.role_id
+            || field(&head, "roleMatches").as_i64() != Some(1)
             || num(&field(&head, "currentScheduleStart")) != r.schedule_start_minutes
             || num(&field(&head, "currentScheduleEnd")) != r.schedule_end_minutes;
         bool_field(&mut head, "editedManually");
@@ -109,6 +145,11 @@ pub(crate) async fn find_duplicates_impl(state: &AppState, rows: &[DuplicateCand
                 status: field(&head, "status").as_str().unwrap_or_default().to_owned(),
                 identity_changed,
                 deleted: !field(&head, "deletedAt").is_null(),
+                company_id: field(&head, "companyId").as_i64(),
+                company_name: field(&head, "companyName").as_str().map(str::to_owned),
+                client_id: field(&head, "clientId").as_i64(),
+                client_name: field(&head, "clientName").as_str().map(str::to_owned),
+                role_name: field(&head, "roleName").as_str().map(str::to_owned),
             },
         ));
     }

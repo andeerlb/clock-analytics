@@ -144,6 +144,10 @@ function processLabel(count: number): string {
  * earlier candidate row in this same import batch — a source-file
  * artifact, not importable at all, since keeping both would just
  * double-import the same shift within one run.
+ * "route-changed" is a "duplicate" whose saved turno sits under another
+ * empresa/cliente than the template's routing resolves to now (the rule was
+ * corrected after the first import) — reprocessed the same way, but
+ * selected by default, since moving it is the point of reimporting.
  * "role-not-found" mirrors "not-found" but for the Função column instead of
  * the colaborador: route AND colaborador both resolved, but the row's raw
  * função text (non-blank) doesn't match any cadastro/apelido for that
@@ -153,6 +157,7 @@ function processLabel(count: number): string {
 type RowCategory =
   | "valid"
   | "duplicate"
+  | "route-changed"
   | "deleted"
   | "duplicate-in-file"
   | "not-found"
@@ -205,6 +210,8 @@ interface PaymentPreviewRow {
   matchedStatus: PaymentShiftStatus | null;
   /** Whether the match was only found by walking the matched shift's history — its own Local/Função/Horário/Data have since been hand-edited away from what's still in this file (see `findDuplicatePaymentShifts`). Only meaningful alongside `matchedEditedManually`. */
   matchedIdentityChanged: boolean;
+  /** For "route-changed": where the saved turno is now (empresa/cliente/função), shown as "antes → depois". `null` otherwise. */
+  matchedRoute: { companyName: string | null; clientName: string | null; roleName: string | null } | null;
   /**
    * Set (only for `category === "not-found"`) when the scoped search under
    * the route's resolved cliente+empresa pair failed, but the same person
@@ -241,7 +248,14 @@ function buildExtraData(row: PaymentPreviewRow): Record<string, string> | null {
 /** Applies one `findDuplicatePaymentShifts` result to its row — shared by every place that runs the check (initial processing, "vincular colaborador", "cadastrar colaborador"), so the "deleted" vs "duplicate" split can't drift between them. */
 function applyDuplicateMatch(row: PaymentPreviewRow, match: DuplicatePaymentShiftMatch) {
   row.isDuplicate = true;
-  row.category = match.deleted ? "deleted" : "duplicate";
+  // Only a saved turno that has its own empresa/cliente can have "moved" —
+  // one from before those were snapshotted isn't flagged.
+  const routeChanged =
+    match.companyId !== null &&
+    match.clientId !== null &&
+    (match.companyId !== row.resolvedCompanyId || match.clientId !== row.resolvedClientId);
+  row.category = match.deleted ? "deleted" : routeChanged ? "route-changed" : "duplicate";
+  row.matchedRoute = routeChanged ? { companyName: match.companyName, clientName: match.clientName, roleName: match.roleName } : null;
   row.matchedShiftId = match.shiftId;
   row.matchedEditedManually = match.editedManually;
   row.matchedStatus = match.status;
@@ -258,9 +272,20 @@ function applyDuplicateMatch(row: PaymentPreviewRow, match: DuplicatePaymentShif
  *    for an unpaid row someone corrected by hand.
  */
 function isProtectedDuplicateMatch(row: PaymentPreviewRow, keepManualEdits: boolean): boolean {
-  if (row.category !== "duplicate") return false;
+  if (!isReprocessCategory(row.category)) return false;
   if (row.matchedStatus === "pago") return true;
   return row.matchedEditedManually && keepManualEdits;
+}
+
+/** A row matching a live saved turno — "Já importado" or "Roteamento mudou" — which reprocessing supersedes. */
+function isReprocessCategory(category: RowCategory): boolean {
+  return category === "duplicate" || category === "route-changed";
+}
+
+/** Checked by default: a new turno, or a saved one the corrected routing moves (unless protected). */
+function isSelectedByDefault(row: PaymentPreviewRow, keepManualEdits: boolean): boolean {
+  if (row.category === "valid") return true;
+  return row.category === "route-changed" && !isProtectedDuplicateMatch(row, keepManualEdits);
 }
 
 interface PaymentFileResult {
@@ -323,6 +348,18 @@ function shiftDedupKey(
 
 const PREVIEW_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const PATHS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+
+/** Empresa/Cliente cell: just the resolved value, or "antes → depois" when a "Roteamento mudou" row moves it. */
+function RouteChangeCell({ before, after }: { before: string | null | undefined; after: string | null }) {
+  if (!after) return <span className="muted">—</span>;
+  if (!before || before === after) return <>{after}</>;
+  return (
+    <span className="route-change">
+      <span className="route-change-from">{before}</span>
+      <span className="route-change-to">{after}</span>
+    </span>
+  );
+}
 
 export default function ImportPaymentsPage() {
   const navigate = useNavigate();
@@ -767,6 +804,7 @@ export default function ImportPaymentsPage() {
     const counts: Record<RowCategory, number> = {
       valid: 0,
       duplicate: 0,
+      "route-changed": 0,
       deleted: 0,
       "duplicate-in-file": 0,
       "not-found": 0,
@@ -824,6 +862,15 @@ export default function ImportPaymentsPage() {
     { filter: "valid", label: "Novos", count: categoryCounts.valid, color: "var(--success)", title: "Colaborador encontrado, sem turno igual já importado." },
     ...(duplicateCount > 0
       ? [{ filter: "duplicate" as RowFilter, label: "Já importados", count: duplicateCount, color: "#93c5fd", title: "Todas as colunas batem com um turno já salvo." }]
+      : []),
+    ...(categoryCounts["route-changed"] > 0
+      ? [{
+          filter: "route-changed" as RowFilter,
+          label: "Roteamento mudou",
+          count: categoryCounts["route-changed"],
+          color: "#c4b5fd",
+          title: "Turno já importado, mas a regra de roteamento agora manda para outra empresa ou cliente. Vem marcado: ao salvar, o turno ganha uma versão nova no destino certo e o antigo vai para o histórico.",
+        }]
       : []),
     ...(deletedCount > 0
       ? [{ filter: "deleted" as RowFilter, label: "Excluídos", count: deletedCount, color: "var(--text-muted)", title: "Esse turno foi removido no sistema." }]
@@ -946,6 +993,7 @@ export default function ImportPaymentsPage() {
               matchedEditedManually: false,
               matchedStatus: null,
               matchedIdentityChanged: false,
+              matchedRoute: null,
             };
 
             // No fixed header row anymore — a physical row is only "real
@@ -1067,7 +1115,7 @@ export default function ImportPaymentsPage() {
 
       const defaultSelected = new Set<number>();
       allRows.forEach((r, i) => {
-        if (r.category === "valid") defaultSelected.add(i);
+        if (isSelectedByDefault(r, keepManualEdits)) defaultSelected.add(i);
       });
 
       // Missing-from-file detection — the inverse of "excluído", only
@@ -1192,7 +1240,7 @@ export default function ImportPaymentsPage() {
     setSelectedRows((prev) => {
       const next = new Set(prev);
       allRows.forEach((r, i) => {
-        if (newlyResolved.includes(r) && r.category === "valid") next.add(i);
+        if (newlyResolved.includes(r) && isSelectedByDefault(r, effectiveKeepManualEdits)) next.add(i);
       });
       return next;
     });
@@ -1266,7 +1314,7 @@ export default function ImportPaymentsPage() {
     setSelectedRows((prev) => {
       const next = new Set(prev);
       allRows.forEach((r, i) => {
-        if (newlyResolved.includes(r) && r.category === "valid") next.add(i);
+        if (newlyResolved.includes(r) && isSelectedByDefault(r, effectiveKeepManualEdits)) next.add(i);
       });
       return next;
     });
@@ -1356,7 +1404,7 @@ export default function ImportPaymentsPage() {
     setSelectedRows((prev) => {
       const next = new Set(prev);
       allRows.forEach((r, i) => {
-        if (newlyResolved.includes(r) && r.category === "valid") next.add(i);
+        if (newlyResolved.includes(r) && isSelectedByDefault(r, effectiveKeepManualEdits)) next.add(i);
       });
       return next;
     });
@@ -1435,7 +1483,7 @@ export default function ImportPaymentsPage() {
     setSelectedRows((prev) => {
       const next = new Set(prev);
       allRows.forEach((r, i) => {
-        if (dbCheckTargets.includes(r) && r.category === "valid") next.add(i);
+        if (dbCheckTargets.includes(r) && isSelectedByDefault(r, effectiveKeepManualEdits)) next.add(i);
       });
       return next;
     });
@@ -1494,7 +1542,7 @@ export default function ImportPaymentsPage() {
     setSelectedRows((prev) => {
       const next = new Set(prev);
       allRows.forEach((r, i) => {
-        if (dbCheckTargets.includes(r) && r.category === "valid") next.add(i);
+        if (dbCheckTargets.includes(r) && isSelectedByDefault(r, effectiveKeepManualEdits)) next.add(i);
       });
       return next;
     });
@@ -1651,7 +1699,7 @@ export default function ImportPaymentsPage() {
           // never gets here selected in the first place — the checkbox is
           // disabled for those (see `canSelect` above); "deleted" is never
           // protected that way, only ever unselected by default.
-          previousShiftId: row.category === "duplicate" || row.category === "deleted" ? row.matchedShiftId : null,
+          previousShiftId: isReprocessCategory(row.category) || row.category === "deleted" ? row.matchedShiftId : null,
         });
         savedFileHashes.add(fileHash);
       }
@@ -2285,8 +2333,12 @@ export default function ImportPaymentsPage() {
                                 </span>
                               )}
                             </td>
-                            <td>{row.resolvedCompanyName ?? <span className="muted">—</span>}</td>
-                            <td>{row.resolvedClientName ?? <span className="muted">—</span>}</td>
+                            <td>
+                              <RouteChangeCell before={row.matchedRoute?.companyName} after={row.resolvedCompanyName} />
+                            </td>
+                            <td>
+                              <RouteChangeCell before={row.matchedRoute?.clientName} after={row.resolvedClientName} />
+                            </td>
                             <td>{row.local}</td>
                             <td>
                               {row.workDate ? (
@@ -2297,7 +2349,17 @@ export default function ImportPaymentsPage() {
                                 </span>
                               )}
                             </td>
-                            <td>{row.role}</td>
+                            <td>
+                              {row.role}
+                              {row.matchedRoute?.roleName && row.matchedRoute.companyName !== row.resolvedCompanyName && (
+                                <span
+                                  className="route-change-note"
+                                  title="A função é cadastrada por empresa: o turno passa a usar a função de mesmo nome (ou apelido) na empresa nova."
+                                >
+                                  {row.matchedRoute.roleName} ({row.matchedRoute.companyName}) → {row.role} ({row.resolvedCompanyName})
+                                </span>
+                              )}
+                            </td>
                             <td>
                               {row.scheduleStartMinutes !== null && row.scheduleEndMinutes !== null ? (
                                 `${formatMinutesAsTime(row.scheduleStartMinutes)} – ${formatMinutesAsTime(row.scheduleEndMinutes)}`
@@ -2348,6 +2410,30 @@ export default function ImportPaymentsPage() {
                                     }
                                   >
                                     Já importado
+                                  </span>
+                                ))}
+                              {row.category === "route-changed" &&
+                                (row.matchedStatus === "pago" ? (
+                                  <span className="row-state row-state-info" title="Esse turno já foi pago — reprocessar nunca vai sobrescrevê-lo, nem para mudar o roteamento.">
+                                    Pago — mantido
+                                  </span>
+                                ) : protectedMatch ? (
+                                  <span
+                                    className="row-state row-state-info"
+                                    title='Esse turno foi atualizado manualmente e está protegido — desative "Manter registros atualizados manualmente" acima para mudar o roteamento mesmo assim.'
+                                  >
+                                    Editado manualmente — mantido
+                                  </span>
+                                ) : selectedRows.has(index) ? (
+                                  <span
+                                    className="row-state row-state-route"
+                                    title="Ao salvar, o turno ganha uma versão nova na empresa/cliente da regra atual; a versão anterior vai para o histórico."
+                                  >
+                                    Roteamento muda
+                                  </span>
+                                ) : (
+                                  <span className="row-state row-state-muted" title="Desmarcado: o turno continua na empresa/cliente de antes.">
+                                    Roteamento muda — desmarcado
                                   </span>
                                 ))}
                               {row.category === "deleted" &&

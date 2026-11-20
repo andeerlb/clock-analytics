@@ -178,6 +178,35 @@ async fn duplicates_follow_the_chain_to_the_head_and_flag_identity_changes() {
     assert!(found[0].1.deleted, "a soft-deleted chain is still found, flagged");
 }
 
+#[tokio::test]
+async fn duplicates_match_the_same_named_role_of_another_company_and_report_the_route() {
+    let state = AppState::for_tests().await;
+    let s = seed(&state).await;
+    save(&state, vec![shift_input(&s, None)], vec![]).await.unwrap();
+    let original = only_shift_id(&state).await;
+
+    // A corrected routing rule now sends the row to another empresa, whose own
+    // função is named differently but shares the "VIG" apelido.
+    let other_company = exec(&state, "INSERT INTO companies (name, cnpj) VALUES ('Beta', '55444333000122')").await;
+    let other_role = exec(&state, &format!("INSERT INTO roles (company_id, name) VALUES ({other_company}, 'vig')")).await;
+    let unrelated_role = exec(&state, &format!("INSERT INTO roles (company_id, name) VALUES ({other_company}, 'Porteiro')")).await;
+
+    let moved = DuplicateCandidate { role_id: Some(other_role as f64), ..candidate(&s, "Portaria") };
+    let found = import::find_duplicates_impl(&state, &[moved]).await.unwrap();
+    assert_eq!(found.len(), 1, "same função by apelido is still the same turno");
+    let m = &found[0].1;
+    assert_eq!(m.shift_id, original);
+    assert!(!m.identity_changed, "a função equivalent by name is not a manual identity change");
+    assert_eq!(m.company_id, Some(s.company));
+    assert_eq!(m.company_name.as_deref(), Some("Acme"));
+    assert_eq!(m.client_id, Some(s.client));
+    assert_eq!(m.client_name.as_deref(), Some("Cliente"));
+    assert_eq!(m.role_name.as_deref(), Some("Vigilante"));
+
+    let other = DuplicateCandidate { role_id: Some(unrelated_role as f64), ..candidate(&s, "Portaria") };
+    assert!(import::find_duplicates_impl(&state, &[other]).await.unwrap().is_empty(), "a different função is a different turno");
+}
+
 // --- transitions --------------------------------------------------------------------
 
 #[tokio::test]

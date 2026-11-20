@@ -1457,6 +1457,13 @@ export interface DuplicatePaymentShiftMatch {
    * don't matter once this is true).
    */
   deleted: boolean;
+  /** The matched head's own empresa/cliente — compared with what the template's routing resolves to now ("Roteamento mudou"). `null` on a row saved before those were snapshotted. */
+  companyId: number | null;
+  companyName: string | null;
+  clientId: number | null;
+  clientName: string | null;
+  /** The matched head's função name — differs from the row's when the new route moved it to another empresa (matching compares função by name/apelido, not id). */
+  roleName: string | null;
 }
 
 /**

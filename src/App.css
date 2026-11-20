@@ -2583,6 +2583,42 @@ button.preview-chip[aria-pressed="true"] {
   background: var(--danger);
 }
 
+.row-state-route::before {
+  background: #c4b5fd;
+}
+
+/* "Roteamento mudou" rows: the saved value struck through, the new one under it. */
+.route-change {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.25;
+}
+
+.route-change-from {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-decoration: line-through;
+}
+
+.route-change-to {
+  color: #c4b5fd;
+  font-weight: 600;
+}
+
+.route-change-to::before {
+  content: "→ ";
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.route-change-note {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
 .table-card .table-scroll {
   overflow-x: auto;
 }
