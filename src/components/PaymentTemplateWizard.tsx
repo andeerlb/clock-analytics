@@ -715,7 +715,9 @@ export default function PaymentTemplateWizard({
     // Without a sample the letter is what identifies a column; the saved name
     // is only a hint (old templates saved whatever the first row held, often
     // a data value like a store name). Older ones also saved "" for none.
-    return Array.from({ length: Math.max(mappedMax + 6, 12) }, (_, i) => ({ index: i, header: null, savedName: labels[i]?.trim() || null }));
+    // Without a sample there's no telling how wide the file is: A–Z, or past
+    // the last answered column. "Ignorar" also takes a typed letter beyond.
+    return Array.from({ length: Math.max(mappedMax + 6, 26) }, (_, i) => ({ index: i, header: null, savedName: labels[i]?.trim() || null }));
   }
 
   /** First value under column `col` in the group's sample sheet, for "ex. em ABA: ...". */

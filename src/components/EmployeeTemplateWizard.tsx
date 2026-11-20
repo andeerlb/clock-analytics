@@ -500,7 +500,9 @@ export default function EmployeeTemplateWizard({
     }
     const labels = groupFieldLabels[key] ?? {};
     const mappedMax = Math.max(-1, ...Object.keys(groupMapping[key] ?? {}).map(Number));
-    return Array.from({ length: Math.max(mappedMax + 6, 12) }, (_, i) => ({ index: i, header: null, savedName: labels[i]?.trim() || null }));
+    // Without a sample there's no telling how wide the file is: A–Z, or past
+    // the last answered column. "Ignorar" also takes a typed letter beyond.
+    return Array.from({ length: Math.max(mappedMax + 6, 26) }, (_, i) => ({ index: i, header: null, savedName: labels[i]?.trim() || null }));
   }
 
   function exampleOf(key: string, col: number): { sheet: string; value: string } | null {

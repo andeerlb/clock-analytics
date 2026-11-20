@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import OptionPicker, { type PickerOption } from "./OptionPicker";
-import { columnLetter } from "../lib/format";
+import { columnIndexFromLetter, columnLetter } from "../lib/format";
 
 /**
  * The column pickers shared by the template wizards' "Onde está cada
@@ -140,7 +140,13 @@ export function IgnoreQuestion<F extends string>({
       .filter(([, f]) => f === ignoredField)
       .map(([col]) => col),
   );
-  const options: PickerOption[] = columns
+  // An ignored column past the listed ones (typed in) still shows as chosen.
+  const listed = new Set(columns.map((c) => c.index));
+  const all: GroupColumn[] = [
+    ...columns,
+    ...[...ignored].map(Number).filter((i) => !listed.has(i)).map((i) => ({ index: i, header: null })),
+  ];
+  const options: PickerOption[] = all
     .filter((c) => mapping[c.index] === undefined || mapping[c.index] === ignoredField)
     .map((c) => ({
       id: String(c.index),
@@ -161,6 +167,11 @@ export function IgnoreQuestion<F extends string>({
           selected={ignored}
           onToggle={(id) => onToggle(Number(id))}
           onClear={ignored.size > 0 ? onClear : undefined}
+          onCreate={(text) => {
+            // A column letter typed in (e.g. "AB"), for one past the list.
+            const index = columnIndexFromLetter(text.replace(/^coluna\s+/i, ""));
+            if (index !== null && mapping[index] === undefined) onToggle(index);
+          }}
           title="Colunas a ignorar"
           allPlaceholder="Nenhuma"
           searchPlaceholder="Buscar coluna"
