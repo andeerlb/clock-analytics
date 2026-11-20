@@ -3,6 +3,7 @@ import { UpdatedByCell, useLastActivity } from "../components/ActivityInfo";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useReadOnly } from "../components/AreaRoute";
+import CountCell from "../components/CountCell";
 import PageHeader from "../components/PageHeader";
 import { listClients, type ClientRow } from "../lib/db";
 import { formatCnpj } from "../lib/format";
@@ -12,6 +13,8 @@ interface ClientListRow {
   name: string;
   cnpj: string;
   companyNames: string[];
+  employeeCount: number;
+  shiftCount: number;
 }
 
 /** One row per client — `listClients` returns one row per (client, company) link, merged here since a client showing up once per empresa it's linked to is noise, not information. */
@@ -22,7 +25,7 @@ function groupByClient(rows: ClientRow[]): ClientListRow[] {
     if (existing) {
       existing.companyNames.push(r.companyName);
     } else {
-      byId.set(r.id, { id: r.id, name: r.name, cnpj: r.cnpj, companyNames: [r.companyName] });
+      byId.set(r.id, { id: r.id, name: r.name, cnpj: r.cnpj, companyNames: [r.companyName], employeeCount: r.employeeCount, shiftCount: r.shiftCount });
     }
   }
   return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -77,6 +80,8 @@ export default function ClientsPage() {
                   <th>Cliente</th>
                   <th>CNPJ</th>
                   <th>Empresa</th>
+                  <th className="count-col">Colaboradores</th>
+                  <th className="count-col">Turnos</th>
                   <th>Atualizado</th>
                 </tr>
               </thead>
@@ -93,6 +98,8 @@ export default function ClientsPage() {
                     </td>
                     <td className="mono">{formatCnpj(c.cnpj)}</td>
                     <td>{c.companyNames.join(", ")}</td>
+                    <CountCell value={c.employeeCount} singular="colaborador" plural="colaboradores" />
+                    <CountCell value={c.shiftCount} singular="turno" plural="turnos" />
                     <td>
                       <UpdatedByCell info={lastActivity.get(String(c.id))} />
                     </td>

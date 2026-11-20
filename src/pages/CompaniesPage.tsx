@@ -3,6 +3,7 @@ import { UpdatedByCell, useLastActivity } from "../components/ActivityInfo";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useReadOnly } from "../components/AreaRoute";
+import CountCell from "../components/CountCell";
 import PageHeader from "../components/PageHeader";
 import { listCompanies, type CompanyRow } from "../lib/db";
 import { formatCnpj } from "../lib/format";
@@ -54,6 +55,8 @@ export default function CompaniesPage() {
                   <th>Empresa</th>
                   <th>CNPJ</th>
                   <th>Horário noturno</th>
+                  <th className="count-col">Clientes</th>
+                  <th className="count-col">Colaboradores</th>
                   <th>Atualizado</th>
                 </tr>
               </thead>
@@ -72,6 +75,8 @@ export default function CompaniesPage() {
                     <td className="mono">
                       {c.nightStartTime}–{c.nightEndTime}
                     </td>
+                    <CountCell value={c.clientCount ?? 0} singular="cliente" plural="clientes" />
+                    <CountCell value={c.employeeCount ?? 0} singular="colaborador" plural="colaboradores" />
                     <td>
                       <UpdatedByCell info={lastActivity.get(String(c.id))} />
                     </td>

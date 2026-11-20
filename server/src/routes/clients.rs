@@ -30,7 +30,9 @@ async fn list_clients(State(state): State<AppState>) -> ApiResult<Json<Vec<Row>>
         sql::select(
             &state.db,
             "
-    SELECT cl.id, cl.name, cl.cnpj, c.id AS companyId, c.name AS companyName
+    SELECT cl.id, cl.name, cl.cnpj, c.id AS companyId, c.name AS companyName,
+      (SELECT COUNT(DISTINCT ecc.employee_id) FROM employee_client_companies ecc WHERE ecc.client_id = cl.id) AS employeeCount,
+      (SELECT COUNT(*) FROM payment_shifts ps WHERE ps.client_id = cl.id AND ps.deleted_at IS NULL) AS shiftCount
     FROM clients cl
     JOIN client_companies cc ON cc.client_id = cl.id
     JOIN companies c ON c.id = cc.company_id

@@ -197,6 +197,10 @@ export interface CompanyRow {
   nightStartTime: string;
   nightEndTime: string;
   nightShiftRule: NightShiftRule;
+  /** Clientes linked to this empresa (only filled by `listCompanies`). */
+  clientCount?: number;
+  /** Distinct colaboradores linked to this empresa (only filled by `listCompanies`). */
+  employeeCount?: number;
 }
 
 export async function listCompanies(): Promise<CompanyRow[]> {
@@ -252,6 +256,10 @@ export interface ClientRow {
   cnpj: string;
   companyId: number;
   companyName: string;
+  /** Distinct colaboradores linked to this cliente, across all its empresas. */
+  employeeCount: number;
+  /** Live (not deleted) turnos of this cliente. */
+  shiftCount: number;
 }
 
 export async function listClients(): Promise<ClientRow[]> {
@@ -1285,6 +1293,10 @@ export interface RoleRow {
   id: number;
   companyId: number;
   name: string;
+  /** Distinct colaboradores with a live turno in this função (only filled by `listRolesGlobal`). */
+  employeeCount?: number;
+  /** Live turnos in this função (only filled by `listRolesGlobal`). */
+  shiftCount?: number;
 }
 
 /**
