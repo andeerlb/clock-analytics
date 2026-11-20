@@ -20,6 +20,7 @@ import ConfirmModal from "../components/ConfirmModal";
 import ImportHistoryDrawer from "../components/ImportHistoryDrawer";
 import EmployeePicker from "../components/EmployeePicker";
 import { periodPresets } from "../components/LibraryFiltersPanel";
+import { addDaysIso, toIso, todayUtc } from "../lib/calendar";
 import OptionPicker from "../components/OptionPicker";
 import { buildSourceColumns } from "../lib/extraColumns";
 import PageHeader from "../components/PageHeader";
@@ -116,9 +117,20 @@ function urlHost(url: string): string {
   }
 }
 
-/** The import's Período starts empty (the whole file), so "Arquivo inteiro" leads the usual shortcuts — same idea as Pagamentos' "Todo o período". */
+/** The longest Período an import can cover — about a month. */
+const IMPORT_MAX_DAYS = 31;
+
+/** The import's Período is required and at most a month, so the shortcuts lead with single days (Hoje, Ontem); the longer ones from Pagamentos are dropped by the picker's `maxDays`. */
 function importPeriodPresets(): PeriodPreset[] {
-  return [{ label: "Arquivo inteiro", start: "", end: "" }, ...periodPresets()];
+  const today = toIso(todayUtc());
+  const yesterday = addDaysIso(today, -1);
+  return [{ label: "Hoje", start: today, end: today }, { label: "Ontem", start: yesterday, end: yesterday }, ...periodPresets()];
+}
+
+/** Starts on "Mês atual" — there's no "whole file" import anymore. */
+function defaultImportPeriod(): { start: string; end: string } {
+  const current = periodPresets().find((p) => p.label === "Mês atual")!;
+  return { start: current.start, end: current.end };
 }
 
 /** For the "⌘F" vs "Ctrl F" hint on the preview's search. */
@@ -375,12 +387,11 @@ export default function ImportPaymentsPage() {
   const [templateId, setTemplateId] = useState(restored?.templateId ?? "");
   const [selectedTemplate, setSelectedTemplate] = useState<PaymentTemplateRow | null>(null);
 
-  // Optional — filters rows by the template's mapped "data" column. Left
-  // empty, processing goes through the whole file (with confirmation, see
-  // handleProcessClick).
-  const [periodStart, setPeriodStart] = useState(restored?.periodStart ?? "");
-  const [periodEnd, setPeriodEnd] = useState(restored?.periodEnd ?? "");
-  const [confirmFullImport, setConfirmFullImport] = useState(false);
+  // Required, at most IMPORT_MAX_DAYS — filters rows by the template's
+  // mapped "data" column. Automatic reimports still replay whatever their
+  // config saved (see handleReimportFromUrl), even an older one with none.
+  const [periodStart, setPeriodStart] = useState(() => restored?.periodStart || defaultImportPeriod().start);
+  const [periodEnd, setPeriodEnd] = useState(() => (restored?.periodStart ? restored.periodEnd : "") || defaultImportPeriod().end);
   /** Row index of a "colaborador não encontrado" row whose "Vincular a [Cliente] ([Empresa])" is pending confirmation — `null` when the modal is closed. */
   const [linkElsewhereConfirmIndex, setLinkElsewhereConfirmIndex] = useState<number | null>(null);
   /** The link confirm modal's own "vincular o histórico também?" checkbox — resets to off each time the modal opens, since it's a fresh choice per link, never remembered across colaboradores. */
@@ -670,10 +681,8 @@ export default function ImportPaymentsPage() {
   // right after would still see stale state. This waits for paths and
   // template to actually land (fileHashes catches up to paths once its own
   // effect finishes) before firing the process step exactly once. Calls
-  // handleProcess() directly, not handleProcessClick() — an automatic
-  // reimport replays Período filters that were already confirmed once (at
-  // the save they were captured from), so re-asking "processar o arquivo
-  // inteiro?" here would just be re-litigating a choice already made.
+  // handleProcess() directly — an automatic reimport replays the Período
+  // its config saved, so it runs as is.
   useEffect(() => {
     if (pendingAutoProcess && selectedTemplate && paths.length > 0 && fileHashes.size === paths.length) {
       setPendingAutoProcess(false);
@@ -1629,22 +1638,13 @@ export default function ImportPaymentsPage() {
     navigate("/roles/new", { state: roleFormState });
   }
 
-  /** Shared by "Processar arquivo(s)" and the "processar o arquivo inteiro?" confirm — in URL mode, nothing's been downloaded yet the first time this runs (there's no separate "Baixar arquivo" step anymore), so it downloads first, then falls into the same `pendingAutoProcess` effect "Reimportar" already uses to process right after. Already-downloaded paths (local files, or a URL reprocessed after an error) skip straight to processing. */
+  /** "Processar arquivo(s)" — in URL mode, nothing's been downloaded yet the first time this runs (there's no separate "Baixar arquivo" step anymore), so it downloads first, then falls into the same `pendingAutoProcess` effect "Reimportar" already uses to process right after. Already-downloaded paths (local files, or a URL reprocessed after an error) skip straight to processing. */
   async function proceedToProcess() {
     if (importMode === "url" && paths.length === 0) {
       await handleDownloadFromUrl(undefined, true);
       return;
     }
     handleProcess();
-  }
-
-  /** No período set means "the whole file" — that's easy to do by accident, so it's confirmed instead of just silently processing everything. */
-  function handleProcessClick() {
-    if (!periodStart && !periodEnd) {
-      setConfirmFullImport(true);
-      return;
-    }
-    proceedToProcess();
   }
 
   async function handleSave() {
@@ -1856,7 +1856,7 @@ export default function ImportPaymentsPage() {
 
                 <div className="field">
                   <label>
-                    Período <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>
+                    Período
                   </label>
                   <PeriodPicker
                     start={periodStart}
@@ -1866,8 +1866,9 @@ export default function ImportPaymentsPage() {
                       setPeriodEnd(end);
                     }}
                     presets={importPeriodPresets()}
+                    maxDays={IMPORT_MAX_DAYS}
                   />
-                  <p className="field-hint">Só as linhas com data nesse intervalo.</p>
+                  <p className="field-hint">Só as linhas com data nesse intervalo — no máximo 1 mês.</p>
                 </div>
               </div>
             </section>
@@ -2053,10 +2054,12 @@ export default function ImportPaymentsPage() {
                 disabled={
                   (importMode === "url" ? !urlInput.trim() : paths.length === 0) ||
                   !templateId ||
+                  !periodStart ||
+                  !periodEnd ||
                   busy ||
                   urlDownloading
                 }
-                onClick={handleProcessClick}
+                onClick={proceedToProcess}
               >
                 <Play size={14} style={{ marginRight: "0.45rem" }} />
                 {urlDownloading ? "Baixando..." : busy ? "Processando..." : processLabel(processCount)}
@@ -2600,20 +2603,6 @@ export default function ImportPaymentsPage() {
           setUrlInput(url);
         }}
       />
-
-      {confirmFullImport && (
-        <ConfirmModal
-          title="Processar sem filtro de período"
-          message="Nenhum período foi selecionado — isso vai processar o relatório inteiro, sem limitar por data. Deseja continuar?"
-          confirmLabel="Processar arquivo inteiro"
-          danger={false}
-          onConfirm={() => {
-            setConfirmFullImport(false);
-            proceedToProcess();
-          }}
-          onCancel={() => setConfirmFullImport(false)}
-        />
-      )}
 
       {linkElsewhereConfirmIndex !== null && shiftRows[linkElsewhereConfirmIndex]?.foundElsewhere && (
         <ConfirmModal
