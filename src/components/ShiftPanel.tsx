@@ -379,7 +379,7 @@ function useShiftHistory(shiftId: number | null) {
 function OriginSection({ shift, importedAt }: { shift: PaymentShiftRow; importedAt: string | null }) {
   // Lexicographic order alone misorders past column Z ("AA" < "B") — sort
   // by letter count first so single-letter columns come before double.
-  const extras = extraColumnEntries(shift.extraData, shift.extraColumns);
+  const extras = extraColumnEntries(shift.extraData, shift.extraColumns, shift.ignoredColumns);
   const rows: { label: string; value: ReactNode }[] = [];
   if (importedAt) rows.push({ label: "Importado em", value: formatDateTime(importedAt) });
   if (shift.sourceFileName) {

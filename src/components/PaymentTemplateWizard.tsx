@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type DragEvent } from "react";
 import { READ_ONLY_TITLE, useReadOnly } from "./AreaRoute";
 import { SampleFileStep, SheetsStep, WizardDrawer } from "./TemplateWizardParts";
 import OptionPicker from "./OptionPicker";
-import { ColumnQuestion, type GroupColumn } from "./TemplateColumns";
+import { ColumnQuestion, IgnoreQuestion, type GroupColumn } from "./TemplateColumns";
 import PaymentTemplateDetails, {
   detailsProblem,
   effectiveIdentifierOrder,
@@ -59,7 +59,12 @@ import {
   type PaymentTargetField,
   type PaymentTemplateGroup,
   type PaymentTemplateRow,
+  IGNORED_COLUMN_FIELD,
+  type IgnoredColumnField,
 } from "../lib/types";
+
+/** What a column answers in the wizard: a field, or "Ignorar". */
+type ColumnAnswer = PaymentTargetField | IgnoredColumnField;
 
 
 const IDENTIFIER_FIELDS: IdentifierField[] = ["cpf", "matricula", "nome"];
@@ -155,7 +160,7 @@ export default function PaymentTemplateWizard({
   // there. No header-row concept on import: a row is a shift when its
   // "data" column parses as a date.
   const [sheetGroupOf, setSheetGroupOf] = useState<Record<string, string>>({});
-  const [groupMapping, setGroupMapping] = useState<Record<string, Record<number, PaymentTargetField>>>({});
+  const [groupMapping, setGroupMapping] = useState<Record<string, Record<number, ColumnAnswer>>>({});
   // Cosmetic header hint per mapped column — captured from the file's
   // header row, or carried over from the saved template's `headerLabel`
   // when editing without one. Never used for matching.
@@ -289,13 +294,13 @@ export default function PaymentTemplateWizard({
   /** Rebuilds the wizard's grouping/mapping state straight from a saved template — no file, no I/O. */
   function hydrateFromTemplate(t: PaymentTemplateRow) {
     const newSheetGroupOf: Record<string, string> = {};
-    const newGroupMapping: Record<string, Record<number, PaymentTargetField>> = {};
+    const newGroupMapping: Record<string, Record<number, ColumnAnswer>> = {};
     const newGroupFieldLabels: Record<string, Record<number, string | null>> = {};
     const sheetNames: string[] = [];
 
     for (const group of t.groups) {
       const repKey = group.sheetNames[0] ?? group.excludedSheetNames[0] ?? CSV_GROUP_KEY;
-      const m: Record<number, PaymentTargetField> = {};
+      const m: Record<number, ColumnAnswer> = {};
       const labels: Record<number, string | null> = {};
       for (const fm of group.fieldMappings) {
         const index = letterToIndex(fm.columnLetter);
@@ -347,7 +352,7 @@ export default function PaymentTemplateWizard({
   function prefillFromRows(sheetNames: string[], rowsBySheet: Record<string, string[][]>) {
     const keys = sheetNames.length > 0 ? sheetNames : [CSV_GROUP_KEY];
     const nextGroupOf: Record<string, string> = {};
-    const nextMapping: Record<string, Record<number, PaymentTargetField>> = {};
+    const nextMapping: Record<string, Record<number, ColumnAnswer>> = {};
     const nextLabels: Record<string, Record<number, string | null>> = {};
     const anchorBySignature = new Map<string, string>();
     for (const key of keys) {
@@ -636,6 +641,41 @@ export default function PaymentTemplateWizard({
         if (mapping[Number(k)] === field) delete current[Number(k)];
       }
       if (colIndex !== null) current[colIndex] = headerLabel;
+      return { ...prev, [key]: current };
+    });
+  }
+
+  /** "Ignorar": adds/removes column `col` of group `key` from the ignored ones (only an unanswered column can be ignored). */
+  function toggleIgnored(key: string, col: number) {
+    const header = columnsOfGroup(key).find((c) => c.index === col)?.header ?? null;
+    const isIgnored = (groupMapping[key] ?? {})[col] === IGNORED_COLUMN_FIELD;
+    setGroupMapping((prev) => {
+      const current = { ...(prev[key] ?? {}) };
+      if (current[col] === IGNORED_COLUMN_FIELD) delete current[col];
+      else if (current[col] === undefined) current[col] = IGNORED_COLUMN_FIELD;
+      return { ...prev, [key]: current };
+    });
+    setGroupFieldLabels((prev) => {
+      const current = { ...(prev[key] ?? {}) };
+      if (isIgnored) delete current[col];
+      else current[col] = header;
+      return { ...prev, [key]: current };
+    });
+  }
+
+  /** Clears every "Ignorar" column of group `key`. */
+  function clearIgnored(key: string) {
+    const cols = Object.entries(groupMapping[key] ?? {})
+      .filter(([, f]) => f === IGNORED_COLUMN_FIELD)
+      .map(([c]) => Number(c));
+    setGroupMapping((prev) => {
+      const current = { ...(prev[key] ?? {}) };
+      for (const c of cols) delete current[c];
+      return { ...prev, [key]: current };
+    });
+    setGroupFieldLabels((prev) => {
+      const current = { ...(prev[key] ?? {}) };
+      for (const c of cols) delete current[c];
       return { ...prev, [key]: current };
     });
   }
@@ -1121,6 +1161,13 @@ export default function PaymentTemplateWizard({
                     />
                   ),
                 )}
+                <IgnoreQuestion
+                  columns={columnsOfGroup(tabKey)}
+                  mapping={groupMapping[tabKey] ?? {}}
+                  ignoredField={IGNORED_COLUMN_FIELD as ColumnAnswer}
+                  onToggle={(col) => toggleIgnored(tabKey, col)}
+                  onClear={() => clearIgnored(tabKey)}
+                />
               </div>
             )}
           </div>
@@ -1260,7 +1307,7 @@ function letterToIndex(letter: string): number | null {
 }
 
 /** Which column group `mapping` answers `field` with, or `null`. */
-function columnOf(mapping: Record<number, PaymentTargetField>, field: PaymentTargetField): number | null {
+function columnOf(mapping: Record<number, ColumnAnswer>, field: ColumnAnswer): number | null {
   const entry = Object.entries(mapping).find(([, f]) => f === field);
   return entry ? Number(entry[0]) : null;
 }
@@ -1268,7 +1315,7 @@ function columnOf(mapping: Record<number, PaymentTargetField>, field: PaymentTar
 const IDENTIFIER_ORDER: IdentifierField[] = ["nome", "cpf", "matricula"];
 
 /** How a column's current answer is named in the pickers ("já é Função"). */
-const QUESTION_LABEL: Record<PaymentTargetField, string> = {
+const QUESTION_LABEL: Record<ColumnAnswer, string> = {
   nome: "Colaborador (nome)",
   cpf: "Colaborador (CPF)",
   matricula: "Colaborador (matrícula)",
@@ -1277,9 +1324,10 @@ const QUESTION_LABEL: Record<PaymentTargetField, string> = {
   funcao: "Função",
   horario: "Horário",
   status: "Status",
+  ignorar: "Ignorada",
 };
 
-const questionLabel = (f: PaymentTargetField) => QUESTION_LABEL[f];
+const questionLabel = (f: ColumnAnswer) => QUESTION_LABEL[f];
 
 /** Reads a header to tell which kind of identifier a column holds, for a first Colaborador answer. */
 function identifierKindOf(header: string | null): IdentifierField {
@@ -1305,7 +1353,7 @@ function IdentifierQuestions({
   example,
 }: {
   columns: GroupColumn[];
-  mapping: Record<number, PaymentTargetField>;
+  mapping: Record<number, ColumnAnswer>;
   revealed: IdentifierField[];
   onReveal: (f: IdentifierField) => void;
   onHide: (f: IdentifierField) => void;

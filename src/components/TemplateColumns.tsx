@@ -114,3 +114,61 @@ export function ColumnQuestion<F extends string>({
     </div>
   );
 }
+
+/**
+ * The "Ignorar" row: any number of columns the import should drop — not
+ * saved anywhere, not shown in "Outras colunas da planilha". Columns another
+ * question already uses aren't offered (a column holds one answer); every
+ * other unanswered column keeps going to the extras, as before.
+ */
+export function IgnoreQuestion<F extends string>({
+  columns,
+  mapping,
+  ignoredField,
+  onToggle,
+  onClear,
+}: {
+  columns: GroupColumn[];
+  mapping: Record<number, F>;
+  /** The mapping value that means "ignored" (`IGNORED_COLUMN_FIELD`). */
+  ignoredField: F;
+  onToggle: (col: number) => void;
+  onClear: () => void;
+}) {
+  const ignored = new Set(
+    Object.entries(mapping)
+      .filter(([, f]) => f === ignoredField)
+      .map(([col]) => col),
+  );
+  const options: PickerOption[] = columns
+    .filter((c) => mapping[c.index] === undefined || mapping[c.index] === ignoredField)
+    .map((c) => ({
+      id: String(c.index),
+      label: c.header ?? `Coluna ${columnLetter(c.index)}`,
+      meta: [c.header ? `coluna ${columnLetter(c.index)}` : null, c.savedName ? `“${c.savedName}”` : null].filter(Boolean).join(" · ") || undefined,
+    }));
+  return (
+    <div className="tmap-q">
+      <label>
+        Ignorar
+        <small>opcional</small>
+      </label>
+      <div className="tmap-pick">
+        <OptionPicker
+          showTiles={false}
+          align="left"
+          options={options}
+          selected={ignored}
+          onToggle={(id) => onToggle(Number(id))}
+          onClear={ignored.size > 0 ? onClear : undefined}
+          title="Colunas a ignorar"
+          allPlaceholder="Nenhuma"
+          searchPlaceholder="Buscar coluna"
+        />
+        <span className="tmap-ex">
+          Colunas que a importação descarta: não são salvas e não aparecem em “Outras colunas da planilha”. As demais colunas sem resposta continuam aparecendo lá.
+        </span>
+      </div>
+    </div>
+  );
+}

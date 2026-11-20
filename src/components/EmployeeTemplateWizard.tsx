@@ -2,7 +2,7 @@ import { X } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { READ_ONLY_TITLE } from "./AreaRoute";
 import OptionPicker from "./OptionPicker";
-import { ColumnQuestion, type GroupColumn } from "./TemplateColumns";
+import { ColumnQuestion, IgnoreQuestion, type GroupColumn } from "./TemplateColumns";
 import { IdentifierOrderSection, moveIdentifier, SampleFileStep, SheetsStep, WizardDrawer } from "./TemplateWizardParts";
 import { effectiveIdentifierOrder, identifierOrderFromSaved } from "./PaymentTemplateDetails";
 import { downloadPaymentFileFromUrl, listSpreadsheetSheets, pickPaymentFile, previewSpreadsheet } from "../lib/api";
@@ -25,7 +25,12 @@ import {
   type EmployeeTemplateRow,
   type IdentifierField,
   type PaymentFileKind,
+  IGNORED_COLUMN_FIELD,
+  type IgnoredColumnField,
 } from "../lib/types";
+
+/** What a column answers in the wizard: a field, or "Ignorar". */
+type ColumnAnswer = EmployeeTargetField | IgnoredColumnField;
 
 /**
  * Builds a colaboradores template the same way the payment one is built:
@@ -88,12 +93,12 @@ function letterToIndex(letter: string): number | null {
   return n - 1;
 }
 
-function columnOf(mapping: Record<number, EmployeeTargetField>, field: EmployeeTargetField): number | null {
+function columnOf(mapping: Record<number, ColumnAnswer>, field: EmployeeTargetField): number | null {
   const entry = Object.entries(mapping).find(([, f]) => f === field);
   return entry ? Number(entry[0]) : null;
 }
 
-const fieldLabel = (f: EmployeeTargetField) => EMPLOYEE_TARGET_FIELD_LABELS[f];
+const fieldLabel = (f: ColumnAnswer) => (f === IGNORED_COLUMN_FIELD ? "Ignorada" : EMPLOYEE_TARGET_FIELD_LABELS[f]);
 
 export default function EmployeeTemplateWizard({
   target,
@@ -120,7 +125,7 @@ export default function EmployeeTemplateWizard({
   // Same grouping as the payment wizard: `sheetGroupOf[sheet]` names the
   // sheet whose answers it uses (itself when it answers alone).
   const [sheetGroupOf, setSheetGroupOf] = useState<Record<string, string>>({});
-  const [groupMapping, setGroupMapping] = useState<Record<string, Record<number, EmployeeTargetField>>>({});
+  const [groupMapping, setGroupMapping] = useState<Record<string, Record<number, ColumnAnswer>>>({});
   const [groupFieldLabels, setGroupFieldLabels] = useState<Record<string, Record<number, string | null>>>({});
   /** The saved header row per group (1-indexed), used when there's no sample file to spot it in. */
   const [groupHeaderRow, setGroupHeaderRow] = useState<Record<string, number | null>>({});
@@ -197,13 +202,13 @@ export default function EmployeeTemplateWizard({
 
   function hydrate(t: EmployeeTemplateRow) {
     const groupOf: Record<string, string> = {};
-    const mapping: Record<string, Record<number, EmployeeTargetField>> = {};
+    const mapping: Record<string, Record<number, ColumnAnswer>> = {};
     const labels: Record<string, Record<number, string | null>> = {};
     const headerRows: Record<string, number | null> = {};
     const names: string[] = [];
     for (const g of t.groups) {
       const key = g.sheetNames[0] ?? g.excludedSheetNames[0] ?? CSV_GROUP_KEY;
-      const m: Record<number, EmployeeTargetField> = {};
+      const m: Record<number, ColumnAnswer> = {};
       const l: Record<number, string | null> = {};
       for (const fm of g.fieldMappings) {
         const index = letterToIndex(fm.columnLetter);
@@ -237,7 +242,7 @@ export default function EmployeeTemplateWizard({
   function prefill(sheetNames: string[], rowsBySheet: Record<string, string[][]>) {
     const keys = sheetNames.length > 0 ? sheetNames : [CSV_GROUP_KEY];
     const groupOf: Record<string, string> = {};
-    const mapping: Record<string, Record<number, EmployeeTargetField>> = {};
+    const mapping: Record<string, Record<number, ColumnAnswer>> = {};
     const labels: Record<string, Record<number, string | null>> = {};
     const anchorBySignature = new Map<string, string>();
     for (const key of keys) {
@@ -503,6 +508,41 @@ export default function EmployeeTemplateWizard({
     if (!sample) return null;
     const value = dataRowsOf(sheetRows[sample]).map((r) => (r[col] ?? "").trim()).find(Boolean);
     return value ? { sheet: sample === CSV_GROUP_KEY ? "no arquivo" : `em ${sample}`, value } : null;
+  }
+
+  /** "Ignorar": adds/removes column `col` of group `key` from the ignored ones (only an unanswered column can be ignored). */
+  function toggleIgnored(key: string, col: number) {
+    const header = columnsOfGroup(key).find((c) => c.index === col)?.header ?? null;
+    const isIgnored = (groupMapping[key] ?? {})[col] === IGNORED_COLUMN_FIELD;
+    setGroupMapping((prev) => {
+      const current = { ...(prev[key] ?? {}) };
+      if (current[col] === IGNORED_COLUMN_FIELD) delete current[col];
+      else if (current[col] === undefined) current[col] = IGNORED_COLUMN_FIELD;
+      return { ...prev, [key]: current };
+    });
+    setGroupFieldLabels((prev) => {
+      const current = { ...(prev[key] ?? {}) };
+      if (isIgnored) delete current[col];
+      else current[col] = header;
+      return { ...prev, [key]: current };
+    });
+  }
+
+  /** Clears every "Ignorar" column of group `key`. */
+  function clearIgnored(key: string) {
+    const cols = Object.entries(groupMapping[key] ?? {})
+      .filter(([, f]) => f === IGNORED_COLUMN_FIELD)
+      .map(([c]) => Number(c));
+    setGroupMapping((prev) => {
+      const current = { ...(prev[key] ?? {}) };
+      for (const c of cols) delete current[c];
+      return { ...prev, [key]: current };
+    });
+    setGroupFieldLabels((prev) => {
+      const current = { ...(prev[key] ?? {}) };
+      for (const c of cols) delete current[c];
+      return { ...prev, [key]: current };
+    });
   }
 
   function setAnswer(key: string, field: EmployeeTargetField, col: number | null) {
@@ -814,6 +854,13 @@ export default function EmployeeTemplateWizard({
                   example={(col) => exampleOf(tabKey, col)}
                 />
               ))}
+              <IgnoreQuestion
+                columns={columnsOfGroup(tabKey)}
+                mapping={groupMapping[tabKey] ?? {}}
+                ignoredField={IGNORED_COLUMN_FIELD as ColumnAnswer}
+                onToggle={(col) => toggleIgnored(tabKey, col)}
+                onClear={() => clearIgnored(tabKey)}
+              />
             </div>
           )}
         </div>

@@ -59,9 +59,13 @@ export interface ExtraColumnEntry {
 export function extraColumnEntries(
   extraData: Record<string, string> | null,
   extraColumns: Record<string, ExtraColumnInfo> | null | undefined,
+  /** Columns the template now ignores: a value saved before that stays hidden. */
+  ignoredColumns?: string[] | null,
 ): ExtraColumnEntry[] {
   if (!extraData) return [];
+  const ignored = new Set(ignoredColumns ?? []);
   return Object.entries(extraData)
+    .filter(([key]) => !ignored.has(key))
     .sort(([a], [b]) => a.length - b.length || a.localeCompare(b))
     .map(([key, raw]) => {
       const info = extraColumns?.[key];

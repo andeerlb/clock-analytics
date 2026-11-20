@@ -272,6 +272,10 @@ fn column_letter(index0: usize) -> String {
     letters
 }
 
+/// A template column answered "Ignorar": read past like any mapped column
+/// (so it never lands in `extra_fields`), but its value goes nowhere.
+pub const IGNORED_COLUMN_FIELD: &str = "ignorar";
+
 fn is_blank_row(fields: &HashMap<String, String>) -> bool {
     fields.values().all(|v| v.trim().is_empty())
 }
@@ -333,6 +337,9 @@ pub fn apply_template(
             let record = record.map_err(friendly_csv_error)?;
             let mut fields: HashMap<String, String> = HashMap::new();
             for (letter, target_field) in &group.field_mappings {
+                if target_field == IGNORED_COLUMN_FIELD {
+                    continue;
+                }
                 if let Some(index) = column_index(letter) {
                     let value = record.get(index).unwrap_or("").trim().to_string();
                     insert_mapped_value(&mut fields, target_field, value);
@@ -377,6 +384,9 @@ pub fn apply_template(
                 let row_number = (i + 1) as u32;
                 let mut fields: HashMap<String, String> = HashMap::new();
                 for (letter, target_field) in &group.field_mappings {
+                    if target_field == IGNORED_COLUMN_FIELD {
+                        continue;
+                    }
                     if let Some(index) = column_index(letter) {
                         let Some(cell) = row.get(index) else { continue };
                         // A native date cell's Display impl prints the raw
@@ -456,5 +466,29 @@ mod preview_cell_tests {
     fn other_cells_unchanged() {
         assert_eq!(preview_cell(&Data::String("seg".into())), "seg");
         assert_eq!(preview_cell(&Data::Float(46346.0)), "46346");
+    }
+}
+
+#[cfg(test)]
+mod ignored_column_tests {
+    use super::{apply_template, GroupSpec};
+
+    #[test]
+    fn an_ignored_column_is_neither_a_field_nor_an_extra() {
+        let dir = std::env::temp_dir().join(format!("ignored-col-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("p.csv");
+        std::fs::write(&path, "Nome;Lixo;Obs\nAna;descartar;guardar\n").unwrap();
+        let groups = vec![GroupSpec {
+            sheet_names: vec![],
+            field_mappings: vec![("A".into(), "nome".into()), ("B".into(), "ignorar".into())],
+        }];
+        let rows = apply_template(path.to_str().unwrap(), &groups, Some(";")).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        let ana = &rows[1];
+        assert_eq!(ana.fields.get("nome").map(String::as_str), Some("Ana"));
+        assert!(!ana.fields.contains_key("ignorar"));
+        assert!(!ana.extra_fields.contains_key("B"), "an ignored column isn't kept");
+        assert_eq!(ana.extra_fields.get("C").map(String::as_str), Some("guardar"), "an unanswered one still is");
     }
 }

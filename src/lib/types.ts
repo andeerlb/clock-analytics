@@ -316,9 +316,19 @@ export interface PaymentRuleCondition {
   caseInsensitive: boolean;
 }
 
+/**
+ * A template column answered "Ignorar": the import reads past it and drops
+ * its value — it isn't saved and doesn't show up in "Outras colunas da
+ * planilha" (an unanswered column still does). Stored like any other
+ * column mapping, as its target field, but never a real field: it doesn't
+ * belong in `PaymentTargetField`, which routing/status rules key off too.
+ */
+export const IGNORED_COLUMN_FIELD = "ignorar";
+export type IgnoredColumnField = typeof IGNORED_COLUMN_FIELD;
+
 export interface PaymentTemplateFieldMapping {
   columnLetter: string;
-  targetField: PaymentTargetField;
+  targetField: PaymentTargetField | IgnoredColumnField;
   headerLabel: string | null;
 }
 
@@ -481,7 +491,7 @@ export const EMPLOYEE_TARGET_FIELD_LABELS: Record<EmployeeTargetField, string> =
 
 export interface EmployeeTemplateFieldMapping {
   columnLetter: string;
-  targetField: EmployeeTargetField;
+  targetField: EmployeeTargetField | IgnoredColumnField;
   headerLabel: string | null;
 }
 
@@ -575,6 +585,8 @@ export interface PaymentShiftRow {
   extraData: Record<string, string> | null;
   /** What each `extraData` column is (header text, Excel date/time kind), from the file+aba this turno was imported from — see `extraColumnEntries`. `null`/empty when unknown. */
   extraColumns?: Record<string, ExtraColumnInfo> | null;
+  /** Column letters this turno's template now answers "Ignorar" for its aba — hidden from its extras (see `extraColumnEntries`). */
+  ignoredColumns?: string[] | null;
   /** True when this row (or one it replaced) was hand-edited via "Editar valor" (`editPaymentShift`) — "Fazer pagamento" and "Voltar para pendente" only inherit it, never set it. A reprocessed import match refuses to supersede one of these unless "Manter registros atualizados manualmente" is off; a `'pago'` row is protected regardless (see `isProtectedDuplicateMatch` in ImportPaymentsPage). */
   editedManually: boolean;
   /** Who wrote this version (import, edit, payment...) — only on `getPaymentShiftHistory` rows; `null` for versions written before it was recorded. */

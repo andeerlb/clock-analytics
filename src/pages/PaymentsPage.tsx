@@ -235,7 +235,7 @@ function ExtrasCell({ shift, onOpen }: { shift: PaymentShiftRow; onOpen: () => v
   // The card is portaled and fixed-positioned: the table's cells and
   // scroll area clip anything that overflows them.
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
-  const entries = extraColumnEntries(shift.extraData, shift.extraColumns);
+  const entries = extraColumnEntries(shift.extraData, shift.extraColumns, shift.ignoredColumns);
   if (entries.length === 0) return null;
   const origin = [shift.sourceSheetName && `Aba ${shift.sourceSheetName}`, shift.sourceRowNumber !== null && `linha ${shift.sourceRowNumber}`]
     .filter(Boolean)

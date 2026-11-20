@@ -129,6 +129,24 @@ async fn extra_columns_come_from_the_file_and_aba_and_survive_new_versions() {
 }
 
 #[tokio::test]
+async fn a_turno_knows_which_columns_its_template_ignores_for_its_aba() {
+    let state = AppState::for_tests().await;
+    let s = seed(&state).await;
+    let template = exec(&state, "INSERT INTO payment_templates (name, file_kind) VALUES ('T', 'xlsx')").await;
+    let out = exec(&state, &format!("INSERT INTO payment_template_groups (template_id) VALUES ({template})")).await;
+    exec(&state, &format!("INSERT INTO payment_template_sheets (group_id, sheet_name) VALUES ({out}, 'Out')")).await;
+    exec(&state, &format!("INSERT INTO payment_template_fields (group_id, column_letter, target_field) VALUES ({out}, 'E', 'ignorar'), ({out}, 'A', 'nome')")).await;
+    // Another aba's group ignores something else: not this turno's business.
+    let other = exec(&state, &format!("INSERT INTO payment_template_groups (template_id) VALUES ({template})")).await;
+    exec(&state, &format!("INSERT INTO payment_template_sheets (group_id, sheet_name) VALUES ({other}, 'Nov')")).await;
+    exec(&state, &format!("INSERT INTO payment_template_fields (group_id, column_letter, target_field) VALUES ({other}, 'G', 'ignorar')")).await;
+
+    save(&state, vec![PaymentShiftInput { template_id: Some(template), ..shift_input(&s, None) }], vec![]).await.unwrap();
+    let shift = shifts::get_shift_impl(&state, only_shift_id(&state).await).await.unwrap();
+    assert_eq!(shift["ignoredColumns"], json!(["E"]));
+}
+
+#[tokio::test]
 async fn save_refuses_to_fork_a_history_and_rolls_back_everything() {
     let state = AppState::for_tests().await;
     let s = seed(&state).await;
