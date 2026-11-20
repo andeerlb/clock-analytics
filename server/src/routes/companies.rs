@@ -33,6 +33,20 @@ pub struct CompanyRow {
     pub night_shift_rule: String,
 }
 
+/// `CompanyRow` plus the Empresas list's counts — only `list_companies`
+/// returns these; `get_company` stays on the plain row.
+#[derive(Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanyListRow {
+    #[sqlx(flatten)]
+    #[serde(flatten)]
+    pub company: CompanyRow,
+    /// Clientes linked through `client_companies`.
+    pub client_count: i64,
+    /// Distinct colaboradores linked through `employee_client_companies`.
+    pub employee_count: i64,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PaymentValueRule {
@@ -88,7 +102,7 @@ pub struct Created {
     pub id: i64,
 }
 
-async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<CompanyRow>>> {
+async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<CompanyListRow>>> {
     Ok(Json(list_companies(&state.db).await?))
 }
 
@@ -106,9 +120,12 @@ async fn update(State(state): State<AppState>, Path(id): Path<i64>, Json(input):
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn list_companies(db: &SqlitePool) -> ApiResult<Vec<CompanyRow>> {
-    Ok(sqlx::query_as::<_, CompanyRow>(
-        "SELECT id, name, cnpj, night_start_time, night_end_time, night_shift_rule FROM companies ORDER BY name",
+pub async fn list_companies(db: &SqlitePool) -> ApiResult<Vec<CompanyListRow>> {
+    Ok(sqlx::query_as::<_, CompanyListRow>(
+        "SELECT c.id, c.name, c.cnpj, c.night_start_time, c.night_end_time, c.night_shift_rule,
+           (SELECT COUNT(*) FROM client_companies cc WHERE cc.company_id = c.id) AS client_count,
+           (SELECT COUNT(DISTINCT ecc.employee_id) FROM employee_client_companies ecc WHERE ecc.company_id = c.id) AS employee_count
+         FROM companies c ORDER BY c.name",
     )
     .fetch_all(db)
     .await?)
@@ -369,8 +386,27 @@ mod tests {
         let db = test_pool().await;
         create_company(&db, input("Zeta", "11222333000181", vec![])).await.unwrap();
         create_company(&db, input("Alfa", "99888777000166", vec![])).await.unwrap();
-        let names: Vec<_> = list_companies(&db).await.unwrap().into_iter().map(|c| c.name).collect();
+        let names: Vec<_> = list_companies(&db).await.unwrap().into_iter().map(|c| c.company.name).collect();
         assert_eq!(names, ["Alfa", "Zeta"]);
+    }
+
+    #[tokio::test]
+    async fn list_counts_clients_and_distinct_employees() {
+        let db = test_pool().await;
+        let company = create_company(&db, input("Alfa", "11222333000181", vec![])).await.unwrap();
+        create_company(&db, input("Zeta", "99888777000166", vec![])).await.unwrap();
+        for sql in [
+            "INSERT INTO clients (id, name, cnpj) VALUES (1, 'C1', '1'), (2, 'C2', '2')",
+            "INSERT INTO client_companies (client_id, company_id) VALUES (1, ?1), (2, ?1)",
+            "INSERT INTO employees (id, name, cpf) VALUES (1, 'Ana', '1'), (2, 'Bia', '2')",
+            // Ana works at both clientes through this empresa: still one colaborador.
+            "INSERT INTO employee_client_companies (employee_id, client_id, company_id) VALUES (1, 1, ?1), (1, 2, ?1), (2, 1, ?1)",
+        ] {
+            sqlx::query(sql).bind(company).execute(&db).await.unwrap();
+        }
+        let rows = list_companies(&db).await.unwrap();
+        let counts: Vec<_> = rows.iter().map(|c| (c.company.name.as_str(), c.client_count, c.employee_count)).collect();
+        assert_eq!(counts, [("Alfa", 2, 2), ("Zeta", 0, 0)]);
     }
 
     #[test]

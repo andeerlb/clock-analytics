@@ -11409,6 +11409,22 @@ button.app-nav-count {
   table.mobile-cards td:empty {
     display: none;
   }
+
+  table.mobile-cards .count-unit {
+    display: inline;
+  }
+}
+
+/* Count columns in the cadastro lists (CountCell): numbers right-aligned;
+   the unit only shows on a phone, where the header row is hidden. */
+th.count-col,
+td.count-col {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.count-unit {
+  display: none;
 }
 
 /* Side sheets (Drawer) open from the bottom on a phone, full width. */

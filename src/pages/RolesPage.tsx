@@ -6,6 +6,7 @@ import { useReadOnly } from "../components/AreaRoute";
 import OptionPicker from "../components/OptionPicker";
 import { formatCnpj } from "../lib/format";
 import Pagination from "../components/Pagination";
+import CountCell from "../components/CountCell";
 import PageHeader from "../components/PageHeader";
 import { listCompanies, listRolesGlobal, type CompanyRow, type RoleRow } from "../lib/db";
 
@@ -150,6 +151,8 @@ export default function RolesPage() {
                   <tr>
                     <th>Função</th>
                     <th>Empresa</th>
+                    <th className="count-col">Colaboradores</th>
+                    <th className="count-col">Turnos</th>
                     <th>Atualizado</th>
                   </tr>
                 </thead>
@@ -160,6 +163,8 @@ export default function RolesPage() {
                         <Link to={`/roles/${r.id}`}>{r.name}</Link>
                       </td>
                       <td>{companyNameById.get(r.companyId) ?? "—"}</td>
+                      <CountCell value={r.employeeCount ?? 0} singular="colaborador" plural="colaboradores" />
+                      <CountCell value={r.shiftCount ?? 0} singular="turno" plural="turnos" />
                       <td>
                         <UpdatedByCell info={lastActivity.get(String(r.id))} />
                       </td>

@@ -65,7 +65,19 @@ async fn list_roles(State(state): State<AppState>, Json(args): Json<CompanyIdArg
 }
 
 async fn list_roles_global(State(state): State<AppState>) -> ApiResult<Json<Vec<Row>>> {
-    Ok(Json(sql::select(&state.db, "SELECT id, company_id AS companyId, name FROM roles ORDER BY name", &[]).await?))
+    // Função lives on the turno, not the colaborador, so "colaboradores" here
+    // means distinct people with at least one live turno in this função.
+    Ok(Json(
+        sql::select(
+            &state.db,
+            "SELECT r.id, r.company_id AS companyId, r.name,
+               (SELECT COUNT(DISTINCT ps.employee_id) FROM payment_shifts ps WHERE ps.role_id = r.id AND ps.deleted_at IS NULL) AS employeeCount,
+               (SELECT COUNT(*) FROM payment_shifts ps WHERE ps.role_id = r.id AND ps.deleted_at IS NULL) AS shiftCount
+             FROM roles r ORDER BY r.name",
+            &[],
+        )
+        .await?,
+    ))
 }
 
 async fn get_role(State(state): State<AppState>, Json(args): Json<IdArgs>) -> ApiResult<Json<Value>> {
